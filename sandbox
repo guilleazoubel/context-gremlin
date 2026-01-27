@@ -64,13 +64,32 @@ export GUM_SPIN_SPINNER_FOREGROUND="212"
 # JIRA INTEGRATION
 # ============================================================================
 
-# Extract Jira ticket ID from URL or input
+JIRA_CONFIG="$HOME/.config/sandbox/jira.conf"
+
+# Load saved Jira credentials
+load_jira_config() {
+    [ -f "$JIRA_CONFIG" ] && source "$JIRA_CONFIG"
+}
+
+# Save Jira credentials
+save_jira_config() {
+    mkdir -p "$(dirname "$JIRA_CONFIG")"
+    cat > "$JIRA_CONFIG" << JIRACONF
+JIRA_DOMAIN="$JIRA_DOMAIN"
+JIRA_EMAIL="$JIRA_EMAIL"
+JIRA_API_TOKEN="$JIRA_API_TOKEN"
+JIRACONF
+    chmod 600 "$JIRA_CONFIG"
+}
+
+# Extract Jira ticket ID and domain from URL or input
 parse_jira_input() {
     local input="$1"
 
     # Handle full URL: https://company.atlassian.net/browse/PROJ-123
-    if [[ "$input" =~ atlassian.net/browse/([A-Z]+-[0-9]+) ]]; then
-        echo "${BASH_REMATCH[1]}"
+    if [[ "$input" =~ ([a-zA-Z0-9-]+\.atlassian\.net)/browse/([A-Z]+-[0-9]+) ]]; then
+        JIRA_URL_DOMAIN="${BASH_REMATCH[1]}"
+        echo "${BASH_REMATCH[2]}"
     # Handle just ticket ID: PROJ-123
     elif [[ "$input" =~ ^[A-Z]+-[0-9]+$ ]]; then
         echo "$input"
@@ -79,22 +98,82 @@ parse_jira_input() {
     fi
 }
 
+# Setup Jira credentials (one-time)
+setup_jira_credentials() {
+    echo ""
+    gum style --foreground 214 --bold "Jira Setup (one-time)"
+    echo ""
+
+    # Use domain from URL if available, otherwise ask
+    if [ -n "$JIRA_URL_DOMAIN" ]; then
+        JIRA_DOMAIN="$JIRA_URL_DOMAIN"
+        dim "Domain: $JIRA_DOMAIN (from URL)"
+    else
+        printf "Jira domain (e.g., company.atlassian.net): "
+        read -r JIRA_DOMAIN
+        [ -z "$JIRA_DOMAIN" ] && return 1
+    fi
+
+    printf "Jira email: "
+    read -r JIRA_EMAIL
+    [ -z "$JIRA_EMAIL" ] && return 1
+
+    echo ""
+    dim "Get API token: https://$JIRA_DOMAIN/secure/ViewProfile.jspa"
+    dim "→ Security → Create API token"
+    echo ""
+    printf "API token: "
+    read -rs JIRA_API_TOKEN
+    echo ""
+    [ -z "$JIRA_API_TOKEN" ] && return 1
+
+    # Test the credentials
+    dim "Testing connection..."
+    local test=$(curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
+        "https://$JIRA_DOMAIN/rest/api/3/myself" 2>/dev/null)
+
+    if echo "$test" | jq -e '.accountId' >/dev/null 2>&1; then
+        local name=$(echo "$test" | jq -r '.displayName')
+        success "Connected as: $name"
+
+        save_jira_config
+        success "Credentials saved to ~/.config/sandbox/jira.conf"
+        return 0
+    else
+        error "Connection failed. Check your credentials."
+        return 1
+    fi
+}
+
 # Fetch Jira ticket details
 fetch_jira_ticket() {
     local ticket_id="$1"
-    local jira_domain="${JIRA_DOMAIN:-}"
-    local jira_email="${JIRA_EMAIL:-}"
-    local jira_token="${JIRA_API_TOKEN:-}"
 
-    # Check if we have Jira credentials
-    if [ -z "$jira_domain" ] || [ -z "$jira_email" ] || [ -z "$jira_token" ]; then
-        return 1
+    # Load saved credentials
+    load_jira_config
+
+    # Use URL domain if provided and no saved domain
+    [ -z "$JIRA_DOMAIN" ] && [ -n "$JIRA_URL_DOMAIN" ] && JIRA_DOMAIN="$JIRA_URL_DOMAIN"
+
+    # Setup credentials if needed
+    if [ -z "$JIRA_DOMAIN" ] || [ -z "$JIRA_EMAIL" ] || [ -z "$JIRA_API_TOKEN" ]; then
+        if ! setup_jira_credentials; then
+            return 1
+        fi
     fi
 
+    dim "Fetching $ticket_id..."
+
     # Fetch ticket via API
-    local response=$(curl -s -u "$jira_email:$jira_token" \
+    local response=$(curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
         -H "Content-Type: application/json" \
-        "https://$jira_domain/rest/api/3/issue/$ticket_id?fields=summary,description,issuetype,status,priority,labels,customfield_10016" 2>/dev/null)
+        "https://$JIRA_DOMAIN/rest/api/3/issue/$ticket_id?fields=summary,description,issuetype,status,priority,labels,assignee,reporter,acceptance_criteria,customfield_10016" 2>/dev/null)
+
+    # Check for errors
+    if echo "$response" | jq -e '.errorMessages' >/dev/null 2>&1; then
+        error "$(echo "$response" | jq -r '.errorMessages[0]')"
+        return 1
+    fi
 
     if [ -n "$response" ] && echo "$response" | jq -e '.fields' >/dev/null 2>&1; then
         echo "$response"
@@ -102,6 +181,36 @@ fetch_jira_ticket() {
     fi
 
     return 1
+}
+
+# Parse Jira description (handles Atlassian Document Format)
+parse_jira_description() {
+    local json="$1"
+
+    # Try to extract text from ADF (Atlassian Document Format)
+    local desc=$(echo "$json" | jq -r '
+        .fields.description.content[]? |
+        if .type == "paragraph" then
+            [.content[]? | .text // empty] | join("")
+        elif .type == "bulletList" then
+            [.content[]? | .content[]? | .content[]? | .text // empty] | map("• " + .) | join("\n")
+        elif .type == "orderedList" then
+            [.content[]? | .content[]? | .content[]? | .text // empty] | to_entries | map("\(.key + 1). " + .value) | join("\n")
+        elif .type == "heading" then
+            [.content[]? | .text // empty] | join("") | "### " + .
+        elif .type == "codeBlock" then
+            "```\n" + ([.content[]? | .text // empty] | join("")) + "\n```"
+        else
+            empty
+        end
+    ' 2>/dev/null | grep -v '^$')
+
+    # Fallback to plain text if ADF parsing fails
+    if [ -z "$desc" ]; then
+        desc=$(echo "$json" | jq -r '.fields.description // "No description"' 2>/dev/null)
+    fi
+
+    echo "$desc"
 }
 
 # Format Jira ticket for display and context
@@ -113,15 +222,28 @@ format_jira_context() {
     local issue_type=$(echo "$ticket_json" | jq -r '.fields.issuetype.name // "Unknown"')
     local status=$(echo "$ticket_json" | jq -r '.fields.status.name // "Unknown"')
     local priority=$(echo "$ticket_json" | jq -r '.fields.priority.name // "Unknown"')
-    local description=$(echo "$ticket_json" | jq -r '.fields.description.content[0].content[0].text // .fields.description // "No description"' 2>/dev/null)
+    local assignee=$(echo "$ticket_json" | jq -r '.fields.assignee.displayName // "Unassigned"')
+    local reporter=$(echo "$ticket_json" | jq -r '.fields.reporter.displayName // "Unknown"')
+    local labels=$(echo "$ticket_json" | jq -r '.fields.labels | join(", ") // ""')
+    local description=$(parse_jira_description "$ticket_json")
+
+    # Store ticket type for guidance
+    JIRA_TICKET_TYPE="$issue_type"
 
     cat << JIRA_CTX
 ## Jira Ticket: $ticket_id
 
-- **Type**: $issue_type
-- **Status**: $status
-- **Priority**: $priority
-- **Summary**: $summary
+| Field | Value |
+|-------|-------|
+| **Type** | $issue_type |
+| **Status** | $status |
+| **Priority** | $priority |
+| **Assignee** | $assignee |
+| **Reporter** | $reporter |
+$([ -n "$labels" ] && echo "| **Labels** | $labels |")
+
+### Summary
+$summary
 
 ### Description
 $description
@@ -140,11 +262,12 @@ prompt_jira_ticket() {
 
     echo ""
     dim "Enter Jira ticket URL or ID (e.g., PROJ-123 or https://company.atlassian.net/browse/PROJ-123)"
-    printf "Jira ticket: "
+    printf "Jira: "
     read -r jira_input
 
     [ -z "$jira_input" ] && return 1
 
+    JIRA_URL_DOMAIN=""
     local ticket_id=$(parse_jira_input "$jira_input")
 
     if [ -z "$ticket_id" ]; then
@@ -153,22 +276,25 @@ prompt_jira_ticket() {
         return 1
     fi
 
-    echo ""
-    dim "Ticket: $ticket_id"
-
-    # Try to fetch ticket details
+    # Fetch ticket details
     local ticket_json=$(fetch_jira_ticket "$ticket_id")
 
     if [ -n "$ticket_json" ]; then
-        success "Fetched ticket details from Jira"
         JIRA_TICKET_ID="$ticket_id"
         JIRA_TICKET_JSON="$ticket_json"
         JIRA_CONTEXT=$(format_jira_context "$ticket_json" "$ticket_id")
+
+        # Show summary
+        echo ""
+        local summary=$(echo "$ticket_json" | jq -r '.fields.summary')
+        local type=$(echo "$ticket_json" | jq -r '.fields.issuetype.name')
+        success "✓ $type: $summary"
         return 0
     fi
 
-    # Fallback: ask for manual input
-    dim "Could not fetch from Jira API. Enter details manually (or leave empty to skip)."
+    # Fallback: manual input
+    echo ""
+    dim "Could not fetch from Jira. Enter details manually?"
     echo ""
 
     local jira_type=$(gum choose --header "Ticket type:" \
