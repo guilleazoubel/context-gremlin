@@ -2704,16 +2704,32 @@ pre_session_menu() {
         case "$choice" in
             *"Start Claude"*)
                 echo ""
-                dim "Claude will auto-start the review."
-                dim "Type /exit when done to return here."
-                echo ""
-                sleep 1
 
-                # Reset terminal state before starting Claude
-                tput reset 2>/dev/null || clear
+                # Check if review already exists
+                local existing_review=""
+                [ -f "$SESSION_DIR/repo/REVIEW.md" ] && existing_review="$SESSION_DIR/repo/REVIEW.md"
 
-                cd "$SESSION_DIR/repo"
-                claude "Begin"
+                if [ -n "$existing_review" ] && [ -s "$existing_review" ]; then
+                    dim "Existing review found. Claude will summarize and continue."
+                    dim "Type /exit when done to return here."
+                    echo ""
+                    sleep 1
+
+                    tput reset 2>/dev/null || clear
+                    cd "$SESSION_DIR/repo"
+
+                    # Resume with context of existing review
+                    claude "Read REVIEW.md and give me a brief summary of the key findings (bullet points, max 5-7 items). Then let me know you're ready to discuss any points or continue refining the review. Keep the summary concise."
+                else
+                    dim "Starting fresh review."
+                    dim "Type /exit when done to return here."
+                    echo ""
+                    sleep 1
+
+                    tput reset 2>/dev/null || clear
+                    cd "$SESSION_DIR/repo"
+                    claude "Begin"
+                fi
 
                 post_session_menu "$SESSION_DIR"
                 return 0
@@ -2869,7 +2885,13 @@ post_session_menu() {
             *"Resume Claude"*)
                 tput reset 2>/dev/null || clear
                 cd "$SESSION_DIR/repo"
-                claude -c
+
+                # If review exists, have Claude summarize before continuing
+                if [ -n "$review_file" ] && [ -s "$review_file" ]; then
+                    claude "Read REVIEW.md and give me a brief summary of the key findings (bullet points, max 5-7 items). Highlight any critical or high-severity issues. Then let me know you're ready to discuss, refine, or update the review."
+                else
+                    claude -c
+                fi
                 ;;
             *"editor"*)
                 open_in_editor "$SESSION_DIR/repo"
