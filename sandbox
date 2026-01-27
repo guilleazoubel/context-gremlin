@@ -1,0 +1,2449 @@
+#!/bin/bash
+
+# ╔═══════════════════════════════════════════════════════════════════════════╗
+# ║                              SANDBOX                                       ║
+# ║         Isolated environments for PR reviews & code investigations         ║
+# ╚═══════════════════════════════════════════════════════════════════════════╝
+
+SESSIONS_DIR="$HOME/Agent-temp"
+mkdir -p "$SESSIONS_DIR"
+
+# ============================================================================
+# DEPENDENCY CHECK
+# ============================================================================
+
+check_dependencies() {
+    local missing=()
+
+    command -v gum >/dev/null 2>&1 || missing+=("gum")
+    command -v fzf >/dev/null 2>&1 || missing+=("fzf")
+    command -v gh >/dev/null 2>&1 || missing+=("gh")
+    command -v jq >/dev/null 2>&1 || missing+=("jq")
+    command -v git >/dev/null 2>&1 || missing+=("git")
+    command -v claude >/dev/null 2>&1 || missing+=("claude")
+
+    if [ ${#missing[@]} -gt 0 ]; then
+        echo "Missing dependencies: ${missing[*]}"
+        echo ""
+        echo "Install with:"
+        for dep in "${missing[@]}"; do
+            case "$dep" in
+                gum) echo "  brew install gum" ;;
+                fzf) echo "  brew install fzf" ;;
+                gh) echo "  brew install gh" ;;
+                jq) echo "  brew install jq" ;;
+                git) echo "  brew install git" ;;
+                claude) echo "  npm install -g @anthropic-ai/claude-code" ;;
+            esac
+        done
+        exit 1
+    fi
+}
+
+check_dependencies
+
+# ============================================================================
+# THEME
+# ============================================================================
+
+export GUM_CHOOSE_CURSOR_FOREGROUND="212"
+export GUM_CHOOSE_SELECTED_FOREGROUND="212"
+export GUM_CHOOSE_HEADER_FOREGROUND="240"
+export GUM_INPUT_CURSOR_FOREGROUND="212"
+export GUM_INPUT_PROMPT_FOREGROUND="212"
+export GUM_CONFIRM_SELECTED_BACKGROUND="212"
+export GUM_SPIN_SPINNER_FOREGROUND="212"
+
+# ============================================================================
+# HELPERS
+# ============================================================================
+
+header() {
+    clear
+    gum style \
+        --border double \
+        --border-foreground 212 \
+        --padding "0 2" \
+        --margin "1 0" \
+        --align center \
+        --width 60 \
+        "🧪 SANDBOX" \
+        "Isolated environments for code work"
+}
+
+success() {
+    gum style --foreground 82 "✓ $1"
+}
+
+error() {
+    gum style --foreground 196 "✗ $1"
+}
+
+info() {
+    gum style --foreground 75 "→ $1"
+}
+
+dim() {
+    gum style --foreground 240 "$1"
+}
+
+# ============================================================================
+# SESSION LISTING
+# ============================================================================
+
+get_sessions() {
+    find "$SESSIONS_DIR" -maxdepth 1 -type d \( -name "pr-*" -o -name "inv-*" \) 2>/dev/null | sort
+}
+
+format_session_display() {
+    local session="$1"
+    local name=$(basename "$session")
+    local info_file="$session/session-info.txt"
+
+    if [ -f "$info_file" ]; then
+        local created=$(grep "^Created:" "$info_file" 2>/dev/null | cut -d: -f2- | xargs)
+        local archived=""
+        grep -q "^ARCHIVED:" "$info_file" 2>/dev/null && archived=" 📦"
+
+        # Check for review file
+        local has_review=""
+        [ -f "$session/REVIEW.md" ] || [ -f "$session/repo/REVIEW.md" ] && has_review=" 📝"
+        [ -f "$session/FINDINGS.md" ] || [ -f "$session/repo/FINDINGS.md" ] && has_review=" 📝"
+
+        if [[ "$name" == pr-* ]]; then
+            local title=$(grep "^PR #" "$info_file" 2>/dev/null | head -1)
+            echo "🔍 $title$archived$has_review"
+            echo "   $name • $created"
+        else
+            local title=$(sed -n '/Investigation Focus:/,/====/p' "$info_file" 2>/dev/null | grep -v "Investigation Focus:" | grep -v "===" | grep -v "^-" | head -1 | xargs)
+            title="${title:0:50}"
+            echo "🔬 $title$archived$has_review"
+            echo "   $name • $created"
+        fi
+    else
+        echo "❓ $name"
+    fi
+    echo ""
+}
+
+display_sessions() {
+    local sessions=$(get_sessions)
+
+    if [ -z "$sessions" ]; then
+        dim "No active sessions"
+        return 1
+    fi
+
+    while IFS= read -r session; do
+        [ -z "$session" ] && continue
+        format_session_display "$session"
+    done <<< "$sessions"
+
+    return 0
+}
+
+select_session_simple() {
+    local sessions=$(get_sessions)
+
+    if [ -z "$sessions" ]; then
+        return 1
+    fi
+
+    # Build array with full formatted display
+    local options=("← Back")
+    local session_paths=("")
+
+    while IFS= read -r session; do
+        [ -z "$session" ] && continue
+        session_paths+=("$session")
+
+        local name=$(basename "$session")
+        local info_file="$session/session-info.txt"
+        local display=""
+
+        if [ -f "$info_file" ]; then
+            local archived=""
+            grep -q "^ARCHIVED:" "$info_file" 2>/dev/null && archived="📦 "
+
+            local has_review=""
+            [ -f "$session/REVIEW.md" ] || [ -f "$session/repo/REVIEW.md" ] && has_review=" 📝"
+            [ -f "$session/FINDINGS.md" ] || [ -f "$session/repo/FINDINGS.md" ] && has_review=" 📝"
+
+            local created=$(grep "^Created:" "$info_file" 2>/dev/null | cut -d: -f2- | xargs | cut -d' ' -f1-2)
+
+            if [[ "$name" == pr-* ]]; then
+                local title=$(grep "^PR #" "$info_file" 2>/dev/null | head -1)
+                display="${archived}🔍 ${title}${has_review} • ${created}"
+            else
+                local title=$(sed -n '/Investigation Focus:/,/====/p' "$info_file" 2>/dev/null | grep -v "Investigation Focus:" | grep -v "===" | grep -v "^-" | head -1 | xargs)
+                title="${title:0:40}"
+                display="${archived}🔬 ${title}${has_review} • ${created}"
+            fi
+        else
+            display="❓ $name"
+        fi
+
+        options+=("$display")
+    done <<< "$sessions"
+
+    # Show selection
+    local selected=$(printf '%s\n' "${options[@]}" | gum choose --header "Select a session (ESC to go back):")
+
+    # Handle back/cancel
+    if [ -z "$selected" ] || [[ "$selected" == "← Back"* ]]; then
+        return 1
+    fi
+
+    # Find matching session by index
+    for i in "${!options[@]}"; do
+        if [ "${options[$i]}" = "$selected" ]; then
+            echo "${session_paths[$i]}"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+# ============================================================================
+# PR REVIEW
+# ============================================================================
+
+# Display current selection context
+show_context() {
+    local title="$1"
+    shift
+
+    header
+    gum style --foreground 212 --bold "$title"
+    echo ""
+
+    # Show previous selections if any
+    if [ $# -gt 0 ]; then
+        local context=""
+        while [ $# -gt 0 ]; do
+            [ -n "$context" ] && context="$context  →  "
+            context="$context$1"
+            shift
+        done
+        gum style --foreground 240 --italic "$context"
+        echo ""
+    fi
+}
+
+select_repo() {
+    local DEFAULT_ORG="aplaceformom"
+    local title="${1:-Select Repository}"
+
+    # All display output to stderr so it doesn't pollute return value
+    show_context "$title" >&2
+    dim "Fetching repositories from $DEFAULT_ORG..." >&2
+
+    # Fetch repos from default org
+    local repos=$(gh repo list "$DEFAULT_ORG" --limit 100 --json name,description --jq '.[] | "\(.name) ~ \(.description // "No description")"' 2>/dev/null)
+
+    if [ -z "$repos" ]; then
+        error "Could not fetch repositories" >&2
+        sleep 2
+        return 1
+    fi
+
+    local repo_count=$(echo "$repos" | wc -l | xargs)
+
+    # Use fzf for fuzzy selection (fzf outputs to stderr by default)
+    local selected=$(echo -e "← Back (cancel)\n$repos" | fzf \
+        --height=~50% \
+        --layout=reverse \
+        --border=rounded \
+        --prompt="Search: " \
+        --header="Select repository ($repo_count available) • ESC to cancel" \
+        --header-first \
+        --ansi)
+
+    # Handle cancel/back
+    if [ -z "$selected" ] || [[ "$selected" == "← Back"* ]]; then
+        return 1
+    fi
+
+    # Extract just the repo name (before the " ~ ")
+    local repo_name=$(echo "$selected" | cut -d'~' -f1 | xargs)
+    echo "https://github.com/$DEFAULT_ORG/$repo_name"
+    return 0
+}
+
+select_pr() {
+    local REPO="$1"
+    local REPO_DISPLAY="$2"
+
+    # All display output to stderr so it doesn't pollute return value
+    show_context "New PR Review" "📁 $REPO_DISPLAY" >&2
+    dim "Fetching open PRs..." >&2
+
+    # Fetch open PRs
+    local prs=$(gh pr list --repo "$REPO" --state open --limit 50 --json number,title,author --jq '.[] | "#\(.number) \(.title) (@\(.author.login))"' 2>/dev/null)
+
+    if [ -z "$prs" ]; then
+        dim "No open PRs found in $REPO" >&2
+        sleep 2
+        return 1
+    fi
+
+    local pr_count=$(echo "$prs" | wc -l | xargs)
+
+    # Use fzf for fuzzy selection (fzf outputs to stderr by default)
+    local selected=$(echo -e "← Back (cancel)\n$prs" | fzf \
+        --height=~50% \
+        --layout=reverse \
+        --border=rounded \
+        --prompt="Search: " \
+        --header="Select PR ($pr_count open) • ESC to cancel" \
+        --header-first \
+        --ansi)
+
+    # Handle cancel/back
+    if [ -z "$selected" ] || [[ "$selected" == "← Back"* ]]; then
+        return 1
+    fi
+
+    # Extract PR number
+    echo "$selected" | sed 's/^#\([0-9]*\).*/\1/'
+    return 0
+}
+
+create_pr_session() {
+    show_context "New PR Review"
+
+    local OWNER=""
+    local REPO=""
+    local PR_NUMBER=""
+    local REPO_URL=""
+
+    # Choose input method
+    local input_method=$(gum choose \
+        "🔍 Browse open PRs" \
+        "🔗 Enter PR URL directly" \
+        "← Back")
+
+    case "$input_method" in
+        *"Browse"*)
+            # First select repo
+            REPO_URL=$(select_repo "New PR Review")
+            if [ -z "$REPO_URL" ]; then
+                return 1
+            fi
+
+            # Extract owner/repo
+            if [[ "$REPO_URL" =~ github.com/([^/]+)/([^/]+) ]]; then
+                OWNER="${BASH_REMATCH[1]}"
+                REPO="${BASH_REMATCH[2]}"
+                REPO="${REPO%.git}"
+            fi
+
+            # Then select PR - pass repo name for context display
+            PR_NUMBER=$(select_pr "$OWNER/$REPO" "$REPO")
+            if [ -z "$PR_NUMBER" ]; then
+                return 1
+            fi
+
+            REPO_URL="https://github.com/$OWNER/$REPO.git"
+            ;;
+        *"Enter PR URL"*)
+            printf "PR URL or number: "
+            read -r pr_input
+            [ -z "$pr_input" ] && return 1
+
+            # Parse PR input
+            if [[ "$pr_input" =~ ^https://github.com/([^/]+)/([^/]+)/pull/([0-9]+) ]]; then
+                OWNER="${BASH_REMATCH[1]}"
+                REPO="${BASH_REMATCH[2]}"
+                PR_NUMBER="${BASH_REMATCH[3]}"
+                REPO_URL="https://github.com/$OWNER/$REPO.git"
+            elif [[ "$pr_input" =~ ^[0-9]+$ ]]; then
+                PR_NUMBER="$pr_input"
+                printf "Repository (owner/repo): "
+                read -r repo_input
+
+                if [[ "$repo_input" =~ github.com/([^/]+)/([^/]+) ]]; then
+                    OWNER="${BASH_REMATCH[1]}"
+                    REPO="${BASH_REMATCH[2]}"
+                    REPO="${REPO%.git}"
+                elif [[ "$repo_input" =~ ^([^/]+)/([^/]+)$ ]]; then
+                    OWNER="${BASH_REMATCH[1]}"
+                    REPO="${BASH_REMATCH[2]}"
+                else
+                    error "Could not parse repository"
+                    sleep 2
+                    return 1
+                fi
+                REPO_URL="https://github.com/$OWNER/$REPO.git"
+            else
+                error "Invalid PR input"
+                sleep 2
+                return 1
+            fi
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+
+    echo ""
+
+    # Debug: show what we're fetching
+    dim "Fetching PR #$PR_NUMBER from $OWNER/$REPO..."
+
+    # Validate we have required info
+    if [ -z "$PR_NUMBER" ] || [ -z "$OWNER" ] || [ -z "$REPO" ]; then
+        error "Missing info - PR: '$PR_NUMBER', Owner: '$OWNER', Repo: '$REPO'"
+        sleep 2
+        return 1
+    fi
+
+    # Fetch PR info with spinner
+    local PR_INFO
+    local pr_error_file=$(mktemp)
+    PR_INFO=$(gum spin --spinner dot --title "Fetching PR #$PR_NUMBER..." -- \
+        gh pr view "$PR_NUMBER" --repo "$OWNER/$REPO" --json title,body,headRefName,baseRefName,author,additions,deletions,changedFiles,url 2>"$pr_error_file")
+
+    if [ $? -ne 0 ] || [ -z "$PR_INFO" ]; then
+        local err_msg=$(cat "$pr_error_file")
+        rm -f "$pr_error_file"
+        error "Could not fetch PR info: $err_msg"
+        sleep 3
+        return 1
+    fi
+    rm -f "$pr_error_file"
+
+    local PR_TITLE=$(echo "$PR_INFO" | jq -r '.title')
+    local PR_BODY=$(echo "$PR_INFO" | jq -r '.body // "No description provided"')
+    local PR_HEAD=$(echo "$PR_INFO" | jq -r '.headRefName')
+    local PR_BASE=$(echo "$PR_INFO" | jq -r '.baseRefName')
+    local PR_AUTHOR=$(echo "$PR_INFO" | jq -r '.author.login')
+    local PR_ADDITIONS=$(echo "$PR_INFO" | jq -r '.additions')
+    local PR_DELETIONS=$(echo "$PR_INFO" | jq -r '.deletions')
+    local PR_FILES=$(echo "$PR_INFO" | jq -r '.changedFiles')
+    local PR_URL=$(echo "$PR_INFO" | jq -r '.url')
+
+    # Show PR info
+    gum style \
+        --border rounded \
+        --border-foreground 240 \
+        --padding "1 2" \
+        --margin "1 0" \
+        "PR #$PR_NUMBER: $PR_TITLE" \
+        "" \
+        "$(dim "Author: $PR_AUTHOR")" \
+        "$(dim "Branch: $PR_HEAD → $PR_BASE")" \
+        "$(dim "Changes: +$PR_ADDITIONS -$PR_DELETIONS in $PR_FILES files")"
+
+    if ! gum confirm "Create session for this PR?"; then
+        return 1
+    fi
+
+    local SESSION_NAME="pr-${REPO}-${PR_NUMBER}-$(date +%Y%m%d-%H%M%S)"
+    local SESSION_DIR="$SESSIONS_DIR/$SESSION_NAME"
+
+    mkdir -p "$SESSION_DIR"
+    cd "$SESSION_DIR"
+
+    # Clone with spinner
+    if ! gum spin --spinner dot --title "Cloning repository..." -- \
+        git clone --depth=50 "$REPO_URL" repo 2>&1; then
+        error "Failed to clone repository"
+        rm -rf "$SESSION_DIR"
+        sleep 2
+        return 1
+    fi
+
+    if [ ! -d "repo" ]; then
+        error "Clone failed - repo directory not created"
+        rm -rf "$SESSION_DIR"
+        sleep 2
+        return 1
+    fi
+
+    cd repo
+    if ! gum spin --spinner dot --title "Checking out PR branch..." -- \
+        bash -c "git fetch origin 'pull/$PR_NUMBER/head:pr-$PR_NUMBER' 2>&1 && git checkout 'pr-$PR_NUMBER' 2>&1"; then
+        error "Failed to checkout PR branch"
+        rm -rf "$SESSION_DIR"
+        sleep 2
+        return 1
+    fi
+
+    local DIFF_STAT=$(git diff --stat "$PR_BASE"..."pr-$PR_NUMBER" 2>/dev/null || echo "")
+    local CHANGED_FILES=$(git diff --name-only "$PR_BASE"..."pr-$PR_NUMBER" 2>/dev/null || echo "")
+    local COMMIT_MESSAGES=$(git log --oneline "$PR_BASE"..."pr-$PR_NUMBER" 2>/dev/null || echo "")
+
+    cd "$SESSION_DIR"
+
+    # Create session-info.txt
+    cat > session-info.txt << EOF
+================================================================================
+SESSION INFO
+================================================================================
+Type:       PR Review
+Created:    $(date '+%Y-%m-%d %H:%M:%S')
+Session:    $SESSION_NAME
+
+PR #$PR_NUMBER: $PR_TITLE
+URL:        $PR_URL
+Author:     $PR_AUTHOR
+Branch:     $PR_HEAD → $PR_BASE
+Stats:      +$PR_ADDITIONS -$PR_DELETIONS in $PR_FILES files
+
+Repository: $OWNER/$REPO
+
+PR Description:
+--------------------------------------------------------------------------------
+$PR_BODY
+
+Changed Files:
+--------------------------------------------------------------------------------
+$CHANGED_FILES
+================================================================================
+EOF
+
+    # Create CLAUDE.md inside repo/ so Claude auto-reads it
+    cat > repo/CLAUDE.md << CLAUDE_EOF
+# PR Review Session - AUTO-START REVIEW
+
+> **IMPORTANT**: Start the review immediately upon reading this file. Do not wait for user input.
+
+## PR Information
+
+- **PR**: #$PR_NUMBER - $PR_TITLE
+- **URL**: $PR_URL
+- **Author**: $PR_AUTHOR
+- **Branch**: \`$PR_HEAD\` → \`$PR_BASE\`
+- **Stats**: +$PR_ADDITIONS -$PR_DELETIONS across $PR_FILES files
+
+## PR Description
+
+$PR_BODY
+
+## Commits in this PR
+
+\`\`\`
+$COMMIT_MESSAGES
+\`\`\`
+
+## Changed Files
+
+\`\`\`
+$CHANGED_FILES
+\`\`\`
+
+## Diff Summary
+
+\`\`\`
+$DIFF_STAT
+\`\`\`
+
+---
+
+## Review Instructions
+
+You are an expert code reviewer helping evaluate this PR. **Begin immediately.**
+
+---
+
+## PHASE 1: Classify the PR Type
+
+First, determine what type of PR this is based on the title, description, and changes:
+
+| Type | Description | Key Concern |
+|------|-------------|-------------|
+| **Feature** | New functionality | Does it work? Is it complete? |
+| **Bug Fix** | Fixing broken behavior | Is the fix minimal and targeted? |
+| **Refactor** | Restructuring without behavior change | Are there ANY functional changes? |
+| **Performance** | Speed/efficiency improvements | Does behavior remain identical? |
+| **Chore** | Dependencies, configs, CI | Are there unintended side effects? |
+| **Docs** | Documentation only | Is code unchanged? |
+
+---
+
+## PHASE 2: Macro Analysis (The Forest)
+
+**Before looking at code details, evaluate the PR holistically:**
+
+### 2.1 Intent Alignment
+- Does the PR do what it claims to do?
+- Is the scope appropriate (not too broad, not too narrow)?
+- Are there changes that don't belong in this PR?
+
+### 2.2 PR Type Violations (CRITICAL)
+
+🚨 **These are often the most important issues:**
+
+| PR Type | Red Flag |
+|---------|----------|
+| **Refactor** | ANY functional/behavioral changes (even "improvements") |
+| **Bug Fix** | Scope creep - refactoring or features mixed in |
+| **Feature** | Unrelated changes, touching code outside feature scope |
+| **Performance** | Behavior changes, different outputs, changed APIs |
+| **Chore** | Logic changes hidden in dependency updates |
+
+### 2.3 Architectural Fit
+- Does this change fit the existing codebase patterns?
+- Does it introduce new patterns/approaches inconsistent with the codebase?
+- Are there simpler approaches that would achieve the same goal?
+
+### 2.4 Completeness
+- Is the feature/fix complete or partially implemented?
+- Are there TODOs or commented-out code?
+- Missing migrations, configs, env vars?
+- Missing documentation for public APIs?
+
+---
+
+## PHASE 3: Micro Analysis (The Trees)
+
+**Now examine the code details. Run these reviews IN PARALLEL using Task tool:**
+
+### 3.1 Correctness
+- Logic errors, off-by-one, null/undefined handling
+- Race conditions, async/await issues
+- Edge cases not handled
+- Error handling gaps
+
+### 3.2 Security
+- Input validation (user input, API params)
+- SQL/NoSQL injection, XSS, command injection
+- Auth/authorization bypasses
+- Sensitive data exposure (logs, errors, responses)
+- Secrets in code
+
+### 3.3 Performance
+- N+1 queries, missing indexes
+- Unnecessary loops, repeated computations
+- Memory leaks, unbounded growth
+- Missing pagination, loading too much data
+
+### 3.4 Code Quality
+- Readability and clarity
+- Naming (variables, functions, files)
+- DRY violations, copy-paste code
+- Dead code, unused imports
+- Consistent style with codebase
+
+### 3.5 Complexity
+- Over-engineering, premature abstraction
+- Simpler alternatives exist?
+- Cognitive load - hard to follow?
+- Deep nesting, long functions
+
+### 3.6 Testing
+- New code has tests?
+- Tests actually test the behavior (not just coverage)?
+- Edge cases tested?
+- Tests would catch regressions?
+
+### 3.7 Regression Risk
+- Changes to shared utilities/components
+- API contract changes
+- Database schema changes
+- Config/environment changes
+
+---
+
+## PHASE 4: Write Review
+
+**IMPORTANT: Write findings to \`REVIEW.md\` file.**
+
+For EACH finding, you MUST include:
+1. **Location** - File and line number
+2. **Current Code** - Show the actual code snippet (5-15 lines of context)
+3. **Issue** - Explain what's wrong and WHY it matters
+4. **Suggested Fix** - Show how the code SHOULD look (if applicable)
+
+This helps the reviewer understand the issue without having to look up the code.
+
+\`\`\`markdown
+# PR Review: #$PR_NUMBER - $PR_TITLE
+
+## At a Glance
+
+| Aspect | Assessment |
+|--------|------------|
+| **Type** | Feature / Bug Fix / Refactor / Performance / Chore |
+| **Risk** | 🟢 Low / 🟡 Medium / 🔴 High |
+| **Scope** | ✅ Appropriate / ⚠️ Too Broad / ⚠️ Too Narrow |
+| **Verdict** | ✅ Approve / 🔄 Request Changes / 💬 Comment |
+
+## Summary
+
+[2-3 sentences: what this PR does, why, and overall assessment]
+
+---
+
+## Understanding the Changes
+
+### What Changed
+[Explain the key changes in plain language - what files, what functionality]
+
+### Why It Changed
+[The motivation - bug being fixed, feature being added, refactor goal]
+
+### How It Works
+[Brief technical explanation of the approach taken]
+
+---
+
+## Macro Analysis
+
+### Intent Alignment
+[Does the PR actually do what it claims? Any scope issues?]
+
+### PR Type Check
+[For refactors: any functional changes? For bug fixes: any scope creep?]
+
+### Architecture Fit
+[Does this fit the codebase patterns? Any concerns?]
+
+---
+
+## Findings Tracker
+
+| ID | Finding | Severity | Status | Since |
+|----|---------|----------|--------|-------|
+| 1 | [Brief description] | 🔴 Critical | ⚠️ Open | v1 |
+| 2 | [Brief description] | 🟠 High | ✅ Fixed | v1→v2 |
+| 3 | [Brief description] | 🟡 Medium | ⚠️ Open | v2 |
+
+---
+
+## Open Findings
+
+### 🔴 Critical (Blocks Merge)
+
+[If none, write "None identified."]
+
+#### Finding #1: [Brief title]
+📍 **Location:** \`path/to/file.ts:XX-YY\`
+📊 **Status:** ⚠️ Open (since v1)
+
+**Current Code:**
+\`\`\`typescript
+// Show the problematic code (5-15 lines with context)
+const problematicCode = something.wrong();
+\`\`\`
+
+**Problem:** [Explain what's wrong and WHY it's critical - security? data loss? crash?]
+
+**Suggested Fix:**
+\`\`\`typescript
+// Show how it should look
+const fixedCode = something.correct();
+\`\`\`
+
+---
+
+### 🟠 High Priority (Should Fix)
+
+[Same format as above for each issue]
+
+---
+
+### 🟡 Medium Priority (Consider Fixing)
+
+[Same format - can be briefer for minor issues]
+
+---
+
+### 🔵 Suggestions (Nice to Have)
+
+[Brief suggestions - code examples optional]
+
+---
+
+## Resolved Findings
+
+[Findings that were fixed - keep brief for reference]
+
+### ~~Finding #2: Missing null check~~ ✅ Fixed in v2
+📍 **Was at:** \`src/api/users.ts:45\`
+**Resolution:** Added optional chaining in commit abc1234
+
+---
+
+## What's Done Well
+
+[Call out good practices, clever solutions, good test coverage, etc.]
+
+---
+
+## Ready-to-Post Review Comments
+
+Copy these directly to GitHub:
+
+### Comment 1: [Title]
+**File:** \`path/to/file.ts\` **Line:** XX
+
+> \`\`\`typescript
+> // Quote the specific code
+> \`\`\`
+
+[Your constructive comment explaining the issue and suggestion]
+
+---
+
+## Verdict
+
+### ✅ Approve / 🔄 Request Changes / 💬 Comment
+
+**Rationale:** [One paragraph explaining your decision]
+
+---
+
+## Review History
+
+| Version | Date | Commit | Action |
+|---------|------|--------|--------|
+| v1 | $(date '+%Y-%m-%d') | Initial | Initial review |
+
+---
+
+*Review generated by Claude Code*
+\`\`\`
+
+---
+
+## Ongoing Collaboration
+
+As you discuss with the reviewer:
+
+1. **Update findings in-place** - Change status, don't duplicate
+2. **Move fixed items** to "Resolved Findings" section
+3. **Update the Tracker table** at the top
+4. **Keep Verdict current**
+
+The REVIEW.md should always show the CURRENT state, not accumulate history.
+
+---
+
+**BEGIN NOW: Classify the PR type, then run macro analysis, then parallel micro analyses. Include code snippets for every finding.**
+CLAUDE_EOF
+
+    success "Session created"
+    CURRENT_SESSION="$SESSION_DIR"
+    return 0
+}
+
+# ============================================================================
+# INVESTIGATION
+# ============================================================================
+
+create_investigation_session() {
+    show_context "New Investigation"
+
+    local REPO_URL=""
+    local REPO_DISPLAY=""
+
+    # Choose input method
+    local input_method=$(gum choose \
+        "🔍 Browse repositories" \
+        "🔗 Enter repo URL directly" \
+        "← Back")
+
+    case "$input_method" in
+        *"Browse"*)
+            REPO_URL=$(select_repo "New Investigation")
+            [ -z "$REPO_URL" ] && return 1
+            ;;
+        *"Enter repo"*)
+            local DEFAULT_REPO="https://github.com/aplaceformom/grace-frontend"
+            printf "Repository URL [$DEFAULT_REPO]: "
+            read -r REPO_URL
+            [ -z "$REPO_URL" ] && REPO_URL="$DEFAULT_REPO"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+
+    # Extract repo display name
+    if [[ "$REPO_URL" =~ github.com/([^/]+)/([^/]+) ]]; then
+        REPO_DISPLAY="${BASH_REMATCH[2]}"
+        REPO_DISPLAY="${REPO_DISPLAY%.git}"
+    else
+        REPO_DISPLAY="$REPO_URL"
+    fi
+
+    show_context "New Investigation" "📁 $REPO_DISPLAY"
+    dim "Fetching branches..."
+
+    # Fetch remote branches - try with and without .git suffix
+    local branches=""
+    branches=$(git ls-remote --heads "$REPO_URL" 2>/dev/null | sed 's/.*refs\/heads\///' | sort)
+    if [ -z "$branches" ]; then
+        branches=$(git ls-remote --heads "${REPO_URL}.git" 2>/dev/null | sed 's/.*refs\/heads\///' | sort)
+    fi
+
+    local BRANCH=""
+    if [ -n "$branches" ]; then
+        local branch_count=$(echo "$branches" | wc -l | xargs)
+
+        # Show context before filter
+        show_context "New Investigation" "📁 $REPO_DISPLAY"
+
+        # Show context
+        show_context "New Investigation" "📁 $REPO_DISPLAY"
+
+        # Use fzf for fuzzy selection
+        BRANCH=$(echo -e "← Back (cancel)\nmain (default)\n$branches" | fzf \
+            --height=~50% \
+            --layout=reverse \
+            --border=rounded \
+            --prompt="Search: " \
+            --header="Select branch ($branch_count available) • ESC to cancel" \
+            --header-first \
+            --ansi)
+
+        # Handle cancel/back
+        if [ -z "$BRANCH" ] || [[ "$BRANCH" == "← Back"* ]]; then
+            return 1
+        fi
+
+        # Handle "main (default)" selection
+        [[ "$BRANCH" == "main (default)" ]] && BRANCH=""
+    else
+        show_context "New Investigation" "📁 $REPO_DISPLAY"
+        dim "Could not fetch branches from remote."
+        echo ""
+
+        local fallback_choice=$(gum choose \
+            "📌 Use main/master (default)" \
+            "✏️  Enter branch name manually" \
+            "← Back (cancel)")
+
+        case "$fallback_choice" in
+            *"main/master"*)
+                BRANCH=""
+                ;;
+            *"Enter branch"*)
+                printf "Branch name: "
+                read -r BRANCH
+                ;;
+            *)
+                return 1
+                ;;
+        esac
+    fi
+
+    # Show context with branch selection
+    local branch_display="${BRANCH:-main}"
+    show_context "New Investigation" "📁 $REPO_DISPLAY" "🌿 $branch_display"
+
+    dim "Describe your investigation focus (empty line to finish, 'q' alone to cancel):"
+    echo ""
+    local INVESTIGATION=""
+    while IFS= read -r line; do
+        [ -z "$line" ] && break
+        [[ "$line" == "q" ]] && return 1
+        INVESTIGATION="${INVESTIGATION}${line}"$'\n'
+    done
+
+    if [ -z "$INVESTIGATION" ]; then
+        dim "No investigation focus provided"
+        sleep 1
+        return 1
+    fi
+
+    local OWNER REPO
+    if [[ "$REPO_URL" =~ ([^/]+)/([^/]+)(\.git)?$ ]]; then
+        OWNER="${BASH_REMATCH[1]}"
+        REPO="${BASH_REMATCH[2]}"
+        REPO="${REPO%.git}"
+    else
+        OWNER="unknown"
+        REPO="repo"
+    fi
+
+    local SESSION_NAME="inv-${REPO}-$(date +%Y%m%d-%H%M%S)"
+    local SESSION_DIR="$SESSIONS_DIR/$SESSION_NAME"
+
+    mkdir -p "$SESSION_DIR"
+    cd "$SESSION_DIR"
+
+    if ! gum spin --spinner dot --title "Cloning repository..." -- \
+        git clone --depth=100 "$REPO_URL" repo 2>&1; then
+        error "Failed to clone repository"
+        rm -rf "$SESSION_DIR"
+        sleep 2
+        return 1
+    fi
+
+    if [ ! -d "repo" ]; then
+        error "Clone failed - repo directory not created"
+        rm -rf "$SESSION_DIR"
+        sleep 2
+        return 1
+    fi
+
+    cd repo
+
+    local BRANCH_INFO
+    if [ -n "$BRANCH" ]; then
+        if ! gum spin --spinner dot --title "Checking out branch..." -- \
+            bash -c "git checkout '$BRANCH' 2>&1 || git checkout -b '$BRANCH' 'origin/$BRANCH' 2>&1"; then
+            error "Failed to checkout branch"
+            rm -rf "$SESSION_DIR"
+            sleep 2
+            return 1
+        fi
+        BRANCH_INFO="$BRANCH"
+    else
+        BRANCH=$(git branch --show-current)
+        BRANCH_INFO="$BRANCH (default)"
+    fi
+
+    cd "$SESSION_DIR"
+
+    # Create session-info.txt
+    cat > session-info.txt << EOF
+================================================================================
+SESSION INFO
+================================================================================
+Type:       Investigation
+Created:    $(date '+%Y-%m-%d %H:%M:%S')
+Session:    $SESSION_NAME
+
+Repository: $OWNER/$REPO
+URL:        $REPO_URL
+Branch:     $BRANCH_INFO
+
+Investigation Focus:
+--------------------------------------------------------------------------------
+$INVESTIGATION
+================================================================================
+EOF
+
+    # Create CLAUDE.md inside repo/ so Claude auto-reads it
+    cat > repo/CLAUDE.md << CLAUDE_EOF
+# Investigation Session - AUTO-START
+
+> **IMPORTANT**: Begin the investigation immediately upon reading this file.
+
+## Repository Information
+
+- **Repository**: $REPO_URL
+- **Branch**: \`$BRANCH_INFO\`
+
+## Investigation Focus
+
+$INVESTIGATION
+
+---
+
+## Investigation Instructions
+
+You are helping investigate an issue in this codebase. **Begin immediately.**
+
+### Phase 1: Understand the Codebase
+- Explore the project structure
+- Identify key files and components related to the investigation
+- Understand the architecture
+
+### Phase 2: Focused Investigation
+- Search for code related to the investigation focus
+- Trace through relevant code paths
+- Identify potential issues or areas of interest
+- Look for patterns, anomalies, or root causes
+
+### Phase 3: Document Findings
+
+**IMPORTANT: Write your findings to \`FINDINGS.md\` file** using this format:
+
+\`\`\`markdown
+# Investigation: [Brief title]
+
+## Summary
+[2-3 sentence summary of what was found]
+
+## Key Files
+- \`path/to/file.ts:123\` - [why this file is relevant]
+
+## Findings
+
+### Root Cause / Main Finding
+[Detailed explanation]
+
+### Related Observations
+- [Other relevant findings]
+
+### Code References
+\\\`\\\`\\\`
+[relevant code snippets with file:line]
+\\\`\\\`\\\`
+
+## Recommendations
+1. [Actionable next step]
+2. [Another recommendation]
+
+## Questions to Explore Further
+- [Open questions]
+\`\`\`
+
+---
+
+## Ongoing Collaboration
+
+As you investigate together:
+
+1. **Update FINDINGS.md** continuously as you discover new information
+2. **Add new sections** for each line of inquiry
+3. **Document dead ends** - what you tried that didn't pan out (saves time later)
+4. **Refine the summary** as understanding deepens
+5. **Keep recommendations current** based on what you learn
+
+The FINDINGS.md should be a living document that captures everything discovered.
+
+---
+
+**BEGIN THE INVESTIGATION NOW. Explore the codebase and focus on the investigation topic.**
+CLAUDE_EOF
+
+    success "Session created"
+    CURRENT_SESSION="$SESSION_DIR"
+    return 0
+}
+
+# ============================================================================
+# CLAUDE SESSION
+# ============================================================================
+
+run_claude_session() {
+    local SESSION_DIR="$1"
+    local SESSION_NAME=$(basename "$SESSION_DIR")
+
+    # Verify session exists
+    if [ ! -d "$SESSION_DIR/repo" ]; then
+        error "Session directory not found: $SESSION_DIR/repo"
+        error "The session may have been deleted or failed to create."
+
+        # Clean up orphaned session if it exists
+        if [ -d "$SESSION_DIR" ]; then
+            if gum confirm --default=false "Delete orphaned session directory?"; then
+                rm -rf "$SESSION_DIR"
+                success "Cleaned up orphaned session"
+            fi
+        fi
+        sleep 2
+        return 1
+    fi
+
+    pre_session_menu "$SESSION_DIR"
+}
+
+open_in_editor() {
+    local dir="$1"
+
+    # Try VS Code, then Cursor, then fallback
+    if command -v code >/dev/null 2>&1; then
+        code "$dir"
+    elif command -v cursor >/dev/null 2>&1; then
+        cursor "$dir"
+    elif [ -d "/Applications/Visual Studio Code.app" ]; then
+        open -a "Visual Studio Code" "$dir"
+    elif [ -d "/Applications/Cursor.app" ]; then
+        open -a "Cursor" "$dir"
+    else
+        error "No editor found. Install VS Code and run:"
+        dim "  Cmd+Shift+P → 'Shell Command: Install code command in PATH'"
+        sleep 3
+        return 1
+    fi
+    return 0
+}
+
+view_markdown_nice() {
+    local file="$1"
+
+    if [ ! -f "$file" ]; then
+        dim "File not found: $file"
+        sleep 1
+        return 1
+    fi
+
+    local choice=$(gum choose \
+        "📖 View in terminal (formatted)" \
+        "🌐 Open in browser (rich view)" \
+        "📝 Open in editor" \
+        "← Back")
+
+    case "$choice" in
+        *"terminal"*)
+            # Use glow if available, otherwise gum pager
+            if command -v glow >/dev/null 2>&1; then
+                glow -p "$file"
+            else
+                gum pager < "$file"
+            fi
+            ;;
+        *"browser"*)
+            generate_review_html "$file"
+            ;;
+        *"editor"*)
+            open_in_editor "$(dirname "$file")"
+            ;;
+    esac
+}
+
+generate_review_html() {
+    local file="$1"
+    local html_file="/tmp/review_$(date +%s).html"
+
+    # Check if file has content
+    if [ ! -s "$file" ]; then
+        error "Review file is empty: $file"
+        sleep 2
+        return 1
+    fi
+
+    cat > "$html_file" << 'HTMLEOF'
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Code Review</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.6/dist/purify.min.js"></script>
+    <style>
+        :root {
+            --critical: #dc2626;
+            --critical-bg: #fef2f2;
+            --high: #ea580c;
+            --high-bg: #fff7ed;
+            --medium: #ca8a04;
+            --medium-bg: #fefce8;
+            --suggestion: #2563eb;
+            --suggestion-bg: #eff6ff;
+            --positive: #16a34a;
+            --positive-bg: #f0fdf4;
+            --gray-50: #f9fafb;
+            --gray-100: #f3f4f6;
+            --gray-200: #e5e7eb;
+            --gray-300: #d1d5db;
+            --gray-600: #4b5563;
+            --gray-700: #374151;
+            --gray-900: #111827;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            line-height: 1.6;
+            color: var(--gray-900);
+            background: var(--gray-50);
+            padding: 2rem;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        /* Header */
+        .review-header {
+            background: white;
+            border-radius: 12px;
+            padding: 2rem;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+
+        .review-header h1 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            margin-bottom: 1rem;
+            color: var(--gray-900);
+        }
+
+        .classification-badges {
+            display: flex;
+            gap: 0.75rem;
+            flex-wrap: wrap;
+            margin-bottom: 1rem;
+        }
+
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.375rem;
+            padding: 0.375rem 0.75rem;
+            border-radius: 9999px;
+            font-size: 0.875rem;
+            font-weight: 500;
+        }
+
+        .badge-type { background: var(--gray-100); color: var(--gray-700); }
+        .badge-approve { background: var(--positive-bg); color: var(--positive); }
+        .badge-changes { background: var(--critical-bg); color: var(--critical); }
+        .badge-comment { background: var(--suggestion-bg); color: var(--suggestion); }
+
+        /* Summary Box */
+        .summary-box {
+            background: var(--gray-50);
+            border-radius: 8px;
+            padding: 1rem;
+            margin-top: 1rem;
+        }
+
+        .summary-box p {
+            color: var(--gray-700);
+            font-size: 0.9375rem;
+        }
+
+        /* Sections */
+        .section {
+            background: white;
+            border-radius: 12px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+
+        .section h2 {
+            font-size: 1.125rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .section h3 {
+            font-size: 1rem;
+            font-weight: 600;
+            margin: 1.25rem 0 0.75rem;
+            color: var(--gray-700);
+        }
+
+        /* Finding Cards */
+        .finding {
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 0.75rem;
+        }
+
+        .finding-critical {
+            background: var(--critical-bg);
+            border-left: 4px solid var(--critical);
+        }
+
+        .finding-high {
+            background: var(--high-bg);
+            border-left: 4px solid var(--high);
+        }
+
+        .finding-medium {
+            background: var(--medium-bg);
+            border-left: 4px solid var(--medium);
+        }
+
+        .finding-suggestion {
+            background: var(--suggestion-bg);
+            border-left: 4px solid var(--suggestion);
+        }
+
+        .finding-positive {
+            background: var(--positive-bg);
+            border-left: 4px solid var(--positive);
+        }
+
+        .finding-location {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8125rem;
+            color: var(--gray-600);
+            margin-bottom: 0.5rem;
+        }
+
+        .finding-title {
+            font-weight: 600;
+            margin-bottom: 0.375rem;
+        }
+
+        .finding-description {
+            font-size: 0.9375rem;
+            color: var(--gray-700);
+        }
+
+        /* Code blocks */
+        pre {
+            background: var(--gray-900);
+            color: #e5e7eb;
+            padding: 1rem;
+            border-radius: 8px;
+            overflow-x: auto;
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.875rem;
+            margin: 0.75rem 0;
+        }
+
+        code {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.875rem;
+        }
+
+        p code, li code {
+            background: var(--gray-100);
+            padding: 0.125rem 0.375rem;
+            border-radius: 4px;
+            color: var(--gray-700);
+        }
+
+        /* Tables */
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 1rem 0;
+            font-size: 0.9375rem;
+        }
+
+        th, td {
+            padding: 0.75rem;
+            text-align: left;
+            border-bottom: 1px solid var(--gray-200);
+        }
+
+        th {
+            background: var(--gray-50);
+            font-weight: 600;
+            color: var(--gray-700);
+        }
+
+        /* Review Comments */
+        .review-comment {
+            background: white;
+            border: 1px solid var(--gray-200);
+            border-radius: 8px;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+
+        .comment-file {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.8125rem;
+            color: var(--suggestion);
+            margin-bottom: 0.75rem;
+        }
+
+        blockquote {
+            background: var(--gray-50);
+            border-left: 3px solid var(--gray-300);
+            padding: 0.75rem 1rem;
+            margin: 0.75rem 0;
+            border-radius: 0 8px 8px 0;
+        }
+
+        blockquote code {
+            background: white;
+        }
+
+        /* Verdict */
+        .verdict-box {
+            text-align: center;
+            padding: 1.5rem;
+            background: linear-gradient(135deg, var(--gray-50), white);
+            border-radius: 12px;
+            margin-top: 2rem;
+        }
+
+        .verdict-icon {
+            font-size: 3rem;
+            margin-bottom: 0.5rem;
+        }
+
+        .verdict-text {
+            font-size: 1.25rem;
+            font-weight: 700;
+        }
+
+        .verdict-approve .verdict-text { color: var(--positive); }
+        .verdict-changes .verdict-text { color: var(--critical); }
+        .verdict-comment .verdict-text { color: var(--suggestion); }
+
+        .verdict-rationale {
+            margin-top: 0.75rem;
+            color: var(--gray-600);
+            font-size: 0.9375rem;
+        }
+
+        /* Lists */
+        ul, ol {
+            margin: 0.75rem 0;
+            padding-left: 1.5rem;
+        }
+
+        li {
+            margin-bottom: 0.375rem;
+        }
+
+        /* Emoji fixes */
+        .emoji {
+            font-family: "Apple Color Emoji", "Segoe UI Emoji", sans-serif;
+        }
+
+        /* Responsive */
+        @media (max-width: 640px) {
+            body { padding: 1rem; }
+            .review-header, .section { padding: 1rem; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div id="content"></div>
+    </div>
+
+    <script>
+HTMLEOF
+
+    # Add the markdown content as a JavaScript variable
+    echo "const markdown = \`" >> "$html_file"
+    # Escape for JS template literal: backslashes, backticks, and ${
+    # Then convert emoji codes
+    cat "$file" | \
+        sed 's/\\/\\\\/g' | \
+        sed 's/`/\\`/g' | \
+        sed 's/\${/\\${/g' | \
+        sed 's/:red_circle:/🔴/g' | \
+        sed 's/:orange_circle:/🟠/g' | \
+        sed 's/:yellow_circle:/🟡/g' | \
+        sed 's/:blue_circle:/🔵/g' | \
+        sed 's/:white_check_mark:/✅/g' | \
+        sed 's/:heavy_check_mark:/✅/g' | \
+        sed 's/:x:/❌/g' | \
+        sed 's/:warning:/⚠️/g' | \
+        sed 's/:bulb:/💡/g' | \
+        sed 's/:memo:/📝/g' | \
+        sed 's/:rocket:/🚀/g' | \
+        sed 's/:bug:/🐛/g' | \
+        sed 's/:lock:/🔒/g' | \
+        sed 's/:zap:/⚡/g' | \
+        sed 's/:recycle:/♻️/g' | \
+        sed 's/:fire:/🔥/g' | \
+        sed 's/:star:/⭐/g' | \
+        sed 's/:thumbsup:/👍/g' | \
+        sed 's/:thumbsdown:/👎/g' | \
+        sed 's/:question:/❓/g' | \
+        sed 's/:exclamation:/❗/g' >> "$html_file"
+
+    cat >> "$html_file" << 'HTMLEOF'
+`;
+
+        // Custom renderer for marked
+        const renderer = new marked.Renderer();
+
+        // Process the markdown
+        let html = marked.parse(markdown);
+
+        // Enhance findings sections with colored cards
+        html = html.replace(/<h3>([^<]*Critical[^<]*)<\/h3>/gi, '<h3 class="finding-header critical">$1</h3>');
+        html = html.replace(/<h3>([^<]*High[^<]*)<\/h3>/gi, '<h3 class="finding-header high">$1</h3>');
+        html = html.replace(/<h3>([^<]*Medium[^<]*)<\/h3>/gi, '<h3 class="finding-header medium">$1</h3>');
+        html = html.replace(/<h3>([^<]*Suggestion[^<]*)<\/h3>/gi, '<h3 class="finding-header suggestion">$1</h3>');
+        html = html.replace(/<h3>([^<]*Positive[^<]*)<\/h3>/gi, '<h3 class="finding-header positive">$1</h3>');
+
+        // Wrap file:line references in styled spans
+        html = html.replace(/\[([^\]]+\.(ts|tsx|js|jsx|py|go|rs|java|rb|css|scss|html|json|yml|yaml|md):\d+[^\]]*)\]/g,
+            '<span class="finding-location">📍 $1</span>');
+        html = html.replace(/\[([^\]]+\.(ts|tsx|js|jsx|py|go|rs|java|rb|css|scss|html|json|yml|yaml|md)[^\]]*)\]/g,
+            '<span class="finding-location">📄 $1</span>');
+
+        // Wrap in sections
+        html = html.replace(/<h2>/g, '</div><div class="section"><h2>');
+        html = '<div class="section">' + html + '</div>';
+        html = html.replace(/<div class="section"><\/div>/g, '');
+
+        // Style the first section as header
+        html = html.replace(/<div class="section">/, '<div class="review-header">');
+
+        // Add verdict styling
+        if (html.includes('Approve')) {
+            html = html.replace(/(<li[^>]*>.*✅.*Approve[^<]*<\/li>)/i,
+                '<li class="verdict-item approve">$1</li>');
+        }
+
+        document.getElementById('content').innerHTML = DOMPurify.sanitize(html);
+
+        // Post-process: style finding items
+        document.querySelectorAll('ul li, p').forEach(el => {
+            const text = el.textContent;
+            if (text.includes('📍') || el.querySelector('.finding-location')) {
+                const parent = el.closest('.section');
+                if (parent) {
+                    const headerText = parent.querySelector('h2, h3')?.textContent || '';
+                    let cls = 'finding';
+                    if (headerText.match(/critical/i)) cls += ' finding-critical';
+                    else if (headerText.match(/high/i)) cls += ' finding-high';
+                    else if (headerText.match(/medium/i)) cls += ' finding-medium';
+                    else if (headerText.match(/suggestion|low/i)) cls += ' finding-suggestion';
+                    else if (headerText.match(/positive|good|well/i)) cls += ' finding-positive';
+                    el.classList.add(...cls.split(' '));
+                }
+            }
+        });
+    </script>
+</body>
+</html>
+HTMLEOF
+
+    open "$html_file" 2>/dev/null || xdg-open "$html_file" 2>/dev/null || true
+    success "Opened review in browser"
+    sleep 1
+}
+
+archive_session() {
+    local SESSION_DIR="$1"
+    local SESSION_NAME=$(basename "$SESSION_DIR")
+
+    # Move review files to session root if they're in repo/
+    [ -f "$SESSION_DIR/repo/REVIEW.md" ] && mv "$SESSION_DIR/repo/REVIEW.md" "$SESSION_DIR/"
+    [ -f "$SESSION_DIR/repo/FINDINGS.md" ] && mv "$SESSION_DIR/repo/FINDINGS.md" "$SESSION_DIR/"
+    [ -f "$SESSION_DIR/repo/CLAUDE.md" ] && mv "$SESSION_DIR/repo/CLAUDE.md" "$SESSION_DIR/"
+
+    # Delete repo folder
+    rm -rf "$SESSION_DIR/repo"
+
+    # Mark as archived
+    echo "ARCHIVED: $(date '+%Y-%m-%d %H:%M:%S')" >> "$SESSION_DIR/session-info.txt"
+
+    success "Session archived (repo deleted, metadata kept)"
+}
+
+is_archived() {
+    local SESSION_DIR="$1"
+    [ ! -d "$SESSION_DIR/repo" ] && [ -f "$SESSION_DIR/session-info.txt" ]
+}
+
+refresh_pr_session() {
+    local SESSION_DIR="$1"
+    local INFO_FILE="$SESSION_DIR/session-info.txt"
+
+    if ! grep -q "^Type:.*PR" "$INFO_FILE" 2>/dev/null; then
+        error "This is not a PR session"
+        sleep 2
+        return 1
+    fi
+
+    local PR_NUMBER=$(grep "^PR #" "$INFO_FILE" 2>/dev/null | head -1 | sed 's/PR #\([0-9]*\).*/\1/')
+    local REPO=$(grep "^Repository:" "$INFO_FILE" 2>/dev/null | head -1 | cut -d: -f2 | xargs)
+    local PR_BASE=$(grep "^Branch:" "$INFO_FILE" 2>/dev/null | head -1 | sed 's/.*→ //' | xargs)
+
+    if [ -z "$PR_NUMBER" ] || [ -z "$REPO" ]; then
+        error "Could not find PR info in session"
+        sleep 2
+        return 1
+    fi
+
+    cd "$SESSION_DIR/repo" || return 1
+
+    # Get current commit before refresh
+    local OLD_COMMIT=$(git rev-parse HEAD 2>/dev/null)
+
+    echo ""
+    gum spin --spinner dot --title "Fetching latest PR changes..." -- \
+        bash -c "git fetch origin 'pull/$PR_NUMBER/head:pr-$PR_NUMBER-new' 2>&1"
+
+    local NEW_COMMIT=$(git rev-parse "pr-$PR_NUMBER-new" 2>/dev/null)
+
+    if [ "$OLD_COMMIT" = "$NEW_COMMIT" ]; then
+        success "PR is already up to date (no new commits)"
+        sleep 2
+        return 0
+    fi
+
+    # Show what changed
+    local NEW_COMMITS=$(git log --oneline "$OLD_COMMIT".."$NEW_COMMIT" 2>/dev/null)
+    local COMMIT_COUNT=$(echo "$NEW_COMMITS" | grep -c . || echo "0")
+
+    echo ""
+    gum style --foreground 82 --bold "Found $COMMIT_COUNT new commit(s):"
+    echo ""
+    echo "$NEW_COMMITS" | head -10
+    [ "$COMMIT_COUNT" -gt 10 ] && dim "... and $((COMMIT_COUNT - 10)) more"
+    echo ""
+
+    if ! gum confirm "Update to latest and prepare re-review?"; then
+        return 0
+    fi
+
+    # Checkout new version
+    git checkout "pr-$PR_NUMBER-new" 2>/dev/null
+    git branch -D "pr-$PR_NUMBER" 2>/dev/null
+    git branch -m "pr-$PR_NUMBER" 2>/dev/null
+
+    # Get new diff stats
+    local NEW_DIFF_STAT=$(git diff --stat "$PR_BASE"..."pr-$PR_NUMBER" 2>/dev/null || echo "")
+    local NEW_CHANGED_FILES=$(git diff --name-only "$PR_BASE"..."pr-$PR_NUMBER" 2>/dev/null || echo "")
+    local CHANGES_SINCE=$(git diff --stat "$OLD_COMMIT"..."pr-$PR_NUMBER" 2>/dev/null || echo "")
+
+    # Update session info with refresh timestamp
+    echo "" >> "$INFO_FILE"
+    echo "REFRESHED: $(date '+%Y-%m-%d %H:%M:%S')" >> "$INFO_FILE"
+    echo "Previous commit: $OLD_COMMIT" >> "$INFO_FILE"
+    echo "New commit: $NEW_COMMIT" >> "$INFO_FILE"
+    echo "New commits: $COMMIT_COUNT" >> "$INFO_FILE"
+
+    # Archive old REVIEW.md if it exists
+    local version=1
+    while [ -f "$SESSION_DIR/repo/REVIEW-v${version}.md" ] || [ -f "$SESSION_DIR/REVIEW-v${version}.md" ]; do
+        ((version++))
+    done
+
+    if [ -f "$SESSION_DIR/repo/REVIEW.md" ]; then
+        cp "$SESSION_DIR/repo/REVIEW.md" "$SESSION_DIR/repo/REVIEW-v${version}.md"
+        success "Archived previous review as REVIEW-v${version}.md"
+    fi
+
+    local next_version=$((version + 1))
+
+    # Create RE-REVIEW.md with streamlined instructions
+    cat > "$SESSION_DIR/repo/RE-REVIEW.md" << REREVIEW_EOF
+# Re-Review: v${next_version}
+
+## What Changed
+
+| Info | Value |
+|------|-------|
+| **Previous** | v${version} (commit \`${OLD_COMMIT:0:8}\`) |
+| **Current** | v${next_version} (commit \`${NEW_COMMIT:0:8}\`) |
+| **New Commits** | ${COMMIT_COUNT} |
+
+### New Commits
+\`\`\`
+$NEW_COMMITS
+\`\`\`
+
+### Files Changed Since Last Review
+\`\`\`
+$CHANGES_SINCE
+\`\`\`
+
+---
+
+## Re-Review Instructions
+
+**Update REVIEW.md in-place. Do NOT append sections.**
+
+### 1. Check Each Open Finding
+For each finding in "Open Findings":
+- **Fixed?** → Move to "Resolved Findings", note the fix
+- **Still present?** → Keep in place
+- **Partially fixed?** → Update the description
+
+### 2. Update the Tracker Table
+\`\`\`markdown
+| ID | Finding | Severity | Status | Since |
+|----|---------|----------|--------|-------|
+| 1 | Null check missing | 🔴 Critical | ✅ Fixed | v1→v${next_version} |
+| 2 | SQL injection | 🟠 High | ⚠️ Open | v1 |
+| 3 | New issue found | 🟡 Medium | ⚠️ Open | v${next_version} |
+\`\`\`
+
+### 3. Check for New Issues
+Review the new commits for any NEW problems introduced.
+Add new findings with "Since: v${next_version}"
+
+### 4. Update Review History
+Add row to the history table:
+\`\`\`markdown
+| v${next_version} | $(date '+%Y-%m-%d') | ${NEW_COMMIT:0:8} | [X fixed, Y new, Z still open] |
+\`\`\`
+
+### 5. Update Verdict
+Re-evaluate based on current state of findings.
+
+---
+
+**BEGIN: Read REVIEW.md, check findings against new code, update in-place.**
+REREVIEW_EOF
+
+    success "PR refreshed! RE-REVIEW.md created with instructions"
+    sleep 1
+
+    # Update CLAUDE.md to reference RE-REVIEW.md
+    if [ -f "$SESSION_DIR/repo/CLAUDE.md" ]; then
+        # Remove any previous re-review notice
+        sed -i '' '/^# ⚠️ RE-REVIEW MODE/,/^---$/d' "$SESSION_DIR/repo/CLAUDE.md" 2>/dev/null || true
+
+        # Prepend new re-review notice
+        local temp_file=$(mktemp)
+        cat > "$temp_file" << NOTICE_EOF
+# ⚠️ RE-REVIEW MODE (v${next_version})
+
+**PR updated: ${COMMIT_COUNT} new commit(s) since last review.**
+
+1. Read \`RE-REVIEW.md\` for what changed
+2. Update \`REVIEW.md\` in-place (don't append)
+3. Move fixed items to "Resolved Findings"
+4. Add any new issues found
+
+---
+
+NOTICE_EOF
+        cat "$SESSION_DIR/repo/CLAUDE.md" >> "$temp_file"
+        mv "$temp_file" "$SESSION_DIR/repo/CLAUDE.md"
+    fi
+
+    return 0
+}
+
+restart_session() {
+    local SESSION_DIR="$1"
+    local INFO_FILE="$SESSION_DIR/session-info.txt"
+
+    # Extract repo URL and branch info
+    local REPO_URL=$(grep "^URL:" "$INFO_FILE" 2>/dev/null | head -1 | cut -d' ' -f2-)
+
+    if [ -z "$REPO_URL" ]; then
+        error "Could not find repository URL in session info"
+        sleep 2
+        return 1
+    fi
+
+    # Check if it's a PR session
+    if grep -q "^Type:.*PR" "$INFO_FILE" 2>/dev/null; then
+        local PR_NUMBER=$(grep "^PR #" "$INFO_FILE" 2>/dev/null | head -1 | sed 's/PR #\([0-9]*\).*/\1/')
+        local PR_BASE=$(grep "^Branch:" "$INFO_FILE" 2>/dev/null | head -1 | sed 's/.*→ //' | xargs)
+
+        gum spin --spinner dot --title "Re-cloning repository..." -- \
+            git clone --depth=50 "https://github.com/${REPO_URL}.git" "$SESSION_DIR/repo" 2>&1 || \
+            git clone --depth=50 "$REPO_URL" "$SESSION_DIR/repo" 2>&1
+
+        if [ ! -d "$SESSION_DIR/repo" ]; then
+            error "Failed to clone repository"
+            sleep 2
+            return 1
+        fi
+
+        cd "$SESSION_DIR/repo"
+        gum spin --spinner dot --title "Checking out PR branch..." -- \
+            bash -c "git fetch origin 'pull/$PR_NUMBER/head:pr-$PR_NUMBER' 2>&1 && git checkout 'pr-$PR_NUMBER' 2>&1"
+    else
+        # Investigation session
+        local BRANCH=$(grep "^Branch:" "$INFO_FILE" 2>/dev/null | head -1 | cut -d: -f2 | xargs | sed 's/ (default)//')
+
+        gum spin --spinner dot --title "Re-cloning repository..." -- \
+            git clone --depth=100 "$REPO_URL" "$SESSION_DIR/repo" 2>&1
+
+        if [ ! -d "$SESSION_DIR/repo" ]; then
+            error "Failed to clone repository"
+            sleep 2
+            return 1
+        fi
+
+        if [ -n "$BRANCH" ]; then
+            cd "$SESSION_DIR/repo"
+            git checkout "$BRANCH" 2>/dev/null || true
+        fi
+    fi
+
+    # Restore CLAUDE.md to repo if it exists in session root
+    [ -f "$SESSION_DIR/CLAUDE.md" ] && cp "$SESSION_DIR/CLAUDE.md" "$SESSION_DIR/repo/"
+
+    # Remove archived marker
+    sed -i '' '/^ARCHIVED:/d' "$SESSION_DIR/session-info.txt" 2>/dev/null || true
+
+    success "Session restored!"
+    sleep 1
+    return 0
+}
+
+pre_session_menu() {
+    local SESSION_DIR="$1"
+    local SESSION_NAME=$(basename "$SESSION_DIR")
+
+    # Get PR URL if it's a PR session
+    local PR_URL=""
+    if [ -f "$SESSION_DIR/session-info.txt" ]; then
+        PR_URL=$(grep "^URL:" "$SESSION_DIR/session-info.txt" 2>/dev/null | head -1 | cut -d: -f2- | xargs)
+    fi
+
+    while true; do
+        header
+        gum style \
+            --border rounded \
+            --border-foreground 82 \
+            --padding "1 2" \
+            --align center \
+            "Session ready: $SESSION_NAME"
+
+        echo ""
+        dim "Explore the changes before starting the review:"
+        echo ""
+
+        # Check if this is a re-review (has RE-REVIEW.md)
+        local is_rereview=""
+        [ -f "$SESSION_DIR/repo/RE-REVIEW.md" ] && is_rereview="yes"
+
+        local options=(
+            "▶ Start Claude $([ -n "$is_rereview" ] && echo "re-review" || echo "review")"
+            "💻 Open in editor (VS Code/Cursor)"
+            "📊 View diff"
+        )
+
+        if [ -n "$PR_URL" ]; then
+            options+=("🌐 Open PR in browser")
+            options+=("🔄 Refresh PR (fetch updates)")
+        fi
+
+        options+=("📄 View session info")
+        options+=("🗑 Cancel and delete session")
+        options+=("← Back to main menu")
+
+        local choice=$(printf '%s\n' "${options[@]}" | gum choose --header "What would you like to do?")
+
+        case "$choice" in
+            *"Start Claude"*)
+                echo ""
+                dim "Claude will auto-start the review."
+                dim "Type /exit when done to return here."
+                echo ""
+                sleep 1
+
+                # Reset terminal state before starting Claude
+                tput reset 2>/dev/null || clear
+
+                cd "$SESSION_DIR/repo"
+                claude "Begin"
+
+                post_session_menu "$SESSION_DIR"
+                return 0
+                ;;
+            *"editor"*|*"VS Code"*|*"Cursor"*)
+                open_in_editor "$SESSION_DIR/repo"
+                ;;
+            *"View diff"*)
+                view_diff "$SESSION_DIR"
+                ;;
+            *"Open PR"*)
+                if [ -n "$PR_URL" ]; then
+                    # Open directly to Files Changed tab
+                    open "${PR_URL}/files" 2>/dev/null || xdg-open "${PR_URL}/files" 2>/dev/null || true
+                    success "Opened PR files in browser"
+                    sleep 1
+                fi
+                ;;
+            *"Refresh PR"*)
+                refresh_pr_session "$SESSION_DIR"
+                ;;
+            *"session info"*)
+                if [ -f "$SESSION_DIR/session-info.txt" ]; then
+                    gum pager < "$SESSION_DIR/session-info.txt"
+                fi
+                ;;
+            *"Cancel"*|*"delete"*)
+                if gum confirm --default=false "Delete this session?"; then
+                    rm -rf "$SESSION_DIR"
+                    success "Session deleted"
+                    sleep 1
+                    return 1
+                fi
+                ;;
+            *"Back to main"*)
+                return 1
+                ;;
+            *)
+                # ESC pressed or empty selection - go back
+                return 1
+                ;;
+        esac
+    done
+}
+
+post_session_menu() {
+    local SESSION_DIR="$1"
+    local SESSION_NAME=$(basename "$SESSION_DIR")
+
+    # Get PR URL if it's a PR session
+    local PR_URL=""
+    if [ -f "$SESSION_DIR/session-info.txt" ]; then
+        PR_URL=$(grep "^URL:" "$SESSION_DIR/session-info.txt" 2>/dev/null | head -1 | cut -d: -f2- | xargs)
+    fi
+
+    # Find review file
+    local review_file=""
+    [ -f "$SESSION_DIR/repo/REVIEW.md" ] && review_file="$SESSION_DIR/repo/REVIEW.md"
+    [ -f "$SESSION_DIR/repo/FINDINGS.md" ] && review_file="$SESSION_DIR/repo/FINDINGS.md"
+    [ -f "$SESSION_DIR/REVIEW.md" ] && review_file="$SESSION_DIR/REVIEW.md"
+    [ -f "$SESSION_DIR/FINDINGS.md" ] && review_file="$SESSION_DIR/FINDINGS.md"
+
+    while true; do
+        header
+        gum style \
+            --border rounded \
+            --border-foreground 240 \
+            --padding "1 2" \
+            --align center \
+            "Session: $SESSION_NAME"
+
+        echo ""
+
+        # Show review/findings file if it exists
+        if [ -n "$review_file" ]; then
+            gum style --foreground 82 "📝 Review findings available"
+            echo ""
+        fi
+
+        local options=(
+            "↩ Resume Claude"
+            "💻 Open in editor"
+            "📊 View diff"
+        )
+
+        # Add PR-specific options
+        if [ -n "$PR_URL" ]; then
+            options+=("🌐 Open PR in browser")
+            options+=("🔄 Refresh PR (check for updates)")
+        fi
+
+        # Add review options if review exists
+        if [ -n "$review_file" ]; then
+            options+=("📖 View review (nice)")
+            options+=("📋 Copy review to clipboard")
+        fi
+
+        options+=(
+            "📄 View session info"
+            "───────────────"
+            "📁 Keep session"
+            "📦 Archive (keep review, delete repo)"
+            "🗑 Delete everything"
+            "← Back to main menu"
+        )
+
+        local choice=$(printf '%s\n' "${options[@]}" | gum choose --header "What next?")
+
+        case "$choice" in
+            *"Resume Claude"*)
+                tput reset 2>/dev/null || clear
+                cd "$SESSION_DIR/repo"
+                claude -c
+                ;;
+            *"editor"*)
+                open_in_editor "$SESSION_DIR/repo"
+                ;;
+            *"View diff"*)
+                view_diff "$SESSION_DIR"
+                ;;
+            *"Open PR in browser"*)
+                if [ -n "$PR_URL" ]; then
+                    open "${PR_URL}/files" 2>/dev/null || xdg-open "${PR_URL}/files" 2>/dev/null || true
+                fi
+                ;;
+            *"Refresh PR"*)
+                if refresh_pr_session "$SESSION_DIR"; then
+                    # Update review_file reference in case it moved
+                    review_file=""
+                    [ -f "$SESSION_DIR/repo/REVIEW.md" ] && review_file="$SESSION_DIR/repo/REVIEW.md"
+                    [ -f "$SESSION_DIR/REVIEW.md" ] && review_file="$SESSION_DIR/REVIEW.md"
+                fi
+                ;;
+            *"View review (nice)"*)
+                if [ -n "$review_file" ]; then
+                    view_markdown_nice "$review_file"
+                fi
+                ;;
+            *"Copy review"*)
+                if [ -n "$review_file" ]; then
+                    cat "$review_file" | pbcopy 2>/dev/null && success "Copied to clipboard"
+                    sleep 1
+                else
+                    dim "No review/findings file found"
+                    sleep 1
+                fi
+                ;;
+            *"session info"*)
+                if [ -f "$SESSION_DIR/session-info.txt" ]; then
+                    gum pager < "$SESSION_DIR/session-info.txt"
+                fi
+                ;;
+            *"Keep session"*)
+                info "Session kept at: $SESSION_DIR"
+                sleep 1
+                return 0
+                ;;
+            *"Archive"*)
+                if gum confirm "Archive session? (Keeps review & metadata, deletes repo)"; then
+                    archive_session "$SESSION_DIR"
+                    sleep 1
+                fi
+                return 0
+                ;;
+            *"Delete everything"*)
+                if gum confirm --default=false "Delete this session completely?"; then
+                    rm -rf "$SESSION_DIR"
+                    success "Session deleted"
+                    sleep 1
+                fi
+                return 0
+                ;;
+            *"───"*)
+                # Separator, do nothing
+                ;;
+            *"Back to main"*)
+                return 0
+                ;;
+            *)
+                # ESC pressed or empty selection - go back
+                return 0
+                ;;
+        esac
+    done
+}
+
+view_diff() {
+    local SESSION_DIR="$1"
+    local INFO_FILE="$SESSION_DIR/session-info.txt"
+
+    cd "$SESSION_DIR/repo"
+
+    # Get base branch from session info
+    local BASE_BRANCH=$(grep "^Branch:" "$INFO_FILE" 2>/dev/null | head -1 | sed 's/.*→ //' | xargs)
+
+    if [ -z "$BASE_BRANCH" ]; then
+        BASE_BRANCH="main"
+    fi
+
+    local choice=$(gum choose \
+        "📊 Summary (stat)" \
+        "📝 Full diff in pager" \
+        "💻 Open diff in VS Code" \
+        "← Back")
+
+    case "$choice" in
+        *"Summary"*)
+            clear
+            echo ""
+            gum style --foreground 75 --bold "Diff Summary"
+            echo ""
+            git diff --stat "$BASE_BRANCH"...HEAD 2>/dev/null || git diff --stat HEAD~5
+            echo ""
+            read -p "Press Enter to continue..."
+            ;;
+        *"Full diff"*)
+            # Use delta if available, otherwise git diff with color
+            if command -v delta >/dev/null 2>&1; then
+                git diff "$BASE_BRANCH"...HEAD 2>/dev/null | delta --paging=always
+            else
+                git diff "$BASE_BRANCH"...HEAD --color=always 2>/dev/null | gum pager
+            fi
+            ;;
+        *"VS Code"*)
+            # Open VS Code with git diff
+            code --diff "$SESSION_DIR/repo" 2>/dev/null || {
+                error "Could not open VS Code"
+                sleep 2
+            }
+            ;;
+    esac
+}
+
+# ============================================================================
+# SEARCH
+# ============================================================================
+
+search_sessions() {
+    header
+    gum style --foreground 214 --bold "Search Sessions"
+    echo ""
+
+    printf "Search: "
+    read -r query
+    [ -z "$query" ] && return 0
+
+    local results=$(grep -ril "$query" "$SESSIONS_DIR"/*/session-info.txt 2>/dev/null || true)
+
+    if [ -z "$results" ]; then
+        echo ""
+        dim "No sessions found matching '$query'"
+        sleep 2
+        return 0
+    fi
+
+    # Build formatted options
+    local sessions=()
+    local options=()
+
+    while IFS= read -r info_file; do
+        [ -z "$info_file" ] && continue
+        local session=$(dirname "$info_file")
+        sessions+=("$session")
+
+        local name=$(basename "$session")
+        local archived=""
+        grep -q "^ARCHIVED:" "$info_file" 2>/dev/null && archived="📦 "
+
+        local has_review=""
+        [ -f "$session/REVIEW.md" ] || [ -f "$session/repo/REVIEW.md" ] && has_review=" 📝"
+        [ -f "$session/FINDINGS.md" ] || [ -f "$session/repo/FINDINGS.md" ] && has_review=" 📝"
+
+        local created=$(grep "^Created:" "$info_file" 2>/dev/null | cut -d: -f2- | xargs | cut -d' ' -f1-2)
+
+        if [[ "$name" == pr-* ]]; then
+            local title=$(grep "^PR #" "$info_file" 2>/dev/null | head -1)
+            options+=("${archived}🔍 ${title}${has_review} • ${created}")
+        else
+            local title=$(sed -n '/Investigation Focus:/,/====/p' "$info_file" 2>/dev/null | grep -v "Investigation Focus:" | grep -v "===" | grep -v "^-" | head -1 | xargs)
+            options+=("${archived}🔬 ${title:0:40}${has_review} • ${created}")
+        fi
+    done <<< "$results"
+
+    echo ""
+    # Add back option
+    local all_options=("← Back" "${options[@]}")
+    local selected=$(printf '%s\n' "${all_options[@]}" | gum choose --header "Found ${#options[@]} match(es) for '$query' (ESC to go back):")
+
+    if [ -z "$selected" ] || [[ "$selected" == "← Back"* ]]; then
+        return 0
+    fi
+
+    # Find matching session by index
+    for i in "${!options[@]}"; do
+        if [ "${options[$i]}" = "$selected" ]; then
+            pre_session_menu "${sessions[$i]}"
+            return 0
+        fi
+    done
+}
+
+# ============================================================================
+# CLEANUP
+# ============================================================================
+
+cleanup_sessions() {
+    header
+    gum style --foreground 196 --bold "Cleanup Sessions"
+    echo ""
+
+    local sessions=$(get_sessions)
+
+    if [ -z "$sessions" ]; then
+        dim "No sessions to clean up"
+        sleep 2
+        return 0
+    fi
+
+    # Display all sessions
+    display_sessions
+
+    # Build options for multi-select
+    local session_array=()
+    local options=()
+    while IFS= read -r session; do
+        [ -z "$session" ] && continue
+        session_array+=("$session")
+        local name=$(basename "$session")
+        local info_file="$session/session-info.txt"
+
+        if [ -f "$info_file" ]; then
+            if [[ "$name" == pr-* ]]; then
+                local title=$(grep "^PR #" "$info_file" 2>/dev/null | head -1)
+                options+=("$title")
+            else
+                local title=$(sed -n '/Investigation Focus:/,/====/p' "$info_file" 2>/dev/null | grep -v "Investigation Focus:" | grep -v "===" | grep -v "^-" | head -1 | xargs)
+                options+=("${title:0:50}")
+            fi
+        else
+            options+=("$name")
+        fi
+    done <<< "$sessions"
+
+    echo ""
+    dim "Press ESC or select nothing to go back"
+    echo ""
+    local selected=$(printf '%s\n' "${options[@]}" | gum choose --no-limit --header "Select sessions to delete (space to select, Enter to confirm):")
+
+    if [ -z "$selected" ]; then
+        return 0
+    fi
+
+    # Find and delete matching sessions
+    local to_delete=()
+    while IFS= read -r sel; do
+        [ -z "$sel" ] && continue
+        for i in "${!options[@]}"; do
+            if [ "${options[$i]}" = "$sel" ]; then
+                to_delete+=("${session_array[$i]}")
+                break
+            fi
+        done
+    done <<< "$selected"
+
+    if [ ${#to_delete[@]} -eq 0 ]; then
+        return 0
+    fi
+
+    echo ""
+    gum style --foreground 196 "Will delete ${#to_delete[@]} session(s)"
+    echo ""
+
+    if gum confirm --default=false "Delete these sessions?"; then
+        for session in "${to_delete[@]}"; do
+            rm -rf "$session"
+            success "Deleted: $(basename "$session")"
+        done
+        sleep 1
+    fi
+}
+
+# ============================================================================
+# LIST / RESUME
+# ============================================================================
+
+list_sessions_menu() {
+    header
+
+    local sessions=$(get_sessions)
+
+    if [ -z "$sessions" ]; then
+        dim "No sessions found"
+        sleep 2
+        return 0
+    fi
+
+    local session=$(select_session_simple)
+
+    if [ -n "$session" ] && [ -d "$session" ]; then
+        # Check if archived
+        local archived=$(is_archived "$session" && echo "yes" || echo "no")
+
+        # Find review file
+        local review_file=""
+        [ -f "$session/repo/REVIEW.md" ] && review_file="$session/repo/REVIEW.md"
+        [ -f "$session/repo/FINDINGS.md" ] && review_file="$session/repo/FINDINGS.md"
+        [ -f "$session/REVIEW.md" ] && review_file="$session/REVIEW.md"
+        [ -f "$session/FINDINGS.md" ] && review_file="$session/FINDINGS.md"
+
+        # Get PR URL for PR-specific options
+        local PR_URL=""
+        if [ -f "$session/session-info.txt" ]; then
+            PR_URL=$(grep "^URL:" "$session/session-info.txt" 2>/dev/null | head -1 | cut -d: -f2- | xargs)
+        fi
+
+        local options=()
+
+        if [ "$archived" = "yes" ]; then
+            options+=("🔄 Restart session (re-clone repo)")
+        else
+            options+=("▶ Resume session")
+            options+=("💻 Open in editor")
+            options+=("📊 View diff")
+        fi
+
+        if [ -n "$PR_URL" ]; then
+            options+=("🌐 Open PR in browser")
+            [ "$archived" != "yes" ] && options+=("🔄 Refresh PR (fetch updates)")
+        fi
+
+        if [ -n "$review_file" ]; then
+            options+=("📖 View review (nice)")
+        fi
+
+        options+=("ℹ View session info")
+        options+=("🗑 Delete session")
+        options+=("← Back")
+
+        local choice=$(printf '%s\n' "${options[@]}" | gum choose --header "$([ "$archived" = "yes" ] && echo "📦 Archived Session" || echo "Active Session")")
+
+        case "$choice" in
+            *"Restart"*)
+                if restart_session "$session"; then
+                    pre_session_menu "$session"
+                fi
+                ;;
+            *"Resume"*)
+                tput reset 2>/dev/null || clear
+                pre_session_menu "$session"
+                ;;
+            *"editor"*)
+                open_in_editor "$session/repo"
+                ;;
+            *"View diff"*)
+                view_diff "$session"
+                ;;
+            *"Open PR in browser"*)
+                if [ -n "$PR_URL" ]; then
+                    open "${PR_URL}/files" 2>/dev/null || xdg-open "${PR_URL}/files" 2>/dev/null || true
+                fi
+                ;;
+            *"Refresh PR"*)
+                refresh_pr_session "$session"
+                ;;
+            *"View review"*)
+                if [ -n "$review_file" ]; then
+                    view_markdown_nice "$review_file"
+                fi
+                ;;
+            *"session info"*)
+                if [ -f "$session/session-info.txt" ]; then
+                    gum pager < "$session/session-info.txt"
+                fi
+                ;;
+            *"Delete"*)
+                if gum confirm --default=false "Delete this session?"; then
+                    rm -rf "$session"
+                    success "Session deleted"
+                    sleep 1
+                fi
+                ;;
+        esac
+    fi
+}
+
+# ============================================================================
+# MAIN MENU
+# ============================================================================
+
+main_menu() {
+    while true; do
+        header
+
+        local choice=$(gum choose \
+            "🔍 New PR Review" \
+            "🔬 New Investigation" \
+            "📋 List Sessions" \
+            "🔎 Search Sessions" \
+            "🧹 Cleanup Sessions" \
+            "👋 Quit")
+
+        case "$choice" in
+            *"PR Review"*)
+                if create_pr_session; then
+                    run_claude_session "$CURRENT_SESSION"
+                fi
+                ;;
+            *"Investigation"*)
+                if create_investigation_session; then
+                    run_claude_session "$CURRENT_SESSION"
+                fi
+                ;;
+            *"List"*)
+                list_sessions_menu
+                ;;
+            *"Search"*)
+                search_sessions
+                ;;
+            *"Cleanup"*)
+                cleanup_sessions
+                ;;
+            *"Quit"*)
+                clear
+                exit 0
+                ;;
+        esac
+    done
+}
+
+# ============================================================================
+# ENTRY
+# ============================================================================
+
+main_menu
