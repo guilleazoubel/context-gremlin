@@ -1513,6 +1513,204 @@ CLAUDE_EOF
 }
 
 # ============================================================================
+# MODE SWITCHING (Review <-> Investigation)
+# ============================================================================
+
+get_current_mode() {
+    local SESSION_DIR="$1"
+    local claude_file="$SESSION_DIR/repo/CLAUDE.md"
+
+    if [ -f "$claude_file" ]; then
+        if grep -q "REVIEW.md" "$claude_file" 2>/dev/null; then
+            echo "review"
+        elif grep -q "FINDINGS.md" "$claude_file" 2>/dev/null; then
+            echo "investigation"
+        else
+            echo "unknown"
+        fi
+    else
+        echo "unknown"
+    fi
+}
+
+switch_to_review_mode() {
+    local SESSION_DIR="$1"
+    local claude_file="$SESSION_DIR/repo/CLAUDE.md"
+
+    # Get session info for context
+    local session_info=""
+    [ -f "$SESSION_DIR/session-info.txt" ] && session_info=$(cat "$SESSION_DIR/session-info.txt")
+
+    # Extract key info
+    local repo_url=$(echo "$session_info" | grep "^URL:" | head -1 | cut -d: -f2- | xargs)
+    local branch=$(echo "$session_info" | grep "^Branch:" | head -1 | cut -d: -f2 | xargs | sed 's/ (default)//')
+
+    cat > "$claude_file" << 'REVIEW_MODE'
+# Code Review Mode
+
+> **Focus: Write a comprehensive code review to REVIEW.md**
+
+## Your Task
+
+You are performing a code review on this codebase. Your goal is to:
+1. Understand the changes or code under review
+2. Identify issues, concerns, and areas for improvement
+3. Document your findings in **REVIEW.md**
+
+## Review Output Format
+
+Write your review to `REVIEW.md` using this structure:
+
+```markdown
+# Code Review
+
+## Summary
+[2-3 sentence overview of what was reviewed]
+
+## Verdict
+**[APPROVE / REQUEST_CHANGES / NEEDS_DISCUSSION]**
+
+## Critical Issues
+- [ ] [Severity: Critical/High] Issue description
+
+## Suggestions
+- [Improvement suggestion with file:line reference]
+
+## Security Considerations
+- [Any security concerns]
+
+## Code Quality
+- [Code quality observations]
+
+## Questions
+- [Questions for the author]
+```
+
+## Review Guidelines
+
+1. **Start by understanding** - Read the code, understand the changes
+2. **Be specific** - Reference files and line numbers (e.g., `src/auth.ts:42`)
+3. **Prioritize** - Focus on important issues first (security, bugs, logic errors)
+4. **Be constructive** - Suggest solutions, not just problems
+5. **Update continuously** - Keep REVIEW.md updated as you review
+
+**BEGIN THE REVIEW NOW.**
+REVIEW_MODE
+
+    success "Switched to Review Mode"
+    dim "Claude will now focus on writing REVIEW.md"
+    sleep 1
+}
+
+switch_to_investigation_mode() {
+    local SESSION_DIR="$1"
+    local claude_file="$SESSION_DIR/repo/CLAUDE.md"
+
+    cat > "$claude_file" << 'INVESTIGATE_MODE'
+# Investigation Mode
+
+> **Focus: Explore and document findings in FINDINGS.md**
+
+## Your Task
+
+You are investigating this codebase. Your goal is to:
+1. Explore and understand the code structure
+2. Find answers to the investigation focus
+3. Document your discoveries in **FINDINGS.md**
+
+## Findings Output Format
+
+Write your findings to `FINDINGS.md` using this structure:
+
+```markdown
+# Investigation: [Brief title]
+
+## Summary
+[2-3 sentence summary of what was found]
+
+## Key Files
+- `path/to/file.ts:123` - [why this file is relevant]
+
+## Findings
+
+### Root Cause / Main Finding
+[Detailed explanation]
+
+### Related Observations
+- [Other relevant findings]
+
+### Code References
+\`\`\`
+[relevant code snippets with file:line]
+\`\`\`
+
+## Recommendations
+1. [Actionable next step]
+2. [Another recommendation]
+
+## Questions to Explore Further
+- [Open questions]
+```
+
+## Investigation Guidelines
+
+1. **Explore first** - Understand the project structure
+2. **Follow the trail** - Trace code paths and dependencies
+3. **Document as you go** - Update FINDINGS.md continuously
+4. **Note dead ends** - Document what didn't work (saves time later)
+5. **Be thorough** - Look for patterns, anomalies, root causes
+
+**BEGIN THE INVESTIGATION NOW.**
+INVESTIGATE_MODE
+
+    success "Switched to Investigation Mode"
+    dim "Claude will now focus on writing FINDINGS.md"
+    sleep 1
+}
+
+prompt_mode_switch() {
+    local SESSION_DIR="$1"
+    local current_mode=$(get_current_mode "$SESSION_DIR")
+
+    header
+    gum style --foreground 214 --bold "Switch Mode"
+    echo ""
+
+    case "$current_mode" in
+        review)
+            dim "Current mode: Review (REVIEW.md)"
+            ;;
+        investigation)
+            dim "Current mode: Investigation (FINDINGS.md)"
+            ;;
+        *)
+            dim "Current mode: Unknown"
+            ;;
+    esac
+    echo ""
+
+    local choice=$(gum choose \
+        --header "Select mode:" \
+        "📝 Review Mode (focus on REVIEW.md)" \
+        "🔬 Investigation Mode (focus on FINDINGS.md)" \
+        "← Cancel")
+
+    case "$choice" in
+        *"Review Mode"*)
+            switch_to_review_mode "$SESSION_DIR"
+            return 0
+            ;;
+        *"Investigation Mode"*)
+            switch_to_investigation_mode "$SESSION_DIR"
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+# ============================================================================
 # ACR (AGENTIC CODE REVIEWER)
 # ============================================================================
 
@@ -3163,15 +3361,19 @@ pre_session_menu() {
             fi
         fi
 
+        # Show current mode
+        local current_mode=$(get_current_mode "$SESSION_DIR")
+
         options+=(
-            "👁 Open live preview (watch REVIEW.md)"
+            "👁 Open live preview"
             "💻 Open in editor (VS Code/Cursor)"
             "📊 View diff"
+            "🔄 Switch mode (Review ↔ Investigation)"
         )
 
         if [ -n "$PR_URL" ]; then
             options+=("🌐 Open PR in browser")
-            options+=("🔄 Refresh PR (fetch updates)")
+            options+=("🔁 Refresh PR (fetch updates)")
         fi
 
         options+=("📄 View session info")
@@ -3264,6 +3466,9 @@ pre_session_menu() {
             *"View diff"*)
                 view_diff "$SESSION_DIR"
                 ;;
+            *"Switch mode"*)
+                prompt_mode_switch "$SESSION_DIR"
+                ;;
             *"Open PR"*)
                 if [ -n "$PR_URL" ]; then
                     # Open directly to Files Changed tab
@@ -3353,6 +3558,7 @@ post_session_menu() {
         fi
 
         options+=(
+            "🔄 Switch mode (Review ↔ Investigation)"
             "📄 View session info"
             "───────────────"
             "📁 Keep session"
@@ -3435,6 +3641,9 @@ post_session_menu() {
                     dim "No review/findings file found"
                     sleep 1
                 fi
+                ;;
+            *"Switch mode"*)
+                prompt_mode_switch "$SESSION_DIR"
                 ;;
             *"session info"*)
                 if [ -f "$SESSION_DIR/session-info.txt" ]; then
