@@ -1304,26 +1304,48 @@ create_investigation_session() {
     local branch_display="${BRANCH:-main}"
     show_context "New Investigation" "📁 $REPO_DISPLAY" "🌿 $branch_display"
 
-    dim "Describe your investigation focus (empty line to finish, 'q' alone to cancel):"
-    echo ""
+    # Optional: Link Jira ticket FIRST (provides context, may make instructions optional)
+    local JIRA_TICKET_ID=""
+    local JIRA_CONTEXT=""
+    local JIRA_TICKET_TYPE=""
+    local JIRA_SUMMARY=""
+    prompt_jira_ticket "investigation"
+
+    # Get Jira summary if ticket was linked
+    if [ -n "$JIRA_TICKET_JSON" ]; then
+        JIRA_SUMMARY=$(echo "$JIRA_TICKET_JSON" | jq -r '.fields.summary // empty' 2>/dev/null)
+    fi
+
+    # Investigation instructions - optional if Jira ticket linked
     local INVESTIGATION=""
+    if [ -n "$JIRA_TICKET_ID" ]; then
+        dim "Additional notes (optional - Jira context will be used):"
+        dim "(empty line to skip, 'q' alone to cancel)"
+    else
+        dim "Describe your investigation focus (empty line to finish, 'q' alone to cancel):"
+    fi
+    echo ""
     while IFS= read -r line; do
         [ -z "$line" ] && break
         [[ "$line" == "q" ]] && return 1
         INVESTIGATION="${INVESTIGATION}${line}"$'\n'
     done
 
-    if [ -z "$INVESTIGATION" ]; then
-        dim "No investigation focus provided"
+    # Need either Jira ticket OR investigation focus
+    if [ -z "$INVESTIGATION" ] && [ -z "$JIRA_TICKET_ID" ]; then
+        dim "No investigation focus or Jira ticket provided"
         sleep 1
         return 1
     fi
 
-    # Optional: Link Jira ticket
-    local JIRA_TICKET_ID=""
-    local JIRA_CONTEXT=""
-    local JIRA_TICKET_TYPE=""
-    prompt_jira_ticket "investigation"
+    # Build the investigation focus text
+    local INVESTIGATION_DISPLAY=""
+    if [ -n "$JIRA_SUMMARY" ]; then
+        INVESTIGATION_DISPLAY="$JIRA_TICKET_ID: $JIRA_SUMMARY"
+        [ -n "$INVESTIGATION" ] && INVESTIGATION_DISPLAY="$INVESTIGATION_DISPLAY"$'\n\nAdditional Notes:\n'"$INVESTIGATION"
+    elif [ -n "$INVESTIGATION" ]; then
+        INVESTIGATION_DISPLAY="$INVESTIGATION"
+    fi
 
     local OWNER REPO
     if [[ "$REPO_URL" =~ ([^/]+)/([^/]+)(\.git)?$ ]]; then
@@ -1391,7 +1413,7 @@ $([ -n "$JIRA_TICKET_ID" ] && echo "Jira:       $JIRA_TICKET_ID")
 
 Investigation Focus:
 --------------------------------------------------------------------------------
-$INVESTIGATION
+$INVESTIGATION_DISPLAY
 ================================================================================
 EOF
 
@@ -1408,7 +1430,9 @@ EOF
 
 ## Investigation Focus
 
-$INVESTIGATION
+$([ -n "$JIRA_SUMMARY" ] && echo "**$JIRA_TICKET_ID: $JIRA_SUMMARY**")
+$([ -n "$INVESTIGATION" ] && echo "
+$INVESTIGATION")
 
 $([ -n "$JIRA_CONTEXT" ] && echo "---
 
