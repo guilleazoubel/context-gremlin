@@ -253,11 +253,13 @@ JIRA_CTX
 # Extract Jira ticket ID from branch name
 # e.g., "HB-404-find-user-not-working" -> "HB-404"
 # e.g., "feature/PROJ-123-new-login" -> "PROJ-123"
+# e.g., "hb-404-lowercase" -> "HB-404" (converts to uppercase)
 extract_jira_from_branch() {
     local branch="$1"
-    # Match patterns like PROJ-123, HB-404, etc.
-    if [[ "$branch" =~ ([A-Z]+-[0-9]+) ]]; then
-        echo "${BASH_REMATCH[1]}"
+    # Match patterns like PROJ-123, HB-404, hb-404, etc. (case-insensitive)
+    # Convert to uppercase for Jira
+    if [[ "$branch" =~ ([A-Za-z]+-[0-9]+) ]]; then
+        echo "${BASH_REMATCH[1]}" | tr '[:lower:]' '[:upper:]'
     fi
 }
 
