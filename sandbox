@@ -1322,6 +1322,580 @@ open_in_editor() {
     return 0
 }
 
+# ============================================================================
+# LIVE PREVIEW
+# ============================================================================
+
+start_live_preview() {
+    local SESSION_DIR="$1"
+    local REVIEW_FILE="$SESSION_DIR/repo/REVIEW.md"
+    local FINDINGS_FILE="$SESSION_DIR/repo/FINDINGS.md"
+    local ACR_FILE="$SESSION_DIR/ACR_REVIEW.md"
+
+    # Determine which file to watch
+    local watch_file="$REVIEW_FILE"
+    local file_title="REVIEW.md"
+
+    # Create live preview HTML
+    local html_file="/tmp/live_review_$(date +%s).html"
+
+    cat > "$html_file" << 'LIVEHTML'
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Live Review Preview</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.6/dist/purify.min.js"></script>
+    <style>
+        :root {
+            --critical: #dc2626; --critical-bg: #fef2f2;
+            --high: #ea580c; --high-bg: #fff7ed;
+            --medium: #ca8a04; --medium-bg: #fefce8;
+            --suggestion: #2563eb; --suggestion-bg: #eff6ff;
+            --positive: #16a34a; --positive-bg: #f0fdf4;
+            --gray-50: #f9fafb; --gray-100: #f3f4f6;
+            --gray-200: #e5e7eb; --gray-600: #4b5563;
+            --gray-700: #374151; --gray-900: #111827;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: 'Inter', -apple-system, sans-serif;
+            line-height: 1.6; color: var(--gray-900);
+            background: var(--gray-50); padding: 1rem;
+        }
+        .header {
+            position: sticky; top: 0; z-index: 100;
+            background: white; border-radius: 8px;
+            padding: 0.75rem 1rem; margin-bottom: 1rem;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            display: flex; justify-content: space-between; align-items: center;
+        }
+        .status { display: flex; align-items: center; gap: 0.5rem; }
+        .status-dot {
+            width: 10px; height: 10px; border-radius: 50%;
+            background: var(--positive); animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        .status-text { font-size: 0.875rem; color: var(--gray-600); }
+        .last-update { font-size: 0.75rem; color: var(--gray-600); }
+        .container { max-width: 900px; margin: 0 auto; }
+        .content {
+            background: white; border-radius: 12px;
+            padding: 2rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+        .waiting {
+            text-align: center; padding: 4rem 2rem;
+            color: var(--gray-600);
+        }
+        .waiting-icon { font-size: 3rem; margin-bottom: 1rem; }
+        h1 { font-size: 1.5rem; margin-bottom: 1rem; }
+        h2 { font-size: 1.25rem; margin: 1.5rem 0 0.75rem; padding-bottom: 0.5rem; border-bottom: 1px solid var(--gray-200); }
+        h3 { font-size: 1rem; margin: 1.25rem 0 0.5rem; color: var(--gray-700); }
+        p { margin-bottom: 0.75rem; }
+        pre {
+            background: var(--gray-900); color: #e5e7eb;
+            padding: 1rem; border-radius: 8px; overflow-x: auto;
+            font-family: 'JetBrains Mono', monospace; font-size: 0.875rem;
+            margin: 0.75rem 0;
+        }
+        code {
+            font-family: 'JetBrains Mono', monospace; font-size: 0.875rem;
+        }
+        p code, li code {
+            background: var(--gray-100); padding: 0.125rem 0.375rem;
+            border-radius: 4px; color: var(--gray-700);
+        }
+        table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.9rem; }
+        th, td { padding: 0.5rem; text-align: left; border-bottom: 1px solid var(--gray-200); }
+        th { background: var(--gray-50); font-weight: 600; }
+        ul, ol { margin: 0.75rem 0; padding-left: 1.5rem; }
+        li { margin-bottom: 0.25rem; }
+        blockquote {
+            border-left: 3px solid var(--gray-300); padding-left: 1rem;
+            margin: 0.75rem 0; color: var(--gray-600); font-style: italic;
+        }
+        .finding-critical { background: var(--critical-bg); border-left: 4px solid var(--critical); padding: 0.75rem; margin: 0.5rem 0; border-radius: 0 8px 8px 0; }
+        .finding-high { background: var(--high-bg); border-left: 4px solid var(--high); padding: 0.75rem; margin: 0.5rem 0; border-radius: 0 8px 8px 0; }
+        .finding-medium { background: var(--medium-bg); border-left: 4px solid var(--medium); padding: 0.75rem; margin: 0.5rem 0; border-radius: 0 8px 8px 0; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="status">
+            <div class="status-dot"></div>
+            <span class="status-text">Live Preview</span>
+        </div>
+        <div class="last-update">Checking for updates...</div>
+    </div>
+    <div class="container">
+        <div class="content" id="content">
+            <div class="waiting">
+                <div class="waiting-icon">📝</div>
+                <h2>Waiting for review...</h2>
+                <p>The review will appear here automatically when the AI starts writing.</p>
+            </div>
+        </div>
+    </div>
+    <script>
+LIVEHTML
+
+    # Add the file paths as JavaScript variables
+    cat >> "$html_file" << JSCONFIG
+        const reviewFile = "${REVIEW_FILE}";
+        const findingsFile = "${FINDINGS_FILE}";
+        const acrFile = "${ACR_FILE}";
+        const sessionDir = "${SESSION_DIR}";
+JSCONFIG
+
+    cat >> "$html_file" << 'LIVEHTML2'
+        let lastContent = '';
+        let lastUpdate = new Date();
+
+        async function checkForUpdates() {
+            try {
+                // Try to fetch the file via a simple endpoint
+                // Since we can't directly read files, we'll use a workaround
+                // The script will update a .json file that we can fetch
+                const response = await fetch(`file://${reviewFile}`);
+                if (response.ok) {
+                    const content = await response.text();
+                    if (content !== lastContent) {
+                        lastContent = content;
+                        lastUpdate = new Date();
+                        renderContent(content);
+                    }
+                }
+            } catch (e) {
+                // File access not available via fetch, try iframe trick
+            }
+            document.querySelector('.last-update').textContent =
+                `Last check: ${lastUpdate.toLocaleTimeString()}`;
+        }
+
+        function renderContent(markdown) {
+            if (!markdown || markdown.trim() === '') {
+                return;
+            }
+
+            let html = marked.parse(markdown);
+
+            // Style findings
+            html = html.replace(/🔴|:red_circle:/g, '<span style="color:var(--critical)">🔴</span>');
+            html = html.replace(/🟠|:orange_circle:/g, '<span style="color:var(--high)">🟠</span>');
+            html = html.replace(/🟡|:yellow_circle:/g, '<span style="color:var(--medium)">🟡</span>');
+            html = html.replace(/✅|:white_check_mark:/g, '<span style="color:var(--positive)">✅</span>');
+
+            document.getElementById('content').innerHTML = DOMPurify.sanitize(html);
+        }
+
+        // Poll for updates every 2 seconds
+        setInterval(checkForUpdates, 2000);
+        checkForUpdates();
+
+        // Also listen for storage events (cross-tab communication)
+        window.addEventListener('storage', (e) => {
+            if (e.key === 'reviewContent') {
+                renderContent(e.newValue);
+            }
+        });
+    </script>
+</body>
+</html>
+LIVEHTML2
+
+    # Open the live preview
+    open "$html_file" 2>/dev/null || xdg-open "$html_file" 2>/dev/null
+
+    # Return the HTML file path so we can update it
+    echo "$html_file"
+}
+
+# Start a background file watcher that updates the preview
+start_file_watcher() {
+    local SESSION_DIR="$1"
+    local HTML_FILE="$2"
+    local REVIEW_FILE="$SESSION_DIR/repo/REVIEW.md"
+
+    # Create a simple watcher script
+    local watcher_script="/tmp/review_watcher_$$.sh"
+    cat > "$watcher_script" << 'WATCHER'
+#!/bin/bash
+SESSION_DIR="$1"
+HTML_FILE="$2"
+REVIEW_FILE="$SESSION_DIR/repo/REVIEW.md"
+LAST_MOD=""
+
+while true; do
+    if [ -f "$REVIEW_FILE" ]; then
+        CURRENT_MOD=$(stat -f %m "$REVIEW_FILE" 2>/dev/null || stat -c %Y "$REVIEW_FILE" 2>/dev/null)
+        if [ "$CURRENT_MOD" != "$LAST_MOD" ]; then
+            LAST_MOD="$CURRENT_MOD"
+            # Update the HTML with new content
+            CONTENT=$(cat "$REVIEW_FILE" | sed 's/\\/\\\\/g' | sed 's/`/\\`/g' | sed "s/'/\\'/g" | sed 's/\$/\\$/g')
+            # Write to a temp file that the browser can poll
+            echo "$CONTENT" > "/tmp/review_content_$$.txt"
+        fi
+    fi
+    sleep 1
+done
+WATCHER
+    chmod +x "$watcher_script"
+
+    # Run watcher in background
+    bash "$watcher_script" "$SESSION_DIR" "$HTML_FILE" &
+    echo $!
+}
+
+# Create a self-updating HTML preview
+create_live_preview() {
+    local SESSION_DIR="$1"
+    local REVIEW_FILE="$SESSION_DIR/repo/REVIEW.md"
+
+    local html_file="/tmp/live_review_$$.html"
+    local content_file="/tmp/review_content_$$.txt"
+
+    # Initialize empty content file
+    touch "$content_file"
+    [ -f "$REVIEW_FILE" ] && cp "$REVIEW_FILE" "$content_file"
+
+    cat > "$html_file" << LIVEPREVIEW
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Live Review - Auto Refresh</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.6/dist/purify.min.js"></script>
+    <style>
+        :root {
+            --critical: #dc2626; --critical-bg: #fef2f2;
+            --high: #ea580c; --high-bg: #fff7ed;
+            --medium: #ca8a04; --medium-bg: #fefce8;
+            --positive: #16a34a; --positive-bg: #f0fdf4;
+            --gray-50: #f9fafb; --gray-100: #f3f4f6;
+            --gray-200: #e5e7eb; --gray-600: #4b5563;
+            --gray-700: #374151; --gray-900: #111827;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Inter', sans-serif; background: var(--gray-50); }
+        .header {
+            position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: white; padding: 0.75rem 1.5rem;
+            display: flex; justify-content: space-between; align-items: center;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+        }
+        .header-title { font-weight: 600; display: flex; align-items: center; gap: 0.5rem; }
+        .live-dot {
+            width: 8px; height: 8px; background: #00ff88; border-radius: 50%;
+            animation: pulse 1.5s infinite;
+        }
+        @keyframes pulse { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.7; transform: scale(1.2); } }
+        .header-info { font-size: 0.8rem; opacity: 0.8; }
+        .container { max-width: 900px; margin: 0 auto; padding: 5rem 1rem 2rem; }
+        .content { background: white; border-radius: 12px; padding: 2rem; box-shadow: 0 4px 20px rgba(0,0,0,0.08); min-height: 60vh; }
+        .waiting { text-align: center; padding: 4rem; color: var(--gray-600); }
+        .waiting h2 { margin: 1rem 0 0.5rem; }
+        .spinner { width: 40px; height: 40px; border: 3px solid var(--gray-200); border-top-color: var(--critical); border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        h1 { font-size: 1.5rem; margin-bottom: 1rem; color: var(--gray-900); }
+        h2 { font-size: 1.25rem; margin: 2rem 0 1rem; padding-bottom: 0.5rem; border-bottom: 2px solid var(--gray-100); }
+        h3 { font-size: 1.1rem; margin: 1.5rem 0 0.75rem; color: var(--gray-700); }
+        h4 { font-size: 1rem; margin: 1rem 0 0.5rem; }
+        p { margin-bottom: 1rem; line-height: 1.7; }
+        pre { background: #1e1e1e; color: #d4d4d4; padding: 1rem; border-radius: 8px; overflow-x: auto; font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; margin: 1rem 0; }
+        code { font-family: 'JetBrains Mono', monospace; }
+        p code, li code { background: var(--gray-100); padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.9em; }
+        table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+        th, td { padding: 0.75rem; text-align: left; border-bottom: 1px solid var(--gray-200); }
+        th { background: var(--gray-50); font-weight: 600; font-size: 0.9rem; }
+        ul, ol { margin: 1rem 0; padding-left: 1.5rem; }
+        li { margin-bottom: 0.5rem; line-height: 1.6; }
+        blockquote { border-left: 4px solid var(--gray-300); padding: 0.5rem 1rem; margin: 1rem 0; background: var(--gray-50); border-radius: 0 8px 8px 0; }
+        hr { border: none; border-top: 2px solid var(--gray-100); margin: 2rem 0; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="header-title"><div class="live-dot"></div> Live Review Preview</div>
+        <div class="header-info">Auto-refreshing every 2s • <span id="lastUpdate">--</span></div>
+    </div>
+    <div class="container">
+        <div class="content" id="content">
+            <div class="waiting">
+                <div class="spinner"></div>
+                <h2>Waiting for review to start...</h2>
+                <p>Content will appear here automatically</p>
+            </div>
+        </div>
+    </div>
+    <script>
+        const contentFile = "${content_file}";
+        const reviewFile = "${REVIEW_FILE}";
+        let lastContent = '';
+        let checkCount = 0;
+
+        async function loadContent() {
+            checkCount++;
+            try {
+                // Try XMLHttpRequest for local file
+                const xhr = new XMLHttpRequest();
+                xhr.open('GET', 'file://' + reviewFile + '?t=' + Date.now(), false);
+                try {
+                    xhr.send();
+                    if (xhr.status === 200 || xhr.status === 0) {
+                        updateContent(xhr.responseText);
+                        return;
+                    }
+                } catch(e) {}
+            } catch(e) {}
+
+            // Fallback: reload page to get fresh content from file system
+            // This works because browsers cache the initial load
+            document.getElementById('lastUpdate').textContent =
+                new Date().toLocaleTimeString() + ' (check #' + checkCount + ')';
+        }
+
+        function updateContent(content) {
+            if (content && content.trim() && content !== lastContent) {
+                lastContent = content;
+                const html = marked.parse(content);
+                document.getElementById('content').innerHTML = DOMPurify.sanitize(html);
+                document.getElementById('lastUpdate').textContent =
+                    'Updated: ' + new Date().toLocaleTimeString();
+            }
+        }
+
+        // Initial load from embedded content if available
+        const initialContent = \`PLACEHOLDER_CONTENT\`;
+        if (initialContent && initialContent !== 'PLACEHOLDER_CONTENT') {
+            updateContent(initialContent);
+        }
+
+        // Poll for updates
+        setInterval(loadContent, 2000);
+    </script>
+</body>
+</html>
+LIVEPREVIEW
+
+    echo "$html_file"
+}
+
+# Run Codex with live preview
+run_codex_review() {
+    local SESSION_DIR="$1"
+    local PR_BASE="${2:-main}"
+    local WITH_ACR="${3:-false}"
+
+    if ! command -v codex >/dev/null 2>&1; then
+        error "Codex CLI not installed. Install with: npm install -g @openai/codex"
+        sleep 2
+        return 1
+    fi
+
+    cd "$SESSION_DIR/repo" || return 1
+
+    header
+    gum style --foreground 39 --bold "Codex Code Review"
+    echo ""
+
+    # Create/clear REVIEW.md
+    local REVIEW_FILE="$SESSION_DIR/repo/REVIEW.md"
+
+    # If WITH_ACR, run ACR first
+    if [ "$WITH_ACR" = "true" ] && [ "$HAS_ACR" = "true" ]; then
+        dim "Running ACR first for parallel analysis..."
+        echo ""
+
+        local acr_output="$SESSION_DIR/ACR_REVIEW.md"
+        acr -r 5 -a claude -b "$PR_BASE" --local 2>&1 | tee "$acr_output"
+
+        echo ""
+        success "ACR complete. Now starting Codex for deep analysis..."
+        echo ""
+        sleep 1
+
+        # Prepare context with ACR results
+        cat > "$REVIEW_FILE" << ACRCONTEXT
+# Code Review
+
+## ACR Pre-Analysis Results
+
+The following findings were identified by ACR (parallel AI reviewers):
+
+\`\`\`
+$(cat "$acr_output")
+\`\`\`
+
+---
+
+## Detailed Analysis
+
+ACRCONTEXT
+    else
+        # Start fresh
+        echo "# Code Review" > "$REVIEW_FILE"
+        echo "" >> "$REVIEW_FILE"
+        echo "*Review in progress...*" >> "$REVIEW_FILE"
+    fi
+
+    # Ask about live preview
+    if gum confirm "Open live preview in browser?"; then
+        dim "Opening live preview..."
+
+        # Start a simple HTTP server for the preview
+        local preview_dir="/tmp/live_preview_$$"
+        mkdir -p "$preview_dir"
+
+        # Create the live preview HTML
+        create_live_preview_server "$SESSION_DIR" "$preview_dir"
+
+        # Start Python HTTP server in background
+        (cd "$preview_dir" && python3 -m http.server 8765 --bind 127.0.0.1 >/dev/null 2>&1) &
+        local server_pid=$!
+
+        sleep 1
+        open "http://127.0.0.1:8765" 2>/dev/null
+
+        success "Live preview at http://127.0.0.1:8765"
+        echo ""
+    fi
+
+    dim "Starting Codex review..."
+    dim "The review will be written to REVIEW.md"
+    echo ""
+    sleep 1
+
+    # Run Codex
+    tput reset 2>/dev/null || clear
+    codex "Review this PR. Analyze the diff against $PR_BASE branch. Write a comprehensive code review to REVIEW.md covering: code quality, potential bugs, security issues, performance concerns, and suggestions for improvement. Be thorough and specific with file:line references."
+
+    # Cleanup server if running
+    [ -n "$server_pid" ] && kill "$server_pid" 2>/dev/null
+
+    return 0
+}
+
+# Create live preview with HTTP server
+create_live_preview_server() {
+    local SESSION_DIR="$1"
+    local PREVIEW_DIR="$2"
+    local REVIEW_FILE="$SESSION_DIR/repo/REVIEW.md"
+
+    # Create index.html
+    cat > "$PREVIEW_DIR/index.html" << 'SERVERHTML'
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Live Review</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=JetBrains+Mono&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@3.0.6/dist/purify.min.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Inter', sans-serif; background: #0f0f0f; color: #e0e0e0; }
+        .header {
+            position: fixed; top: 0; left: 0; right: 0;
+            background: linear-gradient(90deg, #1a1a2e, #16213e);
+            padding: 1rem 2rem; display: flex; justify-content: space-between;
+            align-items: center; z-index: 100; border-bottom: 1px solid #333;
+        }
+        .logo { display: flex; align-items: center; gap: 0.75rem; font-weight: 600; }
+        .live-indicator { display: flex; align-items: center; gap: 0.5rem; }
+        .pulse { width: 10px; height: 10px; background: #00ff88; border-radius: 50%; animation: pulse 1.5s infinite; }
+        @keyframes pulse { 0%,100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.3); opacity: 0.7; } }
+        .status { font-size: 0.85rem; color: #888; }
+        .container { max-width: 900px; margin: 0 auto; padding: 6rem 1.5rem 3rem; }
+        .content { background: #1a1a1a; border-radius: 16px; padding: 2.5rem; border: 1px solid #333; }
+        .waiting { text-align: center; padding: 5rem 2rem; }
+        .waiting h2 { color: #666; margin-top: 1.5rem; font-weight: 500; }
+        .loader { width: 50px; height: 50px; border: 3px solid #333; border-top-color: #00ff88; border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        h1 { font-size: 1.75rem; margin-bottom: 1.5rem; color: #fff; }
+        h2 { font-size: 1.35rem; margin: 2.5rem 0 1rem; color: #fff; border-bottom: 1px solid #333; padding-bottom: 0.5rem; }
+        h3 { font-size: 1.1rem; margin: 1.5rem 0 0.75rem; color: #ccc; }
+        p { margin-bottom: 1rem; line-height: 1.8; color: #bbb; }
+        pre { background: #0d0d0d; color: #e0e0e0; padding: 1.25rem; border-radius: 10px; overflow-x: auto; font-family: 'JetBrains Mono', monospace; font-size: 0.9rem; margin: 1rem 0; border: 1px solid #333; }
+        code { font-family: 'JetBrains Mono', monospace; }
+        p code, li code { background: #2a2a2a; padding: 0.2rem 0.5rem; border-radius: 4px; font-size: 0.9em; color: #f0f0f0; }
+        table { width: 100%; border-collapse: collapse; margin: 1.5rem 0; }
+        th, td { padding: 0.75rem 1rem; text-align: left; border-bottom: 1px solid #333; }
+        th { background: #1f1f1f; color: #fff; font-weight: 600; }
+        ul, ol { margin: 1rem 0; padding-left: 1.75rem; }
+        li { margin-bottom: 0.5rem; color: #bbb; }
+        blockquote { border-left: 4px solid #444; padding: 0.75rem 1.25rem; margin: 1rem 0; background: #1f1f1f; border-radius: 0 8px 8px 0; }
+        hr { border: none; border-top: 1px solid #333; margin: 2rem 0; }
+        a { color: #4dabf7; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="logo">📝 Live Code Review</div>
+        <div class="live-indicator">
+            <div class="pulse"></div>
+            <span class="status" id="status">Connecting...</span>
+        </div>
+    </div>
+    <div class="container">
+        <div class="content" id="content">
+            <div class="waiting">
+                <div class="loader"></div>
+                <h2>Waiting for review content...</h2>
+            </div>
+        </div>
+    </div>
+    <script>
+        let lastContent = '';
+        let updateCount = 0;
+
+        async function fetchContent() {
+            try {
+                const response = await fetch('/content.md?t=' + Date.now());
+                if (response.ok) {
+                    const text = await response.text();
+                    if (text && text !== lastContent) {
+                        lastContent = text;
+                        updateCount++;
+                        document.getElementById('content').innerHTML =
+                            DOMPurify.sanitize(marked.parse(text));
+                        document.getElementById('status').textContent =
+                            'Updated ' + new Date().toLocaleTimeString() + ' (#' + updateCount + ')';
+                    }
+                }
+            } catch (e) {
+                document.getElementById('status').textContent = 'Waiting for file...';
+            }
+        }
+
+        setInterval(fetchContent, 1500);
+        fetchContent();
+    </script>
+</body>
+</html>
+SERVERHTML
+
+    # Create a symlink to the REVIEW.md file
+    ln -sf "$REVIEW_FILE" "$PREVIEW_DIR/content.md"
+
+    # Also watch and copy the file periodically
+    (
+        while true; do
+            [ -f "$REVIEW_FILE" ] && cp "$REVIEW_FILE" "$PREVIEW_DIR/content.md" 2>/dev/null
+            sleep 1
+        done
+    ) &
+}
+
 view_markdown_nice() {
     local file="$1"
 
@@ -2055,14 +2629,26 @@ pre_session_menu() {
         fi
         [ -z "$PR_BASE" ] && PR_BASE="main"
 
+        # Check for Codex
+        local HAS_CODEX=false
+        command -v codex >/dev/null 2>&1 && HAS_CODEX=true
+
         local options=(
             "▶ Start Claude $([ -n "$is_rereview" ] && echo "re-review" || echo "review")"
         )
+
+        # Add Codex option if available
+        if [ "$HAS_CODEX" = "true" ] && [ -n "$PR_URL" ]; then
+            options+=("⚡ Start Codex review (+ live preview)")
+        fi
 
         # Add ACR options if available and this is a PR session
         if [ "$HAS_ACR" = "true" ] && [ -n "$PR_URL" ]; then
             options+=("🤖 Run ACR (parallel AI reviewers)")
             options+=("🔀 ACR → Claude (ACR first, then deep dive)")
+            if [ "$HAS_CODEX" = "true" ]; then
+                options+=("🚀 ACR → Codex (+ live preview)")
+            fi
         fi
 
         options+=(
@@ -2113,6 +2699,16 @@ pre_session_menu() {
                         return 0
                     fi
                 fi
+                ;;
+            *"Start Codex"*)
+                run_codex_review "$SESSION_DIR" "$PR_BASE" "false"
+                post_session_menu "$SESSION_DIR"
+                return 0
+                ;;
+            *"ACR → Codex"*)
+                run_codex_review "$SESSION_DIR" "$PR_BASE" "true"
+                post_session_menu "$SESSION_DIR"
+                return 0
                 ;;
             *"editor"*|*"VS Code"*|*"Cursor"*)
                 open_in_editor "$SESSION_DIR/repo"
