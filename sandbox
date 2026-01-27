@@ -2524,6 +2524,316 @@ ACRCONTEXT
     return 0
 }
 
+# ============================================================================
+# DASHBOARD SERVER (Single server for all sessions)
+# ============================================================================
+
+DASHBOARD_PORT=8765
+DASHBOARD_PID_FILE="$HOME/.sandbox_dashboard_pid"
+
+start_dashboard_server() {
+    # Check if already running
+    if [ -f "$DASHBOARD_PID_FILE" ]; then
+        local old_pid=$(cat "$DASHBOARD_PID_FILE")
+        if kill -0 "$old_pid" 2>/dev/null; then
+            success "Dashboard already running at http://127.0.0.1:$DASHBOARD_PORT"
+            open "http://127.0.0.1:$DASHBOARD_PORT" 2>/dev/null
+            return 0
+        fi
+    fi
+
+    # Kill any existing server on the port
+    lsof -ti:$DASHBOARD_PORT 2>/dev/null | xargs kill 2>/dev/null || true
+    sleep 0.3
+
+    # Create the dashboard server script
+    local server_script="$SESSIONS_DIR/.dashboard_server.py"
+    create_dashboard_server_script "$server_script"
+
+    # Start the server
+    cd "$SESSIONS_DIR"
+    python3 "$server_script" &
+    local pid=$!
+    echo "$pid" > "$DASHBOARD_PID_FILE"
+
+    sleep 1
+    if kill -0 "$pid" 2>/dev/null; then
+        success "Dashboard running at http://127.0.0.1:$DASHBOARD_PORT"
+        open "http://127.0.0.1:$DASHBOARD_PORT" 2>/dev/null
+    else
+        error "Failed to start dashboard server"
+        return 1
+    fi
+}
+
+stop_dashboard_server() {
+    if [ -f "$DASHBOARD_PID_FILE" ]; then
+        local pid=$(cat "$DASHBOARD_PID_FILE")
+        kill "$pid" 2>/dev/null && success "Dashboard server stopped"
+        rm -f "$DASHBOARD_PID_FILE"
+    else
+        dim "No dashboard server running"
+    fi
+}
+
+create_dashboard_server_script() {
+    local script_file="$1"
+    cat > "$script_file" << 'PYSERVER'
+#!/usr/bin/env python3
+import http.server
+import socketserver
+import json
+import os
+from pathlib import Path
+from urllib.parse import urlparse, parse_qs
+
+PORT = 8765
+SESSIONS_DIR = os.path.dirname(os.path.abspath(__file__))
+
+class DashboardHandler(http.server.SimpleHTTPRequestHandler):
+    def do_GET(self):
+        parsed = urlparse(self.path)
+
+        if parsed.path == '/api/sessions':
+            self.send_sessions_list()
+        elif parsed.path == '/api/content':
+            params = parse_qs(parsed.query)
+            session = params.get('session', [''])[0]
+            file_type = params.get('type', ['review'])[0]
+            self.send_file_content(session, file_type)
+        elif parsed.path == '/' or parsed.path == '/index.html':
+            self.send_dashboard()
+        else:
+            super().do_GET()
+
+    def send_sessions_list(self):
+        sessions = []
+        for entry in sorted(Path(SESSIONS_DIR).iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
+            if entry.is_dir() and not entry.name.startswith('.'):
+                info_file = entry / 'session-info.txt'
+                if info_file.exists():
+                    info = self.parse_session_info(info_file)
+                    info['name'] = entry.name
+                    info['has_review'] = (entry / 'REVIEW.md').exists() and (entry / 'REVIEW.md').stat().st_size > 0
+                    info['has_findings'] = (entry / 'FINDINGS.md').exists() and (entry / 'FINDINGS.md').stat().st_size > 0
+                    info['archived'] = not (entry / 'repo').exists()
+                    sessions.append(info)
+
+        self.send_response(200)
+        self.send_header('Content-type', 'application/json')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
+        self.wfile.write(json.dumps(sessions).encode())
+
+    def parse_session_info(self, path):
+        info = {}
+        try:
+            with open(path) as f:
+                for line in f:
+                    if ':' in line and not line.startswith('='):
+                        key, _, value = line.partition(':')
+                        key = key.strip().lower().replace(' ', '_')
+                        info[key] = value.strip()
+        except:
+            pass
+        return info
+
+    def send_file_content(self, session, file_type):
+        filename = 'REVIEW.md' if file_type == 'review' else 'FINDINGS.md'
+        filepath = Path(SESSIONS_DIR) / session / filename
+
+        content = ''
+        if filepath.exists():
+            try:
+                content = filepath.read_text()
+            except:
+                pass
+
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain; charset=utf-8')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
+        self.wfile.write(content.encode())
+
+    def send_dashboard(self):
+        html = '''<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Sandbox Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0a0a0a; color: #e0e0e0; display: flex; height: 100vh; }
+        .sidebar { width: 320px; background: #111; border-right: 1px solid #333; overflow-y: auto; flex-shrink: 0; }
+        .sidebar-header { padding: 1rem; border-bottom: 1px solid #333; position: sticky; top: 0; background: #111; z-index: 10; }
+        .sidebar-header h1 { font-size: 1.2rem; display: flex; align-items: center; gap: 0.5rem; }
+        .session-list { padding: 0.5rem; }
+        .session-item { padding: 0.75rem; border-radius: 8px; cursor: pointer; margin-bottom: 0.25rem; border: 1px solid transparent; }
+        .session-item:hover { background: #1a1a1a; border-color: #333; }
+        .session-item.active { background: #1a2a1a; border-color: #00ff88; }
+        .session-name { font-weight: 500; font-size: 0.85rem; margin-bottom: 0.25rem; word-break: break-all; }
+        .session-meta { font-size: 0.75rem; color: #666; display: flex; gap: 0.5rem; flex-wrap: wrap; }
+        .session-meta span { background: #222; padding: 0.1rem 0.4rem; border-radius: 4px; }
+        .badge-review { color: #4dabf7; }
+        .badge-findings { color: #ffd43b; }
+        .badge-archived { color: #868e96; }
+        .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        .main-header { padding: 1rem 1.5rem; border-bottom: 1px solid #333; display: flex; justify-content: space-between; align-items: center; background: #0f0f0f; }
+        .tabs { display: flex; gap: 0.5rem; }
+        .tab { background: #222; border: 1px solid #444; color: #888; padding: 0.4rem 1rem; border-radius: 6px; cursor: pointer; font-size: 0.85rem; }
+        .tab:hover { border-color: #666; color: #ccc; }
+        .tab.active { background: #00ff88; color: #000; border-color: #00ff88; }
+        .tab.disabled { opacity: 0.3; cursor: not-allowed; }
+        .status { font-size: 0.8rem; color: #666; display: flex; align-items: center; gap: 0.5rem; }
+        .live-dot { width: 8px; height: 8px; background: #00ff88; border-radius: 50%; animation: pulse 1.5s infinite; }
+        @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .content { flex: 1; overflow-y: auto; padding: 2rem; }
+        .content h1 { font-size: 1.5rem; margin-bottom: 1rem; color: #fff; }
+        .content h2 { font-size: 1.25rem; margin: 1.5rem 0 0.75rem; color: #fff; border-bottom: 1px solid #333; padding-bottom: 0.5rem; }
+        .content h3 { font-size: 1.1rem; margin: 1rem 0 0.5rem; color: #ccc; }
+        .content p { margin-bottom: 1rem; line-height: 1.7; color: #bbb; }
+        .content pre { background: #1a1a1a; padding: 1rem; border-radius: 8px; overflow-x: auto; margin: 1rem 0; }
+        .content code { font-family: 'JetBrains Mono', monospace, monospace; font-size: 0.9em; }
+        .content ul, .content ol { margin: 1rem 0; padding-left: 1.5rem; }
+        .content li { margin-bottom: 0.5rem; color: #bbb; }
+        .content blockquote { border-left: 3px solid #444; padding-left: 1rem; margin: 1rem 0; color: #888; }
+        .empty { text-align: center; padding: 4rem; color: #555; }
+        .empty h2 { margin-bottom: 0.5rem; }
+        .filter-input { width: 100%; padding: 0.5rem; background: #1a1a1a; border: 1px solid #333; border-radius: 6px; color: #e0e0e0; margin-top: 0.5rem; }
+        .filter-input:focus { outline: none; border-color: #00ff88; }
+    </style>
+</head>
+<body>
+    <div class="sidebar">
+        <div class="sidebar-header">
+            <h1>🧪 Sandbox</h1>
+            <input type="text" class="filter-input" placeholder="Filter sessions..." id="filter">
+        </div>
+        <div class="session-list" id="sessions"></div>
+    </div>
+    <div class="main">
+        <div class="main-header">
+            <div class="tabs">
+                <button class="tab active" data-type="review" onclick="switchTab('review')">📝 Review</button>
+                <button class="tab" data-type="findings" onclick="switchTab('findings')">🔬 Findings</button>
+            </div>
+            <div class="status">
+                <div class="live-dot"></div>
+                <span id="status">Auto-refresh active</span>
+            </div>
+        </div>
+        <div class="content" id="content">
+            <div class="empty">
+                <h2>Select a session</h2>
+                <p>Choose a session from the sidebar to view its content</p>
+            </div>
+        </div>
+    </div>
+    <script>
+        let sessions = [];
+        let currentSession = null;
+        let currentTab = 'review';
+        let lastContent = '';
+
+        async function loadSessions() {
+            try {
+                const res = await fetch('/api/sessions');
+                sessions = await res.json();
+                renderSessions();
+            } catch (e) {
+                console.error('Failed to load sessions', e);
+            }
+        }
+
+        function renderSessions() {
+            const filter = document.getElementById('filter').value.toLowerCase();
+            const filtered = sessions.filter(s =>
+                s.name.toLowerCase().includes(filter) ||
+                (s.type || '').toLowerCase().includes(filter)
+            );
+
+            document.getElementById('sessions').innerHTML = filtered.map(s => `
+                <div class="session-item ${currentSession === s.name ? 'active' : ''}" onclick="selectSession('${s.name}')">
+                    <div class="session-name">${s.name}</div>
+                    <div class="session-meta">
+                        <span>${s.type || 'Session'}</span>
+                        ${s.has_review ? '<span class="badge-review">Review</span>' : ''}
+                        ${s.has_findings ? '<span class="badge-findings">Findings</span>' : ''}
+                        ${s.archived ? '<span class="badge-archived">Archived</span>' : ''}
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        async function selectSession(name) {
+            currentSession = name;
+            renderSessions();
+            await loadContent();
+            updateTabs();
+        }
+
+        function updateTabs() {
+            const session = sessions.find(s => s.name === currentSession);
+            if (session) {
+                document.querySelector('[data-type="review"]').classList.toggle('disabled', !session.has_review);
+                document.querySelector('[data-type="findings"]').classList.toggle('disabled', !session.has_findings);
+            }
+        }
+
+        function switchTab(type) {
+            currentTab = type;
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelector(`[data-type="${type}"]`).classList.add('active');
+            loadContent();
+        }
+
+        async function loadContent() {
+            if (!currentSession) return;
+            try {
+                const res = await fetch(`/api/content?session=${encodeURIComponent(currentSession)}&type=${currentTab}`);
+                const text = await res.text();
+                if (text !== lastContent) {
+                    lastContent = text;
+                    if (text.trim()) {
+                        document.getElementById('content').innerHTML = marked.parse(text);
+                    } else {
+                        document.getElementById('content').innerHTML = '<div class="empty"><h2>No content yet</h2><p>Waiting for ' + currentTab + ' to be written...</p></div>';
+                    }
+                    document.getElementById('status').textContent = 'Updated ' + new Date().toLocaleTimeString();
+                }
+            } catch (e) {
+                console.error('Failed to load content', e);
+            }
+        }
+
+        document.getElementById('filter').addEventListener('input', renderSessions);
+
+        // Initial load
+        loadSessions();
+
+        // Auto-refresh
+        setInterval(() => {
+            loadSessions();
+            if (currentSession) loadContent();
+        }, 2000);
+    </script>
+</body>
+</html>'''
+        self.send_response(200)
+        self.send_header('Content-type', 'text/html')
+        self.end_headers()
+        self.wfile.write(html.encode())
+
+    def log_message(self, format, *args):
+        pass  # Suppress logging
+
+with socketserver.TCPServer(("127.0.0.1", PORT), DashboardHandler) as httpd:
+    httpd.serve_forever()
+PYSERVER
+    chmod +x "$script_file"
+}
+
 # Create static HTML preview (no server needed, manual refresh)
 create_static_preview() {
     local SESSION_DIR="$1"
@@ -3579,33 +3889,9 @@ pre_session_menu() {
 
         case "$choice" in
             *"live preview"*)
-                # Calculate a unique port for this session (8765 + hash of session name)
-                local port_offset=$(echo "$SESSION_NAME" | cksum | cut -d' ' -f1)
-                local preview_port=$((8765 + (port_offset % 100)))
-
-                # Start live preview server in background
-                local preview_dir="/tmp/live_preview_${SESSION_NAME}"
-                mkdir -p "$preview_dir"
-                create_live_preview_server "$SESSION_DIR" "$preview_dir"
-
-                # Kill any existing server on this port
-                lsof -ti:$preview_port 2>/dev/null | xargs kill 2>/dev/null || true
-                sleep 0.2
-
-                (cd "$preview_dir" && python3 -m http.server $preview_port --bind 127.0.0.1 >/dev/null 2>&1) &
-                local server_pid=$!
-
-                # Save PID for later cleanup
-                echo "$server_pid" > "$SESSION_DIR/.preview_pid"
-                echo "$preview_port" > "$SESSION_DIR/.preview_port"
-
+                # Start the dashboard server (single server for all sessions)
+                start_dashboard_server
                 sleep 1
-                open "http://127.0.0.1:$preview_port" 2>/dev/null
-
-                success "Live preview running at http://127.0.0.1:$preview_port"
-                dim "Server runs in background - you can now start Claude"
-                dim "Preview updates automatically as files change"
-                sleep 2
                 ;;
             *"investigation"*)
                 echo ""
@@ -3873,9 +4159,9 @@ post_session_menu() {
             *"live preview"*)
                 # Choose preview mode
                 local preview_mode=$(printf '%s\n' \
-                    "🔄 Live server (auto-refresh)" \
-                    "📄 Static HTML (manual refresh)" \
-                    "🛑 Stop running server" \
+                    "🔄 Open Dashboard (all sessions)" \
+                    "📄 Static HTML (this session only)" \
+                    "🛑 Stop dashboard server" \
                     "← Cancel" | fzf \
                     --height=~30% \
                     --layout=reverse \
@@ -3886,34 +4172,11 @@ post_session_menu() {
                     --header-first)
 
                 case "$preview_mode" in
-                    *"Live server"*)
-                        # Calculate unique port for this session
-                        local port_offset=$(echo "$SESSION_NAME" | cksum | cut -d' ' -f1)
-                        local preview_port=$((8765 + (port_offset % 100)))
-
-                        local preview_dir="/tmp/live_preview_${SESSION_NAME}"
-                        mkdir -p "$preview_dir"
-                        create_live_preview_server "$SESSION_DIR" "$preview_dir"
-
-                        # Kill any existing server on this port
-                        lsof -ti:$preview_port 2>/dev/null | xargs kill 2>/dev/null || true
-                        sleep 0.2
-
-                        (cd "$preview_dir" && python3 -m http.server $preview_port --bind 127.0.0.1 >/dev/null 2>&1) &
-                        local server_pid=$!
-
-                        echo "$server_pid" > "$SESSION_DIR/.preview_pid"
-                        echo "$preview_port" > "$SESSION_DIR/.preview_port"
-
+                    *"Dashboard"*)
+                        start_dashboard_server
                         sleep 1
-                        open "http://127.0.0.1:$preview_port" 2>/dev/null
-
-                        success "Live preview at http://127.0.0.1:$preview_port"
-                        dim "Server runs in background - continues while you work"
-                        sleep 2
                         ;;
                     *"Static HTML"*)
-                        # Create static HTML file and open it directly
                         local static_file="$SESSION_DIR/preview.html"
                         create_static_preview "$SESSION_DIR" "$static_file"
                         open "$static_file" 2>/dev/null
@@ -3921,14 +4184,7 @@ post_session_menu() {
                         sleep 1
                         ;;
                     *"Stop"*)
-                        # Stop the running server for this session
-                        if [ -f "$SESSION_DIR/.preview_pid" ]; then
-                            local old_pid=$(cat "$SESSION_DIR/.preview_pid")
-                            kill "$old_pid" 2>/dev/null && success "Server stopped"
-                            rm -f "$SESSION_DIR/.preview_pid" "$SESSION_DIR/.preview_port"
-                        else
-                            dim "No server running for this session"
-                        fi
+                        stop_dashboard_server
                         sleep 1
                         ;;
                 esac
