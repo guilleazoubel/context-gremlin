@@ -445,6 +445,30 @@ dim() {
     gum style --foreground 240 "$1"
 }
 
+# Setup output files in session root with symlinks in repo
+# This ensures REVIEW.md and FINDINGS.md survive repo deletion
+setup_output_files() {
+    local SESSION_DIR="$1"
+
+    # Create output files in session root if they don't exist
+    [ ! -f "$SESSION_DIR/REVIEW.md" ] && touch "$SESSION_DIR/REVIEW.md"
+    [ ! -f "$SESSION_DIR/FINDINGS.md" ] && touch "$SESSION_DIR/FINDINGS.md"
+
+    # Create symlinks in repo directory (remove existing files first)
+    if [ -d "$SESSION_DIR/repo" ]; then
+        # If there's already content in repo, move it to session root
+        [ -f "$SESSION_DIR/repo/REVIEW.md" ] && [ ! -L "$SESSION_DIR/repo/REVIEW.md" ] && \
+            mv "$SESSION_DIR/repo/REVIEW.md" "$SESSION_DIR/REVIEW.md"
+        [ -f "$SESSION_DIR/repo/FINDINGS.md" ] && [ ! -L "$SESSION_DIR/repo/FINDINGS.md" ] && \
+            mv "$SESSION_DIR/repo/FINDINGS.md" "$SESSION_DIR/FINDINGS.md"
+
+        # Remove any existing files/links and create fresh symlinks
+        rm -f "$SESSION_DIR/repo/REVIEW.md" "$SESSION_DIR/repo/FINDINGS.md"
+        ln -sf "../REVIEW.md" "$SESSION_DIR/repo/REVIEW.md"
+        ln -sf "../FINDINGS.md" "$SESSION_DIR/repo/FINDINGS.md"
+    fi
+}
+
 # ============================================================================
 # SESSION LISTING
 # ============================================================================
@@ -1201,6 +1225,9 @@ The REVIEW.md should always show the CURRENT state, not accumulate history.
 **BEGIN NOW: Classify the PR type, then run macro analysis, then parallel micro analyses. Include code snippets for every finding.**
 CLAUDE_EOF
 
+    # Setup output files with symlinks (survives repo deletion)
+    setup_output_files "$SESSION_DIR"
+
     success "Session created"
     CURRENT_SESSION="$SESSION_DIR"
     return 0
@@ -1506,6 +1533,9 @@ The FINDINGS.md should be a living document that captures everything discovered.
 
 **BEGIN THE INVESTIGATION NOW. Explore the codebase and focus on the investigation topic.**
 CLAUDE_EOF
+
+    # Setup output files with symlinks (survives repo deletion)
+    setup_output_files "$SESSION_DIR"
 
     success "Session created"
     CURRENT_SESSION="$SESSION_DIR"
@@ -1828,8 +1858,8 @@ run_acr_review() {
                 ;;
             *"Codex"*)
                 if command -v codex >/dev/null 2>&1; then
-                    # Copy ACR results to REVIEW.md as context
-                    cat > "$SESSION_DIR/repo/REVIEW.md" << ACRCTX
+                    # Copy ACR results to REVIEW.md as context (in session root)
+                    cat > "$SESSION_DIR/REVIEW.md" << ACRCTX
 # Code Review
 
 ## ACR Pre-Analysis
@@ -1957,8 +1987,9 @@ open_in_editor() {
 
 start_live_preview() {
     local SESSION_DIR="$1"
-    local REVIEW_FILE="$SESSION_DIR/repo/REVIEW.md"
-    local FINDINGS_FILE="$SESSION_DIR/repo/FINDINGS.md"
+    # Files are stored in session root (symlinked to repo)
+    local REVIEW_FILE="$SESSION_DIR/REVIEW.md"
+    local FINDINGS_FILE="$SESSION_DIR/FINDINGS.md"
     local ACR_FILE="$SESSION_DIR/ACR_REVIEW.md"
 
     # Determine which file to watch
@@ -2150,7 +2181,8 @@ LIVEHTML2
 start_file_watcher() {
     local SESSION_DIR="$1"
     local HTML_FILE="$2"
-    local REVIEW_FILE="$SESSION_DIR/repo/REVIEW.md"
+    # Files are in session root (symlinked to repo)
+    local REVIEW_FILE="$SESSION_DIR/REVIEW.md"
 
     # Create a simple watcher script
     local watcher_script="/tmp/review_watcher_$$.sh"
@@ -2158,7 +2190,7 @@ start_file_watcher() {
 #!/bin/bash
 SESSION_DIR="$1"
 HTML_FILE="$2"
-REVIEW_FILE="$SESSION_DIR/repo/REVIEW.md"
+REVIEW_FILE="$SESSION_DIR/REVIEW.md"
 LAST_MOD=""
 
 while true; do
@@ -2185,7 +2217,8 @@ WATCHER
 # Create a self-updating HTML preview
 create_live_preview() {
     local SESSION_DIR="$1"
-    local REVIEW_FILE="$SESSION_DIR/repo/REVIEW.md"
+    # Files are in session root (symlinked to repo)
+    local REVIEW_FILE="$SESSION_DIR/REVIEW.md"
 
     local html_file="/tmp/live_review_$$.html"
     local content_file="/tmp/review_content_$$.txt"
@@ -2337,8 +2370,8 @@ run_codex_review() {
     gum style --foreground 39 --bold "Codex Code Review"
     echo ""
 
-    # Create/clear REVIEW.md
-    local REVIEW_FILE="$SESSION_DIR/repo/REVIEW.md"
+    # Create/clear REVIEW.md (in session root, symlinked to repo)
+    local REVIEW_FILE="$SESSION_DIR/REVIEW.md"
 
     # If WITH_ACR, run ACR first
     if [ "$WITH_ACR" = "true" ] && [ "$HAS_ACR" = "true" ]; then
@@ -2431,12 +2464,12 @@ create_live_preview_server() {
     local PREVIEW_DIR="$2"
     local FILE_TYPE="${3:-auto}"  # "review", "findings", or "auto" (detect)
 
-    # Determine which files exist
-    local REVIEW_FILE="$SESSION_DIR/repo/REVIEW.md"
-    local FINDINGS_FILE="$SESSION_DIR/repo/FINDINGS.md"
+    # Files are stored in session root (symlinked to repo)
+    local REVIEW_FILE="$SESSION_DIR/REVIEW.md"
+    local FINDINGS_FILE="$SESSION_DIR/FINDINGS.md"
     local HAS_REVIEW=false
     local HAS_FINDINGS=false
-    [ -f "$REVIEW_FILE" ] || touch "$REVIEW_FILE" && HAS_REVIEW=true
+    [ -f "$REVIEW_FILE" ] && HAS_REVIEW=true
     [ -f "$FINDINGS_FILE" ] && HAS_FINDINGS=true
 
     # Create index.html with tab support
@@ -3052,18 +3085,19 @@ archive_session() {
     local SESSION_DIR="$1"
     local SESSION_NAME=$(basename "$SESSION_DIR")
 
-    # Move review files to session root if they're in repo/
-    [ -f "$SESSION_DIR/repo/REVIEW.md" ] && mv "$SESSION_DIR/repo/REVIEW.md" "$SESSION_DIR/"
-    [ -f "$SESSION_DIR/repo/FINDINGS.md" ] && mv "$SESSION_DIR/repo/FINDINGS.md" "$SESSION_DIR/"
-    [ -f "$SESSION_DIR/repo/CLAUDE.md" ] && mv "$SESSION_DIR/repo/CLAUDE.md" "$SESSION_DIR/"
+    # REVIEW.md and FINDINGS.md are already in session root (repo has symlinks)
+    # Just save CLAUDE.md if it exists and isn't a symlink
+    if [ -f "$SESSION_DIR/repo/CLAUDE.md" ] && [ ! -L "$SESSION_DIR/repo/CLAUDE.md" ]; then
+        cp "$SESSION_DIR/repo/CLAUDE.md" "$SESSION_DIR/"
+    fi
 
-    # Delete repo folder
+    # Delete repo folder (symlinks will be deleted with it, actual files stay in session root)
     rm -rf "$SESSION_DIR/repo"
 
     # Mark as archived
     echo "ARCHIVED: $(date '+%Y-%m-%d %H:%M:%S')" >> "$SESSION_DIR/session-info.txt"
 
-    success "Session archived (repo deleted, metadata kept)"
+    success "Session archived (repo deleted, review/findings kept)"
 }
 
 is_archived() {
@@ -3140,14 +3174,14 @@ refresh_pr_session() {
     echo "New commit: $NEW_COMMIT" >> "$INFO_FILE"
     echo "New commits: $COMMIT_COUNT" >> "$INFO_FILE"
 
-    # Archive old REVIEW.md if it exists
+    # Archive old REVIEW.md if it exists (files are in session root)
     local version=1
-    while [ -f "$SESSION_DIR/repo/REVIEW-v${version}.md" ] || [ -f "$SESSION_DIR/REVIEW-v${version}.md" ]; do
+    while [ -f "$SESSION_DIR/REVIEW-v${version}.md" ]; do
         ((version++))
     done
 
-    if [ -f "$SESSION_DIR/repo/REVIEW.md" ]; then
-        cp "$SESSION_DIR/repo/REVIEW.md" "$SESSION_DIR/repo/REVIEW-v${version}.md"
+    if [ -f "$SESSION_DIR/REVIEW.md" ] && [ -s "$SESSION_DIR/REVIEW.md" ]; then
+        cp "$SESSION_DIR/REVIEW.md" "$SESSION_DIR/REVIEW-v${version}.md"
         success "Archived previous review as REVIEW-v${version}.md"
     fi
 
@@ -3297,6 +3331,9 @@ restart_session() {
     # Restore CLAUDE.md to repo if it exists in session root
     [ -f "$SESSION_DIR/CLAUDE.md" ] && cp "$SESSION_DIR/CLAUDE.md" "$SESSION_DIR/repo/"
 
+    # Setup output files with symlinks (files are in session root, symlinked to repo)
+    setup_output_files "$SESSION_DIR"
+
     # Remove archived marker
     sed -i '' '/^ARCHIVED:/d' "$SESSION_DIR/session-info.txt" 2>/dev/null || true
 
@@ -3386,11 +3423,11 @@ pre_session_menu() {
             *"Start Claude"*)
                 echo ""
 
-                # Check if review already exists
+                # Check if review already exists (files are in session root)
                 local existing_review=""
-                [ -f "$SESSION_DIR/repo/REVIEW.md" ] && existing_review="$SESSION_DIR/repo/REVIEW.md"
+                [ -f "$SESSION_DIR/REVIEW.md" ] && [ -s "$SESSION_DIR/REVIEW.md" ] && existing_review="$SESSION_DIR/REVIEW.md"
 
-                if [ -n "$existing_review" ] && [ -s "$existing_review" ]; then
+                if [ -n "$existing_review" ]; then
                     dim "Existing review found. Claude will summarize and continue."
                     dim "Type /exit when done to return here."
                     echo ""
@@ -3514,12 +3551,11 @@ post_session_menu() {
         PR_URL=$(grep "^URL:" "$SESSION_DIR/session-info.txt" 2>/dev/null | head -1 | cut -d: -f2- | xargs)
     fi
 
-    # Find review file
+    # Find review/findings files (stored in session root, symlinked to repo)
     local review_file=""
-    [ -f "$SESSION_DIR/repo/REVIEW.md" ] && review_file="$SESSION_DIR/repo/REVIEW.md"
-    [ -f "$SESSION_DIR/repo/FINDINGS.md" ] && review_file="$SESSION_DIR/repo/FINDINGS.md"
-    [ -f "$SESSION_DIR/REVIEW.md" ] && review_file="$SESSION_DIR/REVIEW.md"
-    [ -f "$SESSION_DIR/FINDINGS.md" ] && review_file="$SESSION_DIR/FINDINGS.md"
+    local findings_file=""
+    [ -f "$SESSION_DIR/REVIEW.md" ] && [ -s "$SESSION_DIR/REVIEW.md" ] && review_file="$SESSION_DIR/REVIEW.md"
+    [ -f "$SESSION_DIR/FINDINGS.md" ] && [ -s "$SESSION_DIR/FINDINGS.md" ] && findings_file="$SESSION_DIR/FINDINGS.md"
 
     while true; do
         header
@@ -3532,9 +3568,14 @@ post_session_menu() {
 
         echo ""
 
-        # Show review/findings file if it exists
-        if [ -n "$review_file" ]; then
-            gum style --foreground 82 "📝 Review findings available"
+        # Show what output files exist
+        local has_output=false
+        if [ -n "$review_file" ] || [ -n "$findings_file" ]; then
+            has_output=true
+            local output_info=""
+            [ -n "$review_file" ] && output_info="Review"
+            [ -n "$findings_file" ] && output_info="${output_info:+$output_info + }Findings"
+            gum style --foreground 82 "📝 $output_info available"
             echo ""
         fi
 
@@ -3550,11 +3591,11 @@ post_session_menu() {
             options+=("🔄 Refresh PR (check for updates)")
         fi
 
-        # Add review options if review exists
-        if [ -n "$review_file" ]; then
-            options+=("📖 View review (nice)")
+        # Add output file options if they exist
+        if [ "$has_output" = "true" ]; then
+            options+=("📖 View output (nice)")
             options+=("👁 Open live preview (auto-refresh)")
-            options+=("📋 Copy review to clipboard")
+            options+=("📋 Copy to clipboard")
         fi
 
         options+=(
@@ -3606,22 +3647,35 @@ post_session_menu() {
                 ;;
             *"Refresh PR"*)
                 if refresh_pr_session "$SESSION_DIR"; then
-                    # Update review_file reference in case it moved
+                    # Re-check files after refresh
                     review_file=""
-                    [ -f "$SESSION_DIR/repo/REVIEW.md" ] && review_file="$SESSION_DIR/repo/REVIEW.md"
-                    [ -f "$SESSION_DIR/REVIEW.md" ] && review_file="$SESSION_DIR/REVIEW.md"
+                    findings_file=""
+                    [ -f "$SESSION_DIR/REVIEW.md" ] && [ -s "$SESSION_DIR/REVIEW.md" ] && review_file="$SESSION_DIR/REVIEW.md"
+                    [ -f "$SESSION_DIR/FINDINGS.md" ] && [ -s "$SESSION_DIR/FINDINGS.md" ] && findings_file="$SESSION_DIR/FINDINGS.md"
                 fi
                 ;;
-            *"View review (nice)"*)
-                if [ -n "$review_file" ]; then
-                    view_markdown_nice "$review_file"
+            *"View output"*)
+                # Let user choose which file to view
+                local view_choice=""
+                if [ -n "$review_file" ] && [ -n "$findings_file" ]; then
+                    view_choice=$(gum choose --header "Which file?" "REVIEW.md" "FINDINGS.md" "Both")
+                elif [ -n "$review_file" ]; then
+                    view_choice="REVIEW.md"
+                else
+                    view_choice="FINDINGS.md"
                 fi
+
+                case "$view_choice" in
+                    "REVIEW.md") view_markdown_nice "$SESSION_DIR/REVIEW.md" ;;
+                    "FINDINGS.md") view_markdown_nice "$SESSION_DIR/FINDINGS.md" ;;
+                    "Both")
+                        view_markdown_nice "$SESSION_DIR/REVIEW.md"
+                        view_markdown_nice "$SESSION_DIR/FINDINGS.md"
+                        ;;
+                esac
                 ;;
             *"live preview"*)
-                # Check for either review or findings file
-                local has_content=false
-                [ -f "$SESSION_DIR/repo/REVIEW.md" ] && has_content=true
-                [ -f "$SESSION_DIR/repo/FINDINGS.md" ] && has_content=true
+                # Files are in session root
 
                 # Kill any existing preview servers first
                 kill_preview_servers
@@ -3645,14 +3699,30 @@ post_session_menu() {
                 kill "$server_pid" 2>/dev/null
                 rm -rf "$preview_dir"
                 ;;
-            *"Copy review"*)
-                if [ -n "$review_file" ]; then
-                    cat "$review_file" | pbcopy 2>/dev/null && success "Copied to clipboard"
-                    sleep 1
-                else
-                    dim "No review/findings file found"
-                    sleep 1
+            *"Copy"*"clipboard"*)
+                # Let user choose which file to copy
+                local copy_choice=""
+                if [ -n "$review_file" ] && [ -n "$findings_file" ]; then
+                    copy_choice=$(gum choose --header "Which file?" "REVIEW.md" "FINDINGS.md" "Both")
+                elif [ -n "$review_file" ]; then
+                    copy_choice="REVIEW.md"
+                elif [ -n "$findings_file" ]; then
+                    copy_choice="FINDINGS.md"
                 fi
+
+                case "$copy_choice" in
+                    "REVIEW.md")
+                        cat "$SESSION_DIR/REVIEW.md" | pbcopy 2>/dev/null && success "Review copied to clipboard"
+                        ;;
+                    "FINDINGS.md")
+                        cat "$SESSION_DIR/FINDINGS.md" | pbcopy 2>/dev/null && success "Findings copied to clipboard"
+                        ;;
+                    "Both")
+                        { echo "# REVIEW"; cat "$SESSION_DIR/REVIEW.md"; echo -e "\n\n# FINDINGS"; cat "$SESSION_DIR/FINDINGS.md"; } | pbcopy 2>/dev/null
+                        success "Both files copied to clipboard"
+                        ;;
+                esac
+                sleep 1
                 ;;
             *"Switch mode"*)
                 prompt_mode_switch "$SESSION_DIR"
@@ -3912,12 +3982,11 @@ list_sessions_menu() {
         # Check if archived
         local archived=$(is_archived "$session" && echo "yes" || echo "no")
 
-        # Find review file
+        # Find review/findings files (prefer session root, fallback to repo for old sessions)
         local review_file=""
-        [ -f "$session/repo/REVIEW.md" ] && review_file="$session/repo/REVIEW.md"
-        [ -f "$session/repo/FINDINGS.md" ] && review_file="$session/repo/FINDINGS.md"
-        [ -f "$session/REVIEW.md" ] && review_file="$session/REVIEW.md"
-        [ -f "$session/FINDINGS.md" ] && review_file="$session/FINDINGS.md"
+        local findings_file=""
+        [ -f "$session/REVIEW.md" ] && [ -s "$session/REVIEW.md" ] && review_file="$session/REVIEW.md"
+        [ -f "$session/FINDINGS.md" ] && [ -s "$session/FINDINGS.md" ] && findings_file="$session/FINDINGS.md"
 
         # Get PR URL for PR-specific options
         local PR_URL=""
