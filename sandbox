@@ -3574,9 +3574,21 @@ post_session_menu() {
                 tput reset 2>/dev/null || clear
                 cd "$SESSION_DIR/repo"
 
-                # If review exists, have Claude summarize before continuing
-                if [ -n "$review_file" ] && [ -s "$review_file" ]; then
-                    claude "Read REVIEW.md and give me a brief summary of the key findings (bullet points, max 5-7 items). Highlight any critical or high-severity issues. Then let me know you're ready to discuss, refine, or update the review."
+                # Determine current mode and appropriate file
+                local mode=$(get_current_mode "$SESSION_DIR")
+                local output_file=""
+                local prompt=""
+
+                if [ "$mode" = "investigation" ]; then
+                    [ -f "$SESSION_DIR/repo/FINDINGS.md" ] && [ -s "$SESSION_DIR/repo/FINDINGS.md" ] && output_file="FINDINGS.md"
+                    prompt="Read FINDINGS.md and give me a brief summary of the key discoveries (bullet points, max 5-7 items). Then let me know you're ready to continue the investigation or discuss the findings."
+                else
+                    [ -f "$SESSION_DIR/repo/REVIEW.md" ] && [ -s "$SESSION_DIR/repo/REVIEW.md" ] && output_file="REVIEW.md"
+                    prompt="Read REVIEW.md and give me a brief summary of the key findings (bullet points, max 5-7 items). Highlight any critical or high-severity issues. Then let me know you're ready to discuss, refine, or update the review."
+                fi
+
+                if [ -n "$output_file" ]; then
+                    claude "$prompt"
                 else
                     claude -c
                 fi
