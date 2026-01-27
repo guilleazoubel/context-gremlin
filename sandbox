@@ -192,8 +192,14 @@ select_session_simple() {
         options+=("$display")
     done <<< "$sessions"
 
-    # Show selection
-    local selected=$(printf '%s\n' "${options[@]}" | gum choose --header "Select a session (ESC to go back):")
+    # Show selection using fzf
+    local selected=$(printf '%s\n' "${options[@]}" | fzf \
+        --height=~50% \
+        --layout=reverse \
+        --border=rounded \
+        --prompt="Search: " \
+        --header="Select a session • ESC to go back" \
+        --header-first)
 
     # Handle back/cancel
     if [ -z "$selected" ] || [[ "$selected" == "← Back"* ]]; then
@@ -1204,28 +1210,55 @@ run_acr_review() {
     success "Results saved to ACR_REVIEW.md"
     sleep 1
 
-    # Offer next steps
-    local next=$(gum choose \
-        "📖 View ACR results" \
-        "🤖 Feed results to Claude for deeper analysis" \
-        "📁 Done, return to session menu" \
-        "← Back")
+    # Offer next steps in a loop until user chooses to go back
+    while true; do
+        local next=$(gum choose \
+            "📖 View ACR results" \
+            "🤖 Feed results to Claude for deeper analysis" \
+            "⚡ Feed results to Codex for deeper analysis" \
+            "✅ Done, return to session menu")
 
-    case "$next" in
-        *"View ACR"*)
-            if command -v glow >/dev/null 2>&1; then
-                glow -p "$acr_output"
-            else
-                gum pager < "$acr_output"
-            fi
-            ;;
-        *"Claude"*)
-            # Create a Claude prompt that includes ACR results
-            feed_acr_to_claude "$SESSION_DIR" "$acr_output"
-            ;;
-    esac
+        case "$next" in
+            *"View ACR"*)
+                if command -v glow >/dev/null 2>&1; then
+                    glow -p "$acr_output"
+                else
+                    gum pager < "$acr_output"
+                fi
+                ;;
+            *"Claude"*)
+                feed_acr_to_claude "$SESSION_DIR" "$acr_output"
+                return 0
+                ;;
+            *"Codex"*)
+                if command -v codex >/dev/null 2>&1; then
+                    # Copy ACR results to REVIEW.md as context
+                    cat > "$SESSION_DIR/repo/REVIEW.md" << ACRCTX
+# Code Review
 
-    return 0
+## ACR Pre-Analysis
+
+\`\`\`
+$(cat "$acr_output")
+\`\`\`
+
+---
+
+## Detailed Analysis
+
+ACRCTX
+                    run_codex_review "$SESSION_DIR" "$PR_BASE" "false"
+                else
+                    error "Codex not installed"
+                    sleep 1
+                fi
+                return 0
+                ;;
+            *"Done"*|*)
+                return 0
+                ;;
+        esac
+    done
 }
 
 feed_acr_to_claude() {
@@ -2652,6 +2685,7 @@ pre_session_menu() {
         fi
 
         options+=(
+            "👁 Open live preview (watch REVIEW.md)"
             "💻 Open in editor (VS Code/Cursor)"
             "📊 View diff"
         )
@@ -2709,6 +2743,22 @@ pre_session_menu() {
                 run_codex_review "$SESSION_DIR" "$PR_BASE" "true"
                 post_session_menu "$SESSION_DIR"
                 return 0
+                ;;
+            *"live preview"*)
+                # Start live preview server in background
+                local preview_dir="/tmp/live_preview_$$"
+                mkdir -p "$preview_dir"
+                create_live_preview_server "$SESSION_DIR" "$preview_dir"
+
+                (cd "$preview_dir" && python3 -m http.server 8765 --bind 127.0.0.1 >/dev/null 2>&1) &
+                LIVE_PREVIEW_PID=$!
+
+                sleep 1
+                open "http://127.0.0.1:8765" 2>/dev/null
+
+                success "Live preview running at http://127.0.0.1:8765"
+                dim "Preview will update as REVIEW.md changes"
+                sleep 2
                 ;;
             *"editor"*|*"VS Code"*|*"Cursor"*)
                 open_in_editor "$SESSION_DIR/repo"
@@ -2800,6 +2850,7 @@ post_session_menu() {
         # Add review options if review exists
         if [ -n "$review_file" ]; then
             options+=("📖 View review (nice)")
+            options+=("👁 Open live preview (auto-refresh)")
             options+=("📋 Copy review to clipboard")
         fi
 
@@ -2842,6 +2893,28 @@ post_session_menu() {
             *"View review (nice)"*)
                 if [ -n "$review_file" ]; then
                     view_markdown_nice "$review_file"
+                fi
+                ;;
+            *"live preview"*)
+                if [ -n "$review_file" ]; then
+                    # Start live preview server
+                    local preview_dir="/tmp/live_preview_$$"
+                    mkdir -p "$preview_dir"
+                    create_live_preview_server "$SESSION_DIR" "$preview_dir"
+
+                    # Start server in background
+                    (cd "$preview_dir" && python3 -m http.server 8765 --bind 127.0.0.1 >/dev/null 2>&1) &
+                    local server_pid=$!
+
+                    sleep 1
+                    open "http://127.0.0.1:8765" 2>/dev/null
+
+                    success "Live preview at http://127.0.0.1:8765"
+                    dim "Press Enter to stop the preview server..."
+                    read -r
+
+                    kill "$server_pid" 2>/dev/null
+                    rm -rf "$preview_dir"
                 fi
                 ;;
             *"Copy review"*)
