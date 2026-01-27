@@ -280,30 +280,64 @@ prompt_jira_ticket() {
     fi
 
     echo ""
+    local jira_input=""
+
     if [ -n "$suggested_ticket" ]; then
-        # Found ticket in branch name - suggest it
-        if gum confirm "Link Jira ticket $suggested_ticket (from branch name)?"; then
-            jira_input="$suggested_ticket"
-        elif gum confirm --default=false "Link a different Jira ticket?"; then
-            dim "Enter Jira ticket URL or ID:"
-            printf "Jira: "
-            read -r jira_input
-            [ -z "$jira_input" ] && return 1
-        else
-            echo ""
-            return 1
-        fi
+        # Found ticket in branch name - offer 3 choices
+        local jira_choice=$(printf '%s\n' \
+            "✓ Yes, link $suggested_ticket" \
+            "✏️  Link different ticket" \
+            "⏭  Skip" | fzf \
+            --height=~30% \
+            --layout=reverse \
+            --border=rounded \
+            --no-info \
+            --prompt="" \
+            --header="Link Jira ticket $suggested_ticket (from branch name)?" \
+            --header-first)
+
+        case "$jira_choice" in
+            *"Yes"*)
+                jira_input="$suggested_ticket"
+                ;;
+            *"different"*)
+                echo ""
+                dim "Enter Jira ticket URL or ID:"
+                printf "Jira: "
+                read -r jira_input
+                [ -z "$jira_input" ] && return 1
+                ;;
+            *)
+                echo ""
+                return 1
+                ;;
+        esac
     else
         # No ticket found in branch - ask normally
-        if ! gum confirm --default=false "Link a Jira ticket for additional context?"; then
-            echo ""
-            return 1
-        fi
-        echo ""
-        dim "Enter Jira ticket URL or ID (e.g., PROJ-123 or https://company.atlassian.net/browse/PROJ-123)"
-        printf "Jira: "
-        read -r jira_input
-        [ -z "$jira_input" ] && return 1
+        local jira_choice=$(printf '%s\n' \
+            "✓ Yes, link a ticket" \
+            "⏭  Skip" | fzf \
+            --height=~25% \
+            --layout=reverse \
+            --border=rounded \
+            --no-info \
+            --prompt="" \
+            --header="Link a Jira ticket for additional context?" \
+            --header-first)
+
+        case "$jira_choice" in
+            *"Yes"*)
+                echo ""
+                dim "Enter Jira ticket URL or ID (e.g., PROJ-123 or https://company.atlassian.net/browse/PROJ-123)"
+                printf "Jira: "
+                read -r jira_input
+                [ -z "$jira_input" ] && return 1
+                ;;
+            *)
+                echo ""
+                return 1
+                ;;
+        esac
     fi
 
     JIRA_URL_DOMAIN=""
@@ -2490,6 +2524,65 @@ ACRCONTEXT
     return 0
 }
 
+# Create static HTML preview (no server needed, manual refresh)
+create_static_preview() {
+    local SESSION_DIR="$1"
+    local OUTPUT_FILE="$2"
+
+    local REVIEW_FILE="$SESSION_DIR/REVIEW.md"
+    local FINDINGS_FILE="$SESSION_DIR/FINDINGS.md"
+
+    # Read content
+    local review_content=""
+    local findings_content=""
+    [ -f "$REVIEW_FILE" ] && review_content=$(cat "$REVIEW_FILE" | sed 's/\\/\\\\/g' | sed 's/`/\\`/g' | sed "s/'/\\\\'/g")
+    [ -f "$FINDINGS_FILE" ] && findings_content=$(cat "$FINDINGS_FILE" | sed 's/\\/\\\\/g' | sed 's/`/\\`/g' | sed "s/'/\\\\'/g")
+
+    cat > "$OUTPUT_FILE" << STATICHTML
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>Preview - $(basename "$SESSION_DIR")</title>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #0f0f0f; color: #e0e0e0; padding: 2rem; }
+        .tabs { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+        .tab { background: #222; border: 1px solid #444; color: #888; padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer; }
+        .tab.active { background: #00ff88; color: #000; border-color: #00ff88; }
+        .content { background: #1a1a1a; border-radius: 12px; padding: 2rem; border: 1px solid #333; min-height: 60vh; }
+        h1,h2,h3 { color: #fff; margin: 1.5rem 0 0.75rem; }
+        p { margin-bottom: 1rem; line-height: 1.7; color: #bbb; }
+        pre { background: #0d0d0d; padding: 1rem; border-radius: 8px; overflow-x: auto; }
+        code { font-family: 'JetBrains Mono', monospace; }
+        .refresh { position: fixed; top: 1rem; right: 1rem; background: #333; color: #fff; padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer; border: none; }
+        .refresh:hover { background: #444; }
+    </style>
+</head>
+<body>
+    <button class="refresh" onclick="location.reload()">⟳ Refresh</button>
+    <div class="tabs">
+        <button class="tab active" onclick="showTab('review')">Review</button>
+        <button class="tab" onclick="showTab('findings')">Findings</button>
+    </div>
+    <div class="content" id="content"></div>
+    <script>
+        const content = { review: \`$review_content\`, findings: \`$findings_content\` };
+        let current = 'review';
+        function showTab(tab) {
+            current = tab;
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelector('.tab:nth-child(' + (tab === 'review' ? 1 : 2) + ')').classList.add('active');
+            document.getElementById('content').innerHTML = marked.parse(content[tab] || '*No content yet*');
+        }
+        showTab('review');
+    </script>
+</body>
+</html>
+STATICHTML
+}
+
 # Create live preview with HTTP server
 kill_preview_servers() {
     # Kill any existing preview servers on port 8765
@@ -3474,7 +3567,15 @@ pre_session_menu() {
         options+=("🗑 Cancel and delete session")
         options+=("← Back to main menu")
 
-        local choice=$(printf '%s\n' "${options[@]}" | gum choose --header "What would you like to do?")
+        local choice=$(printf '%s\n' "${options[@]}" | fzf \
+            --height=~50% \
+            --layout=reverse \
+            --border=rounded \
+            --no-info \
+            --prompt="" \
+            --header="What would you like to do?" \
+            --header-first \
+            --ansi)
 
         case "$choice" in
             *"investigation"*)
@@ -3564,22 +3665,32 @@ pre_session_menu() {
                 return 0
                 ;;
             *"live preview"*)
-                # Kill any existing preview servers first
-                kill_preview_servers
+                # Calculate a unique port for this session (8765 + hash of session name)
+                local port_offset=$(echo "$SESSION_NAME" | cksum | cut -d' ' -f1)
+                local preview_port=$((8765 + (port_offset % 100)))
 
                 # Start live preview server in background
-                local preview_dir="/tmp/live_preview_$$"
+                local preview_dir="/tmp/live_preview_${SESSION_NAME}"
                 mkdir -p "$preview_dir"
                 create_live_preview_server "$SESSION_DIR" "$preview_dir"
 
-                (cd "$preview_dir" && python3 -m http.server 8765 --bind 127.0.0.1 >/dev/null 2>&1) &
-                LIVE_PREVIEW_PID=$!
+                # Kill any existing server on this port
+                lsof -ti:$preview_port 2>/dev/null | xargs kill 2>/dev/null || true
+                sleep 0.2
+
+                (cd "$preview_dir" && python3 -m http.server $preview_port --bind 127.0.0.1 >/dev/null 2>&1) &
+                local server_pid=$!
+
+                # Save PID for later cleanup
+                echo "$server_pid" > "$SESSION_DIR/.preview_pid"
+                echo "$preview_port" > "$SESSION_DIR/.preview_port"
 
                 sleep 1
-                open "http://127.0.0.1:8765" 2>/dev/null
+                open "http://127.0.0.1:$preview_port" 2>/dev/null
 
-                success "Live preview running at http://127.0.0.1:8765"
-                dim "Preview will update as REVIEW.md or FINDINGS.md changes"
+                success "Live preview running at http://127.0.0.1:$preview_port"
+                dim "Server runs in background - you can now start Claude"
+                dim "Preview updates automatically as files change"
                 sleep 2
                 ;;
             *"editor"*|*"VS Code"*|*"Cursor"*)
@@ -3760,29 +3871,67 @@ post_session_menu() {
                 esac
                 ;;
             *"live preview"*)
-                # Files are in session root
+                # Choose preview mode
+                local preview_mode=$(printf '%s\n' \
+                    "🔄 Live server (auto-refresh)" \
+                    "📄 Static HTML (manual refresh)" \
+                    "🛑 Stop running server" \
+                    "← Cancel" | fzf \
+                    --height=~30% \
+                    --layout=reverse \
+                    --border=rounded \
+                    --no-info \
+                    --prompt="" \
+                    --header="Preview mode" \
+                    --header-first)
 
-                # Kill any existing preview servers first
-                kill_preview_servers
+                case "$preview_mode" in
+                    *"Live server"*)
+                        # Calculate unique port for this session
+                        local port_offset=$(echo "$SESSION_NAME" | cksum | cut -d' ' -f1)
+                        local preview_port=$((8765 + (port_offset % 100)))
 
-                # Start live preview server
-                local preview_dir="/tmp/live_preview_$$"
-                mkdir -p "$preview_dir"
-                create_live_preview_server "$SESSION_DIR" "$preview_dir"
+                        local preview_dir="/tmp/live_preview_${SESSION_NAME}"
+                        mkdir -p "$preview_dir"
+                        create_live_preview_server "$SESSION_DIR" "$preview_dir"
 
-                # Start server in background
-                (cd "$preview_dir" && python3 -m http.server 8765 --bind 127.0.0.1 >/dev/null 2>&1) &
-                local server_pid=$!
+                        # Kill any existing server on this port
+                        lsof -ti:$preview_port 2>/dev/null | xargs kill 2>/dev/null || true
+                        sleep 0.2
 
-                sleep 1
-                open "http://127.0.0.1:8765" 2>/dev/null
+                        (cd "$preview_dir" && python3 -m http.server $preview_port --bind 127.0.0.1 >/dev/null 2>&1) &
+                        local server_pid=$!
 
-                success "Live preview at http://127.0.0.1:8765"
-                dim "Press Enter to stop the preview server..."
-                read -r
+                        echo "$server_pid" > "$SESSION_DIR/.preview_pid"
+                        echo "$preview_port" > "$SESSION_DIR/.preview_port"
 
-                kill "$server_pid" 2>/dev/null
-                rm -rf "$preview_dir"
+                        sleep 1
+                        open "http://127.0.0.1:$preview_port" 2>/dev/null
+
+                        success "Live preview at http://127.0.0.1:$preview_port"
+                        dim "Server runs in background - continues while you work"
+                        sleep 2
+                        ;;
+                    *"Static HTML"*)
+                        # Create static HTML file and open it directly
+                        local static_file="$SESSION_DIR/preview.html"
+                        create_static_preview "$SESSION_DIR" "$static_file"
+                        open "$static_file" 2>/dev/null
+                        success "Opened static preview - refresh browser to see updates"
+                        sleep 1
+                        ;;
+                    *"Stop"*)
+                        # Stop the running server for this session
+                        if [ -f "$SESSION_DIR/.preview_pid" ]; then
+                            local old_pid=$(cat "$SESSION_DIR/.preview_pid")
+                            kill "$old_pid" 2>/dev/null && success "Server stopped"
+                            rm -f "$SESSION_DIR/.preview_pid" "$SESSION_DIR/.preview_port"
+                        else
+                            dim "No server running for this session"
+                        fi
+                        sleep 1
+                        ;;
+                esac
                 ;;
             *"Copy"*"clipboard"*)
                 # Let user choose which file to copy
