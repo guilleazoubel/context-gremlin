@@ -2183,6 +2183,9 @@ ACRCONTEXT
     if gum confirm "Open live preview in browser?"; then
         dim "Opening live preview..."
 
+        # Kill any existing preview servers first
+        kill_preview_servers
+
         # Start a simple HTTP server for the preview
         local preview_dir="/tmp/live_preview_$$"
         mkdir -p "$preview_dir"
@@ -2217,12 +2220,28 @@ ACRCONTEXT
 }
 
 # Create live preview with HTTP server
+kill_preview_servers() {
+    # Kill any existing preview servers on port 8765
+    lsof -ti:8765 2>/dev/null | xargs kill 2>/dev/null || true
+    # Also kill any lingering file copy loops
+    pkill -f "live_preview_" 2>/dev/null || true
+    sleep 0.3
+}
+
 create_live_preview_server() {
     local SESSION_DIR="$1"
     local PREVIEW_DIR="$2"
-    local REVIEW_FILE="$SESSION_DIR/repo/REVIEW.md"
+    local FILE_TYPE="${3:-auto}"  # "review", "findings", or "auto" (detect)
 
-    # Create index.html
+    # Determine which files exist
+    local REVIEW_FILE="$SESSION_DIR/repo/REVIEW.md"
+    local FINDINGS_FILE="$SESSION_DIR/repo/FINDINGS.md"
+    local HAS_REVIEW=false
+    local HAS_FINDINGS=false
+    [ -f "$REVIEW_FILE" ] || touch "$REVIEW_FILE" && HAS_REVIEW=true
+    [ -f "$FINDINGS_FILE" ] && HAS_FINDINGS=true
+
+    # Create index.html with tab support
     cat > "$PREVIEW_DIR/index.html" << 'SERVERHTML'
 <!DOCTYPE html>
 <html lang="en">
@@ -2246,6 +2265,12 @@ create_live_preview_server() {
         .pulse { width: 10px; height: 10px; background: #00ff88; border-radius: 50%; animation: pulse 1.5s infinite; }
         @keyframes pulse { 0%,100% { transform: scale(1); opacity: 1; } 50% { transform: scale(1.3); opacity: 0.7; } }
         .status { font-size: 0.85rem; color: #888; }
+        .tabs { display: flex; gap: 0.5rem; }
+        .tab { background: transparent; border: 1px solid #444; color: #888; padding: 0.4rem 1rem; border-radius: 6px; cursor: pointer; font-size: 0.85rem; transition: all 0.2s; }
+        .tab:hover { border-color: #666; color: #ccc; }
+        .tab.active { background: #00ff88; color: #000; border-color: #00ff88; font-weight: 600; }
+        .tab.has-content { border-color: #00ff88; }
+        .tab.no-content { opacity: 0.4; }
         .container { max-width: 900px; margin: 0 auto; padding: 6rem 1.5rem 3rem; }
         .content { background: #1a1a1a; border-radius: 16px; padding: 2.5rem; border: 1px solid #333; }
         .waiting { text-align: center; padding: 5rem 2rem; }
@@ -2271,7 +2296,11 @@ create_live_preview_server() {
 </head>
 <body>
     <div class="header">
-        <div class="logo">📝 Live Code Review</div>
+        <div class="logo">📝 <span id="title">Live Preview</span></div>
+        <div class="tabs" id="tabs">
+            <button class="tab active" data-file="review">Review</button>
+            <button class="tab" data-file="findings">Findings</button>
+        </div>
         <div class="live-indicator">
             <div class="pulse"></div>
             <span class="status" id="status">Connecting...</span>
@@ -2286,42 +2315,94 @@ create_live_preview_server() {
         </div>
     </div>
     <script>
-        let lastContent = '';
-        let updateCount = 0;
+        let currentFile = 'review';
+        let lastContent = { review: '', findings: '' };
+        let updateCount = { review: 0, findings: 0 };
+        let hasContent = { review: false, findings: false };
 
-        async function fetchContent() {
+        async function fetchFile(type) {
+            const filename = type === 'review' ? 'review.md' : 'findings.md';
             try {
-                const response = await fetch('/content.md?t=' + Date.now());
+                const response = await fetch('/' + filename + '?t=' + Date.now());
                 if (response.ok) {
                     const text = await response.text();
-                    if (text && text !== lastContent) {
-                        lastContent = text;
-                        updateCount++;
-                        document.getElementById('content').innerHTML =
-                            DOMPurify.sanitize(marked.parse(text));
-                        document.getElementById('status').textContent =
-                            'Updated ' + new Date().toLocaleTimeString() + ' (#' + updateCount + ')';
+                    hasContent[type] = text && text.trim().length > 0;
+                    updateTabState();
+                    if (text && text !== lastContent[type]) {
+                        lastContent[type] = text;
+                        updateCount[type]++;
+                        if (currentFile === type) {
+                            renderContent(text, type);
+                        }
                     }
+                    return text;
                 }
-            } catch (e) {
-                document.getElementById('status').textContent = 'Waiting for file...';
+            } catch (e) {}
+            hasContent[type] = false;
+            updateTabState();
+            return null;
+        }
+
+        function renderContent(text, type) {
+            if (text && text.trim()) {
+                document.getElementById('content').innerHTML = DOMPurify.sanitize(marked.parse(text));
+                document.getElementById('status').textContent =
+                    'Updated ' + new Date().toLocaleTimeString() + ' (#' + updateCount[type] + ')';
+            } else {
+                document.getElementById('content').innerHTML =
+                    '<div class="waiting"><div class="loader"></div><h2>Waiting for ' +
+                    (type === 'review' ? 'review' : 'findings') + ' content...</h2></div>';
+            }
+            document.getElementById('title').textContent =
+                type === 'review' ? 'Live Code Review' : 'Live Investigation';
+        }
+
+        function updateTabState() {
+            document.querySelectorAll('.tab').forEach(tab => {
+                const type = tab.dataset.file;
+                tab.classList.toggle('has-content', hasContent[type]);
+                tab.classList.toggle('no-content', !hasContent[type]);
+            });
+        }
+
+        function switchTab(type) {
+            currentFile = type;
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelector('.tab[data-file="' + type + '"]').classList.add('active');
+            renderContent(lastContent[type], type);
+        }
+
+        document.querySelectorAll('.tab').forEach(tab => {
+            tab.addEventListener('click', () => switchTab(tab.dataset.file));
+        });
+
+        async function fetchAll() {
+            await Promise.all([fetchFile('review'), fetchFile('findings')]);
+            // Auto-switch to findings tab if review is empty but findings has content
+            if (!hasContent.review && hasContent.findings && currentFile === 'review') {
+                switchTab('findings');
             }
         }
 
-        setInterval(fetchContent, 1500);
-        fetchContent();
+        setInterval(fetchAll, 1500);
+        fetchAll();
     </script>
 </body>
 </html>
 SERVERHTML
 
-    # Create a symlink to the REVIEW.md file
-    ln -sf "$REVIEW_FILE" "$PREVIEW_DIR/content.md"
+    # Copy both files initially
+    [ -f "$REVIEW_FILE" ] && cp "$REVIEW_FILE" "$PREVIEW_DIR/review.md" 2>/dev/null
+    [ -f "$FINDINGS_FILE" ] && cp "$FINDINGS_FILE" "$PREVIEW_DIR/findings.md" 2>/dev/null
 
-    # Also watch and copy the file periodically
+    # Touch empty files so they exist
+    touch "$PREVIEW_DIR/review.md" "$PREVIEW_DIR/findings.md"
+
+    # Watch and copy both files periodically (named for cleanup)
     (
         while true; do
-            [ -f "$REVIEW_FILE" ] && cp "$REVIEW_FILE" "$PREVIEW_DIR/content.md" 2>/dev/null
+            [ -f "$REVIEW_FILE" ] && cp "$REVIEW_FILE" "$PREVIEW_DIR/review.md" 2>/dev/null
+            [ -f "$FINDINGS_FILE" ] && cp "$FINDINGS_FILE" "$PREVIEW_DIR/findings.md" 2>/dev/null
             sleep 1
         done
     ) &
@@ -3159,6 +3240,9 @@ pre_session_menu() {
                 return 0
                 ;;
             *"live preview"*)
+                # Kill any existing preview servers first
+                kill_preview_servers
+
                 # Start live preview server in background
                 local preview_dir="/tmp/live_preview_$$"
                 mkdir -p "$preview_dir"
@@ -3171,7 +3255,7 @@ pre_session_menu() {
                 open "http://127.0.0.1:8765" 2>/dev/null
 
                 success "Live preview running at http://127.0.0.1:8765"
-                dim "Preview will update as REVIEW.md changes"
+                dim "Preview will update as REVIEW.md or FINDINGS.md changes"
                 sleep 2
                 ;;
             *"editor"*|*"VS Code"*|*"Cursor"*)
@@ -3316,26 +3400,32 @@ post_session_menu() {
                 fi
                 ;;
             *"live preview"*)
-                if [ -n "$review_file" ]; then
-                    # Start live preview server
-                    local preview_dir="/tmp/live_preview_$$"
-                    mkdir -p "$preview_dir"
-                    create_live_preview_server "$SESSION_DIR" "$preview_dir"
+                # Check for either review or findings file
+                local has_content=false
+                [ -f "$SESSION_DIR/repo/REVIEW.md" ] && has_content=true
+                [ -f "$SESSION_DIR/repo/FINDINGS.md" ] && has_content=true
 
-                    # Start server in background
-                    (cd "$preview_dir" && python3 -m http.server 8765 --bind 127.0.0.1 >/dev/null 2>&1) &
-                    local server_pid=$!
+                # Kill any existing preview servers first
+                kill_preview_servers
 
-                    sleep 1
-                    open "http://127.0.0.1:8765" 2>/dev/null
+                # Start live preview server
+                local preview_dir="/tmp/live_preview_$$"
+                mkdir -p "$preview_dir"
+                create_live_preview_server "$SESSION_DIR" "$preview_dir"
 
-                    success "Live preview at http://127.0.0.1:8765"
-                    dim "Press Enter to stop the preview server..."
-                    read -r
+                # Start server in background
+                (cd "$preview_dir" && python3 -m http.server 8765 --bind 127.0.0.1 >/dev/null 2>&1) &
+                local server_pid=$!
 
-                    kill "$server_pid" 2>/dev/null
-                    rm -rf "$preview_dir"
-                fi
+                sleep 1
+                open "http://127.0.0.1:8765" 2>/dev/null
+
+                success "Live preview at http://127.0.0.1:8765"
+                dim "Press Enter to stop the preview server..."
+                read -r
+
+                kill "$server_pid" 2>/dev/null
+                rm -rf "$preview_dir"
                 ;;
             *"Copy review"*)
                 if [ -n "$review_file" ]; then
