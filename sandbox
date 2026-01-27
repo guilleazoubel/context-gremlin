@@ -250,22 +250,54 @@ $description
 JIRA_CTX
 }
 
+# Extract Jira ticket ID from branch name
+# e.g., "HB-404-find-user-not-working" -> "HB-404"
+# e.g., "feature/PROJ-123-new-login" -> "PROJ-123"
+extract_jira_from_branch() {
+    local branch="$1"
+    # Match patterns like PROJ-123, HB-404, etc.
+    if [[ "$branch" =~ ([A-Z]+-[0-9]+) ]]; then
+        echo "${BASH_REMATCH[1]}"
+    fi
+}
+
 # Prompt user for optional Jira ticket
 prompt_jira_ticket() {
     local context_type="$1"  # "pr" or "investigation"
+    local branch_name="$2"   # optional: branch name to extract ticket from
 
-    echo ""
-    if ! gum confirm --default=false "Link a Jira ticket for additional context?"; then
-        echo ""
-        return 1
+    # Try to extract Jira ticket from branch name
+    local suggested_ticket=""
+    if [ -n "$branch_name" ]; then
+        suggested_ticket=$(extract_jira_from_branch "$branch_name")
     fi
 
     echo ""
-    dim "Enter Jira ticket URL or ID (e.g., PROJ-123 or https://company.atlassian.net/browse/PROJ-123)"
-    printf "Jira: "
-    read -r jira_input
-
-    [ -z "$jira_input" ] && return 1
+    if [ -n "$suggested_ticket" ]; then
+        # Found ticket in branch name - suggest it
+        if gum confirm "Link Jira ticket $suggested_ticket (from branch name)?"; then
+            jira_input="$suggested_ticket"
+        elif gum confirm --default=false "Link a different Jira ticket?"; then
+            dim "Enter Jira ticket URL or ID:"
+            printf "Jira: "
+            read -r jira_input
+            [ -z "$jira_input" ] && return 1
+        else
+            echo ""
+            return 1
+        fi
+    else
+        # No ticket found in branch - ask normally
+        if ! gum confirm --default=false "Link a Jira ticket for additional context?"; then
+            echo ""
+            return 1
+        fi
+        echo ""
+        dim "Enter Jira ticket URL or ID (e.g., PROJ-123 or https://company.atlassian.net/browse/PROJ-123)"
+        printf "Jira: "
+        read -r jira_input
+        [ -z "$jira_input" ] && return 1
+    fi
 
     JIRA_URL_DOMAIN=""
     local ticket_id=$(parse_jira_input "$jira_input")
@@ -828,11 +860,11 @@ create_pr_session() {
         return 1
     fi
 
-    # Optional: Link Jira ticket
+    # Optional: Link Jira ticket (pass branch name for auto-detection)
     local JIRA_TICKET_ID=""
     local JIRA_CONTEXT=""
     local JIRA_TICKET_TYPE=""
-    prompt_jira_ticket "pr"
+    prompt_jira_ticket "pr" "$PR_HEAD"
 
     local SESSION_NAME="pr-${REPO}-${PR_NUMBER}-$(date +%Y%m%d-%H%M%S)"
     local SESSION_DIR="$SESSIONS_DIR/$SESSION_NAME"
@@ -1332,11 +1364,12 @@ create_investigation_session() {
     show_context "New Investigation" "📁 $REPO_DISPLAY" "🌿 $branch_display"
 
     # Optional: Link Jira ticket FIRST (provides context, may make instructions optional)
+    # Pass branch name for auto-detection of Jira ticket (e.g., HB-404-fix-login -> HB-404)
     local JIRA_TICKET_ID=""
     local JIRA_CONTEXT=""
     local JIRA_TICKET_TYPE=""
     local JIRA_SUMMARY=""
-    prompt_jira_ticket "investigation"
+    prompt_jira_ticket "investigation" "$BRANCH"
 
     # Get Jira summary if ticket was linked
     if [ -n "$JIRA_TICKET_JSON" ]; then
@@ -3352,6 +3385,12 @@ pre_session_menu() {
         PR_URL=$(grep "^URL:" "$SESSION_DIR/session-info.txt" 2>/dev/null | head -1 | cut -d: -f2- | xargs)
     fi
 
+    # Detect session type
+    local SESSION_TYPE="review"
+    if [ -f "$SESSION_DIR/session-info.txt" ]; then
+        grep -q "^Type:.*Investigation" "$SESSION_DIR/session-info.txt" && SESSION_TYPE="investigation"
+    fi
+
     while true; do
         header
         gum style \
@@ -3362,7 +3401,11 @@ pre_session_menu() {
             "Session ready: $SESSION_NAME"
 
         echo ""
-        dim "Explore the changes before starting the review:"
+        if [ "$SESSION_TYPE" = "investigation" ]; then
+            dim "Ready to investigate. Choose how to proceed:"
+        else
+            dim "Explore the changes before starting the review:"
+        fi
         echo ""
 
         # Check if this is a re-review (has RE-REVIEW.md)
@@ -3380,9 +3423,20 @@ pre_session_menu() {
         local HAS_CODEX=false
         command -v codex >/dev/null 2>&1 && HAS_CODEX=true
 
-        local options=(
-            "▶ Start Claude $([ -n "$is_rereview" ] && echo "re-review" || echo "review")"
-        )
+        # Show current mode
+        local current_mode=$(get_current_mode "$SESSION_DIR")
+
+        local options=()
+
+        if [ "$SESSION_TYPE" = "investigation" ]; then
+            # Investigation session options
+            options+=("🔬 Start Claude investigation")
+            options+=("📝 Start Claude review (of changes vs $PR_BASE)")
+        else
+            # PR Review session options
+            options+=("▶ Start Claude $([ -n "$is_rereview" ] && echo "re-review" || echo "review")")
+            options+=("🔬 Start Claude investigation (explore codebase)")
+        fi
 
         # Add Codex option if available
         if [ "$HAS_CODEX" = "true" ] && [ -n "$PR_URL" ]; then
@@ -3398,14 +3452,10 @@ pre_session_menu() {
             fi
         fi
 
-        # Show current mode
-        local current_mode=$(get_current_mode "$SESSION_DIR")
-
         options+=(
             "👁 Open live preview"
             "💻 Open in editor (VS Code/Cursor)"
             "📊 View diff"
-            "🔄 Switch mode (Review ↔ Investigation)"
         )
 
         if [ -n "$PR_URL" ]; then
@@ -3420,32 +3470,60 @@ pre_session_menu() {
         local choice=$(printf '%s\n' "${options[@]}" | gum choose --header "What would you like to do?")
 
         case "$choice" in
-            *"Start Claude"*)
+            *"investigation"*)
                 echo ""
+                # Switch to investigation mode
+                switch_to_investigation_mode "$SESSION_DIR"
+
+                # Check if findings already exist
+                local existing_findings=""
+                [ -f "$SESSION_DIR/FINDINGS.md" ] && [ -s "$SESSION_DIR/FINDINGS.md" ] && existing_findings="yes"
+
+                if [ -n "$existing_findings" ]; then
+                    dim "Existing findings found. Claude will summarize and continue."
+                else
+                    dim "Starting investigation."
+                fi
+                dim "Type /exit when done to return here."
+                echo ""
+                sleep 1
+
+                tput reset 2>/dev/null || clear
+                cd "$SESSION_DIR/repo"
+
+                if [ -n "$existing_findings" ]; then
+                    claude "Read FINDINGS.md and give me a brief summary of the key discoveries (bullet points, max 5-7 items). Then let me know you're ready to continue the investigation."
+                else
+                    claude "Begin"
+                fi
+
+                post_session_menu "$SESSION_DIR"
+                return 0
+                ;;
+            *"review"*|*"re-review"*)
+                echo ""
+                # Switch to review mode
+                switch_to_review_mode "$SESSION_DIR"
 
                 # Check if review already exists (files are in session root)
                 local existing_review=""
-                [ -f "$SESSION_DIR/REVIEW.md" ] && [ -s "$SESSION_DIR/REVIEW.md" ] && existing_review="$SESSION_DIR/REVIEW.md"
+                [ -f "$SESSION_DIR/REVIEW.md" ] && [ -s "$SESSION_DIR/REVIEW.md" ] && existing_review="yes"
 
                 if [ -n "$existing_review" ]; then
                     dim "Existing review found. Claude will summarize and continue."
-                    dim "Type /exit when done to return here."
-                    echo ""
-                    sleep 1
-
-                    tput reset 2>/dev/null || clear
-                    cd "$SESSION_DIR/repo"
-
-                    # Resume with context of existing review
-                    claude "Read REVIEW.md and give me a brief summary of the key findings (bullet points, max 5-7 items). Then let me know you're ready to discuss any points or continue refining the review. Keep the summary concise."
                 else
-                    dim "Starting fresh review."
-                    dim "Type /exit when done to return here."
-                    echo ""
-                    sleep 1
+                    dim "Starting review."
+                fi
+                dim "Type /exit when done to return here."
+                echo ""
+                sleep 1
 
-                    tput reset 2>/dev/null || clear
-                    cd "$SESSION_DIR/repo"
+                tput reset 2>/dev/null || clear
+                cd "$SESSION_DIR/repo"
+
+                if [ -n "$existing_review" ]; then
+                    claude "Read REVIEW.md and give me a brief summary of the key findings (bullet points, max 5-7 items). Then let me know you're ready to discuss or continue refining the review."
+                else
                     claude "Begin"
                 fi
 
