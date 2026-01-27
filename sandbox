@@ -3578,6 +3578,35 @@ pre_session_menu() {
             --ansi)
 
         case "$choice" in
+            *"live preview"*)
+                # Calculate a unique port for this session (8765 + hash of session name)
+                local port_offset=$(echo "$SESSION_NAME" | cksum | cut -d' ' -f1)
+                local preview_port=$((8765 + (port_offset % 100)))
+
+                # Start live preview server in background
+                local preview_dir="/tmp/live_preview_${SESSION_NAME}"
+                mkdir -p "$preview_dir"
+                create_live_preview_server "$SESSION_DIR" "$preview_dir"
+
+                # Kill any existing server on this port
+                lsof -ti:$preview_port 2>/dev/null | xargs kill 2>/dev/null || true
+                sleep 0.2
+
+                (cd "$preview_dir" && python3 -m http.server $preview_port --bind 127.0.0.1 >/dev/null 2>&1) &
+                local server_pid=$!
+
+                # Save PID for later cleanup
+                echo "$server_pid" > "$SESSION_DIR/.preview_pid"
+                echo "$preview_port" > "$SESSION_DIR/.preview_port"
+
+                sleep 1
+                open "http://127.0.0.1:$preview_port" 2>/dev/null
+
+                success "Live preview running at http://127.0.0.1:$preview_port"
+                dim "Server runs in background - you can now start Claude"
+                dim "Preview updates automatically as files change"
+                sleep 2
+                ;;
             *"investigation"*)
                 echo ""
                 # Switch to investigation mode
@@ -3663,35 +3692,6 @@ pre_session_menu() {
                 run_codex_review "$SESSION_DIR" "$PR_BASE" "true"
                 post_session_menu "$SESSION_DIR"
                 return 0
-                ;;
-            *"live preview"*)
-                # Calculate a unique port for this session (8765 + hash of session name)
-                local port_offset=$(echo "$SESSION_NAME" | cksum | cut -d' ' -f1)
-                local preview_port=$((8765 + (port_offset % 100)))
-
-                # Start live preview server in background
-                local preview_dir="/tmp/live_preview_${SESSION_NAME}"
-                mkdir -p "$preview_dir"
-                create_live_preview_server "$SESSION_DIR" "$preview_dir"
-
-                # Kill any existing server on this port
-                lsof -ti:$preview_port 2>/dev/null | xargs kill 2>/dev/null || true
-                sleep 0.2
-
-                (cd "$preview_dir" && python3 -m http.server $preview_port --bind 127.0.0.1 >/dev/null 2>&1) &
-                local server_pid=$!
-
-                # Save PID for later cleanup
-                echo "$server_pid" > "$SESSION_DIR/.preview_pid"
-                echo "$preview_port" > "$SESSION_DIR/.preview_port"
-
-                sleep 1
-                open "http://127.0.0.1:$preview_port" 2>/dev/null
-
-                success "Live preview running at http://127.0.0.1:$preview_port"
-                dim "Server runs in background - you can now start Claude"
-                dim "Preview updates automatically as files change"
-                sleep 2
                 ;;
             *"editor"*|*"VS Code"*|*"Cursor"*)
                 open_in_editor "$SESSION_DIR/repo"
