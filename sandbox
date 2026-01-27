@@ -256,9 +256,14 @@ JIRA_CTX
 # e.g., "hb-404-lowercase" -> "HB-404" (converts to uppercase)
 extract_jira_from_branch() {
     local branch="$1"
+    # Trim whitespace
+    branch=$(echo "$branch" | xargs)
+    [ -z "$branch" ] && return
+
     # Match patterns like PROJ-123, HB-404, hb-404, etc. (case-insensitive)
+    # Pattern: 2+ letters, hyphen, 1+ digits
     # Convert to uppercase for Jira
-    if [[ "$branch" =~ ([A-Za-z]+-[0-9]+) ]]; then
+    if [[ "$branch" =~ ([A-Za-z][A-Za-z]+-[0-9]+) ]]; then
         echo "${BASH_REMATCH[1]}" | tr '[:lower:]' '[:upper:]'
     fi
 }
