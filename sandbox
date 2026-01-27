@@ -1363,8 +1363,13 @@ create_investigation_session() {
     mkdir -p "$SESSION_DIR"
     cd "$SESSION_DIR"
 
+    # Clone with branch if specified (avoids fetch issues with shallow clone)
+    local clone_cmd="git clone --depth=100"
+    [ -n "$BRANCH" ] && clone_cmd="$clone_cmd --branch '$BRANCH'"
+    clone_cmd="$clone_cmd '$REPO_URL' repo"
+
     if ! gum spin --spinner dot --title "Cloning repository..." -- \
-        git clone --depth=100 "$REPO_URL" repo 2>&1; then
+        bash -c "$clone_cmd 2>&1"; then
         error "Failed to clone repository"
         rm -rf "$SESSION_DIR"
         sleep 2
@@ -1382,13 +1387,6 @@ create_investigation_session() {
 
     local BRANCH_INFO
     if [ -n "$BRANCH" ]; then
-        if ! gum spin --spinner dot --title "Checking out branch..." -- \
-            bash -c "git checkout '$BRANCH' 2>&1 || git checkout -b '$BRANCH' 'origin/$BRANCH' 2>&1"; then
-            error "Failed to checkout branch"
-            rm -rf "$SESSION_DIR"
-            sleep 2
-            return 1
-        fi
         BRANCH_INFO="$BRANCH"
     else
         BRANCH=$(git branch --show-current)
@@ -3002,18 +3000,18 @@ restart_session() {
         # Investigation session
         local BRANCH=$(grep "^Branch:" "$INFO_FILE" 2>/dev/null | head -1 | cut -d: -f2 | xargs | sed 's/ (default)//')
 
+        # Clone with branch directly if specified (avoids fetch issues with shallow clone)
+        local clone_cmd="git clone --depth=100"
+        [ -n "$BRANCH" ] && clone_cmd="$clone_cmd --branch '$BRANCH'"
+        clone_cmd="$clone_cmd '$REPO_URL' '$SESSION_DIR/repo'"
+
         gum spin --spinner dot --title "Re-cloning repository..." -- \
-            git clone --depth=100 "$REPO_URL" "$SESSION_DIR/repo" 2>&1
+            bash -c "$clone_cmd 2>&1"
 
         if [ ! -d "$SESSION_DIR/repo" ]; then
             error "Failed to clone repository"
             sleep 2
             return 1
-        fi
-
-        if [ -n "$BRANCH" ]; then
-            cd "$SESSION_DIR/repo"
-            git checkout "$BRANCH" 2>/dev/null || true
         fi
     fi
 
