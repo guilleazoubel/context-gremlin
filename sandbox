@@ -890,12 +890,6 @@ create_investigation_session() {
     if [ -n "$branches" ]; then
         local branch_count=$(echo "$branches" | wc -l | xargs)
 
-        # Show context before filter
-        show_context "New Investigation" "📁 $REPO_DISPLAY"
-
-        # Show context
-        show_context "New Investigation" "📁 $REPO_DISPLAY"
-
         # Use fzf for fuzzy selection
         BRANCH=$(echo -e "← Back (cancel)\nmain (default)\n$branches" | fzf \
             --height=~50% \
@@ -914,7 +908,6 @@ create_investigation_session() {
         # Handle "main (default)" selection
         [[ "$BRANCH" == "main (default)" ]] && BRANCH=""
     else
-        show_context "New Investigation" "📁 $REPO_DISPLAY"
         dim "Could not fetch branches from remote."
         echo ""
 
