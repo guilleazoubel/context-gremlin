@@ -61,6 +61,232 @@ export GUM_CONFIRM_SELECTED_BACKGROUND="212"
 export GUM_SPIN_SPINNER_FOREGROUND="212"
 
 # ============================================================================
+# JIRA INTEGRATION
+# ============================================================================
+
+# Extract Jira ticket ID from URL or input
+parse_jira_input() {
+    local input="$1"
+
+    # Handle full URL: https://company.atlassian.net/browse/PROJ-123
+    if [[ "$input" =~ atlassian.net/browse/([A-Z]+-[0-9]+) ]]; then
+        echo "${BASH_REMATCH[1]}"
+    # Handle just ticket ID: PROJ-123
+    elif [[ "$input" =~ ^[A-Z]+-[0-9]+$ ]]; then
+        echo "$input"
+    else
+        echo ""
+    fi
+}
+
+# Fetch Jira ticket details
+fetch_jira_ticket() {
+    local ticket_id="$1"
+    local jira_domain="${JIRA_DOMAIN:-}"
+    local jira_email="${JIRA_EMAIL:-}"
+    local jira_token="${JIRA_API_TOKEN:-}"
+
+    # Check if we have Jira credentials
+    if [ -z "$jira_domain" ] || [ -z "$jira_email" ] || [ -z "$jira_token" ]; then
+        return 1
+    fi
+
+    # Fetch ticket via API
+    local response=$(curl -s -u "$jira_email:$jira_token" \
+        -H "Content-Type: application/json" \
+        "https://$jira_domain/rest/api/3/issue/$ticket_id?fields=summary,description,issuetype,status,priority,labels,customfield_10016" 2>/dev/null)
+
+    if [ -n "$response" ] && echo "$response" | jq -e '.fields' >/dev/null 2>&1; then
+        echo "$response"
+        return 0
+    fi
+
+    return 1
+}
+
+# Format Jira ticket for display and context
+format_jira_context() {
+    local ticket_json="$1"
+    local ticket_id="$2"
+
+    local summary=$(echo "$ticket_json" | jq -r '.fields.summary // "No summary"')
+    local issue_type=$(echo "$ticket_json" | jq -r '.fields.issuetype.name // "Unknown"')
+    local status=$(echo "$ticket_json" | jq -r '.fields.status.name // "Unknown"')
+    local priority=$(echo "$ticket_json" | jq -r '.fields.priority.name // "Unknown"')
+    local description=$(echo "$ticket_json" | jq -r '.fields.description.content[0].content[0].text // .fields.description // "No description"' 2>/dev/null)
+
+    cat << JIRA_CTX
+## Jira Ticket: $ticket_id
+
+- **Type**: $issue_type
+- **Status**: $status
+- **Priority**: $priority
+- **Summary**: $summary
+
+### Description
+$description
+JIRA_CTX
+}
+
+# Prompt user for optional Jira ticket
+prompt_jira_ticket() {
+    local context_type="$1"  # "pr" or "investigation"
+
+    echo ""
+    if ! gum confirm --default=false "Link a Jira ticket for additional context?"; then
+        echo ""
+        return 1
+    fi
+
+    echo ""
+    dim "Enter Jira ticket URL or ID (e.g., PROJ-123 or https://company.atlassian.net/browse/PROJ-123)"
+    printf "Jira ticket: "
+    read -r jira_input
+
+    [ -z "$jira_input" ] && return 1
+
+    local ticket_id=$(parse_jira_input "$jira_input")
+
+    if [ -z "$ticket_id" ]; then
+        error "Could not parse Jira ticket ID"
+        sleep 1
+        return 1
+    fi
+
+    echo ""
+    dim "Ticket: $ticket_id"
+
+    # Try to fetch ticket details
+    local ticket_json=$(fetch_jira_ticket "$ticket_id")
+
+    if [ -n "$ticket_json" ]; then
+        success "Fetched ticket details from Jira"
+        JIRA_TICKET_ID="$ticket_id"
+        JIRA_TICKET_JSON="$ticket_json"
+        JIRA_CONTEXT=$(format_jira_context "$ticket_json" "$ticket_id")
+        return 0
+    fi
+
+    # Fallback: ask for manual input
+    dim "Could not fetch from Jira API. Enter details manually (or leave empty to skip)."
+    echo ""
+
+    local jira_type=$(gum choose --header "Ticket type:" \
+        "Story" \
+        "Bug" \
+        "Task" \
+        "Spike" \
+        "Epic" \
+        "Skip")
+
+    [ "$jira_type" = "Skip" ] && return 1
+
+    echo ""
+    dim "Paste the ticket description/acceptance criteria (empty line to finish):"
+    local jira_desc=""
+    while IFS= read -r line; do
+        [ -z "$line" ] && break
+        jira_desc="${jira_desc}${line}"$'\n'
+    done
+
+    if [ -n "$jira_desc" ]; then
+        JIRA_TICKET_ID="$ticket_id"
+        JIRA_TICKET_TYPE="$jira_type"
+        JIRA_CONTEXT=$(cat << MANUAL_JIRA
+## Jira Ticket: $ticket_id
+
+- **Type**: $jira_type
+
+### Description / Acceptance Criteria
+$jira_desc
+MANUAL_JIRA
+)
+        return 0
+    fi
+
+    return 1
+}
+
+# Generate Jira context for CLAUDE.md based on ticket type
+generate_jira_guidance() {
+    local ticket_type="$1"
+    local context_type="$2"  # "pr" or "investigation"
+
+    case "$ticket_type" in
+        "Story"|"story")
+            if [ "$context_type" = "pr" ]; then
+                cat << 'STORY_PR'
+
+### Jira Context Guidance (Story)
+This PR implements a **Story**. When reviewing:
+1. **Acceptance Criteria**: Verify all acceptance criteria from the ticket are met
+2. **User Value**: Ensure the implementation delivers the intended user value
+3. **Scope**: Check that the PR doesn't exceed or fall short of the story scope
+4. **Edge Cases**: Consider edge cases that may not be explicitly stated
+STORY_PR
+            else
+                cat << 'STORY_INV'
+
+### Jira Context Guidance (Story)
+This investigation is for a **Story**. Goals:
+1. Understand what user value we're trying to deliver
+2. Identify the best technical approach to implement
+3. Consider edge cases and potential challenges
+4. Propose a solution that meets acceptance criteria
+STORY_INV
+            fi
+            ;;
+        "Bug"|"bug")
+            if [ "$context_type" = "pr" ]; then
+                cat << 'BUG_PR'
+
+### Jira Context Guidance (Bug Fix)
+This PR fixes a **Bug**. When reviewing:
+1. **Root Cause**: Verify the fix addresses the root cause, not just symptoms
+2. **Regression**: Ensure the fix doesn't introduce new issues
+3. **Test Coverage**: Check for tests that prevent regression
+4. **Scope**: Bug fixes should be minimal and focused
+BUG_PR
+            else
+                cat << 'BUG_INV'
+
+### Jira Context Guidance (Bug)
+This investigation is for a **Bug**. Goals:
+1. Reproduce and understand the bug behavior
+2. Identify the root cause (not just symptoms)
+3. Determine the minimal fix required
+4. Consider potential side effects of the fix
+BUG_INV
+            fi
+            ;;
+        "Task"|"task")
+            cat << 'TASK_CTX'
+
+### Jira Context Guidance (Task)
+This is a **Task** (technical work). Focus on:
+1. Technical correctness and best practices
+2. Maintainability and code quality
+3. Documentation if applicable
+TASK_CTX
+            ;;
+        "Spike"|"spike")
+            cat << 'SPIKE_CTX'
+
+### Jira Context Guidance (Spike)
+This is a **Spike** (research/exploration). Goals:
+1. Gather information and understanding
+2. Evaluate options and trade-offs
+3. Document findings and recommendations
+4. Provide estimates for implementation
+SPIKE_CTX
+            ;;
+        *)
+            echo ""
+            ;;
+    esac
+}
+
+# ============================================================================
 # HELPERS
 # ============================================================================
 
@@ -452,6 +678,12 @@ create_pr_session() {
         return 1
     fi
 
+    # Optional: Link Jira ticket
+    local JIRA_TICKET_ID=""
+    local JIRA_CONTEXT=""
+    local JIRA_TICKET_TYPE=""
+    prompt_jira_ticket "pr"
+
     local SESSION_NAME="pr-${REPO}-${PR_NUMBER}-$(date +%Y%m%d-%H%M%S)"
     local SESSION_DIR="$SESSIONS_DIR/$SESSION_NAME"
 
@@ -505,6 +737,7 @@ Branch:     $PR_HEAD → $PR_BASE
 Stats:      +$PR_ADDITIONS -$PR_DELETIONS in $PR_FILES files
 
 Repository: $OWNER/$REPO
+$([ -n "$JIRA_TICKET_ID" ] && echo "Jira:       $JIRA_TICKET_ID")
 
 PR Description:
 --------------------------------------------------------------------------------
@@ -551,6 +784,11 @@ $CHANGED_FILES
 \`\`\`
 $DIFF_STAT
 \`\`\`
+
+$([ -n "$JIRA_CONTEXT" ] && echo "---
+
+$JIRA_CONTEXT
+$(generate_jira_guidance "$JIRA_TICKET_TYPE" "pr")")
 
 ---
 
@@ -955,6 +1193,12 @@ create_investigation_session() {
         return 1
     fi
 
+    # Optional: Link Jira ticket
+    local JIRA_TICKET_ID=""
+    local JIRA_CONTEXT=""
+    local JIRA_TICKET_TYPE=""
+    prompt_jira_ticket "investigation"
+
     local OWNER REPO
     if [[ "$REPO_URL" =~ ([^/]+)/([^/]+)(\.git)?$ ]]; then
         OWNER="${BASH_REMATCH[1]}"
@@ -1017,6 +1261,7 @@ Session:    $SESSION_NAME
 Repository: $OWNER/$REPO
 URL:        $REPO_URL
 Branch:     $BRANCH_INFO
+$([ -n "$JIRA_TICKET_ID" ] && echo "Jira:       $JIRA_TICKET_ID")
 
 Investigation Focus:
 --------------------------------------------------------------------------------
@@ -1038,6 +1283,11 @@ EOF
 ## Investigation Focus
 
 $INVESTIGATION
+
+$([ -n "$JIRA_CONTEXT" ] && echo "---
+
+$JIRA_CONTEXT
+$(generate_jira_guidance "$JIRA_TICKET_TYPE" "investigation")")
 
 ---
 
