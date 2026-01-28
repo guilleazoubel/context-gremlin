@@ -588,30 +588,70 @@ fetch_jira_ticket() {
 }
 
 # Parse Jira description (handles Atlassian Document Format)
+# ADF is a complex nested JSON format used by Jira Cloud
 parse_jira_description() {
     local json="$1"
 
-    # Try to extract text from ADF (Atlassian Document Format)
+    # Recursive function to extract text from ADF nodes
+    # Handles: paragraph, bulletList, orderedList, heading, codeBlock, text, hardBreak, mention, etc.
     local desc=$(echo "$json" | jq -r '
-        .fields.description.content[]? |
-        if .type == "paragraph" then
-            [.content[]? | .text // empty] | join("")
-        elif .type == "bulletList" then
-            [.content[]? | .content[]? | .content[]? | .text // empty] | map("• " + .) | join("\n")
-        elif .type == "orderedList" then
-            [.content[]? | .content[]? | .content[]? | .text // empty] | to_entries | map("\(.key + 1). " + .value) | join("\n")
-        elif .type == "heading" then
-            [.content[]? | .text // empty] | join("") | "### " + .
-        elif .type == "codeBlock" then
-            "```\n" + ([.content[]? | .text // empty] | join("")) + "\n```"
-        else
-            empty
-        end
-    ' 2>/dev/null | grep -v '^$')
+        def extract_text:
+            if type == "array" then
+                map(extract_text) | join("")
+            elif type == "object" then
+                if .type == "text" then
+                    .text // ""
+                elif .type == "hardBreak" then
+                    "\n"
+                elif .type == "mention" then
+                    "@" + (.attrs.text // "user")
+                elif .type == "emoji" then
+                    .attrs.shortName // ""
+                elif .type == "inlineCard" then
+                    "[link]"
+                elif .type == "paragraph" then
+                    ((.content // []) | extract_text) + "\n"
+                elif .type == "heading" then
+                    "\n" + (if .attrs.level == 1 then "# " elif .attrs.level == 2 then "## " elif .attrs.level == 3 then "### " else "#### " end) + ((.content // []) | extract_text) + "\n"
+                elif .type == "bulletList" then
+                    "\n" + ((.content // []) | map("• " + ((.content // []) | extract_text)) | join("")) + "\n"
+                elif .type == "orderedList" then
+                    "\n" + ((.content // []) | to_entries | map("\(.key + 1). " + ((.value.content // []) | extract_text)) | join("")) + "\n"
+                elif .type == "listItem" then
+                    ((.content // []) | extract_text)
+                elif .type == "codeBlock" then
+                    "\n```" + (.attrs.language // "") + "\n" + ((.content // []) | extract_text) + "```\n"
+                elif .type == "blockquote" then
+                    "\n> " + ((.content // []) | extract_text | gsub("\n"; "\n> ")) + "\n"
+                elif .type == "rule" then
+                    "\n---\n"
+                elif .type == "table" then
+                    "\n[Table content]\n"
+                elif .type == "panel" then
+                    "\n> **" + (.attrs.panelType // "Note") + "**: " + ((.content // []) | extract_text) + "\n"
+                elif .type == "expand" then
+                    "\n**" + (.attrs.title // "Details") + "**\n" + ((.content // []) | extract_text)
+                elif .type == "mediaSingle" or .type == "mediaGroup" then
+                    "\n[Image/Media]\n"
+                else
+                    ((.content // []) | extract_text)
+                end
+            else
+                ""
+            end;
+        .fields.description.content // [] | extract_text
+    ' 2>/dev/null)
 
-    # Fallback to plain text if ADF parsing fails
-    if [ -z "$desc" ]; then
+    # Clean up excessive newlines
+    desc=$(echo "$desc" | sed '/^$/N;/^\n$/d' | sed 's/\n\n\n*/\n\n/g')
+
+    # Fallback to plain text if ADF parsing fails or is empty
+    if [ -z "$desc" ] || [ "$desc" = "null" ]; then
         desc=$(echo "$json" | jq -r '.fields.description // "No description"' 2>/dev/null)
+        # If it's still an object (ADF that jq couldn't parse), show a message
+        if echo "$desc" | jq -e '.content' >/dev/null 2>&1; then
+            desc="[Complex ADF content - see Jira ticket for full formatting]"
+        fi
     fi
 
     echo "$desc"
@@ -2108,95 +2148,130 @@ EOF
     create_session_json "$SESSION_DIR" "investigation" "$REPO_URL" "$extra_json"
 
     # Create CLAUDE.md inside repo/ so Claude auto-reads it
+    # Build a rich context section based on Jira ticket
+    local PROBLEM_CONTEXT=""
+    if [ -n "$JIRA_CONTEXT" ]; then
+        PROBLEM_CONTEXT="$JIRA_CONTEXT"
+    fi
+
     cat > repo/CLAUDE.md << CLAUDE_EOF
 # Investigation Session - AUTO-START
 
-> **IMPORTANT**: Begin the investigation immediately upon reading this file.
+> **CRITICAL**: Read this entire document carefully. It contains all the context you need to understand what you're investigating and what is expected.
+
+---
+
+## THE PROBLEM
+
+$(if [ -n "$JIRA_TICKET_ID" ]; then
+    echo "### $JIRA_TICKET_ID: $JIRA_SUMMARY"
+    echo ""
+    echo "This investigation is linked to a Jira ticket. **Read the full context below carefully** - it contains:"
+    echo "- The reported issue/request"
+    echo "- Description with technical details"
+    echo "- Any comments from team members with additional context"
+    echo "- Attachments that may show the issue"
+else
+    echo "### Investigation Focus"
+fi)
+
+$([ -n "$INVESTIGATION" ] && echo "
+**Additional Context from User:**
+$INVESTIGATION")
+
+---
+
+$PROBLEM_CONTEXT
+
+$([ -n "$JIRA_TICKET_TYPE" ] && generate_jira_guidance "$JIRA_TICKET_TYPE" "investigation")
+
+---
+
+## YOUR MISSION
+
+Based on the problem described above, you need to:
+
+1. **Understand the Issue**: What exactly is the problem? What behavior is expected vs actual?
+2. **Find the Root Cause**: Trace through the code to identify WHY this is happening
+3. **Document Everything**: Write your findings to \`FINDINGS.md\` as you go
 
 ## Repository Information
 
 - **Repository**: $REPO_URL
 - **Branch**: \`$BRANCH_INFO\`
 
-## Investigation Focus
-
-$([ -n "$JIRA_SUMMARY" ] && echo "**$JIRA_TICKET_ID: $JIRA_SUMMARY**")
-$([ -n "$INVESTIGATION" ] && echo "
-$INVESTIGATION")
-
-$([ -n "$JIRA_CONTEXT" ] && echo "---
-
-$JIRA_CONTEXT
-$(generate_jira_guidance "$JIRA_TICKET_TYPE" "investigation")")
-
 ---
 
-## Investigation Instructions
+## INVESTIGATION APPROACH
 
-You are helping investigate an issue in this codebase. **Begin immediately.**
+### Step 1: Understand the Context (First 5 minutes)
+- Re-read the problem description above
+- Identify key terms, components, or features mentioned
+- Note any error messages, expected behavior, or reproduction steps
 
-### Phase 1: Understand the Codebase
-- Explore the project structure
-- Identify key files and components related to the investigation
-- Understand the architecture
+### Step 2: Explore the Codebase
+- Find files related to the components mentioned in the issue
+- Understand the architecture around the affected area
+- Map out how data flows through the relevant code paths
 
-### Phase 2: Focused Investigation
-- Search for code related to the investigation focus
-- Trace through relevant code paths
-- Identify potential issues or areas of interest
-- Look for patterns, anomalies, or root causes
+### Step 3: Deep Investigation
+- Trace the code paths that could cause the reported issue
+- Look for edge cases, race conditions, or logic errors
+- Check error handling and boundary conditions
+- Review recent changes to relevant files (git log/blame)
 
-### Phase 3: Document Findings
-
-**IMPORTANT: Write your findings to \`FINDINGS.md\` file** using this format:
+### Step 4: Document Findings
+Write to \`FINDINGS.md\` using this structure:
 
 \`\`\`markdown
-# Investigation: [Brief title]
+# Investigation: $JIRA_TICKET_ID - [Brief Problem Description]
+
+## Problem Statement
+[Restate the issue in your own words after investigating]
 
 ## Summary
-[2-3 sentence summary of what was found]
+[2-3 sentences: What did you find? What's the root cause?]
 
-## Key Files
-- \`path/to/file.ts:123\` - [why this file is relevant]
+## Key Files Involved
+- \`path/to/file.ts:123\` - [role in the issue]
 
-## Findings
+## Root Cause Analysis
 
-### Root Cause / Main Finding
-[Detailed explanation]
+### What's Happening
+[Detailed explanation of the issue]
 
-### Related Observations
-- [Other relevant findings]
+### Why It's Happening
+[The underlying cause]
 
-### Code References
-\\\`\\\`\\\`
-[relevant code snippets with file:line]
+### Code Evidence
+\\\`\\\`\\\`typescript
+// Relevant code with file:line reference
 \\\`\\\`\\\`
 
 ## Recommendations
-1. [Actionable next step]
-2. [Another recommendation]
 
-## Questions to Explore Further
-- [Open questions]
+### Immediate Fix
+[What should be done to fix this specific issue]
+
+### Follow-up Improvements
+[Any related improvements worth considering]
+
+## Questions / Unknowns
+- [Anything that needs clarification]
 \`\`\`
 
 ---
 
-## Ongoing Collaboration
+## EXPECTATIONS
 
-As you investigate together:
-
-1. **Update FINDINGS.md** continuously as you discover new information
-2. **Add new sections** for each line of inquiry
-3. **Document dead ends** - what you tried that didn't pan out (saves time later)
-4. **Refine the summary** as understanding deepens
-5. **Keep recommendations current** based on what you learn
-
-The FINDINGS.md should be a living document that captures everything discovered.
+- **Be thorough**: The Jira ticket context above is your primary guide
+- **Reference specifics**: Always include file paths and line numbers
+- **Update continuously**: Keep FINDINGS.md current as you discover things
+- **Connect to the issue**: Every finding should relate back to the reported problem
 
 ---
 
-**BEGIN THE INVESTIGATION NOW. Explore the codebase and focus on the investigation topic.**
+**BEGIN NOW**: Start by summarizing what you understand the problem to be, then explore the codebase to find relevant files.
 CLAUDE_EOF
 
     # Setup output files with symlinks (survives repo deletion)
