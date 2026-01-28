@@ -9,6 +9,70 @@ SESSIONS_DIR="$HOME/Agent-temp"
 mkdir -p "$SESSIONS_DIR"
 
 # ============================================================================
+# CONFIGURATION SYSTEM
+# ============================================================================
+
+CONFIG_DIR="$HOME/.sandbox"
+CONFIG_FILE="$CONFIG_DIR/config"
+
+# Default configuration values
+DEFAULT_MODEL="sonnet"
+DEFAULT_DASHBOARD_AUTO_START="true"
+DEFAULT_PROJECT=""
+
+# Current configuration (loaded at startup)
+MODEL="${DEFAULT_MODEL}"
+DASHBOARD_AUTO_START="${DEFAULT_DASHBOARD_AUTO_START}"
+DEFAULT_PROJECT="${DEFAULT_PROJECT}"
+
+# Load configuration from file
+load_config() {
+    mkdir -p "$CONFIG_DIR"
+
+    if [ -f "$CONFIG_FILE" ]; then
+        # Source the config file to load variables
+        while IFS='=' read -r key value; do
+            # Skip comments and empty lines
+            [[ "$key" =~ ^[[:space:]]*# ]] && continue
+            [[ -z "$key" ]] && continue
+
+            # Remove leading/trailing whitespace and quotes
+            key=$(echo "$key" | xargs)
+            value=$(echo "$value" | sed 's/^["'\'']\|["'\'']$//g' | xargs)
+
+            case "$key" in
+                MODEL) MODEL="$value" ;;
+                DASHBOARD_AUTO_START) DASHBOARD_AUTO_START="$value" ;;
+                DEFAULT_PROJECT) DEFAULT_PROJECT="$value" ;;
+            esac
+        done < "$CONFIG_FILE"
+    fi
+}
+
+# Save configuration to file
+save_config() {
+    mkdir -p "$CONFIG_DIR"
+
+    cat > "$CONFIG_FILE" << EOF
+# Sandbox Configuration
+# Generated: $(date '+%Y-%m-%d %H:%M:%S')
+
+# Claude model to use (sonnet/opus/haiku)
+MODEL="$MODEL"
+
+# Auto-start dashboard when sandbox launches (true/false)
+DASHBOARD_AUTO_START="$DASHBOARD_AUTO_START"
+
+# Default project path (last used or set manually)
+DEFAULT_PROJECT="$DEFAULT_PROJECT"
+EOF
+    chmod 600 "$CONFIG_FILE"
+}
+
+# Load config at startup
+load_config
+
+# ============================================================================
 # DEPENDENCY CHECK
 # ============================================================================
 
@@ -164,10 +228,10 @@ fetch_jira_ticket() {
 
     dim "Fetching $ticket_id..."
 
-    # Fetch ticket via API
+    # Fetch ticket via API (including attachments)
     local response=$(curl -s -u "$JIRA_EMAIL:$JIRA_API_TOKEN" \
         -H "Content-Type: application/json" \
-        "https://$JIRA_DOMAIN/rest/api/3/issue/$ticket_id?fields=summary,description,issuetype,status,priority,labels,assignee,reporter,acceptance_criteria,customfield_10016" 2>/dev/null)
+        "https://$JIRA_DOMAIN/rest/api/3/issue/$ticket_id?fields=summary,description,issuetype,status,priority,labels,assignee,reporter,acceptance_criteria,customfield_10016,attachment,comment" 2>/dev/null)
 
     # Check for errors
     if echo "$response" | jq -e '.errorMessages' >/dev/null 2>&1; then
@@ -248,6 +312,68 @@ $summary
 ### Description
 $description
 JIRA_CTX
+
+    # Add attachments (especially images)
+    local attachments=$(echo "$ticket_json" | jq -r '
+        .fields.attachment // [] |
+        map(select(.mimeType | startswith("image/"))) |
+        if length > 0 then
+            "### Attached Images\n\n" +
+            (map("- **\(.filename)**: \(.content)") | join("\n"))
+        else
+            empty
+        end
+    ' 2>/dev/null)
+
+    if [ -n "$attachments" ]; then
+        echo ""
+        echo "$attachments"
+    fi
+
+    # Add all attachments list
+    local all_attachments=$(echo "$ticket_json" | jq -r '
+        .fields.attachment // [] |
+        if length > 0 then
+            "\n### All Attachments\n\n" +
+            (map("- [\(.filename)](\(.content)) (\(.mimeType))") | join("\n"))
+        else
+            empty
+        end
+    ' 2>/dev/null)
+
+    if [ -n "$all_attachments" ]; then
+        echo "$all_attachments"
+    fi
+
+    # Add comments
+    local comments=$(echo "$ticket_json" | jq -r '
+        .fields.comment.comments // [] |
+        if length > 0 then
+            "\n### Comments (" + (length | tostring) + ")\n\n" +
+            (map(
+                "---\n**" + (.author.displayName // "Unknown") + "** - " +
+                (.created | split("T")[0]) + "\n\n" +
+                (
+                    .body.content // [] |
+                    map(
+                        if .type == "paragraph" then
+                            ([.content[]? | .text // empty] | join(""))
+                        elif .type == "codeBlock" then
+                            "```\n" + ([.content[]? | .text // empty] | join("")) + "\n```"
+                        else
+                            ""
+                        end
+                    ) | join("\n")
+                )
+            ) | join("\n\n"))
+        else
+            empty
+        end
+    ' 2>/dev/null)
+
+    if [ -n "$comments" ]; then
+        echo "$comments"
+    fi
 }
 
 # Extract Jira ticket ID from branch name
@@ -547,7 +673,7 @@ setup_output_files() {
 # ============================================================================
 
 get_sessions() {
-    find "$SESSIONS_DIR" -maxdepth 1 -type d \( -name "pr-*" -o -name "inv-*" \) 2>/dev/null | sort
+    find "$SESSIONS_DIR" -maxdepth 1 -type d \( -name "pr-*" -o -name "inv-*" -o -name "dev-*" \) 2>/dev/null | sort
 }
 
 format_session_display() {
@@ -560,19 +686,26 @@ format_session_display() {
         local archived=""
         grep -q "^ARCHIVED:" "$info_file" 2>/dev/null && archived=" 📦"
 
-        # Check for review file
-        local has_review=""
-        [ -f "$session/REVIEW.md" ] || [ -f "$session/repo/REVIEW.md" ] && has_review=" 📝"
-        [ -f "$session/FINDINGS.md" ] || [ -f "$session/repo/FINDINGS.md" ] && has_review=" 📝"
+        # Check for output files
+        local has_output=""
+        [ -f "$session/REVIEW.md" ] || [ -f "$session/repo/REVIEW.md" ] && has_output=" 📝"
+        [ -f "$session/FINDINGS.md" ] || [ -f "$session/repo/FINDINGS.md" ] && has_output=" 📝"
+        [ -f "$session/DEVLOG.md" ] || [ -f "$session/repo/DEVLOG.md" ] && has_output=" 📝"
 
         if [[ "$name" == pr-* ]]; then
             local title=$(grep "^PR #" "$info_file" 2>/dev/null | head -1)
-            echo "🔍 $title$archived$has_review"
+            echo "📝 $title$archived$has_output"
+            echo "   $name • $created"
+        elif [[ "$name" == dev-* ]]; then
+            local jira=$(grep "^Jira:" "$info_file" 2>/dev/null | head -1 | cut -d: -f2 | xargs)
+            local summary=$(grep "^Summary:" "$info_file" 2>/dev/null | head -1 | cut -d: -f2- | xargs)
+            summary="${summary:0:40}"
+            echo "🛠️  $jira: $summary$archived$has_output"
             echo "   $name • $created"
         else
             local title=$(sed -n '/Investigation Focus:/,/====/p' "$info_file" 2>/dev/null | grep -v "Investigation Focus:" | grep -v "===" | grep -v "^-" | head -1 | xargs)
             title="${title:0:50}"
-            echo "🔬 $title$archived$has_review"
+            echo "🔍 $title$archived$has_output"
             echo "   $name • $created"
         fi
     else
@@ -620,19 +753,25 @@ select_session_simple() {
             local archived=""
             grep -q "^ARCHIVED:" "$info_file" 2>/dev/null && archived="📦 "
 
-            local has_review=""
-            [ -f "$session/REVIEW.md" ] || [ -f "$session/repo/REVIEW.md" ] && has_review=" 📝"
-            [ -f "$session/FINDINGS.md" ] || [ -f "$session/repo/FINDINGS.md" ] && has_review=" 📝"
+            local has_output=""
+            [ -f "$session/REVIEW.md" ] || [ -f "$session/repo/REVIEW.md" ] && has_output=" 📝"
+            [ -f "$session/FINDINGS.md" ] || [ -f "$session/repo/FINDINGS.md" ] && has_output=" 📝"
+            [ -f "$session/DEVLOG.md" ] || [ -f "$session/repo/DEVLOG.md" ] && has_output=" 📝"
 
             local created=$(grep "^Created:" "$info_file" 2>/dev/null | cut -d: -f2- | xargs | cut -d' ' -f1-2)
 
             if [[ "$name" == pr-* ]]; then
                 local title=$(grep "^PR #" "$info_file" 2>/dev/null | head -1)
-                display="${archived}🔍 ${title}${has_review} • ${created}"
+                display="${archived}📝 ${title}${has_output} • ${created}"
+            elif [[ "$name" == dev-* ]]; then
+                local jira=$(grep "^Jira:" "$info_file" 2>/dev/null | head -1 | cut -d: -f2 | xargs)
+                local summary=$(grep "^Summary:" "$info_file" 2>/dev/null | head -1 | cut -d: -f2- | xargs)
+                summary="${summary:0:30}"
+                display="${archived}🛠️  ${jira}: ${summary}${has_output} • ${created}"
             else
                 local title=$(sed -n '/Investigation Focus:/,/====/p' "$info_file" 2>/dev/null | grep -v "Investigation Focus:" | grep -v "===" | grep -v "^-" | head -1 | xargs)
                 title="${title:0:40}"
-                display="${archived}🔬 ${title}${has_review} • ${created}"
+                display="${archived}🔍 ${title}${has_output} • ${created}"
             fi
         else
             display="❓ $name"
@@ -1503,6 +1642,7 @@ SESSION INFO
 ================================================================================
 Type:       Investigation
 Created:    $(date '+%Y-%m-%d %H:%M:%S')
+Creator:    $(whoami)
 Session:    $SESSION_NAME
 
 Repository: $OWNER/$REPO
@@ -1617,18 +1757,378 @@ CLAUDE_EOF
 }
 
 # ============================================================================
+# DEVELOPMENT MODE
+# ============================================================================
+
+# Generate branch name from Jira ticket
+# e.g., "HB-500" with summary "Implement new feature" -> "feature/HB-500-implement-new-feature"
+generate_branch_from_jira() {
+    local ticket_id="$1"
+    local summary="$2"
+    local ticket_type="${3:-Story}"
+
+    # Determine branch prefix based on ticket type
+    local prefix="feature"
+    case "$ticket_type" in
+        "Bug"|"bug") prefix="bugfix" ;;
+        "Hotfix"|"hotfix") prefix="hotfix" ;;
+        "Task"|"task") prefix="task" ;;
+        "Spike"|"spike") prefix="spike" ;;
+        *) prefix="feature" ;;
+    esac
+
+    # Create slug from summary
+    local slug=$(echo "$summary" | \
+        tr '[:upper:]' '[:lower:]' | \
+        sed 's/[^a-z0-9 ]//g' | \
+        tr ' ' '-' | \
+        sed 's/--*/-/g' | \
+        sed 's/^-//' | \
+        sed 's/-$//' | \
+        cut -c1-40)
+
+    # Construct branch name
+    echo "${prefix}/${ticket_id}-${slug}"
+}
+
+create_development_session() {
+    show_context "New Development Session"
+
+    local REPO_URL=""
+    local REPO_DISPLAY=""
+
+    # Choose input method - with default project option if set
+    local options=()
+    [ -n "$DEFAULT_PROJECT" ] && options+=("⭐ Use default: $DEFAULT_PROJECT")
+    options+=("🔍 Browse repositories")
+    options+=("🔗 Enter repo URL directly")
+    options+=("← Back")
+
+    local input_method=$(printf '%s\n' "${options[@]}" | fzf \
+        --height=~35% \
+        --layout=reverse \
+        --border=rounded \
+        --no-info \
+        --prompt="" \
+        --header="Select project" \
+        --header-first)
+
+    case "$input_method" in
+        *"Use default"*)
+            REPO_URL="$DEFAULT_PROJECT"
+            ;;
+        *"Browse"*)
+            REPO_URL=$(select_repo "New Development Session")
+            [ -z "$REPO_URL" ] && return 1
+            ;;
+        *"Enter repo"*)
+            printf "Repository URL: "
+            read -r REPO_URL
+            [ -z "$REPO_URL" ] && return 1
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+
+    # Save as default project for next time
+    if [ "$REPO_URL" != "$DEFAULT_PROJECT" ]; then
+        DEFAULT_PROJECT="$REPO_URL"
+        save_config
+    fi
+
+    # Extract repo display name
+    if [[ "$REPO_URL" =~ github.com/([^/]+)/([^/]+) ]]; then
+        REPO_DISPLAY="${BASH_REMATCH[2]}"
+        REPO_DISPLAY="${REPO_DISPLAY%.git}"
+    else
+        REPO_DISPLAY="$REPO_URL"
+    fi
+
+    show_context "New Development Session" "📁 $REPO_DISPLAY"
+
+    # Get Jira ticket
+    echo ""
+    dim "Enter Jira ticket ID or URL (e.g., HB-500 or https://company.atlassian.net/browse/HB-500)"
+    printf "Jira ticket: "
+    read -r jira_input
+
+    if [ -z "$jira_input" ]; then
+        error "Jira ticket is required for development mode"
+        sleep 1
+        return 1
+    fi
+
+    JIRA_URL_DOMAIN=""
+    local ticket_id=$(parse_jira_input "$jira_input")
+
+    if [ -z "$ticket_id" ]; then
+        error "Could not parse Jira ticket ID"
+        sleep 1
+        return 1
+    fi
+
+    # Fetch Jira ticket details
+    dim "Fetching Jira ticket details..."
+    local ticket_json=$(fetch_jira_ticket "$ticket_id")
+
+    local JIRA_SUMMARY=""
+    local JIRA_DESCRIPTION=""
+    local JIRA_TYPE="Story"
+    local JIRA_CONTEXT=""
+    local BRANCH_NAME=""
+
+    if [ -n "$ticket_json" ]; then
+        JIRA_SUMMARY=$(echo "$ticket_json" | jq -r '.fields.summary // "No summary"')
+        JIRA_TYPE=$(echo "$ticket_json" | jq -r '.fields.issuetype.name // "Story"')
+        JIRA_DESCRIPTION=$(parse_jira_description "$ticket_json")
+        JIRA_CONTEXT=$(format_jira_context "$ticket_json" "$ticket_id")
+
+        # Show ticket info
+        echo ""
+        gum style \
+            --border rounded \
+            --border-foreground 240 \
+            --padding "1 2" \
+            --margin "1 0" \
+            "[$JIRA_TYPE] $ticket_id" \
+            "" \
+            "$JIRA_SUMMARY"
+
+        # Generate branch name
+        BRANCH_NAME=$(generate_branch_from_jira "$ticket_id" "$JIRA_SUMMARY" "$JIRA_TYPE")
+    else
+        error "Could not fetch Jira ticket. Please enter details manually."
+        echo ""
+
+        printf "Ticket summary: "
+        read -r JIRA_SUMMARY
+        [ -z "$JIRA_SUMMARY" ] && JIRA_SUMMARY="New feature"
+
+        JIRA_TYPE=$(gum choose --header "Ticket type:" \
+            "Story" \
+            "Bug" \
+            "Task" \
+            "Spike")
+
+        BRANCH_NAME=$(generate_branch_from_jira "$ticket_id" "$JIRA_SUMMARY" "$JIRA_TYPE")
+        JIRA_CONTEXT="## Jira Ticket: $ticket_id\n\n- **Type**: $JIRA_TYPE\n- **Summary**: $JIRA_SUMMARY"
+    fi
+
+    # Show and confirm branch name
+    echo ""
+    gum style --foreground 75 "Branch name: $BRANCH_NAME"
+    echo ""
+
+    local branch_choice=$(printf '%s\n' \
+        "✓ Use this branch name" \
+        "✏️  Edit branch name" \
+        "← Cancel" | fzf \
+        --height=~25% \
+        --layout=reverse \
+        --border=rounded \
+        --no-info \
+        --prompt="" \
+        --header="Confirm branch name" \
+        --header-first)
+
+    case "$branch_choice" in
+        *"Edit"*)
+            printf "Branch name: "
+            read -r BRANCH_NAME
+            [ -z "$BRANCH_NAME" ] && return 1
+            ;;
+        *"Cancel"*|"")
+            return 1
+            ;;
+    esac
+
+    # Extract owner/repo for session naming
+    local OWNER REPO
+    if [[ "$REPO_URL" =~ ([^/]+)/([^/]+)(\.git)?$ ]]; then
+        OWNER="${BASH_REMATCH[1]}"
+        REPO="${BASH_REMATCH[2]}"
+        REPO="${REPO%.git}"
+    else
+        OWNER="unknown"
+        REPO="repo"
+    fi
+
+    local SESSION_NAME="dev-${REPO}-${ticket_id}-$(date +%Y%m%d-%H%M%S)"
+    local SESSION_DIR="$SESSIONS_DIR/$SESSION_NAME"
+
+    mkdir -p "$SESSION_DIR"
+    cd "$SESSION_DIR"
+
+    # Clone repository
+    if ! gum spin --spinner dot --title "Cloning repository..." -- \
+        git clone --depth=100 "$REPO_URL" repo 2>&1; then
+        error "Failed to clone repository"
+        rm -rf "$SESSION_DIR"
+        sleep 2
+        return 1
+    fi
+
+    if [ ! -d "repo" ]; then
+        error "Clone failed - repo directory not created"
+        rm -rf "$SESSION_DIR"
+        sleep 2
+        return 1
+    fi
+
+    cd repo
+
+    # Create and checkout new branch
+    if ! gum spin --spinner dot --title "Creating branch $BRANCH_NAME..." -- \
+        bash -c "git checkout -b '$BRANCH_NAME' 2>&1"; then
+        error "Failed to create branch"
+        rm -rf "$SESSION_DIR"
+        sleep 2
+        return 1
+    fi
+
+    local ACTUAL_BRANCH=$(git branch --show-current)
+
+    cd "$SESSION_DIR"
+
+    # Create session-info.txt
+    cat > session-info.txt << EOF
+================================================================================
+SESSION INFO
+================================================================================
+Type:       Development
+Created:    $(date '+%Y-%m-%d %H:%M:%S')
+Creator:    $(whoami)
+Session:    $SESSION_NAME
+
+Repository: $OWNER/$REPO
+URL:        $REPO_URL
+Branch:     $ACTUAL_BRANCH
+
+Jira:       $ticket_id
+Jira Type:  $JIRA_TYPE
+Summary:    $JIRA_SUMMARY
+
+================================================================================
+EOF
+
+    # Create DEVLOG.md for tracking progress
+    cat > repo/DEVLOG.md << DEVLOG_EOF
+# Development Log: $ticket_id
+
+## Session Info
+- **Ticket**: $ticket_id
+- **Branch**: \`$ACTUAL_BRANCH\`
+- **Started**: $(date '+%Y-%m-%d %H:%M:%S')
+
+---
+
+## Progress
+
+### $(date '+%Y-%m-%d %H:%M') - Session Started
+
+- [ ] Initial setup complete
+- [ ] Codebase exploration
+- [ ] Implementation planning
+
+---
+
+## Notes
+
+_Add your notes and decisions here as you work._
+
+---
+
+## Commits
+
+_Track your commits here:_
+
+- Initial commit: _pending_
+DEVLOG_EOF
+
+    # Create CLAUDE.md with development instructions
+    cat > repo/CLAUDE.md << CLAUDE_DEV_EOF
+# Development Session: $ticket_id
+
+## Context
+
+**Jira Ticket**: $ticket_id
+**Type**: $JIRA_TYPE
+**Summary**: $JIRA_SUMMARY
+
+$JIRA_CONTEXT
+
+---
+
+## Your Task
+
+You are helping develop a new feature. The branch \`$ACTUAL_BRANCH\` has been created.
+
+## Guidelines
+
+1. **Understand First**: Read the existing codebase to understand patterns and conventions
+2. **Clean Code**: Write clean, maintainable code following existing patterns
+3. **Tests**: Add tests for new functionality
+4. **Track Progress**: Update DEVLOG.md with progress, decisions, and notes
+5. **Commit Often**: Make frequent commits with clear messages
+
+## Files
+
+- **DEVLOG.md** - Track your progress, decisions, and notes here
+- **CLAUDE.md** - This file (development context)
+
+## Development Workflow
+
+1. **Explore** - Understand the codebase structure
+2. **Plan** - Outline the implementation approach
+3. **Implement** - Write the code
+4. **Test** - Verify the implementation works
+5. **Review** - Check for quality and completeness
+
+---
+
+**BEGIN DEVELOPMENT NOW.**
+
+Start by exploring the codebase to understand:
+1. Project structure and architecture
+2. Relevant files for this feature
+3. Existing patterns to follow
+
+Then update DEVLOG.md with your findings and implementation plan.
+CLAUDE_DEV_EOF
+
+    # Setup output files with symlinks
+    touch "$SESSION_DIR/DEVLOG.md"
+    ln -sf "../DEVLOG.md" "$SESSION_DIR/repo/DEVLOG.md" 2>/dev/null || true
+
+    success "Development session created"
+    info "Branch: $ACTUAL_BRANCH"
+    CURRENT_SESSION="$SESSION_DIR"
+    return 0
+}
+
+# ============================================================================
 # MODE SWITCHING (Review <-> Investigation)
 # ============================================================================
 
 get_current_mode() {
     local SESSION_DIR="$1"
     local claude_file="$SESSION_DIR/repo/CLAUDE.md"
+    local session_name=$(basename "$SESSION_DIR")
+
+    # Check session name prefix first
+    if [[ "$session_name" == dev-* ]]; then
+        echo "development"
+        return
+    fi
 
     if [ -f "$claude_file" ]; then
         if grep -q "REVIEW.md" "$claude_file" 2>/dev/null; then
             echo "review"
         elif grep -q "FINDINGS.md" "$claude_file" 2>/dev/null; then
             echo "investigation"
+        elif grep -q "DEVLOG.md" "$claude_file" 2>/dev/null; then
+            echo "development"
         else
             echo "unknown"
         fi
@@ -1817,6 +2317,50 @@ prompt_mode_switch() {
 # ============================================================================
 # ACR (AGENTIC CODE REVIEWER)
 # ============================================================================
+
+# Quick ACR run without post-menu (for ACR → Claude flow)
+run_acr_quick() {
+    local SESSION_DIR="$1"
+    local PR_BASE="${2:-main}"
+
+    if [ "$HAS_ACR" != "true" ]; then
+        error "ACR not installed. Install with: brew install richhaase/tap/acr"
+        sleep 2
+        return 1
+    fi
+
+    cd "$SESSION_DIR/repo" || return 1
+
+    header
+    gum style --foreground 214 --bold "ACR - Quick Review (5 reviewers, claude)"
+    echo ""
+
+    local acr_output="$SESSION_DIR/ACR_REVIEW.md"
+
+    # Create header
+    {
+        echo "# ACR Review Results"
+        echo ""
+        echo "- **Reviewers**: 5"
+        echo "- **Agents**: claude"
+        echo "- **Base**: $PR_BASE"
+        echo "- **Date**: $(date '+%Y-%m-%d %H:%M:%S')"
+        echo ""
+        echo "---"
+        echo ""
+    } > "$acr_output"
+
+    # Run ACR with defaults
+    gum spin --spinner dot --title "Running ACR..." -- bash -c "acr -r 5 -a claude -b '$PR_BASE' -t 10m --local 2>&1 | tee -a '$acr_output'"
+
+    echo "---" >> "$acr_output"
+    echo "" >> "$acr_output"
+    echo "*Generated by ACR (Agentic Code Reviewer)*" >> "$acr_output"
+
+    success "ACR results saved to ACR_REVIEW.md"
+    sleep 1
+    return 0
+}
 
 run_acr_review() {
     local SESSION_DIR="$1"
@@ -2052,6 +2596,56 @@ open_in_editor() {
         sleep 3
         return 1
     fi
+    return 0
+}
+
+# Open a new terminal window/tab in the session's repo folder
+open_terminal_in_repo() {
+    local SESSION_DIR="$1"
+    local REPO_DIR="$SESSION_DIR/repo"
+
+    if [ ! -d "$REPO_DIR" ]; then
+        error "Repository folder not found: $REPO_DIR"
+        sleep 1
+        return 1
+    fi
+
+    # Try iTerm2 first (macOS)
+    if [ -d "/Applications/iTerm.app" ]; then
+        osascript << ITERM_SCRIPT
+tell application "iTerm"
+    activate
+    tell current window
+        create tab with default profile
+        tell current session
+            write text "cd '$REPO_DIR' && clear && pwd && git status"
+        end tell
+    end tell
+end tell
+ITERM_SCRIPT
+        success "Opened new iTerm2 tab"
+        return 0
+    fi
+
+    # Try Terminal.app (macOS)
+    if [ -d "/Applications/Utilities/Terminal.app" ]; then
+        osascript << TERM_SCRIPT
+tell application "Terminal"
+    activate
+    do script "cd '$REPO_DIR' && clear && pwd && git status"
+end tell
+TERM_SCRIPT
+        success "Opened new Terminal window"
+        return 0
+    fi
+
+    # Fallback: print instructions
+    echo ""
+    info "To open a terminal in the repo, run:"
+    echo ""
+    gum style --foreground 82 "  cd $REPO_DIR"
+    echo ""
+    sleep 2
     return 0
 }
 
@@ -2532,48 +3126,99 @@ DASHBOARD_PORT=8765
 DASHBOARD_PID_FILE="$HOME/.sandbox_dashboard_pid"
 
 start_dashboard_server() {
-    # Check if already running
-    if [ -f "$DASHBOARD_PID_FILE" ]; then
-        local old_pid=$(cat "$DASHBOARD_PID_FILE")
-        if kill -0 "$old_pid" 2>/dev/null; then
-            success "Dashboard already running at http://127.0.0.1:$DASHBOARD_PORT"
-            open "http://127.0.0.1:$DASHBOARD_PORT" 2>/dev/null
-            return 0
-        fi
-    fi
+    # Always clean up first to ensure clean state
+    cleanup_dashboard_server
 
-    # Kill any existing server on the port
-    lsof -ti:$DASHBOARD_PORT 2>/dev/null | xargs kill 2>/dev/null || true
-    sleep 0.3
-
-    # Create the dashboard server script
+    # Create the dashboard server script (always recreate to pick up code changes)
     local server_script="$SESSIONS_DIR/.dashboard_server.py"
     create_dashboard_server_script "$server_script"
 
     # Start the server
     cd "$SESSIONS_DIR"
-    python3 "$server_script" &
+    nohup python3 "$server_script" > "$SESSIONS_DIR/.dashboard.log" 2>&1 &
     local pid=$!
     echo "$pid" > "$DASHBOARD_PID_FILE"
 
-    sleep 1
-    if kill -0 "$pid" 2>/dev/null; then
-        success "Dashboard running at http://127.0.0.1:$DASHBOARD_PORT"
-        open "http://127.0.0.1:$DASHBOARD_PORT" 2>/dev/null
-    else
-        error "Failed to start dashboard server"
-        return 1
+    # Wait and verify it started (check multiple times)
+    local attempts=0
+    while [ $attempts -lt 10 ]; do
+        sleep 0.3
+        attempts=$((attempts + 1))
+
+        # Check if process is still running
+        if ! kill -0 "$pid" 2>/dev/null; then
+            break  # Process died
+        fi
+
+        # Check if port is listening
+        if lsof -ti:$DASHBOARD_PORT >/dev/null 2>&1; then
+            return 0  # Success!
+        fi
+    done
+
+    # Failed to start - show error
+    error "Failed to start dashboard server"
+    if [ -f "$SESSIONS_DIR/.dashboard.log" ]; then
+        local log_content=$(cat "$SESSIONS_DIR/.dashboard.log" 2>/dev/null)
+        if [ -n "$log_content" ]; then
+            dim "Server log:"
+            echo "$log_content" | tail -10
+        fi
     fi
+    cleanup_dashboard_server
+    return 1
 }
 
 stop_dashboard_server() {
+    cleanup_dashboard_server
+}
+
+cleanup_dashboard_server() {
+    # Kill by PID file
     if [ -f "$DASHBOARD_PID_FILE" ]; then
-        local pid=$(cat "$DASHBOARD_PID_FILE")
-        kill "$pid" 2>/dev/null && success "Dashboard server stopped"
+        local pid=$(cat "$DASHBOARD_PID_FILE" 2>/dev/null)
+        if [ -n "$pid" ]; then
+            kill "$pid" 2>/dev/null
+            kill -9 "$pid" 2>/dev/null  # Force kill if still alive
+        fi
         rm -f "$DASHBOARD_PID_FILE"
-    else
-        dim "No dashboard server running"
     fi
+
+    # Kill anything on the port (catches orphaned processes)
+    local pids=$(lsof -ti:$DASHBOARD_PORT 2>/dev/null)
+    if [ -n "$pids" ]; then
+        echo "$pids" | xargs kill 2>/dev/null
+        sleep 0.3
+        # Force kill if still there
+        pids=$(lsof -ti:$DASHBOARD_PORT 2>/dev/null)
+        if [ -n "$pids" ]; then
+            echo "$pids" | xargs kill -9 2>/dev/null
+        fi
+    fi
+
+    # Wait for port to be free
+    local attempts=0
+    while lsof -ti:$DASHBOARD_PORT >/dev/null 2>&1 && [ $attempts -lt 10 ]; do
+        sleep 0.2
+        attempts=$((attempts + 1))
+    done
+}
+
+is_dashboard_running() {
+    # Check both PID and port
+    if [ -f "$DASHBOARD_PID_FILE" ]; then
+        local pid=$(cat "$DASHBOARD_PID_FILE" 2>/dev/null)
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            if lsof -ti:$DASHBOARD_PORT >/dev/null 2>&1; then
+                return 0
+            fi
+        fi
+    fi
+    # Also check if something else is on the port
+    if lsof -ti:$DASHBOARD_PORT >/dev/null 2>&1; then
+        return 0
+    fi
+    return 1
 }
 
 create_dashboard_server_script() {
@@ -2600,11 +3245,66 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             params = parse_qs(parsed.query)
             session = params.get('session', [''])[0]
             file_type = params.get('type', ['review'])[0]
-            self.send_file_content(session, file_type)
+            version = params.get('version', ['current'])[0]
+            self.send_file_content(session, file_type, version)
         elif parsed.path == '/' or parsed.path == '/index.html':
             self.send_dashboard()
         else:
             super().do_GET()
+
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        content_length = int(self.headers.get('Content-Length', 0))
+        body = self.rfile.read(content_length).decode('utf-8')
+
+        try:
+            data = json.loads(body) if body else {}
+        except:
+            data = {}
+
+        session_name = data.get('session', '')
+
+        # Validate session name to prevent path traversal
+        if not session_name or '/' in session_name or '..' in session_name:
+            self.send_error(400, 'Invalid session name')
+            return
+
+        session_path = Path(SESSIONS_DIR) / session_name
+
+        if not session_path.exists() or not session_path.is_dir():
+            self.send_error(404, 'Session not found')
+            return
+
+        if parsed.path == '/api/archive':
+            self.archive_session(session_path)
+        elif parsed.path == '/api/delete':
+            self.delete_session(session_path)
+        else:
+            self.send_error(404, 'Not found')
+
+    def archive_session(self, session_path):
+        import shutil
+        repo_path = session_path / 'repo'
+        try:
+            if repo_path.exists():
+                shutil.rmtree(repo_path)
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({'status': 'archived'}).encode())
+        except Exception as e:
+            self.send_error(500, str(e))
+
+    def delete_session(self, session_path):
+        import shutil
+        try:
+            shutil.rmtree(session_path)
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({'status': 'deleted'}).encode())
+        except Exception as e:
+            self.send_error(500, str(e))
 
     def send_sessions_list(self):
         sessions = []
@@ -2616,7 +3316,30 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                     info['name'] = entry.name
                     info['has_review'] = (entry / 'REVIEW.md').exists() and (entry / 'REVIEW.md').stat().st_size > 0
                     info['has_findings'] = (entry / 'FINDINGS.md').exists() and (entry / 'FINDINGS.md').stat().st_size > 0
+                    info['has_devlog'] = (entry / 'DEVLOG.md').exists() and (entry / 'DEVLOG.md').stat().st_size > 0
                     info['archived'] = not (entry / 'repo').exists()
+
+                    # Detect session type from folder name
+                    if entry.name.startswith('pr-'):
+                        info['session_type'] = 'review'
+                    elif entry.name.startswith('dev-'):
+                        info['session_type'] = 'development'
+                    elif entry.name.startswith('inv-'):
+                        info['session_type'] = 'investigation'
+                    else:
+                        info['session_type'] = 'unknown'
+
+                    # Check for archived review versions (REVIEW-v1.md, REVIEW-v2.md, etc.)
+                    review_versions = []
+                    for f in entry.glob('REVIEW-v*.md'):
+                        if f.stat().st_size > 0:
+                            version = f.stem.replace('REVIEW-', '')
+                            review_versions.append(version)
+                    info['review_versions'] = sorted(review_versions)
+
+                    # Check for RE-REVIEW.md (indicates re-review in progress)
+                    info['has_rereview'] = (entry / 'repo' / 'RE-REVIEW.md').exists()
+
                     sessions.append(info)
 
         self.send_response(200)
@@ -2626,20 +3349,114 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         self.wfile.write(json.dumps(sessions).encode())
 
     def parse_session_info(self, path):
+        import re
         info = {}
         try:
-            with open(path) as f:
-                for line in f:
-                    if ':' in line and not line.startswith('='):
-                        key, _, value = line.partition(':')
-                        key = key.strip().lower().replace(' ', '_')
-                        info[key] = value.strip()
-        except:
-            pass
+            content = path.read_text()
+            lines = content.split('\n')
+            in_focus = False
+            focus_lines = []
+
+            for line in lines:
+                # Parse key: value pairs
+                if ':' in line and not line.startswith('=') and not line.startswith('-'):
+                    key, _, value = line.partition(':')
+                    key = key.strip().lower().replace(' ', '_')
+                    value = value.strip()
+                    if value:
+                        info[key] = value
+
+                # Extract PR number and title from "PR #123: Title here"
+                if line.startswith('PR #'):
+                    match = re.match(r'PR #(\d+)', line)
+                    if match:
+                        info['pr'] = match.group(1)
+                    parts = line.split(':', 1)
+                    if len(parts) > 1:
+                        info['pr_title'] = parts[1].strip()
+
+                # Track investigation focus section
+                if 'Investigation Focus:' in line:
+                    in_focus = True
+                    continue
+                if in_focus:
+                    if line.startswith('===') or line.startswith('---'):
+                        in_focus = False
+                    elif line.strip() and not line.startswith('-'):
+                        focus_lines.append(line.strip())
+
+            if focus_lines:
+                info['focus'] = ' '.join(focus_lines)[:100]
+
+            # Extract repo from repository field if URL
+            if 'repository' in info and 'github.com' in info['repository']:
+                # Handle URLs like https://github.com/org/repo or git@github.com:org/repo
+                repo_url = info['repository']
+                if not repo_url.startswith('http'):
+                    # Convert git@github.com:org/repo to https://github.com/org/repo
+                    match = re.match(r'git@github\.com:(.+?)(?:\.git)?$', repo_url)
+                    if match:
+                        info['repository'] = f"https://github.com/{match.group(1)}"
+
+            # Extract author from PR info line like "Author: John Doe"
+            # or from "PR #123: Title by author" patterns
+            for line in lines:
+                if line.lower().startswith('author:'):
+                    info['author'] = line.split(':', 1)[1].strip()
+                elif line.lower().startswith('creator:'):
+                    info['creator'] = line.split(':', 1)[1].strip()
+                elif line.lower().startswith('created by:'):
+                    info['author'] = line.split(':', 1)[1].strip()
+
+            # Build display title - use full description, not truncated
+            session_type = info.get('type', 'Session')
+            jira = info.get('jira', '')
+            summary = info.get('summary', '')
+
+            if 'PR' in session_type:
+                pr_title = info.get('pr_title', '')
+                pr_num = info.get('pr', '')
+                if pr_title:
+                    info['display_title'] = f"PR #{pr_num}: {pr_title}" if pr_num else f"PR: {pr_title}"
+                else:
+                    info['display_title'] = f"PR #{pr_num}" if pr_num else "PR Review"
+            elif 'Development' in session_type:
+                # For development sessions, show Jira ticket and summary
+                if jira and summary:
+                    info['display_title'] = f"{jira}: {summary}"
+                elif jira:
+                    info['display_title'] = f"Development: {jira}"
+                else:
+                    info['display_title'] = "Development"
+            else:
+                # For investigations, use the focus/description
+                focus = info.get('focus', '') or info.get('description', '')
+                if focus:
+                    info['display_title'] = f"Investigation: {focus}"
+                else:
+                    info['display_title'] = "Investigation"
+
+            if jira and 'Development' not in session_type:
+                info['display_title'] += f" ({jira})"
+
+        except Exception as e:
+            info['display_title'] = 'Session'
         return info
 
-    def send_file_content(self, session, file_type):
-        filename = 'REVIEW.md' if file_type == 'review' else 'FINDINGS.md'
+    def send_file_content(self, session, file_type, version='current'):
+        # Determine filename based on type and version
+        if version != 'current' and file_type == 'review':
+            # Archived version like REVIEW-v1.md
+            filename = f'REVIEW-{version}.md'
+        elif file_type == 'review':
+            filename = 'REVIEW.md'
+        elif file_type == 'findings':
+            filename = 'FINDINGS.md'
+        elif file_type == 'devlog':
+            filename = 'DEVLOG.md'
+        else:
+            filename = 'REVIEW.md'
+
         filepath = Path(SESSIONS_DIR) / session / filename
 
         content = ''
@@ -2677,6 +3494,7 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         .session-meta span { background: #222; padding: 0.1rem 0.4rem; border-radius: 4px; }
         .badge-review { color: #4dabf7; }
         .badge-findings { color: #ffd43b; }
+        .badge-devlog { color: #a78bfa; }
         .badge-archived { color: #868e96; }
         .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
         .main-header { padding: 1rem 1.5rem; border-bottom: 1px solid #333; display: flex; justify-content: space-between; align-items: center; background: #0f0f0f; }
@@ -2702,6 +3520,27 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         .empty h2 { margin-bottom: 0.5rem; }
         .filter-input { width: 100%; padding: 0.5rem; background: #1a1a1a; border: 1px solid #333; border-radius: 6px; color: #e0e0e0; margin-top: 0.5rem; }
         .filter-input:focus { outline: none; border-color: #00ff88; }
+        .session-title { font-weight: 500; font-size: 0.85rem; margin-bottom: 0.25rem; }
+        .session-folder { font-size: 0.7rem; color: #555; word-break: break-all; }
+        .session-details { background: #0f0f0f; border-bottom: 1px solid #333; padding: 0.75rem 1.5rem; display: none; }
+        .session-details.visible { display: block; }
+        .session-details-title { font-size: 1rem; font-weight: 600; color: #fff; margin-bottom: 0.5rem; }
+        .session-details-links { display: flex; flex-wrap: wrap; gap: 0.75rem; }
+        .session-details-links a { font-size: 0.8rem; color: #4dabf7; text-decoration: none; display: flex; align-items: center; gap: 0.3rem; padding: 0.25rem 0.5rem; background: #1a1a1a; border-radius: 4px; border: 1px solid #333; }
+        .session-details-links a:hover { border-color: #4dabf7; background: #1a2a3a; }
+        .session-details-info { margin-top: 0.5rem; font-size: 0.75rem; color: #666; display: flex; gap: 1rem; flex-wrap: wrap; }
+        .session-details-info span { display: flex; align-items: center; gap: 0.3rem; }
+        .session-details-header { display: flex; justify-content: space-between; align-items: flex-start; }
+        .session-details-actions { display: flex; gap: 0.5rem; }
+        .session-details-actions button { font-size: 0.75rem; padding: 0.3rem 0.6rem; border-radius: 4px; cursor: pointer; border: 1px solid #333; display: flex; align-items: center; gap: 0.3rem; }
+        .btn-archive { background: #2a2a1a; color: #ffd43b; }
+        .btn-archive:hover { background: #3a3a2a; border-color: #ffd43b; }
+        .btn-delete { background: #2a1a1a; color: #ff6b6b; }
+        .btn-delete:hover { background: #3a2a2a; border-color: #ff6b6b; }
+        .btn-archive:disabled, .btn-delete:disabled { opacity: 0.5; cursor: not-allowed; }
+        .version-select { background: #222; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; padding: 0.4rem 0.6rem; font-size: 0.85rem; cursor: pointer; margin-left: 0.5rem; }
+        .version-select:hover { border-color: #666; }
+        .rereview-badge { background: #3a2a1a; color: #ffa500; padding: 0.3rem 0.6rem; border-radius: 4px; font-size: 0.75rem; margin-right: 1rem; }
     </style>
 </head>
 <body>
@@ -2713,12 +3552,28 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         <div class="session-list" id="sessions"></div>
     </div>
     <div class="main">
+        <div class="session-details" id="sessionDetails">
+            <div class="session-details-header">
+                <div class="session-details-title" id="sessionTitle">Session</div>
+                <div class="session-details-actions">
+                    <button class="btn-archive" id="btnArchive" onclick="archiveSession()">📦 Archive</button>
+                    <button class="btn-delete" id="btnDelete" onclick="deleteSession()">🗑️ Delete</button>
+                </div>
+            </div>
+            <div class="session-details-links" id="sessionLinks"></div>
+            <div class="session-details-info" id="sessionInfo"></div>
+        </div>
         <div class="main-header">
             <div class="tabs">
                 <button class="tab active" data-type="review" onclick="switchTab('review')">📝 Review</button>
                 <button class="tab" data-type="findings" onclick="switchTab('findings')">🔬 Findings</button>
+                <button class="tab" data-type="devlog" onclick="switchTab('devlog')">📓 Devlog</button>
+                <select class="version-select" id="versionSelect" onchange="switchVersion(this.value)" style="display:none;">
+                    <option value="current">Current</option>
+                </select>
             </div>
             <div class="status">
+                <span id="rereviewBadge" class="rereview-badge" style="display:none;">🔄 Re-review pending</span>
                 <div class="live-dot"></div>
                 <span id="status">Auto-refresh active</span>
             </div>
@@ -2748,55 +3603,211 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
 
         function renderSessions() {
             const filter = document.getElementById('filter').value.toLowerCase();
-            const filtered = sessions.filter(s =>
-                s.name.toLowerCase().includes(filter) ||
-                (s.type || '').toLowerCase().includes(filter)
-            );
+            const filtered = sessions.filter(s => {
+                // Search in all string fields
+                return Object.values(s).some(v =>
+                    typeof v === 'string' && v.toLowerCase().includes(filter)
+                );
+            });
 
             document.getElementById('sessions').innerHTML = filtered.map(s => `
                 <div class="session-item ${currentSession === s.name ? 'active' : ''}" onclick="selectSession('${s.name}')">
-                    <div class="session-name">${s.name}</div>
+                    <div class="session-title">${escapeHtml(s.display_title || s.name)}</div>
+                    <div class="session-folder">${s.name}</div>
                     <div class="session-meta">
-                        <span>${s.type || 'Session'}</span>
                         ${s.has_review ? '<span class="badge-review">Review</span>' : ''}
                         ${s.has_findings ? '<span class="badge-findings">Findings</span>' : ''}
+                        ${s.has_devlog ? '<span class="badge-devlog">Devlog</span>' : ''}
                         ${s.archived ? '<span class="badge-archived">Archived</span>' : ''}
                     </div>
                 </div>
             `).join('');
         }
 
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
         async function selectSession(name) {
             currentSession = name;
+            const session = sessions.find(s => s.name === name);
+
+            // Set default tab based on session type and available content
+            let defaultTab = 'review';
+            if (session) {
+                // For development sessions, prefer devlog
+                if (session.session_type === 'development' && session.has_devlog) {
+                    defaultTab = 'devlog';
+                } else if (session.has_review) {
+                    defaultTab = 'review';
+                } else if (session.has_findings) {
+                    defaultTab = 'findings';
+                } else if (session.has_devlog) {
+                    defaultTab = 'devlog';
+                }
+            }
+            currentTab = defaultTab;
+
+            // Update tab UI to match
+            document.querySelectorAll('.tab').forEach(function(t) {
+                t.classList.remove('active');
+            });
+            var activeTab = document.querySelector('[data-type="' + currentTab + '"]');
+            if (activeTab) activeTab.classList.add('active');
+
             renderSessions();
+            renderSessionDetails();
             await loadContent();
             updateTabs();
         }
+
+        function renderSessionDetails() {
+            const session = sessions.find(s => s.name === currentSession);
+            const detailsEl = document.getElementById('sessionDetails');
+
+            if (!session) {
+                detailsEl.classList.remove('visible');
+                return;
+            }
+
+            detailsEl.classList.add('visible');
+            document.getElementById('sessionTitle').textContent = session.display_title || session.name;
+
+            // Build links
+            const links = [];
+
+            // Determine repo URL - could be in url field or constructed from repository field
+            let repoUrl = session.url || '';
+            if (!repoUrl && session.repository) {
+                const repo = session.repository;
+                if (repo.includes('github.com')) {
+                    repoUrl = repo;
+                } else if (repo.includes('/')) {
+                    repoUrl = `https://github.com/${repo}`;
+                }
+            }
+            // Clean repo URL - remove /pull/xxx if present (we'll add it separately for PR link)
+            const repoBaseUrl = repoUrl.replace(/\\/pull\\/\\d+.*$/, '');
+
+            // PR link
+            if (session.pr && session.pr.match(/^\\d+$/) && repoBaseUrl) {
+                links.push(`<a href="${repoBaseUrl}/pull/${session.pr}" target="_blank">🔗 PR #${session.pr}</a>`);
+            } else if (session.pr && session.pr.includes('http')) {
+                links.push(`<a href="${session.pr}" target="_blank">🔗 Pull Request</a>`);
+            }
+
+            // Repository link
+            if (repoBaseUrl && repoBaseUrl.includes('http')) {
+                links.push(`<a href="${repoBaseUrl}" target="_blank">📂 Repository</a>`);
+            }
+
+            // Jira link
+            if (session.jira) {
+                const jiraUrl = `https://aplaceformom.atlassian.net/browse/${session.jira}`;
+                links.push(`<a href="${jiraUrl}" target="_blank">🎫 ${session.jira}</a>`);
+            }
+
+            // Preview environment link (only for grace-frontend repo)
+            if (session.branch && repoBaseUrl.includes('grace-frontend')) {
+                // Branch field might be "feature/branch → main", extract just the head branch
+                // Remove everything after arrow or " main"/" master" suffix
+                var headBranch = session.branch
+                    .replace(/\\s*\\u2192\\s*.*/g, '')  // Unicode arrow →
+                    .replace(/\\s*->\\s*.*/g, '')       // ASCII arrow ->
+                    .replace(/\\s+(main|master)$/i, '') // trailing main/master
+                    .trim();
+                // Convert branch to URL slug: feature/HB-404-name -> feature-hb-404-name
+                var branchSlug = headBranch.replace(/\\//g, '-').toLowerCase();
+                var previewUrl = 'https://grace-frontend-dev-git-' + branchSlug + '.preview.findcare.dev.aplaceformom.com/';
+                links.push('<a href="' + previewUrl + '" target="_blank">🌐 Preview</a>');
+            }
+
+            document.getElementById('sessionLinks').innerHTML = links.join('');
+
+            // Build info
+            const infos = [];
+            const author = session.author || session.creator;
+            if (author) {
+                infos.push(`<span>👤 ${escapeHtml(author)}</span>`);
+            }
+            if (session.branch) {
+                infos.push(`<span>🌿 ${escapeHtml(session.branch)}</span>`);
+            }
+            if (session.type) {
+                infos.push(`<span>📋 ${escapeHtml(session.type)}</span>`);
+            }
+            if (session.created) {
+                infos.push(`<span>📅 ${escapeHtml(session.created)}</span>`);
+            }
+
+            document.getElementById('sessionInfo').innerHTML = infos.join('');
+
+            // Update action buttons
+            const archiveBtn = document.getElementById('btnArchive');
+            archiveBtn.disabled = session.archived;
+            archiveBtn.innerHTML = session.archived ? '📦 Archived' : '📦 Archive';
+        }
+
+        let currentVersion = 'current';
 
         function updateTabs() {
             const session = sessions.find(s => s.name === currentSession);
             if (session) {
                 document.querySelector('[data-type="review"]').classList.toggle('disabled', !session.has_review);
                 document.querySelector('[data-type="findings"]').classList.toggle('disabled', !session.has_findings);
+                document.querySelector('[data-type="devlog"]').classList.toggle('disabled', !session.has_devlog);
+
+                // Update version selector
+                const versionSelect = document.getElementById('versionSelect');
+                const versions = session.review_versions || [];
+                if (versions.length > 0) {
+                    versionSelect.innerHTML = '<option value="current">Current</option>' +
+                        versions.map(v => '<option value="' + v + '">' + v.toUpperCase() + ' (archived)</option>').join('');
+                    versionSelect.style.display = 'inline-block';
+                    versionSelect.value = currentVersion;
+                } else {
+                    versionSelect.style.display = 'none';
+                }
+
+                // Show re-review badge if pending
+                const rereviewBadge = document.getElementById('rereviewBadge');
+                rereviewBadge.style.display = session.has_rereview ? 'inline-block' : 'none';
             }
         }
 
         function switchTab(type) {
             currentTab = type;
+            currentVersion = 'current';
+            document.getElementById('versionSelect').value = 'current';
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
             document.querySelector(`[data-type="${type}"]`).classList.add('active');
+            loadContent();
+        }
+
+        function switchVersion(version) {
+            currentVersion = version;
             loadContent();
         }
 
         async function loadContent() {
             if (!currentSession) return;
             try {
-                const res = await fetch(`/api/content?session=${encodeURIComponent(currentSession)}&type=${currentTab}`);
+                var url = '/api/content?session=' + encodeURIComponent(currentSession) + '&type=' + currentTab;
+                if (currentVersion !== 'current') {
+                    url += '&version=' + encodeURIComponent(currentVersion);
+                }
+                const res = await fetch(url);
                 const text = await res.text();
                 if (text !== lastContent) {
                     lastContent = text;
                     if (text.trim()) {
-                        document.getElementById('content').innerHTML = marked.parse(text);
+                        var header = '';
+                        if (currentVersion !== 'current') {
+                            header = '<div style="background:#3a2a1a;color:#ffa500;padding:0.5rem 1rem;border-radius:6px;margin-bottom:1rem;">📦 Viewing archived version: ' + currentVersion.toUpperCase() + '</div>';
+                        }
+                        document.getElementById('content').innerHTML = header + marked.parse(text);
                     } else {
                         document.getElementById('content').innerHTML = '<div class="empty"><h2>No content yet</h2><p>Waiting for ' + currentTab + ' to be written...</p></div>';
                     }
@@ -2808,6 +3819,61 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         }
 
         document.getElementById('filter').addEventListener('input', renderSessions);
+
+        async function archiveSession() {
+            if (!currentSession) return;
+            const session = sessions.find(s => s.name === currentSession);
+            if (!session || session.archived) return;
+
+            if (!confirm(`Archive session "${session.display_title || currentSession}"?\\n\\nThis will delete the cloned repo but keep the review/findings files.`)) return;
+
+            document.getElementById('btnArchive').disabled = true;
+            try {
+                const res = await fetch('/api/archive', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ session: currentSession })
+                });
+                if (res.ok) {
+                    await loadSessions();
+                    renderSessionDetails();
+                } else {
+                    alert('Failed to archive session');
+                }
+            } catch (e) {
+                console.error('Archive failed', e);
+                alert('Failed to archive session');
+            }
+            document.getElementById('btnArchive').disabled = false;
+        }
+
+        async function deleteSession() {
+            if (!currentSession) return;
+            const session = sessions.find(s => s.name === currentSession);
+
+            if (!confirm(`DELETE session "${session?.display_title || currentSession}"?\\n\\nThis will permanently delete ALL files including reviews and findings. This cannot be undone.`)) return;
+
+            document.getElementById('btnDelete').disabled = true;
+            try {
+                const res = await fetch('/api/delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ session: currentSession })
+                });
+                if (res.ok) {
+                    currentSession = null;
+                    await loadSessions();
+                    document.getElementById('sessionDetails').classList.remove('visible');
+                    document.getElementById('content').innerHTML = '<div class="empty"><h2>Select a session</h2><p>Choose a session from the sidebar to view its content</p></div>';
+                } else {
+                    alert('Failed to delete session');
+                }
+            } catch (e) {
+                console.error('Delete failed', e);
+                alert('Failed to delete session');
+            }
+            document.getElementById('btnDelete').disabled = false;
+        }
 
         // Initial load
         loadSessions();
@@ -2828,8 +3894,21 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
     def log_message(self, format, *args):
         pass  # Suppress logging
 
-with socketserver.TCPServer(("127.0.0.1", PORT), DashboardHandler) as httpd:
-    httpd.serve_forever()
+if __name__ == '__main__':
+    import sys
+    socketserver.TCPServer.allow_reuse_address = True
+    try:
+        with socketserver.TCPServer(("127.0.0.1", PORT), DashboardHandler) as httpd:
+            print(f"Dashboard server running on http://127.0.0.1:{PORT}", flush=True)
+            httpd.serve_forever()
+    except OSError as e:
+        if e.errno == 48:  # Address already in use
+            print(f"Error: Port {PORT} is already in use", file=sys.stderr)
+            sys.exit(1)
+        raise
+    except KeyboardInterrupt:
+        print("Server stopped")
+        sys.exit(0)
 PYSERVER
     chmod +x "$script_file"
 }
@@ -3677,16 +4756,27 @@ For each finding in "Open Findings":
 Review the new commits for any NEW problems introduced.
 Add new findings with "Since: v${next_version}"
 
-### 4. Update Review History
-Add row to the history table:
+### 4. Update Review History (IMPORTANT!)
+The Review History table MUST have a new row for this version. Find the table that looks like:
 \`\`\`markdown
-| v${next_version} | $(date '+%Y-%m-%d') | ${NEW_COMMIT:0:8} | [X fixed, Y new, Z still open] |
+## Review History
+
+| Version | Date | Commit | Action |
+|---------|------|--------|--------|
+| v1 | 2026-01-27 | e627b8f | Initial review - Approved |
+\`\`\`
+
+ADD a new row (do NOT replace existing rows):
+\`\`\`markdown
+| v${next_version} | $(date '+%Y-%m-%d') | ${NEW_COMMIT:0:8} | Re-review: X fixed, Y new issues |
 \`\`\`
 
 ### 5. Update Verdict
-Re-evaluate based on current state of findings.
+Re-evaluate based on current state of ALL findings (fixed + remaining + new).
 
 ---
+
+**CRITICAL: The Review History table must show ALL versions (v1, v2, etc). Do NOT remove previous rows.**
 
 **BEGIN: Read REVIEW.md, check findings against new code, update in-place.**
 REREVIEW_EOF
@@ -3706,10 +4796,16 @@ REREVIEW_EOF
 
 **PR updated: ${COMMIT_COUNT} new commit(s) since last review.**
 
+## What to do:
 1. Read \`RE-REVIEW.md\` for what changed
-2. Update \`REVIEW.md\` in-place (don't append)
-3. Move fixed items to "Resolved Findings"
-4. Add any new issues found
+2. Update \`REVIEW.md\` **in-place** (don't append sections)
+3. Move fixed items to "Resolved Findings" section
+4. Add any new issues found in the new commits
+5. **IMPORTANT**: Add a new row to the Review History table for v${next_version}
+
+## Review History Must Show:
+- v1: Initial review
+- v${next_version}: This re-review (add this row!)
 
 ---
 
@@ -3718,7 +4814,38 @@ NOTICE_EOF
         mv "$temp_file" "$SESSION_DIR/repo/CLAUDE.md"
     fi
 
-    return 0
+    # Ask if user wants to start Claude immediately for re-review
+    echo ""
+    local rereview_action=$(printf '%s\n' \
+        "▶ Start Claude re-review now" \
+        "🤖 Run ACR first, then Claude" \
+        "📋 Return to menu (start later)" | fzf \
+        --height=~30% \
+        --layout=reverse \
+        --border=rounded \
+        --no-info \
+        --prompt="" \
+        --header="Ready to re-review. What would you like to do?" \
+        --header-first)
+
+    case "$rereview_action" in
+        *"Start Claude"*)
+            tput reset 2>/dev/null || clear
+            cd "$SESSION_DIR/repo"
+            claude "RE-REVIEW MODE: PR has been updated with $COMMIT_COUNT new commit(s). Read RE-REVIEW.md for what changed, then update REVIEW.md in-place."
+            return 2  # Signal that Claude was run
+            ;;
+        *"ACR"*)
+            run_acr_quick "$SESSION_DIR" "$PR_BASE"
+            tput reset 2>/dev/null || clear
+            cd "$SESSION_DIR/repo"
+            claude "RE-REVIEW MODE with ACR: PR has been updated. Read RE-REVIEW.md and ACR_REVIEW.md, then update REVIEW.md in-place."
+            return 2  # Signal that Claude was run
+            ;;
+        *)
+            return 0
+            ;;
+    esac
 }
 
 restart_session() {
@@ -3957,17 +5084,13 @@ pre_session_menu() {
                 run_acr_review "$SESSION_DIR" "$PR_BASE"
                 ;;
             *"ACR → Claude"*)
-                # Run ACR first, then Claude
-                if run_acr_review "$SESSION_DIR" "$PR_BASE"; then
-                    echo ""
-                    if gum confirm "ACR complete. Start Claude for deeper analysis?"; then
-                        tput reset 2>/dev/null || clear
-                        cd "$SESSION_DIR/repo"
-                        claude "I've received ACR review results in the CLAUDE.md context. Please analyze them and create a comprehensive REVIEW.md."
-                        post_session_menu "$SESSION_DIR"
-                        return 0
-                    fi
-                fi
+                # Run ACR first, then go directly to Claude (no confirmation)
+                run_acr_quick "$SESSION_DIR" "$PR_BASE"
+                tput reset 2>/dev/null || clear
+                cd "$SESSION_DIR/repo"
+                claude "I've received ACR review results in the CLAUDE.md context. Please analyze them and create a comprehensive REVIEW.md."
+                post_session_menu "$SESSION_DIR"
+                return 0
                 ;;
             *"Start Codex"*)
                 run_codex_review "$SESSION_DIR" "$PR_BASE" "false"
@@ -4064,6 +5187,7 @@ post_session_menu() {
         local options=(
             "↩ Resume Claude"
             "💻 Open in editor"
+            "🖥️  Open Terminal in repo"
             "📊 View diff"
         )
 
@@ -4090,7 +5214,14 @@ post_session_menu() {
             "← Back to main menu"
         )
 
-        local choice=$(printf '%s\n' "${options[@]}" | gum choose --header "What next?")
+        local choice=$(printf '%s\n' "${options[@]}" | fzf \
+            --height=~50% \
+            --layout=reverse \
+            --border=rounded \
+            --no-info \
+            --prompt="" \
+            --header="What next?" \
+            --header-first)
 
         case "$choice" in
             *"Resume Claude"*)
@@ -4102,7 +5233,10 @@ post_session_menu() {
                 local output_file=""
                 local prompt=""
 
-                if [ "$mode" = "investigation" ]; then
+                if [ "$mode" = "development" ]; then
+                    [ -f "$SESSION_DIR/repo/DEVLOG.md" ] && [ -s "$SESSION_DIR/repo/DEVLOG.md" ] && output_file="DEVLOG.md"
+                    prompt="Read DEVLOG.md and give me a brief summary of the progress so far (bullet points). Then let me know you're ready to continue development."
+                elif [ "$mode" = "investigation" ]; then
                     [ -f "$SESSION_DIR/repo/FINDINGS.md" ] && [ -s "$SESSION_DIR/repo/FINDINGS.md" ] && output_file="FINDINGS.md"
                     prompt="Read FINDINGS.md and give me a brief summary of the key discoveries (bullet points, max 5-7 items). Then let me know you're ready to continue the investigation or discuss the findings."
                 else
@@ -4118,6 +5252,9 @@ post_session_menu() {
                 ;;
             *"editor"*)
                 open_in_editor "$SESSION_DIR/repo"
+                ;;
+            *"Terminal"*)
+                open_terminal_in_repo "$SESSION_DIR"
                 ;;
             *"View diff"*)
                 view_diff "$SESSION_DIR"
@@ -4140,7 +5277,14 @@ post_session_menu() {
                 # Let user choose which file to view
                 local view_choice=""
                 if [ -n "$review_file" ] && [ -n "$findings_file" ]; then
-                    view_choice=$(gum choose --header "Which file?" "REVIEW.md" "FINDINGS.md" "Both")
+                    view_choice=$(printf '%s\n' "REVIEW.md" "FINDINGS.md" "Both" | fzf \
+                        --height=~20% \
+                        --layout=reverse \
+                        --border=rounded \
+                        --no-info \
+                        --prompt="" \
+                        --header="Which file?" \
+                        --header-first)
                 elif [ -n "$review_file" ]; then
                     view_choice="REVIEW.md"
                 else
@@ -4193,7 +5337,14 @@ post_session_menu() {
                 # Let user choose which file to copy
                 local copy_choice=""
                 if [ -n "$review_file" ] && [ -n "$findings_file" ]; then
-                    copy_choice=$(gum choose --header "Which file?" "REVIEW.md" "FINDINGS.md" "Both")
+                    copy_choice=$(printf '%s\n' "REVIEW.md" "FINDINGS.md" "Both" | fzf \
+                        --height=~20% \
+                        --layout=reverse \
+                        --border=rounded \
+                        --no-info \
+                        --prompt="" \
+                        --header="Which file?" \
+                        --header-first)
                 elif [ -n "$review_file" ]; then
                     copy_choice="REVIEW.md"
                 elif [ -n "$findings_file" ]; then
@@ -4356,7 +5507,14 @@ search_sessions() {
     echo ""
     # Add back option
     local all_options=("← Back" "${options[@]}")
-    local selected=$(printf '%s\n' "${all_options[@]}" | gum choose --header "Found ${#options[@]} match(es) for '$query' (ESC to go back):")
+    local selected=$(printf '%s\n' "${all_options[@]}" | fzf \
+        --height=~50% \
+        --layout=reverse \
+        --border=rounded \
+        --no-info \
+        --prompt="" \
+        --header="Found ${#options[@]} match(es) for '$query'" \
+        --header-first)
 
     if [ -z "$selected" ] || [[ "$selected" == "← Back"* ]]; then
         return 0
@@ -4414,9 +5572,17 @@ cleanup_sessions() {
     done <<< "$sessions"
 
     echo ""
-    dim "Press ESC or select nothing to go back"
+    dim "Press TAB to select, Enter to confirm, ESC to cancel"
     echo ""
-    local selected=$(printf '%s\n' "${options[@]}" | gum choose --no-limit --header "Select sessions to delete (space to select, Enter to confirm):")
+    local selected=$(printf '%s\n' "${options[@]}" | fzf \
+        --multi \
+        --height=~50% \
+        --layout=reverse \
+        --border=rounded \
+        --no-info \
+        --prompt="" \
+        --header="Select sessions to delete (TAB to select)" \
+        --header-first)
 
     if [ -z "$selected" ]; then
         return 0
@@ -4507,7 +5673,16 @@ list_sessions_menu() {
         options+=("🗑 Delete session")
         options+=("← Back")
 
-        local choice=$(printf '%s\n' "${options[@]}" | gum choose --header "$([ "$archived" = "yes" ] && echo "📦 Archived Session" || echo "Active Session")")
+        local header_text="Active Session"
+        [ "$archived" = "yes" ] && header_text="📦 Archived Session"
+        local choice=$(printf '%s\n' "${options[@]}" | fzf \
+            --height=~50% \
+            --layout=reverse \
+            --border=rounded \
+            --no-info \
+            --prompt="" \
+            --header="$header_text" \
+            --header-first)
 
         case "$choice" in
             *"Restart"*)
@@ -4555,32 +5730,135 @@ list_sessions_menu() {
 }
 
 # ============================================================================
-# MAIN MENU
+# SETTINGS MENU
 # ============================================================================
 
-main_menu() {
+settings_menu() {
     while true; do
         header
+        gum style --foreground 212 --bold "Settings"
+        echo ""
 
-        local choice=$(gum choose \
-            "🔍 New PR Review" \
-            "🔬 New Investigation" \
-            "📋 List Sessions" \
-            "🔎 Search Sessions" \
-            "🧹 Cleanup Sessions" \
-            "👋 Quit")
+        # Show current settings
+        gum style --foreground 240 "Current configuration:"
+        echo "  Model: $(gum style --foreground 82 "$MODEL")"
+        echo "  Dashboard auto-start: $(gum style --foreground 82 "$DASHBOARD_AUTO_START")"
+        [ -n "$DEFAULT_PROJECT" ] && echo "  Default project: $(gum style --foreground 82 "$DEFAULT_PROJECT")"
+        echo ""
+
+        local choice=$(printf '%s\n' \
+            "🤖 Switch Claude model ($MODEL)" \
+            "🌐 Toggle dashboard auto-start ($DASHBOARD_AUTO_START)" \
+            "📁 Set default project" \
+            "🗑️  Clear configuration" \
+            "📄 View config file" \
+            "← Back" | fzf \
+            --height=~40% \
+            --layout=reverse \
+            --border=rounded \
+            --no-info \
+            --prompt="" \
+            --header="Configure sandbox settings" \
+            --header-first)
 
         case "$choice" in
-            *"PR Review"*)
-                if create_pr_session; then
-                    run_claude_session "$CURRENT_SESSION"
+            *"Switch Claude model"*)
+                local new_model=$(printf '%s\n' \
+                    "sonnet (Recommended - fast & capable)" \
+                    "opus (Most capable - slower)" \
+                    "haiku (Fastest - simpler tasks)" | fzf \
+                    --height=~25% \
+                    --layout=reverse \
+                    --border=rounded \
+                    --no-info \
+                    --prompt="" \
+                    --header="Select Claude model" \
+                    --header-first)
+
+                case "$new_model" in
+                    *"sonnet"*) MODEL="sonnet" ;;
+                    *"opus"*) MODEL="opus" ;;
+                    *"haiku"*) MODEL="haiku" ;;
+                esac
+
+                if [ -n "$new_model" ]; then
+                    save_config
+                    success "Model set to: $MODEL"
+                    sleep 1
                 fi
                 ;;
-            *"Investigation"*)
-                if create_investigation_session; then
-                    run_claude_session "$CURRENT_SESSION"
+            *"Toggle dashboard"*)
+                if [ "$DASHBOARD_AUTO_START" = "true" ]; then
+                    DASHBOARD_AUTO_START="false"
+                else
+                    DASHBOARD_AUTO_START="true"
+                fi
+                save_config
+                success "Dashboard auto-start: $DASHBOARD_AUTO_START"
+                sleep 1
+                ;;
+            *"Set default project"*)
+                local project_path=$(gum input \
+                    --placeholder "e.g., https://github.com/org/repo" \
+                    --value "$DEFAULT_PROJECT" \
+                    --header "Default project URL or path:")
+
+                if [ -n "$project_path" ]; then
+                    DEFAULT_PROJECT="$project_path"
+                    save_config
+                    success "Default project set"
+                    sleep 1
                 fi
                 ;;
+            *"Clear configuration"*)
+                if gum confirm "Clear all configuration?"; then
+                    MODEL="$DEFAULT_MODEL"
+                    DASHBOARD_AUTO_START="$DEFAULT_DASHBOARD_AUTO_START"
+                    DEFAULT_PROJECT=""
+                    rm -f "$CONFIG_FILE"
+                    success "Configuration cleared"
+                    sleep 1
+                fi
+                ;;
+            *"View config"*)
+                if [ -f "$CONFIG_FILE" ]; then
+                    gum pager < "$CONFIG_FILE"
+                else
+                    dim "No config file exists yet"
+                    sleep 1
+                fi
+                ;;
+            *"Back"*|"")
+                return 0
+                ;;
+        esac
+    done
+}
+
+# ============================================================================
+# SESSIONS MENU (consolidated session management)
+# ============================================================================
+
+sessions_menu() {
+    while true; do
+        header
+        gum style --foreground 212 --bold "Sessions"
+        echo ""
+
+        local choice=$(printf '%s\n' \
+            "📋 List all sessions" \
+            "🔎 Search sessions" \
+            "🧹 Cleanup old sessions" \
+            "← Back" | fzf \
+            --height=~35% \
+            --layout=reverse \
+            --border=rounded \
+            --no-info \
+            --prompt="" \
+            --header="Manage existing sessions" \
+            --header-first)
+
+        case "$choice" in
             *"List"*)
                 list_sessions_menu
                 ;;
@@ -4590,16 +5868,155 @@ main_menu() {
             *"Cleanup"*)
                 cleanup_sessions
                 ;;
-            *"Quit"*)
-                clear
-                exit 0
+            *"Back"*|"")
+                return 0
                 ;;
         esac
     done
 }
 
 # ============================================================================
+# MAIN MENU
+# ============================================================================
+
+main_menu() {
+    while true; do
+        header
+
+        # Show dashboard status indicator
+        local dashboard_status=""
+        if is_dashboard_running; then
+            dashboard_status="  $(gum style --foreground 82 '● Dashboard running')"
+        fi
+        [ -n "$dashboard_status" ] && echo "$dashboard_status" && echo ""
+
+        local choice=$(printf '%s\n' \
+            "📝 Review      - Review a PR with AI assistance" \
+            "🔍 Investigate - Explore codebase for bugs/issues" \
+            "🛠️  Develop     - Start new feature from Jira ticket" \
+            "─────────────────────────────────────────────────" \
+            "⚙️  Settings    - Configure model, dashboard, etc." \
+            "📋 Sessions    - View/manage existing sessions" \
+            "🌐 Dashboard   - Open live dashboard" \
+            "👋 Quit" | fzf \
+            --height=~50% \
+            --layout=reverse \
+            --border=rounded \
+            --no-info \
+            --prompt="" \
+            --header="Choose mode:" \
+            --header-first)
+
+        case "$choice" in
+            *"Review"*)
+                if create_pr_session; then
+                    run_claude_session "$CURRENT_SESSION"
+                fi
+                ;;
+            *"Investigate"*)
+                if create_investigation_session; then
+                    run_claude_session "$CURRENT_SESSION"
+                fi
+                ;;
+            *"Develop"*)
+                if create_development_session; then
+                    run_claude_session "$CURRENT_SESSION"
+                fi
+                ;;
+            *"Settings"*)
+                settings_menu
+                ;;
+            *"Sessions"*)
+                sessions_menu
+                ;;
+            *"Dashboard"*)
+                launch_live_dashboard
+                ;;
+            *"Quit"*)
+                stop_dashboard_server 2>/dev/null
+                clear
+                exit 0
+                ;;
+            *"────"*|"")
+                # Separator or ESC pressed - do nothing
+                ;;
+        esac
+    done
+}
+
+launch_live_dashboard() {
+    if is_dashboard_running; then
+        local action=$(printf '%s\n' \
+            "🌐 Open in browser" \
+            "🔄 Restart server (reload code changes)" \
+            "🛑 Stop server" \
+            "← Back" | fzf \
+            --height=~30% \
+            --layout=reverse \
+            --border=rounded \
+            --no-info \
+            --prompt="" \
+            --header="Dashboard is running at http://127.0.0.1:$DASHBOARD_PORT" \
+            --header-first)
+
+        case "$action" in
+            *"Open"*)
+                open "http://127.0.0.1:$DASHBOARD_PORT" 2>/dev/null || \
+                xdg-open "http://127.0.0.1:$DASHBOARD_PORT" 2>/dev/null || \
+                gum style --foreground 87 "Open http://127.0.0.1:$DASHBOARD_PORT in your browser"
+                sleep 1
+                ;;
+            *"Restart"*)
+                dim "Stopping dashboard..."
+                cleanup_dashboard_server
+                sleep 0.5
+                dim "Starting dashboard..."
+                if start_dashboard_server; then
+                    success "Dashboard restarted"
+                    sleep 0.5
+                    open "http://127.0.0.1:$DASHBOARD_PORT" 2>/dev/null
+                else
+                    error "Failed to restart dashboard"
+                fi
+                sleep 1
+                ;;
+            *"Stop"*)
+                cleanup_dashboard_server
+                success "Dashboard stopped"
+                sleep 1
+                ;;
+        esac
+    else
+        gum spin --spinner dot --title "Starting dashboard..." -- sleep 0.5
+        if start_dashboard_server; then
+            success "Dashboard running at http://127.0.0.1:$DASHBOARD_PORT"
+            open "http://127.0.0.1:$DASHBOARD_PORT" 2>/dev/null || \
+            xdg-open "http://127.0.0.1:$DASHBOARD_PORT" 2>/dev/null || \
+            gum style --foreground 87 "Open http://127.0.0.1:$DASHBOARD_PORT in your browser"
+
+            gum style \
+                --border rounded \
+                --border-foreground 214 \
+                --padding "1 2" \
+                "Dashboard is running in the background." \
+                "Select 'Live Dashboard' again to manage or stop it."
+            sleep 2
+        else
+            error "Failed to start dashboard. Check $SESSIONS_DIR/.dashboard.log for details."
+            sleep 2
+        fi
+    fi
+}
+
+# ============================================================================
 # ENTRY
 # ============================================================================
+
+# Auto-start dashboard if configured
+if [ "$DASHBOARD_AUTO_START" = "true" ]; then
+    if ! is_dashboard_running; then
+        start_dashboard_server >/dev/null 2>&1 &
+    fi
+fi
 
 main_menu
