@@ -4126,9 +4126,14 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                     continue
 
                 info['name'] = entry.name
-                info['has_review'] = (entry / 'REVIEW.md').exists() and (entry / 'REVIEW.md').stat().st_size > 0
-                info['has_findings'] = (entry / 'FINDINGS.md').exists() and (entry / 'FINDINGS.md').stat().st_size > 0
-                info['has_devlog'] = (entry / 'DEVLOG.md').exists() and (entry / 'DEVLOG.md').stat().st_size > 0
+                # Check for output files in both root and repo/ folder
+                def has_file(name):
+                    root = entry / name
+                    repo = entry / 'repo' / name
+                    return (root.exists() and root.stat().st_size > 0) or (repo.exists() and repo.stat().st_size > 0)
+                info['has_review'] = has_file('REVIEW.md')
+                info['has_findings'] = has_file('FINDINGS.md')
+                info['has_devlog'] = has_file('DEVLOG.md')
                 info['archived'] = not (entry / 'repo').exists()
 
                 # Check for archived review versions (REVIEW-v1.md, REVIEW-v2.md, etc.)
@@ -4387,7 +4392,11 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         else:
             filename = 'REVIEW.md'
 
-        filepath = Path(SESSIONS_DIR) / session / filename
+        session_path = Path(SESSIONS_DIR) / session
+        # Check both root and repo/ folder
+        filepath = session_path / filename
+        if not filepath.exists() or filepath.stat().st_size == 0:
+            filepath = session_path / 'repo' / filename
 
         content = ''
         if filepath.exists():
