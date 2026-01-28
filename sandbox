@@ -3997,6 +3997,8 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             self.switch_session_mode(session_path, new_mode)
         elif parsed.path == '/api/focus-terminal':
             self.focus_terminal(session_path)
+        elif parsed.path == '/api/start-claude':
+            self.start_claude_session(session_path)
         else:
             self.send_error(404, 'Not found')
 
@@ -4094,6 +4096,77 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
             self.wfile.write(json.dumps({'status': 'focused' if found else 'not_found', 'found': found}).encode())
+        except Exception as e:
+            self.send_error(500, str(e))
+
+    def start_claude_session(self, session_path):
+        """Start Claude in a new terminal with logging"""
+        import subprocess
+        import datetime
+        try:
+            session_name = session_path.name
+            repo_path = session_path / 'repo'
+
+            if not repo_path.exists():
+                self.send_error(400, 'Session repo not found (may be archived)')
+                return
+
+            # Create logs directory
+            logs_dir = session_path / 'logs'
+            logs_dir.mkdir(exist_ok=True)
+            log_file = logs_dir / f"terminal-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
+
+            # Build the command
+            claude_cmd = f"cd '{repo_path}' && script -q '{log_file}' claude"
+
+            # Try iTerm2 first
+            script = f'''
+            tell application "iTerm"
+                activate
+                tell current window
+                    create tab with default profile
+                    tell current session
+                        set name to "🧪 {session_name}"
+                        write text "{claude_cmd}"
+                    end tell
+                end tell
+            end tell
+            '''
+            result = subprocess.run(['osascript', '-e', script], capture_output=True, text=True)
+
+            # Update session.json if it exists
+            session_json = session_path / 'session.json'
+            if session_json.exists():
+                with open(session_json) as f:
+                    data = json.load(f)
+                data['terminal'] = {
+                    'log_file': str(log_file),
+                    'tab_name': session_name,
+                    'started': datetime.datetime.now().isoformat()
+                }
+                if 'history' not in data:
+                    data['history'] = []
+                data['history'].append({
+                    'timestamp': datetime.datetime.now().isoformat(),
+                    'action': 'terminal_started',
+                    'source': 'dashboard'
+                })
+                with open(session_json, 'w') as f:
+                    json.dump(data, f, indent=2)
+
+            # Also create a simple marker file for v1 sessions
+            terminal_marker = session_path / '.terminal_log'
+            terminal_marker.write_text(str(log_file))
+
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                'status': 'started',
+                'log_file': str(log_file),
+                'session': session_name
+            }).encode())
         except Exception as e:
             self.send_error(500, str(e))
 
@@ -4202,17 +4275,35 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
 
     def check_terminal_active(self, session_path):
         """Check if session has an active terminal log being written"""
+        import time
+        log_file = None
+
         try:
+            # Method 1: Check session.json (v2 sessions)
             session_json = session_path / 'session.json'
             if session_json.exists():
                 with open(session_json) as f:
                     data = json.load(f)
                 log_file = data.get('terminal', {}).get('log_file', '')
-                if log_file and Path(log_file).exists():
-                    # Check if log was modified in the last 60 seconds
-                    import time
-                    mtime = Path(log_file).stat().st_mtime
-                    return (time.time() - mtime) < 60
+
+            # Method 2: Check .terminal_log marker file (v1 sessions or fallback)
+            if not log_file:
+                marker = session_path / '.terminal_log'
+                if marker.exists():
+                    log_file = marker.read_text().strip()
+
+            # Method 3: Check logs/ directory for recent log files
+            if not log_file or not Path(log_file).exists():
+                logs_dir = session_path / 'logs'
+                if logs_dir.exists():
+                    log_files = sorted(logs_dir.glob('terminal-*.log'), key=lambda x: x.stat().st_mtime, reverse=True)
+                    if log_files:
+                        log_file = str(log_files[0])
+
+            # Check if log file was modified recently (within 120 seconds)
+            if log_file and Path(log_file).exists():
+                mtime = Path(log_file).stat().st_mtime
+                return (time.time() - mtime) < 120
         except:
             pass
         return False
@@ -4499,6 +4590,7 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             <div class="session-details-header">
                 <div class="session-details-title" id="sessionTitle">Session</div>
                 <div class="session-details-actions">
+                    <button class="btn-focus" id="btnStart" onclick="startClaude()">▶️ Start Claude</button>
                     <button class="btn-focus" id="btnFocus" onclick="focusTerminal()">🎯 Focus Terminal</button>
                     <button class="btn-archive" id="btnArchive" onclick="archiveSession()">📦 Archive</button>
                     <button class="btn-delete" id="btnDelete" onclick="deleteSession()">🗑️ Delete</button>
@@ -4817,6 +4909,30 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                 alert('Failed to archive session');
             }
             document.getElementById('btnArchive').disabled = false;
+        }
+
+        async function startClaude() {
+            if (!currentSession) return;
+            const session = sessions.find(s => s.name === currentSession);
+            if (session?.archived) {
+                alert('Cannot start Claude on archived session (repo deleted)');
+                return;
+            }
+            try {
+                const res = await fetch('/api/start-claude', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ session: currentSession })
+                });
+                const data = await res.json();
+                if (data.status === 'started') {
+                    // Refresh to show terminal as active
+                    setTimeout(() => loadSessions(), 1000);
+                }
+            } catch (e) {
+                console.error('Start Claude failed', e);
+                alert('Failed to start Claude session');
+            }
         }
 
         async function focusTerminal() {
