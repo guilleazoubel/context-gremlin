@@ -73,6 +73,346 @@ EOF
 load_config
 
 # ============================================================================
+# V2 SESSION MODEL
+# ============================================================================
+# Unified session management with session.json metadata
+# All sessions use session-* naming with mode tracked in metadata
+
+# Generate unique session ID
+generate_session_id() {
+    local prefix="session"
+    local timestamp=$(date '+%Y%m%d-%H%M%S')
+    local random=$(head -c 4 /dev/urandom | xxd -p)
+    echo "${prefix}-${timestamp}-${random}"
+}
+
+# Create session.json with all metadata
+# Usage: create_session_json SESSION_DIR mode project [extra_json_fields]
+create_session_json() {
+    local session_dir="$1"
+    local mode="$2"
+    local project="$3"
+    local extra_fields="${4:-{}}"
+
+    local session_id=$(basename "$session_dir")
+    local created=$(date -Iseconds)
+
+    # Merge extra fields into base JSON
+    local json=$(jq -n \
+        --arg id "$session_id" \
+        --arg mode "$mode" \
+        --arg project "$project" \
+        --arg created "$created" \
+        --arg status "active" \
+        --argjson extra "$extra_fields" \
+        '{
+            id: $id,
+            mode: $mode,
+            project: $project,
+            created: $created,
+            status: $status,
+            terminal: {
+                pid: null,
+                tmux_session: null,
+                log_file: null
+            },
+            history: []
+        } + $extra')
+
+    echo "$json" > "$session_dir/session.json"
+}
+
+# Read a field from session.json
+# Usage: read_session_field SESSION_DIR field_path
+read_session_field() {
+    local session_dir="$1"
+    local field="$2"
+    local session_file="$session_dir/session.json"
+
+    if [ -f "$session_file" ]; then
+        jq -r ".$field // empty" "$session_file" 2>/dev/null
+    fi
+}
+
+# Update a field in session.json
+# Usage: update_session_field SESSION_DIR field_path value
+update_session_field() {
+    local session_dir="$1"
+    local field="$2"
+    local value="$3"
+    local session_file="$session_dir/session.json"
+
+    if [ -f "$session_file" ]; then
+        local tmp=$(mktemp)
+        # Check if value is JSON or plain string
+        if echo "$value" | jq -e . >/dev/null 2>&1; then
+            jq ".$field = $value" "$session_file" > "$tmp" && mv "$tmp" "$session_file"
+        else
+            jq --arg v "$value" ".$field = \$v" "$session_file" > "$tmp" && mv "$tmp" "$session_file"
+        fi
+    fi
+}
+
+# Add history entry to session
+# Usage: add_session_history SESSION_DIR action [details_json]
+add_session_history() {
+    local session_dir="$1"
+    local action="$2"
+    local details="${3:-{}}"
+    local session_file="$session_dir/session.json"
+
+    if [ -f "$session_file" ]; then
+        local tmp=$(mktemp)
+        local timestamp=$(date -Iseconds)
+        jq --arg ts "$timestamp" --arg act "$action" --argjson det "$details" \
+            '.history += [{ timestamp: $ts, action: $act } + $det]' \
+            "$session_file" > "$tmp" && mv "$tmp" "$session_file"
+    fi
+}
+
+# Check if session uses v2 format (has session.json)
+is_v2_session() {
+    local session_dir="$1"
+    [ -f "$session_dir/session.json" ]
+}
+
+# Migrate old session to v2 format
+# Reads session-info.txt and creates session.json
+migrate_session_to_v2() {
+    local session_dir="$1"
+    local session_name=$(basename "$session_dir")
+    local info_file="$session_dir/session-info.txt"
+
+    # Skip if already v2
+    [ -f "$session_dir/session.json" ] && return 0
+
+    # Skip if no info file
+    [ ! -f "$info_file" ] && return 1
+
+    # Determine mode from folder name
+    local mode="investigation"
+    if [[ "$session_name" == pr-* ]]; then
+        mode="review"
+    elif [[ "$session_name" == dev-* ]]; then
+        mode="development"
+    fi
+
+    # Parse info file for metadata
+    local project=""
+    local pr_number=""
+    local pr_title=""
+    local jira_ticket=""
+    local branch=""
+    local created=""
+    local focus=""
+
+    while IFS=: read -r key value; do
+        key=$(echo "$key" | xargs | tr '[:upper:]' '[:lower:]' | tr ' ' '_')
+        value=$(echo "$value" | xargs)
+        case "$key" in
+            repository) project="$value" ;;
+            pr*)
+                if [[ "$value" =~ ([0-9]+) ]]; then
+                    pr_number="${BASH_REMATCH[1]}"
+                fi
+                ;;
+            branch) branch="$value" ;;
+            jira) jira_ticket="$value" ;;
+            created) created="$value" ;;
+            summary) pr_title="$value" ;;
+        esac
+    done < "$info_file"
+
+    # Build extra fields based on mode
+    local extra="{}"
+    case "$mode" in
+        review)
+            extra=$(jq -n --arg pr "$pr_number" --arg title "$pr_title" --arg branch "$branch" \
+                '{pr: {number: $pr, title: $title, branch: $branch}}')
+            ;;
+        development)
+            extra=$(jq -n --arg jira "$jira_ticket" --arg branch "$branch" \
+                '{jira: {ticket: $jira}, branch: $branch}')
+            ;;
+        investigation)
+            # Extract focus from the file
+            focus=$(sed -n '/Investigation Focus:/,/====/p' "$info_file" 2>/dev/null | \
+                grep -v "Investigation Focus:" | grep -v "===" | grep -v "^-" | head -1 | xargs)
+            extra=$(jq -n --arg focus "$focus" '{focus: $focus}')
+            ;;
+    esac
+
+    # Create session.json
+    create_session_json "$session_dir" "$mode" "$project" "$extra"
+
+    # Update created timestamp if available
+    if [ -n "$created" ]; then
+        update_session_field "$session_dir" "created" "$created"
+    fi
+
+    # Mark as migrated in history
+    add_session_history "$session_dir" "migrated" '{"from": "v1"}'
+
+    return 0
+}
+
+# Get sessions (supports both v1 and v2 formats)
+get_sessions_v2() {
+    # Find all session directories (old naming: pr-*, inv-*, dev-*; new naming: session-*)
+    find "$SESSIONS_DIR" -maxdepth 1 -type d \( \
+        -name "pr-*" -o -name "inv-*" -o -name "dev-*" -o -name "session-*" \
+    \) 2>/dev/null | sort -r
+}
+
+# Get session mode (works with both formats)
+get_session_mode() {
+    local session_dir="$1"
+
+    # Try v2 first
+    if is_v2_session "$session_dir"; then
+        read_session_field "$session_dir" "mode"
+        return
+    fi
+
+    # Fall back to v1 folder naming
+    local name=$(basename "$session_dir")
+    if [[ "$name" == pr-* ]]; then
+        echo "review"
+    elif [[ "$name" == dev-* ]]; then
+        echo "development"
+    else
+        echo "investigation"
+    fi
+}
+
+# CLAUDE.md templates for each mode
+generate_claude_md() {
+    local session_dir="$1"
+    local mode="$2"
+    local context="$3"  # Mode-specific context (PR info, Jira details, focus area)
+
+    local repo_dir="$session_dir/repo"
+    local claude_md="$repo_dir/CLAUDE.md"
+
+    case "$mode" in
+        review)
+            cat > "$claude_md" << 'REVIEW_TEMPLATE'
+# PR Review Session
+
+## Context
+{CONTEXT}
+
+## Your Task
+You are reviewing this pull request. Focus on:
+- Code quality and best practices
+- Potential bugs or edge cases
+- Security concerns
+- Performance implications
+- Test coverage
+
+## Guidelines
+- Be constructive and specific
+- Explain the "why" behind suggestions
+- Prioritize issues by severity
+- Acknowledge good patterns when you see them
+
+## Output
+Write your review to `REVIEW.md` in this directory. Structure it as:
+1. Summary
+2. Key findings (Critical, Important, Minor)
+3. Specific file-by-file feedback
+4. Recommended actions
+REVIEW_TEMPLATE
+            # Replace context placeholder
+            sed -i '' "s|{CONTEXT}|$context|g" "$claude_md" 2>/dev/null || \
+            sed -i "s|{CONTEXT}|$context|g" "$claude_md"
+            ;;
+
+        development)
+            cat > "$claude_md" << 'DEV_TEMPLATE'
+# Development Session
+
+## Context
+{CONTEXT}
+
+## Your Task
+You are implementing a new feature/fix. The branch has been created for you.
+
+## Guidelines
+- Follow existing code patterns and conventions
+- Write clean, maintainable code
+- Add tests for new functionality
+- Update DEVLOG.md with progress and decisions
+- Commit frequently with clear messages
+
+## Output
+- Track your progress in `DEVLOG.md`
+- Make commits as you complete logical units of work
+- Note any questions or blockers in the devlog
+DEV_TEMPLATE
+            sed -i '' "s|{CONTEXT}|$context|g" "$claude_md" 2>/dev/null || \
+            sed -i "s|{CONTEXT}|$context|g" "$claude_md"
+
+            # Also create DEVLOG.md
+            local devlog="$repo_dir/DEVLOG.md"
+            cat > "$devlog" << DEVLOG
+# Development Log
+
+## Session Started: $(date '+%Y-%m-%d %H:%M')
+
+---
+
+### Progress
+
+(Your progress notes will appear here)
+
+---
+
+### Questions / Blockers
+
+(Note any issues encountered)
+
+---
+
+### Commits
+
+(List of commits made during this session)
+DEVLOG
+            ;;
+
+        investigation)
+            cat > "$claude_md" << 'INV_TEMPLATE'
+# Investigation Session
+
+## Focus Area
+{CONTEXT}
+
+## Your Task
+You are investigating a specific area of the codebase. Your goal is to:
+- Understand how the relevant code works
+- Identify potential issues or improvements
+- Document your findings clearly
+
+## Guidelines
+- Be thorough but focused
+- Trace code paths to understand flow
+- Look for edge cases and error handling
+- Consider security and performance
+
+## Output
+Write your findings to `FINDINGS.md` in this directory. Structure it as:
+1. Summary of investigation
+2. Code flow analysis
+3. Issues found
+4. Recommendations
+INV_TEMPLATE
+            sed -i '' "s|{CONTEXT}|$context|g" "$claude_md" 2>/dev/null || \
+            sed -i "s|{CONTEXT}|$context|g" "$claude_md"
+            ;;
+    esac
+}
+
+# ============================================================================
 # DEPENDENCY CHECK
 # ============================================================================
 
@@ -673,24 +1013,61 @@ setup_output_files() {
 # ============================================================================
 
 get_sessions() {
-    find "$SESSIONS_DIR" -maxdepth 1 -type d \( -name "pr-*" -o -name "inv-*" -o -name "dev-*" \) 2>/dev/null | sort
+    # Support both v1 (pr-*, inv-*, dev-*) and v2 (session-*) naming
+    find "$SESSIONS_DIR" -maxdepth 1 -type d \( \
+        -name "pr-*" -o -name "inv-*" -o -name "dev-*" -o -name "session-*" \
+    \) 2>/dev/null | sort -r
 }
 
 format_session_display() {
     local session="$1"
     local name=$(basename "$session")
+    local session_json="$session/session.json"
     local info_file="$session/session-info.txt"
 
-    if [ -f "$info_file" ]; then
+    # Check for output files
+    local has_output=""
+    [ -f "$session/REVIEW.md" ] || [ -f "$session/repo/REVIEW.md" ] && has_output=" 📝"
+    [ -f "$session/FINDINGS.md" ] || [ -f "$session/repo/FINDINGS.md" ] && has_output=" 📝"
+    [ -f "$session/DEVLOG.md" ] || [ -f "$session/repo/DEVLOG.md" ] && has_output=" 📝"
+
+    # V2 format: session.json
+    if [ -f "$session_json" ]; then
+        local mode=$(jq -r '.mode // "unknown"' "$session_json")
+        local created=$(jq -r '.created // ""' "$session_json" | cut -dT -f1)
+        local status=$(jq -r '.status // "active"' "$session_json")
+        local archived=""
+        [ "$status" = "archived" ] && archived=" 📦"
+
+        case "$mode" in
+            review)
+                local pr_num=$(jq -r '.pr.number // ""' "$session_json")
+                local pr_title=$(jq -r '.pr.title // ""' "$session_json")
+                pr_title="${pr_title:0:40}"
+                echo "📝 PR #$pr_num: $pr_title$archived$has_output"
+                ;;
+            development)
+                local jira=$(jq -r '.jira.ticket // ""' "$session_json")
+                local summary=$(jq -r '.jira.summary // ""' "$session_json")
+                summary="${summary:0:40}"
+                echo "🛠️  $jira: $summary$archived$has_output"
+                ;;
+            investigation)
+                local focus=$(jq -r '.focus // ""' "$session_json")
+                focus="${focus:0:50}"
+                echo "🔍 $focus$archived$has_output"
+                ;;
+            *)
+                echo "❓ $name$archived$has_output"
+                ;;
+        esac
+        echo "   $name • $created"
+
+    # V1 format: session-info.txt
+    elif [ -f "$info_file" ]; then
         local created=$(grep "^Created:" "$info_file" 2>/dev/null | cut -d: -f2- | xargs)
         local archived=""
         grep -q "^ARCHIVED:" "$info_file" 2>/dev/null && archived=" 📦"
-
-        # Check for output files
-        local has_output=""
-        [ -f "$session/REVIEW.md" ] || [ -f "$session/repo/REVIEW.md" ] && has_output=" 📝"
-        [ -f "$session/FINDINGS.md" ] || [ -f "$session/repo/FINDINGS.md" ] && has_output=" 📝"
-        [ -f "$session/DEVLOG.md" ] || [ -f "$session/repo/DEVLOG.md" ] && has_output=" 📝"
 
         if [[ "$name" == pr-* ]]; then
             local title=$(grep "^PR #" "$info_file" 2>/dev/null | head -1)
@@ -746,17 +1123,51 @@ select_session_simple() {
         session_paths+=("$session")
 
         local name=$(basename "$session")
+        local session_json="$session/session.json"
         local info_file="$session/session-info.txt"
         local display=""
 
-        if [ -f "$info_file" ]; then
+        # Check for output files
+        local has_output=""
+        [ -f "$session/REVIEW.md" ] || [ -f "$session/repo/REVIEW.md" ] && has_output=" 📝"
+        [ -f "$session/FINDINGS.md" ] || [ -f "$session/repo/FINDINGS.md" ] && has_output=" 📝"
+        [ -f "$session/DEVLOG.md" ] || [ -f "$session/repo/DEVLOG.md" ] && has_output=" 📝"
+
+        # V2 format: session.json
+        if [ -f "$session_json" ]; then
+            local mode=$(jq -r '.mode // "unknown"' "$session_json")
+            local created=$(jq -r '.created // ""' "$session_json" | cut -dT -f1)
+            local status=$(jq -r '.status // "active"' "$session_json")
+            local archived=""
+            [ "$status" = "archived" ] && archived="📦 "
+
+            case "$mode" in
+                review)
+                    local pr_num=$(jq -r '.pr.number // ""' "$session_json")
+                    local pr_title=$(jq -r '.pr.title // ""' "$session_json")
+                    pr_title="${pr_title:0:30}"
+                    display="${archived}📝 PR #$pr_num: $pr_title$has_output • $created"
+                    ;;
+                development)
+                    local jira=$(jq -r '.jira.ticket // ""' "$session_json")
+                    local summary=$(jq -r '.jira.summary // ""' "$session_json")
+                    summary="${summary:0:30}"
+                    display="${archived}🛠️  $jira: $summary$has_output • $created"
+                    ;;
+                investigation)
+                    local focus=$(jq -r '.focus // ""' "$session_json")
+                    focus="${focus:0:40}"
+                    display="${archived}🔍 $focus$has_output • $created"
+                    ;;
+                *)
+                    display="${archived}❓ $name$has_output • $created"
+                    ;;
+            esac
+
+        # V1 format: session-info.txt
+        elif [ -f "$info_file" ]; then
             local archived=""
             grep -q "^ARCHIVED:" "$info_file" 2>/dev/null && archived="📦 "
-
-            local has_output=""
-            [ -f "$session/REVIEW.md" ] || [ -f "$session/repo/REVIEW.md" ] && has_output=" 📝"
-            [ -f "$session/FINDINGS.md" ] || [ -f "$session/repo/FINDINGS.md" ] && has_output=" 📝"
-            [ -f "$session/DEVLOG.md" ] || [ -f "$session/repo/DEVLOG.md" ] && has_output=" 📝"
 
             local created=$(grep "^Created:" "$info_file" 2>/dev/null | cut -d: -f2- | xargs | cut -d' ' -f1-2)
 
@@ -1083,7 +1494,7 @@ create_pr_session() {
 
     cd "$SESSION_DIR"
 
-    # Create session-info.txt
+    # Create session-info.txt (v1 format - for backward compatibility)
     cat > session-info.txt << EOF
 ================================================================================
 SESSION INFO
@@ -1110,6 +1521,34 @@ Changed Files:
 $CHANGED_FILES
 ================================================================================
 EOF
+
+    # Create session.json (v2 format)
+    local extra_json=$(jq -n \
+        --arg number "$PR_NUMBER" \
+        --arg title "$PR_TITLE" \
+        --arg url "$PR_URL" \
+        --arg author "$PR_AUTHOR" \
+        --arg head "$PR_HEAD" \
+        --arg base "$PR_BASE" \
+        --arg additions "$PR_ADDITIONS" \
+        --arg deletions "$PR_DELETIONS" \
+        --arg files "$PR_FILES" \
+        --arg jira "${JIRA_TICKET_ID:-}" \
+        '{
+            pr: {
+                number: $number,
+                title: $title,
+                url: $url,
+                author: $author,
+                head: $head,
+                base: $base,
+                additions: ($additions | tonumber),
+                deletions: ($deletions | tonumber),
+                files: ($files | tonumber)
+            },
+            jira: (if $jira != "" then {ticket: $jira} else null end)
+        }')
+    create_session_json "$SESSION_DIR" "review" "https://github.com/$OWNER/$REPO" "$extra_json"
 
     # Create CLAUDE.md inside repo/ so Claude auto-reads it
     cat > repo/CLAUDE.md << CLAUDE_EOF
@@ -1635,7 +2074,7 @@ create_investigation_session() {
 
     cd "$SESSION_DIR"
 
-    # Create session-info.txt
+    # Create session-info.txt (v1 format - for backward compatibility)
     cat > session-info.txt << EOF
 ================================================================================
 SESSION INFO
@@ -1655,6 +2094,18 @@ Investigation Focus:
 $INVESTIGATION_DISPLAY
 ================================================================================
 EOF
+
+    # Create session.json (v2 format)
+    local extra_json=$(jq -n \
+        --arg focus "$INVESTIGATION_DISPLAY" \
+        --arg branch "$BRANCH_INFO" \
+        --arg jira "${JIRA_TICKET_ID:-}" \
+        '{
+            focus: $focus,
+            branch: $branch,
+            jira: (if $jira != "" then {ticket: $jira} else null end)
+        }')
+    create_session_json "$SESSION_DIR" "investigation" "$REPO_URL" "$extra_json"
 
     # Create CLAUDE.md inside repo/ so Claude auto-reads it
     cat > repo/CLAUDE.md << CLAUDE_EOF
@@ -1991,7 +2442,7 @@ create_development_session() {
 
     cd "$SESSION_DIR"
 
-    # Create session-info.txt
+    # Create session-info.txt (v1 format - for backward compatibility)
     cat > session-info.txt << EOF
 ================================================================================
 SESSION INFO
@@ -2011,6 +2462,22 @@ Summary:    $JIRA_SUMMARY
 
 ================================================================================
 EOF
+
+    # Create session.json (v2 format)
+    local extra_json=$(jq -n \
+        --arg ticket "$ticket_id" \
+        --arg jira_type "$JIRA_TYPE" \
+        --arg summary "$JIRA_SUMMARY" \
+        --arg branch "$ACTUAL_BRANCH" \
+        '{
+            jira: {
+                ticket: $ticket,
+                type: $jira_type,
+                summary: $summary
+            },
+            branch: $branch
+        }')
+    create_session_json "$SESSION_DIR" "development" "$REPO_URL" "$extra_json"
 
     # Create DEVLOG.md for tracking progress
     cat > repo/DEVLOG.md << DEVLOG_EOF
@@ -2113,15 +2580,26 @@ CLAUDE_DEV_EOF
 
 get_current_mode() {
     local SESSION_DIR="$1"
+    local session_json="$SESSION_DIR/session.json"
     local claude_file="$SESSION_DIR/repo/CLAUDE.md"
     local session_name=$(basename "$SESSION_DIR")
 
-    # Check session name prefix first
+    # V2: Check session.json first
+    if [ -f "$session_json" ]; then
+        local mode=$(jq -r '.mode // empty' "$session_json" 2>/dev/null)
+        if [ -n "$mode" ]; then
+            echo "$mode"
+            return
+        fi
+    fi
+
+    # V1: Check session name prefix
     if [[ "$session_name" == dev-* ]]; then
         echo "development"
         return
     fi
 
+    # V1: Check CLAUDE.md content
     if [ -f "$claude_file" ]; then
         if grep -q "REVIEW.md" "$claude_file" 2>/dev/null; then
             echo "review"
@@ -2201,6 +2679,12 @@ Write your review to `REVIEW.md` using this structure:
 **BEGIN THE REVIEW NOW.**
 REVIEW_MODE
 
+    # Update session.json mode if v2 session
+    if [ -f "$SESSION_DIR/session.json" ]; then
+        update_session_field "$SESSION_DIR" "mode" "review"
+        add_session_history "$SESSION_DIR" "mode_switch" '{"to": "review"}'
+    fi
+
     success "Switched to Review Mode"
     dim "Claude will now focus on writing REVIEW.md"
     sleep 1
@@ -2266,6 +2750,12 @@ Write your findings to `FINDINGS.md` using this structure:
 
 **BEGIN THE INVESTIGATION NOW.**
 INVESTIGATE_MODE
+
+    # Update session.json mode if v2 session
+    if [ -f "$SESSION_DIR/session.json" ]; then
+        update_session_field "$SESSION_DIR" "mode" "investigation"
+        add_session_history "$SESSION_DIR" "mode_switch" '{"to": "investigation"}'
+    fi
 
     success "Switched to Investigation Mode"
     dim "Claude will now focus on writing FINDINGS.md"
@@ -2600,9 +3090,89 @@ open_in_editor() {
 }
 
 # Open a new terminal window/tab in the session's repo folder
+# Start a Claude session in a new terminal with logging
+start_claude_terminal() {
+    local SESSION_DIR="$1"
+    local REPO_DIR="$SESSION_DIR/repo"
+    local SESSION_NAME=$(basename "$SESSION_DIR")
+
+    if [ ! -d "$REPO_DIR" ]; then
+        error "Repository folder not found: $REPO_DIR"
+        return 1
+    fi
+
+    # Create terminal log directory
+    local log_dir="$SESSION_DIR/logs"
+    mkdir -p "$log_dir"
+    local log_file="$log_dir/terminal-$(date +%Y%m%d-%H%M%S).log"
+
+    # Determine mode for proper claude startup
+    local mode=$(get_current_mode "$SESSION_DIR")
+    local mode_short="${mode:0:3}"
+
+    # Build the claude command based on mode
+    local claude_cmd="cd '$REPO_DIR' && claude"
+
+    # Try iTerm2 first (macOS)
+    if [ -d "/Applications/iTerm.app" ]; then
+        osascript << ITERM_SCRIPT
+tell application "iTerm"
+    activate
+    tell current window
+        create tab with default profile
+        tell current session
+            set name to "🧪 $SESSION_NAME"
+            write text "script -q '$log_file' $claude_cmd"
+        end tell
+    end tell
+end tell
+ITERM_SCRIPT
+        # Update session.json with terminal info
+        if [ -f "$SESSION_DIR/session.json" ]; then
+            local terminal_info=$(jq -n \
+                --arg log "$log_file" \
+                --arg name "$SESSION_NAME" \
+                '{log_file: $log, tab_name: $name, started: (now | strftime("%Y-%m-%dT%H:%M:%S"))}')
+            update_session_field "$SESSION_DIR" "terminal" "$terminal_info"
+            add_session_history "$SESSION_DIR" "terminal_started" '{"app": "iTerm2"}'
+        fi
+        return 0
+    fi
+
+    # Try Terminal.app (macOS)
+    if [ -d "/Applications/Utilities/Terminal.app" ]; then
+        osascript << TERM_SCRIPT
+tell application "Terminal"
+    activate
+    do script "script -q '$log_file' $claude_cmd"
+end tell
+TERM_SCRIPT
+        if [ -f "$SESSION_DIR/session.json" ]; then
+            local terminal_info=$(jq -n \
+                --arg log "$log_file" \
+                --arg name "$SESSION_NAME" \
+                '{log_file: $log, tab_name: $name, started: (now | strftime("%Y-%m-%dT%H:%M:%S"))}')
+            update_session_field "$SESSION_DIR" "terminal" "$terminal_info"
+            add_session_history "$SESSION_DIR" "terminal_started" '{"app": "Terminal.app"}'
+        fi
+        return 0
+    fi
+
+    # Fallback: print instructions
+    echo ""
+    info "To start Claude in the repo, run:"
+    echo ""
+    gum style --foreground 82 "  cd $REPO_DIR && claude"
+    echo ""
+    sleep 2
+    return 0
+}
+
+# Open terminal in repo without starting claude
 open_terminal_in_repo() {
     local SESSION_DIR="$1"
     local REPO_DIR="$SESSION_DIR/repo"
+    local SESSION_NAME=$(basename "$SESSION_DIR")
 
     if [ ! -d "$REPO_DIR" ]; then
         error "Repository folder not found: $REPO_DIR"
@@ -2618,6 +3188,7 @@ tell application "iTerm"
     tell current window
         create tab with default profile
         tell current session
+            set name to "🧪 $SESSION_NAME"
             write text "cd '$REPO_DIR' && clear && pwd && git status"
         end tell
     end tell
@@ -2647,6 +3218,66 @@ TERM_SCRIPT
     echo ""
     sleep 2
     return 0
+}
+
+# Focus an existing terminal window/tab for a session
+focus_session_terminal() {
+    local SESSION_DIR="$1"
+    local SESSION_NAME=$(basename "$SESSION_DIR")
+
+    # Try iTerm2 first
+    if [ -d "/Applications/iTerm.app" ]; then
+        osascript << FOCUS_SCRIPT
+tell application "iTerm"
+    activate
+    set foundTab to false
+    repeat with aWindow in windows
+        repeat with aTab in tabs of aWindow
+            repeat with aSession in sessions of aTab
+                if name of aSession contains "$SESSION_NAME" then
+                    select aTab
+                    set foundTab to true
+                    exit repeat
+                end if
+            end repeat
+            if foundTab then exit repeat
+        end repeat
+        if foundTab then exit repeat
+    end repeat
+    return foundTab
+end tell
+FOCUS_SCRIPT
+        return $?
+    fi
+
+    # Terminal.app doesn't support easy tab finding
+    dim "Could not auto-focus terminal. Look for tab: $SESSION_NAME"
+    return 1
+}
+
+# Get terminal output (last N lines from log)
+get_terminal_output() {
+    local SESSION_DIR="$1"
+    local lines="${2:-50}"
+
+    if [ -f "$SESSION_DIR/session.json" ]; then
+        local log_file=$(jq -r '.terminal.log_file // empty' "$SESSION_DIR/session.json")
+        if [ -n "$log_file" ] && [ -f "$log_file" ]; then
+            # Strip ANSI codes and get last N lines
+            tail -n "$lines" "$log_file" 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g'
+            return 0
+        fi
+    fi
+
+    # Fallback: look for any log file
+    local latest_log=$(ls -t "$SESSION_DIR/logs"/*.log 2>/dev/null | head -1)
+    if [ -n "$latest_log" ]; then
+        tail -n "$lines" "$latest_log" 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g'
+        return 0
+    fi
+
+    echo "No terminal log found"
+    return 1
 }
 
 # ============================================================================
@@ -3238,15 +3869,22 @@ SESSIONS_DIR = os.path.dirname(os.path.abspath(__file__))
 class DashboardHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
+        params = parse_qs(parsed.query)
 
         if parsed.path == '/api/sessions':
             self.send_sessions_list()
         elif parsed.path == '/api/content':
-            params = parse_qs(parsed.query)
             session = params.get('session', [''])[0]
             file_type = params.get('type', ['review'])[0]
             version = params.get('version', ['current'])[0]
             self.send_file_content(session, file_type, version)
+        elif parsed.path == '/api/terminal':
+            session = params.get('session', [''])[0]
+            lines = int(params.get('lines', ['100'])[0])
+            self.send_terminal_output(session, lines)
+        elif parsed.path == '/api/session':
+            session = params.get('session', [''])[0]
+            self.send_session_details(session)
         elif parsed.path == '/' or parsed.path == '/index.html':
             self.send_dashboard()
         else:
@@ -3279,6 +3917,11 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             self.archive_session(session_path)
         elif parsed.path == '/api/delete':
             self.delete_session(session_path)
+        elif parsed.path == '/api/switch-mode':
+            new_mode = data.get('mode', '')
+            self.switch_session_mode(session_path, new_mode)
+        elif parsed.path == '/api/focus-terminal':
+            self.focus_terminal(session_path)
         else:
             self.send_error(404, 'Not found')
 
@@ -3306,20 +3949,96 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         except Exception as e:
             self.send_error(500, str(e))
 
+    def switch_session_mode(self, session_path, new_mode):
+        """Switch session mode (review/investigation/development)"""
+        import datetime
+        try:
+            session_json = session_path / 'session.json'
+            if not session_json.exists():
+                self.send_error(400, 'Session does not have v2 format')
+                return
+
+            with open(session_json) as f:
+                data = json.load(f)
+
+            old_mode = data.get('mode', 'unknown')
+            data['mode'] = new_mode
+
+            # Add history entry
+            if 'history' not in data:
+                data['history'] = []
+            data['history'].append({
+                'timestamp': datetime.datetime.now().isoformat(),
+                'action': 'mode_switch',
+                'from': old_mode,
+                'to': new_mode
+            })
+
+            with open(session_json, 'w') as f:
+                json.dump(data, f, indent=2)
+
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps({'status': 'switched', 'mode': new_mode}).encode())
+        except Exception as e:
+            self.send_error(500, str(e))
+
+    def focus_terminal(self, session_path):
+        """Trigger terminal focus via AppleScript (macOS)"""
+        import subprocess
+        try:
+            session_name = session_path.name
+            # Try iTerm2 first
+            script = f'''
+            tell application "iTerm"
+                activate
+                set foundTab to false
+                repeat with aWindow in windows
+                    repeat with aTab in tabs of aWindow
+                        repeat with aSession in sessions of aTab
+                            if name of aSession contains "{session_name}" then
+                                select aTab
+                                set foundTab to true
+                                exit repeat
+                            end if
+                        end repeat
+                        if foundTab then exit repeat
+                    end repeat
+                    if foundTab then exit repeat
+                end repeat
+                return foundTab
+            end tell
+            '''
+            result = subprocess.run(['osascript', '-e', script], capture_output=True, text=True)
+            found = 'true' in result.stdout.lower()
+
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps({'status': 'focused' if found else 'not_found', 'found': found}).encode())
+        except Exception as e:
+            self.send_error(500, str(e))
+
     def send_sessions_list(self):
         sessions = []
         for entry in sorted(Path(SESSIONS_DIR).iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
             if entry.is_dir() and not entry.name.startswith('.'):
+                session_json = entry / 'session.json'
                 info_file = entry / 'session-info.txt'
-                if info_file.exists():
-                    info = self.parse_session_info(info_file)
-                    info['name'] = entry.name
-                    info['has_review'] = (entry / 'REVIEW.md').exists() and (entry / 'REVIEW.md').stat().st_size > 0
-                    info['has_findings'] = (entry / 'FINDINGS.md').exists() and (entry / 'FINDINGS.md').stat().st_size > 0
-                    info['has_devlog'] = (entry / 'DEVLOG.md').exists() and (entry / 'DEVLOG.md').stat().st_size > 0
-                    info['archived'] = not (entry / 'repo').exists()
 
-                    # Detect session type from folder name
+                info = {}
+
+                # V2 format: session.json
+                if session_json.exists():
+                    info = self.parse_session_json(session_json)
+
+                # V1 format: session-info.txt (fallback)
+                elif info_file.exists():
+                    info = self.parse_session_info(info_file)
+                    # Detect session type from folder name for v1
                     if entry.name.startswith('pr-'):
                         info['session_type'] = 'review'
                     elif entry.name.startswith('dev-'):
@@ -3328,25 +4047,161 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                         info['session_type'] = 'investigation'
                     else:
                         info['session_type'] = 'unknown'
+                else:
+                    continue
 
-                    # Check for archived review versions (REVIEW-v1.md, REVIEW-v2.md, etc.)
-                    review_versions = []
-                    for f in entry.glob('REVIEW-v*.md'):
-                        if f.stat().st_size > 0:
-                            version = f.stem.replace('REVIEW-', '')
-                            review_versions.append(version)
-                    info['review_versions'] = sorted(review_versions)
+                info['name'] = entry.name
+                info['has_review'] = (entry / 'REVIEW.md').exists() and (entry / 'REVIEW.md').stat().st_size > 0
+                info['has_findings'] = (entry / 'FINDINGS.md').exists() and (entry / 'FINDINGS.md').stat().st_size > 0
+                info['has_devlog'] = (entry / 'DEVLOG.md').exists() and (entry / 'DEVLOG.md').stat().st_size > 0
+                info['archived'] = not (entry / 'repo').exists()
 
-                    # Check for RE-REVIEW.md (indicates re-review in progress)
-                    info['has_rereview'] = (entry / 'repo' / 'RE-REVIEW.md').exists()
+                # Check for archived review versions (REVIEW-v1.md, REVIEW-v2.md, etc.)
+                review_versions = []
+                for f in entry.glob('REVIEW-v*.md'):
+                    if f.stat().st_size > 0:
+                        version = f.stem.replace('REVIEW-', '')
+                        review_versions.append(version)
+                info['review_versions'] = sorted(review_versions)
 
-                    sessions.append(info)
+                # Check for RE-REVIEW.md (indicates re-review in progress)
+                info['has_rereview'] = (entry / 'repo' / 'RE-REVIEW.md').exists()
+
+                # Check terminal status
+                info['has_terminal'] = self.check_terminal_active(entry)
+
+                sessions.append(info)
 
         self.send_response(200)
         self.send_header('Content-type', 'application/json')
         self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
         self.wfile.write(json.dumps(sessions).encode())
+
+    def parse_session_json(self, path):
+        """Parse V2 session.json format"""
+        try:
+            with open(path) as f:
+                data = json.load(f)
+
+            info = {
+                'session_type': data.get('mode', 'unknown'),
+                'project': data.get('project', ''),
+                'created': data.get('created', ''),
+                'status': data.get('status', 'active'),
+            }
+
+            # Extract mode-specific fields
+            mode = data.get('mode', '')
+            if mode == 'review':
+                pr = data.get('pr', {})
+                info['pr'] = pr.get('number', '')
+                info['pr_title'] = pr.get('title', '')
+                info['author'] = pr.get('author', '')
+                info['display_title'] = f"PR #{pr.get('number', '')}: {pr.get('title', '')}"
+            elif mode == 'development':
+                jira = data.get('jira', {})
+                info['jira'] = jira.get('ticket', '')
+                info['summary'] = jira.get('summary', '')
+                info['branch'] = data.get('branch', '')
+                ticket = jira.get('ticket', '')
+                summary = jira.get('summary', '')
+                info['display_title'] = f"{ticket}: {summary}" if summary else f"Dev: {ticket}"
+            elif mode == 'investigation':
+                info['focus'] = data.get('focus', '')
+                info['display_title'] = f"Investigation: {data.get('focus', '')[:50]}"
+
+            # Terminal info
+            terminal = data.get('terminal', {})
+            if terminal:
+                info['terminal_log'] = terminal.get('log_file', '')
+
+            return info
+        except Exception as e:
+            return {'display_title': 'Session', 'error': str(e)}
+
+    def check_terminal_active(self, session_path):
+        """Check if session has an active terminal log being written"""
+        try:
+            session_json = session_path / 'session.json'
+            if session_json.exists():
+                with open(session_json) as f:
+                    data = json.load(f)
+                log_file = data.get('terminal', {}).get('log_file', '')
+                if log_file and Path(log_file).exists():
+                    # Check if log was modified in the last 60 seconds
+                    import time
+                    mtime = Path(log_file).stat().st_mtime
+                    return (time.time() - mtime) < 60
+        except:
+            pass
+        return False
+
+    def send_terminal_output(self, session_name, lines=100):
+        """Stream terminal output from session log file"""
+        import re
+        session_path = Path(SESSIONS_DIR) / session_name
+        content = ""
+
+        try:
+            # Try session.json first for log file path
+            session_json = session_path / 'session.json'
+            log_file = None
+
+            if session_json.exists():
+                with open(session_json) as f:
+                    data = json.load(f)
+                log_file = data.get('terminal', {}).get('log_file', '')
+
+            # Fallback: look for any log file
+            if not log_file or not Path(log_file).exists():
+                logs_dir = session_path / 'logs'
+                if logs_dir.exists():
+                    log_files = sorted(logs_dir.glob('*.log'), key=lambda x: x.stat().st_mtime, reverse=True)
+                    if log_files:
+                        log_file = str(log_files[0])
+
+            if log_file and Path(log_file).exists():
+                with open(log_file, 'r', errors='replace') as f:
+                    all_lines = f.readlines()
+                    content = ''.join(all_lines[-lines:])
+                    # Strip ANSI escape codes for cleaner display
+                    content = re.sub(r'\x1b\[[0-9;]*[mGKH]', '', content)
+        except Exception as e:
+            content = f"Error reading terminal log: {e}"
+
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain; charset=utf-8')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
+        self.wfile.write(content.encode())
+
+    def send_session_details(self, session_name):
+        """Get full session details including history"""
+        session_path = Path(SESSIONS_DIR) / session_name
+        result = {'name': session_name}
+
+        try:
+            session_json = session_path / 'session.json'
+            if session_json.exists():
+                with open(session_json) as f:
+                    result = json.load(f)
+                result['name'] = session_name
+                result['format'] = 'v2'
+            else:
+                info_file = session_path / 'session-info.txt'
+                if info_file.exists():
+                    result = self.parse_session_info(info_file)
+                    result['name'] = session_name
+                    result['format'] = 'v1'
+        except Exception as e:
+            result['error'] = str(e)
+
+        self.send_response(200)
+        self.send_header('Content-type', 'application/json')
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.end_headers()
+        self.wfile.write(json.dumps(result).encode())
 
     def parse_session_info(self, path):
         import re
@@ -3496,6 +4351,10 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         .badge-findings { color: #ffd43b; }
         .badge-devlog { color: #a78bfa; }
         .badge-archived { color: #868e96; }
+        .badge-terminal { color: #00ff88; }
+        .btn-focus { background: #1a2a1a; color: #00ff88; }
+        .btn-focus:hover { background: #2a3a2a; border-color: #00ff88; }
+        .terminal-output { background: #1a1a1a; color: #00ff88; font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; white-space: pre-wrap; padding: 1rem; border-radius: 8px; overflow: auto; max-height: calc(100vh - 300px); }
         .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
         .main-header { padding: 1rem 1.5rem; border-bottom: 1px solid #333; display: flex; justify-content: space-between; align-items: center; background: #0f0f0f; }
         .tabs { display: flex; gap: 0.5rem; }
@@ -3556,6 +4415,7 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             <div class="session-details-header">
                 <div class="session-details-title" id="sessionTitle">Session</div>
                 <div class="session-details-actions">
+                    <button class="btn-focus" id="btnFocus" onclick="focusTerminal()">🎯 Focus Terminal</button>
                     <button class="btn-archive" id="btnArchive" onclick="archiveSession()">📦 Archive</button>
                     <button class="btn-delete" id="btnDelete" onclick="deleteSession()">🗑️ Delete</button>
                 </div>
@@ -3568,6 +4428,7 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                 <button class="tab active" data-type="review" onclick="switchTab('review')">📝 Review</button>
                 <button class="tab" data-type="findings" onclick="switchTab('findings')">🔬 Findings</button>
                 <button class="tab" data-type="devlog" onclick="switchTab('devlog')">📓 Devlog</button>
+                <button class="tab" data-type="terminal" onclick="switchTab('terminal')">💻 Terminal</button>
                 <select class="version-select" id="versionSelect" onchange="switchVersion(this.value)" style="display:none;">
                     <option value="current">Current</option>
                 </select>
@@ -3615,6 +4476,7 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                     <div class="session-title">${escapeHtml(s.display_title || s.name)}</div>
                     <div class="session-folder">${s.name}</div>
                     <div class="session-meta">
+                        ${s.has_terminal ? '<span class="badge-terminal">● Active</span>' : ''}
                         ${s.has_review ? '<span class="badge-review">Review</span>' : ''}
                         ${s.has_findings ? '<span class="badge-findings">Findings</span>' : ''}
                         ${s.has_devlog ? '<span class="badge-devlog">Devlog</span>' : ''}
@@ -3758,6 +4620,7 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                 document.querySelector('[data-type="review"]').classList.toggle('disabled', !session.has_review);
                 document.querySelector('[data-type="findings"]').classList.toggle('disabled', !session.has_findings);
                 document.querySelector('[data-type="devlog"]').classList.toggle('disabled', !session.has_devlog);
+                document.querySelector('[data-type="terminal"]').classList.toggle('disabled', !session.has_terminal);
 
                 // Update version selector
                 const versionSelect = document.getElementById('versionSelect');
@@ -3774,6 +4637,10 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                 // Show re-review badge if pending
                 const rereviewBadge = document.getElementById('rereviewBadge');
                 rereviewBadge.style.display = session.has_rereview ? 'inline-block' : 'none';
+
+                // Update focus button visibility
+                const focusBtn = document.getElementById('btnFocus');
+                focusBtn.style.display = session.has_terminal ? 'inline-flex' : 'none';
             }
         }
 
@@ -3794,6 +4661,27 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         async function loadContent() {
             if (!currentSession) return;
             try {
+                // Terminal tab has special handling
+                if (currentTab === 'terminal') {
+                    const res = await fetch('/api/terminal?session=' + encodeURIComponent(currentSession) + '&lines=200');
+                    const text = await res.text();
+                    if (text !== lastContent) {
+                        lastContent = text;
+                        if (text.trim()) {
+                            document.getElementById('content').innerHTML =
+                                '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem;">' +
+                                '<h2 style="margin:0;border:none;padding:0;">Terminal Output</h2>' +
+                                '<button onclick="focusTerminal()" style="background:#1a2a1a;color:#00ff88;border:1px solid #333;padding:0.5rem 1rem;border-radius:6px;cursor:pointer;">🎯 Focus Terminal</button>' +
+                                '</div>' +
+                                '<div class="terminal-output">' + escapeHtml(text) + '</div>';
+                        } else {
+                            document.getElementById('content').innerHTML = '<div class="empty"><h2>No terminal output</h2><p>Start a Claude session with logging to see output here</p></div>';
+                        }
+                    }
+                    document.getElementById('status').textContent = 'Updated ' + new Date().toLocaleTimeString();
+                    return;
+                }
+
                 var url = '/api/content?session=' + encodeURIComponent(currentSession) + '&type=' + currentTab;
                 if (currentVersion !== 'current') {
                     url += '&version=' + encodeURIComponent(currentVersion);
@@ -3845,6 +4733,23 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                 alert('Failed to archive session');
             }
             document.getElementById('btnArchive').disabled = false;
+        }
+
+        async function focusTerminal() {
+            if (!currentSession) return;
+            try {
+                const res = await fetch('/api/focus-terminal', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ session: currentSession })
+                });
+                const data = await res.json();
+                if (!data.found) {
+                    alert('Terminal not found. Make sure a Claude session is running for this session.');
+                }
+            } catch (e) {
+                console.error('Focus terminal failed', e);
+            }
         }
 
         async function deleteSession() {
@@ -5186,8 +6091,10 @@ post_session_menu() {
 
         local options=(
             "↩ Resume Claude"
+            "🚀 Start Claude in new terminal (with logging)"
             "💻 Open in editor"
             "🖥️  Open Terminal in repo"
+            "🎯 Focus session terminal"
             "📊 View diff"
         )
 
@@ -5250,11 +6157,22 @@ post_session_menu() {
                     claude -c
                 fi
                 ;;
+            *"Start Claude in new terminal"*)
+                start_claude_terminal "$SESSION_DIR"
+                success "Claude started in new terminal with logging"
+                sleep 1
+                ;;
             *"editor"*)
                 open_in_editor "$SESSION_DIR/repo"
                 ;;
             *"Terminal"*)
                 open_terminal_in_repo "$SESSION_DIR"
+                ;;
+            *"Focus session terminal"*)
+                if ! focus_session_terminal "$SESSION_DIR"; then
+                    dim "No terminal found for this session"
+                    sleep 1
+                fi
                 ;;
             *"View diff"*)
                 view_diff "$SESSION_DIR"
@@ -5750,6 +6668,7 @@ settings_menu() {
             "🤖 Switch Claude model ($MODEL)" \
             "🌐 Toggle dashboard auto-start ($DASHBOARD_AUTO_START)" \
             "📁 Set default project" \
+            "🔄 Migrate sessions to v2 format" \
             "🗑️  Clear configuration" \
             "📄 View config file" \
             "← Back" | fzf \
@@ -5809,6 +6728,36 @@ settings_menu() {
                     success "Default project set"
                     sleep 1
                 fi
+                ;;
+            *"Migrate sessions"*)
+                echo ""
+                dim "Scanning for v1 sessions..."
+                local migrated=0
+                local failed=0
+
+                for session in $(get_sessions); do
+                    if [ ! -f "$session/session.json" ] && [ -f "$session/session-info.txt" ]; then
+                        local name=$(basename "$session")
+                        dim "  Migrating $name..."
+                        if migrate_session_to_v2 "$session"; then
+                            ((migrated++))
+                        else
+                            ((failed++))
+                        fi
+                    fi
+                done
+
+                echo ""
+                if [ $migrated -gt 0 ]; then
+                    success "Migrated $migrated session(s) to v2 format"
+                fi
+                if [ $failed -gt 0 ]; then
+                    error "Failed to migrate $failed session(s)"
+                fi
+                if [ $migrated -eq 0 ] && [ $failed -eq 0 ]; then
+                    dim "No v1 sessions found to migrate"
+                fi
+                sleep 2
                 ;;
             *"Clear configuration"*)
                 if gum confirm "Clear all configuration?"; then
