@@ -4697,12 +4697,19 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         let currentSession = null;
         let currentTab = 'review';
         let lastContent = '';
+        let lastSessionsJson = '';
 
         async function loadSessions() {
             try {
                 const res = await fetch('/api/sessions');
-                sessions = await res.json();
-                renderSessions();
+                const newSessions = await res.json();
+                const newJson = JSON.stringify(newSessions);
+                // Only re-render if data changed
+                if (newJson !== lastSessionsJson) {
+                    lastSessionsJson = newJson;
+                    sessions = newSessions;
+                    renderSessions();
+                }
             } catch (e) {
                 console.error('Failed to load sessions', e);
             }
