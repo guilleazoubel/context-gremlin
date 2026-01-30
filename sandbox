@@ -1602,7 +1602,7 @@ EOF
                 deletions: ($deletions | tonumber),
                 files: ($files | tonumber)
             },
-            jira: (if $jira != "" then {ticket: $jira} else null end)
+            jira: (if ($jira | length) > 0 then {ticket: $jira} else null end)
         }')
     create_session_json "$SESSION_DIR" "review" "https://github.com/$OWNER/$REPO" "$extra_json"
 
@@ -2159,7 +2159,7 @@ EOF
         '{
             focus: $focus,
             branch: $branch,
-            jira: (if $jira != "" then {ticket: $jira} else null end)
+            jira: (if ($jira | length) > 0 then {ticket: $jira} else null end)
         }')
     create_session_json "$SESSION_DIR" "investigation" "$REPO_URL" "$extra_json"
 
@@ -4221,12 +4221,12 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
 
                 info = {}
 
-                # V2 format: session.json
+                # V2 format: session.json (but fall back to v1 if empty/invalid)
                 if session_json.exists():
                     info = self.parse_session_json(session_json)
 
-                # V1 format: session-info.txt (fallback)
-                elif info_file.exists():
+                # V1 format: session-info.txt (fallback if v2 missing or invalid)
+                if not info and info_file.exists():
                     info = self.parse_session_info(info_file)
                     # Detect session type from folder name for v1
                     if entry.name.startswith('pr-'):
@@ -4237,7 +4237,9 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                         info['session_type'] = 'investigation'
                     else:
                         info['session_type'] = 'unknown'
-                else:
+
+                # Skip if we couldn't get any info
+                if not info:
                     continue
 
                 info['name'] = entry.name
@@ -4277,7 +4279,11 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         """Parse V2 session.json format"""
         try:
             with open(path) as f:
-                data = json.load(f)
+                content = f.read().strip()
+            # Return None for empty or whitespace-only files
+            if not content:
+                return None
+            data = json.loads(content)
 
             info = {
                 'session_type': data.get('mode', 'unknown'),
@@ -4313,7 +4319,8 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
 
             return info
         except Exception as e:
-            return {'display_title': 'Session', 'error': str(e)}
+            # Return None on parse error to trigger fallback to session-info.txt
+            return None
 
     def check_terminal_active(self, session_path):
         """Check if session has an active terminal log being written"""
@@ -4325,8 +4332,10 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             session_json = session_path / 'session.json'
             if session_json.exists():
                 with open(session_json) as f:
-                    data = json.load(f)
-                log_file = data.get('terminal', {}).get('log_file', '')
+                    content = f.read().strip()
+                if content:
+                    data = json.loads(content)
+                    log_file = data.get('terminal', {}).get('log_file', '')
 
             # Method 2: Check .terminal_log marker file (v1 sessions or fallback)
             if not log_file:
@@ -4363,8 +4372,10 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
 
             if session_json.exists():
                 with open(session_json) as f:
-                    data = json.load(f)
-                log_file = data.get('terminal', {}).get('log_file', '')
+                    content = f.read().strip()
+                if content:
+                    data = json.loads(content)
+                    log_file = data.get('terminal', {}).get('log_file', '')
 
             # Fallback: look for any log file
             if not log_file or not Path(log_file).exists():
@@ -4402,17 +4413,24 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
 
         try:
             session_json = session_path / 'session.json'
+            info_file = session_path / 'session-info.txt'
+            loaded_v2 = False
+
+            # Try V2 format first (session.json)
             if session_json.exists():
                 with open(session_json) as f:
-                    result = json.load(f)
-                result['name'] = session_name
-                result['format'] = 'v2'
-            else:
-                info_file = session_path / 'session-info.txt'
-                if info_file.exists():
-                    result = self.parse_session_info(info_file)
+                    content = f.read().strip()
+                if content:
+                    result = json.loads(content)
                     result['name'] = session_name
-                    result['format'] = 'v1'
+                    result['format'] = 'v2'
+                    loaded_v2 = True
+
+            # Fall back to V1 format (session-info.txt)
+            if not loaded_v2 and info_file.exists():
+                result = self.parse_session_info(info_file)
+                result['name'] = session_name
+                result['format'] = 'v1'
         except Exception as e:
             result['error'] = str(e)
 
