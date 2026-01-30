@@ -1045,6 +1045,22 @@ setup_output_files() {
         rm -f "$SESSION_DIR/repo/REVIEW.md" "$SESSION_DIR/repo/FINDINGS.md"
         ln -sf "../REVIEW.md" "$SESSION_DIR/repo/REVIEW.md"
         ln -sf "../FINDINGS.md" "$SESSION_DIR/repo/FINDINGS.md"
+
+        # Configure Claude permissions to allow writing to session folder without prompts
+        mkdir -p "$SESSION_DIR/repo/.claude"
+        cat > "$SESSION_DIR/repo/.claude/settings.local.json" << CLAUDE_SETTINGS
+{
+  "permissions": {
+    "allow": [
+      "Read(**)",
+      "Edit(**)",
+      "Write($SESSION_DIR/**)",
+      "Write($SESSION_DIR/repo/**)"
+    ],
+    "deny": []
+  }
+}
+CLAUDE_SETTINGS
     fi
 }
 
@@ -3186,7 +3202,8 @@ start_claude_terminal() {
     local mode_short="${mode:0:3}"
 
     # Build the claude command based on mode
-    local claude_cmd="cd '$REPO_DIR' && claude"
+    # Use --add-dir to allow Claude to write to session folder without permission prompts
+    local claude_cmd="cd '$REPO_DIR' && claude --add-dir '$SESSION_DIR'"
 
     # Try iTerm2 first (macOS)
     if [ -d "/Applications/iTerm.app" ]; then
@@ -4067,29 +4084,41 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         import subprocess
         try:
             session_name = session_path.name
-            # Try iTerm2 first
-            script = f'''
-            tell application "iTerm"
-                activate
-                set foundTab to false
-                repeat with aWindow in windows
-                    repeat with aTab in tabs of aWindow
-                        repeat with aSession in sessions of aTab
-                            if name of aSession contains "{session_name}" then
-                                select aTab
-                                set foundTab to true
-                                exit repeat
-                            end if
+            found = False
+
+            # Try iTerm2 first if installed
+            if Path('/Applications/iTerm.app').exists():
+                script = f'''
+                tell application "iTerm"
+                    activate
+                    set foundTab to false
+                    repeat with aWindow in windows
+                        repeat with aTab in tabs of aWindow
+                            repeat with aSession in sessions of aTab
+                                if name of aSession contains "{session_name}" then
+                                    select aTab
+                                    set foundTab to true
+                                    exit repeat
+                                end if
+                            end repeat
+                            if foundTab then exit repeat
                         end repeat
                         if foundTab then exit repeat
                     end repeat
-                    if foundTab then exit repeat
-                end repeat
-                return foundTab
-            end tell
-            '''
-            result = subprocess.run(['osascript', '-e', script], capture_output=True, text=True)
-            found = 'true' in result.stdout.lower()
+                    return foundTab
+                end tell
+                '''
+                result = subprocess.run(['osascript', '-e', script], capture_output=True, text=True)
+                found = 'true' in result.stdout.lower()
+            else:
+                # Fall back to Terminal.app - just activate it (can't easily find specific windows)
+                script = '''
+                tell application "Terminal"
+                    activate
+                end tell
+                '''
+                result = subprocess.run(['osascript', '-e', script], capture_output=True, text=True)
+                found = result.returncode == 0
 
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
@@ -4117,21 +4146,34 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             log_file = logs_dir / f"terminal-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
 
             # Build the command
-            claude_cmd = f"cd '{repo_path}' && script -q '{log_file}' claude"
+            # Use --add-dir to allow Claude to write to session folder without permission prompts
+            claude_cmd = f"cd '{repo_path}' && script -q '{log_file}' claude --add-dir '{session_path}'"
 
-            # Try iTerm2 first
-            script = f'''
-            tell application "iTerm"
-                activate
-                tell current window
-                    create tab with default profile
-                    tell current session
-                        set name to "🧪 {session_name}"
-                        write text "{claude_cmd}"
+            # Try iTerm2 first, fall back to Terminal.app
+            if Path('/Applications/iTerm.app').exists():
+                script = f'''
+                tell application "iTerm"
+                    activate
+                    if (count of windows) = 0 then
+                        create window with default profile
+                    end if
+                    tell current window
+                        create tab with default profile
+                        tell current session
+                            set name to "🧪 {session_name}"
+                            write text "{claude_cmd}"
+                        end tell
                     end tell
                 end tell
-            end tell
-            '''
+                '''
+            else:
+                # Fall back to Terminal.app
+                script = f'''
+                tell application "Terminal"
+                    activate
+                    do script "{claude_cmd}"
+                end tell
+                '''
             result = subprocess.run(['osascript', '-e', script], capture_output=True, text=True)
 
             # Update session.json if it exists
@@ -4337,7 +4379,13 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                     all_lines = f.readlines()
                     content = ''.join(all_lines[-lines:])
                     # Strip ANSI escape codes for cleaner display
-                    content = re.sub(r'\x1b\[[0-9;]*[mGKH]', '', content)
+                    # Handle: colors, cursor movement, clearing, etc.
+                    content = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', content)  # CSI sequences
+                    content = re.sub(r'\x1b\][^\x07]*\x07', '', content)  # OSC sequences (title, etc.)
+                    content = re.sub(r'\x1b[()][AB012]', '', content)  # Character set selection
+                    content = re.sub(r'\x1b[78DEHM]', '', content)  # Other escape sequences
+                    content = re.sub(r'\x0f|\x0e', '', content)  # Shift In/Out
+                    content = re.sub(r'\r', '', content)  # Carriage returns
         except Exception as e:
             content = f"Error reading terminal log: {e}"
 
