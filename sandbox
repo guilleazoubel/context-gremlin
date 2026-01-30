@@ -998,7 +998,7 @@ SPIKE_CTX
 header() {
     clear
     gum style \
-        --border double \
+        --border rounded \
         --border-foreground 212 \
         --padding "0 2" \
         --margin "1 0" \
