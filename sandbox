@@ -997,10 +997,15 @@ SPIKE_CTX
 
 header() {
     clear
-    echo ""
-    gum style --foreground 212 --bold "  ======  SANDBOX  ======"
-    gum style --foreground 240 "  Isolated environments for code work"
-    echo ""
+    gum style \
+        --border double \
+        --border-foreground 212 \
+        --padding "0 2" \
+        --margin "1 0" \
+        --align center \
+        --width 60 \
+        "🧪 SANDBOX" \
+        "Isolated environments for code work"
 }
 
 success() {
