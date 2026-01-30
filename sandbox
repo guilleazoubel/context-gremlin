@@ -4296,9 +4296,13 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             mode = data.get('mode', '')
             if mode == 'review':
                 pr = data.get('pr', {})
+                # If PR data is missing, return None to trigger fallback to session-info.txt
+                if not pr or not pr.get('number'):
+                    return None
                 info['pr'] = pr.get('number', '')
                 info['pr_title'] = pr.get('title', '')
                 info['author'] = pr.get('author', '')
+                info['branch'] = f"{pr.get('head', '')} → {pr.get('base', '')}" if pr.get('head') else ''
                 info['display_title'] = f"PR #{pr.get('number', '')}: {pr.get('title', '')}"
             elif mode == 'development':
                 jira = data.get('jira', {})
@@ -5049,11 +5053,11 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         // Initial load
         loadSessions();
 
-        // Auto-refresh
+        // Auto-refresh (5 seconds to allow easier inspection)
         setInterval(() => {
             loadSessions();
             if (currentSession) loadContent();
-        }, 2000);
+        }, 5000);
     </script>
 </body>
 </html>'''
