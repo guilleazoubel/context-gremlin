@@ -5067,6 +5067,54 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             return div.innerHTML;
         }
 
+        // Convert GitHub-style emoji codes to actual emojis
+        function convertEmojis(text) {
+            const emojiMap = {
+                ':white_check_mark:': '✅',
+                ':heavy_check_mark:': '✅',
+                ':x:': '❌',
+                ':warning:': '⚠️',
+                ':red_circle:': '🔴',
+                ':orange_circle:': '🟠',
+                ':yellow_circle:': '🟡',
+                ':green_circle:': '🟢',
+                ':blue_circle:': '🔵',
+                ':bulb:': '💡',
+                ':memo:': '📝',
+                ':rocket:': '🚀',
+                ':bug:': '🐛',
+                ':lock:': '🔒',
+                ':zap:': '⚡',
+                ':recycle:': '♻️',
+                ':fire:': '🔥',
+                ':star:': '⭐',
+                ':thumbsup:': '👍',
+                ':thumbsdown:': '👎',
+                ':question:': '❓',
+                ':exclamation:': '❗',
+                ':pushpin:': '📍',
+                ':chart_with_upwards_trend:': '📈',
+                ':package:': '📦',
+                ':gear:': '⚙️',
+                ':wrench:': '🔧',
+                ':hammer:': '🔨',
+                ':eyes:': '👀',
+                ':thought_balloon:': '💭',
+                ':speech_balloon:': '💬',
+                ':mag:': '🔍',
+                ':link:': '🔗',
+                ':arrow_right:': '→',
+                ':arrow_left:': '←',
+                ':heavy_minus_sign:': '➖',
+                ':heavy_plus_sign:': '➕'
+            };
+            let result = text;
+            for (const [code, emoji] of Object.entries(emojiMap)) {
+                result = result.split(code).join(emoji);
+            }
+            return result;
+        }
+
         async function selectSession(name) {
             currentSession = name;
             const session = sessions.find(s => s.name === name);
@@ -5270,10 +5318,11 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                         if (currentVersion !== 'current') {
                             header = '<div style="background:#3a2a1a;color:#ffa500;padding:0.5rem 1rem;border-radius:6px;margin-bottom:1rem;">📦 Viewing archived version: ' + currentVersion.toUpperCase() + '</div>';
                         }
-                        document.getElementById('content').innerHTML = header + marked.parse(text);
+                        const convertedText = convertEmojis(text);
+                        document.getElementById('content').innerHTML = header + marked.parse(convertedText);
                         // Add PR comment buttons to findings (only for review tab and PR sessions)
                         if (currentTab === 'review') {
-                            addPRCommentButtons(text);
+                            addPRCommentButtons(convertedText);
                         }
                     } else {
                         document.getElementById('content').innerHTML = '<div class="empty"><h2>No content yet</h2><p>Waiting for ' + currentTab + ' to be written...</p></div>';
