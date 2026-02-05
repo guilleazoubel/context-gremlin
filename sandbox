@@ -2725,59 +2725,128 @@ switch_to_review_mode() {
     cat > "$claude_file" << 'REVIEW_MODE'
 # Code Review Mode
 
-> **Focus: Write a comprehensive code review to REVIEW.md**
+> **Focus: Write a comprehensive, insightful code review to REVIEW.md**
 
-## Your Task
+## Your Mission
 
-You are performing a code review on this codebase. Your goal is to:
-1. Understand the changes or code under review
-2. Identify issues, concerns, and areas for improvement
-3. Document your findings in **REVIEW.md**
+You are a senior engineer performing a thorough code review. Your job is NOT just to find bugs—it's to deeply understand what's being done, why it's being done, and whether it's being done well.
+
+## Review Process
+
+### Phase 1: Understand the Context
+1. **What is the request?** - Read the PR description, Jira ticket, or session-info.txt
+2. **What problem is being solved?** - Understand the "why" behind these changes
+3. **What is the scope?** - How much of the codebase is affected?
+
+### Phase 2: Analyze the Changes
+For each significant change, understand and document:
+- **What** is being changed
+- **Why** this approach was chosen
+- **How** it integrates with existing code
+
+### Phase 3: Critical Analysis
+Review through these lenses:
+
+| Angle | Key Questions |
+|-------|---------------|
+| **Correctness** | Does it actually solve the problem? Are there edge cases? |
+| **Security** | Any injection risks, auth issues, data exposure, OWASP concerns? |
+| **Complexity** | Is this overly complex? Could it be simpler? |
+| **Clarity** | Is the code readable? Would a new dev understand it? |
+| **Proper Fix vs Hack** | Is this a real solution or a band-aid? Technical debt? |
+| **DRY** | Is there duplication? Should something be abstracted? |
+| **Performance** | Any obvious N+1 queries, memory leaks, inefficiencies? |
+| **Testing** | Is it testable? Are tests included? |
 
 ## Review Output Format
 
-Write your review to `REVIEW.md` using this structure:
+Write to `REVIEW.md` with this structure:
 
 ```markdown
-# Code Review
+# Code Review: [PR Title or Brief Description]
 
-## Summary
-[2-3 sentence overview of what was reviewed]
+## Overview
+**Scope:** [What this PR/change does - 2-3 sentences]
+**Why:** [The problem being solved or feature being added]
+**Risk Level:** [Low/Medium/High] - [Brief justification]
 
-## Verdict
-**[APPROVE / REQUEST_CHANGES / NEEDS_DISCUSSION]**
+## Change Summary
+[Walk through the key changes, explaining what each file/component does]
 
-## Critical Issues
-- [ ] [Severity: Critical/High] Issue description
+| File | Change Type | Purpose |
+|------|-------------|---------|
+| `path/file.ts` | Modified | [What and why] |
 
-## Suggestions
-- [Improvement suggestion with file:line reference]
+## Findings
 
-## Security Considerations
-- [Any security concerns]
+### Critical Issues 🔴
+[Issues that MUST be fixed before merge]
 
-## Code Quality
-- [Code quality observations]
+#### Finding #1: [Brief title]
+📍 **Location:** `path/to/file.ts:XX-YY`
+📊 **Status:** ⚠️ Open
 
-## Questions
-- [Questions for the author]
+**What's happening:** [Explain the code]
+**Problem:** [What's wrong]
+**Impact:** [Why this matters - security, bugs, perf, etc.]
+**Suggested Fix:** [How to fix it]
+```suggestion
+// Code suggestion if applicable
 ```
 
-## Review Guidelines
+### Important Issues 🟠
+[Should be fixed, but not blockers]
 
-1. **Start by understanding** - Read the code, understand the changes
-2. **Be specific** - Reference files and line numbers (e.g., `src/auth.ts:42`)
-3. **Prioritize** - Focus on important issues first (security, bugs, logic errors)
-4. **Be constructive** - Suggest solutions, not just problems
-5. **Update continuously** - Keep REVIEW.md updated as you review
+### Suggestions 🟡
+[Nice-to-haves, improvements]
 
-## Available Context Files
+### Positive Notes ✅
+[What was done well - acknowledge good patterns]
 
-- **session-info.txt** - Session metadata, PR info, Jira ticket
-- **FINDINGS.md** - Investigation results (if you investigated first)
-- **DEVLOG.md** - Development notes (if you developed first)
+## Security Review
+- [ ] No hardcoded secrets or credentials
+- [ ] Input validation present where needed
+- [ ] No SQL/XSS/injection vulnerabilities
+- [ ] Auth/authz properly enforced
+- [Additional observations]
 
-**BEGIN THE REVIEW NOW.**
+## Code Quality Assessment
+- **Complexity:** [Simple/Moderate/Complex] - [Notes]
+- **Readability:** [Good/Fair/Poor] - [Notes]
+- **DRY Compliance:** [Notes on duplication]
+- **Proper Solution:** [Is this the right fix or a hack?]
+
+## Verdict
+
+**Recommendation:** [✅ APPROVE | ⚠️ REQUEST CHANGES | 💬 NEEDS DISCUSSION]
+
+**Rationale:** [Why this verdict - summarize key factors]
+
+## Review History
+| Version | Date | Commit | Action |
+|---------|------|--------|--------|
+| v1 | [date] | [sha] | Initial review |
+```
+
+## Important Guidelines
+
+1. **Be thorough** - Don't just skim. Understand every change.
+2. **Be specific** - Always include `file:line` references
+3. **Explain the "why"** - Don't just say "this is wrong", explain the impact
+4. **Suggest solutions** - Every problem should have a suggested fix
+5. **Acknowledge good work** - Note positive patterns, not just issues
+6. **Think like an attacker** - What could go wrong? What could be exploited?
+7. **Think like a maintainer** - Will this be easy to maintain in 6 months?
+
+## Available Context
+
+- **session-info.txt** - PR metadata, Jira ticket details
+- **ACR_REVIEW.md** - Automated review results (if present - USE AS INPUT, but do your own analysis)
+- **FINDINGS.md** - Investigation results (if investigated first)
+
+> ⚠️ If ACR_REVIEW.md exists, read it for context, but perform your OWN comprehensive review. ACR provides hints, not conclusions.
+
+**BEGIN YOUR COMPREHENSIVE REVIEW NOW.**
 REVIEW_MODE
 
     # Re-append Jira context if it existed
@@ -4134,6 +4203,11 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             self.focus_terminal(session_path)
         elif parsed.path == '/api/start-claude':
             self.start_claude_session(session_path)
+        elif parsed.path == '/api/post-pr-comment':
+            file_path = data.get('file', '')
+            line = data.get('line', 0)
+            comment = data.get('comment', '')
+            self.post_pr_comment(session_path, file_path, line, comment)
         else:
             self.send_error(404, 'Not found')
 
@@ -4327,6 +4401,125 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                 'log_file': str(log_file),
                 'session': session_name
             }).encode())
+        except Exception as e:
+            self.send_error(500, str(e))
+
+    def post_pr_comment(self, session_path, file_path, line, comment):
+        """Post a review comment to the PR on GitHub"""
+        import subprocess
+        import re
+        try:
+            # Get PR info from session
+            pr_number = None
+            repo_owner = None
+            repo_name = None
+
+            session_json = session_path / 'session.json'
+            info_file = session_path / 'session-info.txt'
+
+            # Try V2 format first
+            if session_json.exists():
+                with open(session_json) as f:
+                    content = f.read().strip()
+                if content:
+                    data = json.loads(content)
+                    pr_info = data.get('pr', {})
+                    pr_number = pr_info.get('number')
+                    project = data.get('project', '')
+                    # Parse owner/repo from project URL
+                    match = re.search(r'github\.com/([^/]+)/([^/]+)', project)
+                    if match:
+                        repo_owner = match.group(1)
+                        repo_name = match.group(2).replace('.git', '')
+
+            # Fall back to V1 format
+            if not pr_number and info_file.exists():
+                content = info_file.read_text()
+                # Extract PR number
+                match = re.search(r'PR #(\d+)', content)
+                if match:
+                    pr_number = match.group(1)
+                # Extract repo from URL or Repository line
+                match = re.search(r'Repository:\s*([^\n]+)', content)
+                if match:
+                    repo_str = match.group(1).strip()
+                    if '/' in repo_str:
+                        parts = repo_str.split('/')
+                        if len(parts) >= 2:
+                            repo_owner = parts[-2]
+                            repo_name = parts[-1].replace('.git', '')
+
+            if not all([pr_number, repo_owner, repo_name]):
+                self.send_error(400, f'Could not determine PR info: pr={pr_number}, owner={repo_owner}, repo={repo_name}')
+                return
+
+            # Get the latest commit SHA from the PR branch
+            repo_path = session_path / 'repo'
+            if not repo_path.exists():
+                self.send_error(400, 'Session repo not found (may be archived)')
+                return
+
+            result = subprocess.run(
+                ['git', 'rev-parse', 'HEAD'],
+                cwd=str(repo_path),
+                capture_output=True,
+                text=True
+            )
+            if result.returncode != 0:
+                self.send_error(500, f'Failed to get commit SHA: {result.stderr}')
+                return
+            commit_sha = result.stdout.strip()
+
+            # Prepare the API request body
+            # GitHub requires: body, commit_id, path, line (or position for older API)
+            api_body = {
+                'body': comment,
+                'commit_id': commit_sha,
+                'path': file_path,
+                'line': int(line),
+                'side': 'RIGHT'  # Comment on the new version of the file
+            }
+
+            # Post comment using gh api
+            result = subprocess.run(
+                [
+                    'gh', 'api',
+                    f'repos/{repo_owner}/{repo_name}/pulls/{pr_number}/comments',
+                    '-X', 'POST',
+                    '-f', f'body={comment}',
+                    '-f', f'commit_id={commit_sha}',
+                    '-f', f'path={file_path}',
+                    '-F', f'line={int(line)}',
+                    '-f', 'side=RIGHT'
+                ],
+                capture_output=True,
+                text=True
+            )
+
+            if result.returncode != 0:
+                error_msg = result.stderr or result.stdout
+                self.send_error(500, f'GitHub API error: {error_msg}')
+                return
+
+            # Parse response to get comment URL
+            try:
+                response_data = json.loads(result.stdout)
+                comment_url = response_data.get('html_url', '')
+            except:
+                comment_url = ''
+
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                'status': 'posted',
+                'comment_url': comment_url,
+                'pr': pr_number,
+                'file': file_path,
+                'line': line
+            }).encode())
+
         except Exception as e:
             self.send_error(500, str(e))
 
@@ -4763,6 +4956,17 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         .version-select { background: #222; color: #e0e0e0; border: 1px solid #444; border-radius: 6px; padding: 0.4rem 0.6rem; font-size: 0.85rem; cursor: pointer; margin-left: 0.5rem; }
         .version-select:hover { border-color: #666; }
         .rereview-badge { background: #3a2a1a; color: #ffa500; padding: 0.3rem 0.6rem; border-radius: 4px; font-size: 0.75rem; margin-right: 1rem; }
+        .btn-post-pr { background: #1a2a3a; color: #4dabf7; border: 1px solid #4dabf7; padding: 0.25rem 0.5rem; border-radius: 4px; cursor: pointer; font-size: 0.7rem; margin-left: 0.5rem; transition: all 0.2s; }
+        .btn-post-pr:hover { background: #2a3a4a; }
+        .btn-post-pr:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-post-pr.posted { background: #1a3a1a; color: #00ff88; border-color: #00ff88; }
+        .btn-post-pr.error { background: #3a1a1a; color: #ff6b6b; border-color: #ff6b6b; }
+        .finding-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; }
+        .finding-actions { display: flex; gap: 0.25rem; align-items: center; }
+        .toast { position: fixed; bottom: 2rem; right: 2rem; padding: 1rem 1.5rem; border-radius: 8px; z-index: 1000; animation: slideIn 0.3s ease; }
+        .toast.success { background: #1a3a1a; color: #00ff88; border: 1px solid #00ff88; }
+        .toast.error { background: #3a1a1a; color: #ff6b6b; border: 1px solid #ff6b6b; }
+        @keyframes slideIn { from { transform: translateY(100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
     </style>
 </head>
 <body>
@@ -5067,6 +5271,10 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                             header = '<div style="background:#3a2a1a;color:#ffa500;padding:0.5rem 1rem;border-radius:6px;margin-bottom:1rem;">📦 Viewing archived version: ' + currentVersion.toUpperCase() + '</div>';
                         }
                         document.getElementById('content').innerHTML = header + marked.parse(text);
+                        // Add PR comment buttons to findings (only for review tab and PR sessions)
+                        if (currentTab === 'review') {
+                            addPRCommentButtons(text);
+                        }
                     } else {
                         document.getElementById('content').innerHTML = '<div class="empty"><h2>No content yet</h2><p>Waiting for ' + currentTab + ' to be written...</p></div>';
                     }
@@ -5173,6 +5381,269 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                 alert('Failed to delete session');
             }
             document.getElementById('btnDelete').disabled = false;
+        }
+
+        // Toast notification
+        function showToast(message, type = 'success') {
+            const existing = document.querySelector('.toast');
+            if (existing) existing.remove();
+
+            const toast = document.createElement('div');
+            toast.className = 'toast ' + type;
+            toast.textContent = message;
+            document.body.appendChild(toast);
+
+            setTimeout(() => toast.remove(), 4000);
+        }
+
+        // Parse findings and add PR comment buttons
+        function addPRCommentButtons(rawMarkdown) {
+            const session = sessions.find(s => s.name === currentSession);
+            // Only add buttons for PR sessions that aren't archived
+            if (!session || !session.pr || session.archived) return;
+
+            // Find all h4 elements that look like findings
+            const content = document.getElementById('content');
+            const h4s = content.querySelectorAll('h4');
+
+            // Parse the raw markdown to extract finding details
+            // Looking for patterns like:
+            // #### Finding #1: Title
+            // 📍 **Location:** `path/to/file.ts:XX-YY`
+            // **Problem:** description
+
+            // Enhanced regex to capture full finding details
+            const findingRegex = /####\\s*Finding\\s*#?(\\d+)[:\\s]*([^\\n]+)\\n([\\s\\S]*?)(?=####|$)/gi;
+            const findings = [];
+            let match;
+
+            while ((match = findingRegex.exec(rawMarkdown)) !== null) {
+                const findingBody = match[3];
+
+                // Extract location
+                const locMatch = findingBody.match(/📍\\s*\\*\\*Location:\\*\\*\\s*`([^`]+)`/);
+                if (!locMatch) continue;
+
+                const location = locMatch[1];
+                const fileLineMatch = location.match(/^([^:]+):(\\d+)(?:-(\\d+))?/);
+                if (!fileLineMatch) continue;
+
+                // Extract problem - look for **Problem:** or just Problem:
+                const problemMatch = findingBody.match(/\\*\\*Problem:?\\*\\*\\s*([^*]+?)(?=\\*\\*|$)/s) ||
+                                    findingBody.match(/Problem:\\s*([^\\n]+)/i);
+                const problem = problemMatch ? problemMatch[1].trim().replace(/\\n+/g, ' ') : '';
+
+                // Extract impact - look for **Impact:** or Why it matters:
+                const impactMatch = findingBody.match(/\\*\\*Impact:?\\*\\*\\s*([^*]+?)(?=\\*\\*|$)/s) ||
+                                   findingBody.match(/\\*\\*Why[^:]*:\\*\\*\\s*([^*]+?)(?=\\*\\*|$)/s) ||
+                                   findingBody.match(/Impact:\\s*([^\\n]+)/i);
+                const impact = impactMatch ? impactMatch[1].trim().replace(/\\n+/g, ' ') : '';
+
+                // Extract suggested fix text
+                const suggestedMatch = findingBody.match(/\\*\\*Suggest[^:]*:?\\*\\*\\s*([^`*]+?)(?=```|\\*\\*|$)/s) ||
+                                      findingBody.match(/\\*\\*(?:Fix|Recommendation):?\\*\\*\\s*([^`*]+?)(?=```|\\*\\*|$)/s);
+                const suggested = suggestedMatch ? suggestedMatch[1].trim().replace(/\\n+/g, ' ') : '';
+
+                // Extract code suggestion if present (code block after Suggested Fix)
+                const codeMatch = findingBody.match(/\\*\\*Suggest[^*]*\\*\\*[\\s\\S]*?```(?:suggestion|[a-z]*)\\n([\\s\\S]*?)```/);
+                const suggestedCode = codeMatch ? codeMatch[1].trim() : '';
+
+                findings.push({
+                    number: match[1],
+                    title: match[2].trim(),
+                    file: fileLineMatch[1],
+                    line: parseInt(fileLineMatch[2]),
+                    endLine: fileLineMatch[3] ? parseInt(fileLineMatch[3]) : null,
+                    problem: problem,
+                    impact: impact,
+                    suggested: suggested,
+                    suggestedCode: suggestedCode
+                });
+            }
+
+            // Also try simpler pattern for findings with just Location
+            const simpleRegex = /####\\s*(?:Finding\\s*#?\\d+[:\\s]*)?([^\\n]+)\\n[\\s\\S]*?(?:📍|\\*\\*Location:\\*\\*)\\s*`?([^`\\n]+\\.[a-z]+:\\d+[^`\\n]*)`?/gi;
+            while ((match = simpleRegex.exec(rawMarkdown)) !== null) {
+                const location = match[2].trim();
+                const locMatch = location.match(/^([^:]+):(\\d+)(?:-(\\d+))?/);
+                if (locMatch && !findings.some(f => f.file === locMatch[1] && f.line === parseInt(locMatch[2]))) {
+                    findings.push({
+                        title: match[1].trim(),
+                        file: locMatch[1],
+                        line: parseInt(locMatch[2]),
+                        endLine: locMatch[3] ? parseInt(locMatch[3]) : null,
+                        problem: match[1].trim()
+                    });
+                }
+            }
+
+            // Inject buttons into the DOM
+            h4s.forEach((h4, index) => {
+                const text = h4.textContent || '';
+                // Try to match this h4 with a finding
+                const finding = findings.find(f =>
+                    text.includes(f.title?.substring(0, 30)) ||
+                    (f.number && text.includes('#' + f.number))
+                );
+
+                if (finding) {
+                    // Create button container
+                    const btnContainer = document.createElement('span');
+                    btnContainer.className = 'finding-actions';
+                    btnContainer.style.marginLeft = '0.5rem';
+
+                    // Create post to PR button
+                    const btn = document.createElement('button');
+                    btn.className = 'btn-post-pr';
+                    btn.innerHTML = '💬 Post to PR';
+                    btn.dataset.file = finding.file;
+                    btn.dataset.line = finding.line;
+                    btn.dataset.finding = JSON.stringify(finding);
+                    btn.onclick = function() { postToPR(this); };
+
+                    // Create copy button as fallback
+                    const copyBtn = document.createElement('button');
+                    copyBtn.className = 'btn-post-pr';
+                    copyBtn.innerHTML = '📋 Open';
+                    copyBtn.title = 'Copy comment & open PR at ' + finding.file + ':' + finding.line;
+                    copyBtn.onclick = async function() {
+                        copyBtn.innerHTML = '⏳';
+                        await copyAndOpenPR(finding);
+                        copyBtn.innerHTML = '📋 Open';
+                    };
+
+                    btnContainer.appendChild(btn);
+                    btnContainer.appendChild(copyBtn);
+                    h4.appendChild(btnContainer);
+                }
+            });
+        }
+
+        // Format a rich comment from finding data
+        function formatFindingComment(finding) {
+            let comment = '**' + finding.title + '**\\n\\n';
+
+            if (finding.problem) {
+                comment += '**Problem:** ' + finding.problem + '\\n\\n';
+            }
+
+            if (finding.impact) {
+                comment += '**Impact:** ' + finding.impact + '\\n\\n';
+            }
+
+            if (finding.suggested) {
+                comment += '**Suggested Fix:** ' + finding.suggested;
+                if (finding.suggestedCode) {
+                    comment += '\\n```suggestion\\n' + finding.suggestedCode + '\\n```';
+                }
+                comment += '\\n';
+            } else if (finding.suggestedCode) {
+                comment += '**Suggested Fix:**\\n```suggestion\\n' + finding.suggestedCode + '\\n```\\n';
+            }
+
+            return comment.trim();
+        }
+
+        // Post comment to PR via API
+        async function postToPR(btn) {
+            const file = btn.dataset.file;
+            const line = parseInt(btn.dataset.line);
+            const finding = JSON.parse(btn.dataset.finding);
+
+            // Build comment body
+            const comment = formatFindingComment(finding);
+
+            btn.disabled = true;
+            btn.innerHTML = '⏳ Posting...';
+
+            try {
+                const res = await fetch('/api/post-pr-comment', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        session: currentSession,
+                        file: file,
+                        line: line,
+                        comment: comment
+                    })
+                });
+
+                const data = await res.json();
+
+                if (res.ok && data.status === 'posted') {
+                    btn.innerHTML = '✅ Posted';
+                    btn.className = 'btn-post-pr posted';
+                    showToast('Comment posted to PR #' + data.pr + ' on ' + file + ':' + line);
+
+                    if (data.comment_url) {
+                        btn.onclick = function() { window.open(data.comment_url, '_blank'); };
+                        btn.innerHTML = '✅ View';
+                        btn.title = 'Click to view comment on GitHub';
+                    }
+                } else {
+                    throw new Error(data.error || 'Failed to post comment');
+                }
+            } catch (e) {
+                console.error('Post to PR failed', e);
+                btn.innerHTML = '❌ Failed';
+                btn.className = 'btn-post-pr error';
+                btn.disabled = false;
+                showToast('Failed to post: ' + e.message, 'error');
+
+                // Reset after 3 seconds
+                setTimeout(() => {
+                    btn.innerHTML = '💬 Post to PR';
+                    btn.className = 'btn-post-pr';
+                }, 3000);
+            }
+        }
+
+        // Fallback: copy comment and open PR file at exact line
+        async function copyAndOpenPR(finding) {
+            const session = sessions.find(s => s.name === currentSession);
+            if (!session) return;
+
+            const comment = formatFindingComment(finding);
+
+            // Copy to clipboard
+            navigator.clipboard.writeText(comment).then(() => {
+                showToast('Comment copied! Opening PR at ' + finding.file + ':' + finding.line);
+            }).catch(() => {
+                showToast('Could not copy to clipboard', 'error');
+            });
+
+            // Build PR file URL with line anchor
+            // GitHub format: /pull/123/files#diff-<sha256-of-path>R<line>
+            let prUrl = session.url || '';
+            if (!prUrl && session.repository) {
+                prUrl = session.repository.includes('github.com') ? session.repository : 'https://github.com/' + session.repository;
+                if (!prUrl.includes('/pull/')) {
+                    prUrl += '/pull/' + session.pr;
+                }
+            }
+
+            if (prUrl) {
+                // Compute SHA256 hash of file path for GitHub's anchor format
+                const hash = await computeGitHubDiffHash(finding.file);
+                // R = right side (new file), the line number
+                const anchor = hash ? '#diff-' + hash + 'R' + finding.line : '';
+                window.open(prUrl + '/files' + anchor, '_blank');
+            }
+        }
+
+        // Compute GitHub's diff anchor hash (SHA256 of file path, first 64 hex chars)
+        async function computeGitHubDiffHash(filePath) {
+            try {
+                const encoder = new TextEncoder();
+                const data = encoder.encode(filePath);
+                const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+                const hashArray = Array.from(new Uint8Array(hashBuffer));
+                const hashHex = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+                return hashHex;  // GitHub uses full 64-char hash
+            } catch (e) {
+                console.error('Could not compute hash:', e);
+                return null;
+            }
         }
 
         // Initial load
@@ -6339,7 +6810,7 @@ pre_session_menu() {
                         dim "Type /exit when done to return here."
                         sleep 1
                         tput reset 2>/dev/null || clear
-                        cd "$SESSION_DIR/repo" && claude --add-dir "$SESSION_DIR" -- "ACR review complete. Read ACR_REVIEW.md in the session directory for the parallel review results, then create a comprehensive REVIEW.md."
+                        cd "$SESSION_DIR/repo" && claude --add-dir "$SESSION_DIR" -- "ACR has provided initial findings in ACR_REVIEW.md - use this as CONTEXT only. Now perform YOUR OWN comprehensive code review following the CLAUDE.md guidelines. Understand the scope, analyze every change, evaluate through all lenses (correctness, security, complexity, clarity, DRY, proper-fix-vs-hack), and write a thorough REVIEW.md with detailed findings including problem, impact, and suggested fixes."
                         post_session_menu "$SESSION_DIR"
                         return 0
                         ;;
@@ -6358,7 +6829,7 @@ pre_session_menu() {
                         dim "Type /exit when done to return here."
                         sleep 1
                         tput reset 2>/dev/null || clear
-                        cd "$SESSION_DIR/repo" && claude --add-dir "$SESSION_DIR" -- "Begin"
+                        cd "$SESSION_DIR/repo" && claude --add-dir "$SESSION_DIR" -- "Perform a comprehensive code review following CLAUDE.md. First understand the scope and WHY these changes exist. Then analyze every change through all lenses: correctness, security, complexity, clarity, DRY, and whether this is a proper fix or a hack. Write a thorough REVIEW.md with detailed findings including what's happening, the problem, impact, and suggested fixes."
                         post_session_menu "$SESSION_DIR"
                         return 0
                         ;;
