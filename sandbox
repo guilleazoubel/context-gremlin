@@ -2706,17 +2706,21 @@ get_current_mode() {
     fi
 }
 
+# Extract Jira context section from CLAUDE.md to preserve across mode switches
+extract_jira_context() {
+    local claude_file="$1"
+    if [ -f "$claude_file" ]; then
+        # Extract everything from "## Jira" to end of file (Jira context is always appended last)
+        awk '/^## Jira/{found=1} found{print}' "$claude_file"
+    fi
+}
+
 switch_to_review_mode() {
     local SESSION_DIR="$1"
     local claude_file="$SESSION_DIR/repo/CLAUDE.md"
 
-    # Get session info for context
-    local session_info=""
-    [ -f "$SESSION_DIR/session-info.txt" ] && session_info=$(cat "$SESSION_DIR/session-info.txt")
-
-    # Extract key info
-    local repo_url=$(echo "$session_info" | grep "^URL:" | head -1 | cut -d: -f2- | xargs)
-    local branch=$(echo "$session_info" | grep "^Branch:" | head -1 | cut -d: -f2 | xargs | sed 's/ (default)//')
+    # Preserve existing Jira context before overwriting
+    local jira_context=$(extract_jira_context "$claude_file")
 
     cat > "$claude_file" << 'REVIEW_MODE'
 # Code Review Mode
@@ -2767,8 +2771,20 @@ Write your review to `REVIEW.md` using this structure:
 4. **Be constructive** - Suggest solutions, not just problems
 5. **Update continuously** - Keep REVIEW.md updated as you review
 
+## Available Context Files
+
+- **session-info.txt** - Session metadata, PR info, Jira ticket
+- **FINDINGS.md** - Investigation results (if you investigated first)
+- **DEVLOG.md** - Development notes (if you developed first)
+
 **BEGIN THE REVIEW NOW.**
 REVIEW_MODE
+
+    # Re-append Jira context if it existed
+    if [ -n "$jira_context" ]; then
+        echo "" >> "$claude_file"
+        echo "$jira_context" >> "$claude_file"
+    fi
 
     # Update session.json mode if v2 session
     if [ -f "$SESSION_DIR/session.json" ]; then
@@ -2784,6 +2800,9 @@ REVIEW_MODE
 switch_to_investigation_mode() {
     local SESSION_DIR="$1"
     local claude_file="$SESSION_DIR/repo/CLAUDE.md"
+
+    # Preserve existing Jira context before overwriting
+    local jira_context=$(extract_jira_context "$claude_file")
 
     cat > "$claude_file" << 'INVESTIGATE_MODE'
 # Investigation Mode
@@ -2839,8 +2858,20 @@ Write your findings to `FINDINGS.md` using this structure:
 4. **Note dead ends** - Document what didn't work (saves time later)
 5. **Be thorough** - Look for patterns, anomalies, root causes
 
+## Available Context Files
+
+- **session-info.txt** - Session metadata, PR info, Jira ticket
+- **REVIEW.md** - Review findings (if reviewed first)
+- **DEVLOG.md** - Development notes (if developed first)
+
 **BEGIN THE INVESTIGATION NOW.**
 INVESTIGATE_MODE
+
+    # Re-append Jira context if it existed
+    if [ -n "$jira_context" ]; then
+        echo "" >> "$claude_file"
+        echo "$jira_context" >> "$claude_file"
+    fi
 
     # Update session.json mode if v2 session
     if [ -f "$SESSION_DIR/session.json" ]; then
@@ -2850,6 +2881,85 @@ INVESTIGATE_MODE
 
     success "Switched to Investigation Mode"
     dim "Claude will now focus on writing FINDINGS.md"
+    sleep 1
+}
+
+switch_to_development_mode() {
+    local SESSION_DIR="$1"
+    local claude_file="$SESSION_DIR/repo/CLAUDE.md"
+
+    # Preserve existing Jira context before overwriting
+    local jira_context=$(extract_jira_context "$claude_file")
+
+    cat > "$claude_file" << 'DEV_MODE'
+# Development Mode
+
+> **Focus: Implement features/fixes, document in DEVLOG.md**
+
+## Your Task
+
+1. Implement the requested feature or fix
+2. Write clean, tested code
+3. Document progress in **DEVLOG.md**
+
+## Available Context Files
+
+- **session-info.txt** - Jira ticket details, requirements
+- **FINDINGS.md** - Investigation results (read this first if exists!)
+- **REVIEW.md** - Code review findings (fix issues found here!)
+
+## Development Guidelines
+
+1. **Read context first** - Check FINDINGS.md and REVIEW.md
+2. **Small commits** - Make incremental, logical commits
+3. **Test as you go** - Run tests after changes
+4. **Document** - Update DEVLOG.md with progress
+
+## DEVLOG Format
+
+Write your progress to `DEVLOG.md` using this structure:
+
+```markdown
+# Development Log
+
+## Task
+[Brief description of what you're implementing]
+
+## Progress
+
+### [Timestamp or Step]
+- What was done
+- Files modified
+- Issues encountered
+
+## Changes Made
+- `path/to/file.ts` - [what changed]
+
+## Testing
+- [ ] Unit tests pass
+- [ ] Manual testing done
+
+## Notes
+[Any important observations or decisions]
+```
+
+**BEGIN DEVELOPMENT NOW.**
+DEV_MODE
+
+    # Re-append Jira context if it existed
+    if [ -n "$jira_context" ]; then
+        echo "" >> "$claude_file"
+        echo "$jira_context" >> "$claude_file"
+    fi
+
+    # Update session.json mode if v2 session
+    if [ -f "$SESSION_DIR/session.json" ]; then
+        update_session_field "$SESSION_DIR" "mode" "development"
+        add_session_history "$SESSION_DIR" "mode_switch" '{"to": "development"}'
+    fi
+
+    success "Switched to Development Mode"
+    dim "Claude will focus on implementation and DEVLOG.md"
     sleep 1
 }
 
@@ -2868,6 +2978,9 @@ prompt_mode_switch() {
         investigation)
             dim "Current mode: Investigation (FINDINGS.md)"
             ;;
+        development)
+            dim "Current mode: Development (DEVLOG.md)"
+            ;;
         *)
             dim "Current mode: Unknown"
             ;;
@@ -2878,6 +2991,7 @@ prompt_mode_switch() {
         --header "Select mode:" \
         "📝 Review Mode (focus on REVIEW.md)" \
         "🔬 Investigation Mode (focus on FINDINGS.md)" \
+        "🛠 Development Mode (focus on DEVLOG.md)" \
         "← Cancel")
 
     case "$choice" in
@@ -2887,6 +3001,10 @@ prompt_mode_switch() {
             ;;
         *"Investigation Mode"*)
             switch_to_investigation_mode "$SESSION_DIR"
+            return 0
+            ;;
+        *"Development Mode"*)
+            switch_to_development_mode "$SESSION_DIR"
             return 0
             ;;
         *)
@@ -6094,6 +6212,60 @@ restart_session() {
     return 0
 }
 
+# Generic tool picker for review/investigation/development
+# Usage: pick_tool "review|investigation|development" "$PR_URL"
+pick_tool() {
+    local action_type="$1"  # review, investigation, or development
+    local PR_URL="$2"
+
+    local options=()
+    local header=""
+
+    case "$action_type" in
+        review)
+            header="Select review tool:"
+            options+=("🤖 Claude - Deep review with explanations")
+            # Add Codex if available
+            if command -v codex >/dev/null 2>&1 && [ -n "$PR_URL" ]; then
+                options+=("⚡ Codex - Fast parallel review")
+            fi
+            # Add ACR options if available
+            if [ "$HAS_ACR" = "true" ] && [ -n "$PR_URL" ]; then
+                options+=("🔀 ACR → Claude - Quick scan, then deep dive")
+                options+=("📋 ACR only - Parallel AI scan")
+            fi
+            ;;
+        investigation)
+            header="Select investigation tool:"
+            options+=("🤖 Claude - Interactive exploration")
+            if command -v codex >/dev/null 2>&1; then
+                options+=("⚡ Codex - Fast analysis")
+            fi
+            ;;
+        development)
+            header="Select development tool:"
+            options+=("🤖 Claude - Interactive development")
+            if command -v codex >/dev/null 2>&1; then
+                options+=("⚡ Codex - Fast assistance")
+            fi
+            ;;
+    esac
+
+    options+=("← Back")
+
+    local choice=$(printf '%s\n' "${options[@]}" | fzf \
+        --height=~30% \
+        --layout=reverse \
+        --border=rounded \
+        --no-info \
+        --prompt="" \
+        --header="$header" \
+        --header-first \
+        --ansi)
+
+    echo "$choice"
+}
+
 pre_session_menu() {
     local SESSION_DIR="$1"
     local SESSION_NAME=$(basename "$SESSION_DIR")
@@ -6104,11 +6276,12 @@ pre_session_menu() {
         PR_URL=$(grep "^URL:" "$SESSION_DIR/session-info.txt" 2>/dev/null | head -1 | cut -d: -f2- | xargs)
     fi
 
-    # Detect session type
-    local SESSION_TYPE="review"
+    # Get PR base branch for ACR
+    local PR_BASE=""
     if [ -f "$SESSION_DIR/session-info.txt" ]; then
-        grep -q "^Type:.*Investigation" "$SESSION_DIR/session-info.txt" && SESSION_TYPE="investigation"
+        PR_BASE=$(grep "^Branch:" "$SESSION_DIR/session-info.txt" 2>/dev/null | head -1 | sed 's/.*→ //' | xargs)
     fi
+    [ -z "$PR_BASE" ] && PR_BASE="main"
 
     while true; do
         header
@@ -6120,74 +6293,32 @@ pre_session_menu() {
             "Session ready: $SESSION_NAME"
 
         echo ""
-        if [ "$SESSION_TYPE" = "investigation" ]; then
-            dim "Ready to investigate. Choose how to proceed:"
-        else
-            dim "Explore the changes before starting the review:"
-        fi
+        dim "Choose an action:"
         echo ""
 
-        # Check if this is a re-review (has RE-REVIEW.md)
-        local is_rereview=""
-        [ -f "$SESSION_DIR/repo/RE-REVIEW.md" ] && is_rereview="yes"
-
-        # Get PR base branch for ACR
-        local PR_BASE=""
-        if [ -f "$SESSION_DIR/session-info.txt" ]; then
-            PR_BASE=$(grep "^Branch:" "$SESSION_DIR/session-info.txt" 2>/dev/null | head -1 | sed 's/.*→ //' | xargs)
-        fi
-        [ -z "$PR_BASE" ] && PR_BASE="main"
-
-        # Check for Codex
-        local HAS_CODEX=false
-        command -v codex >/dev/null 2>&1 && HAS_CODEX=true
-
-        # Show current mode
-        local current_mode=$(get_current_mode "$SESSION_DIR")
-
+        # UNIFIED options - same for ALL session types
         local options=()
 
-        if [ "$SESSION_TYPE" = "investigation" ]; then
-            # Investigation session options
-            options+=("🔬 Start Claude investigation")
-            options+=("📝 Start Claude review (of changes vs $PR_BASE)")
-        else
-            # PR Review session options
-            options+=("▶ Start Claude $([ -n "$is_rereview" ] && echo "re-review" || echo "review")")
-            options+=("🔬 Start Claude investigation (explore codebase)")
-        fi
+        # Primary actions - ALL available regardless of session type
+        options+=("▶ Review")
+        options+=("🔬 Investigate")
+        options+=("🛠 Develop")
 
-        # Add Codex option if available
-        if [ "$HAS_CODEX" = "true" ] && [ -n "$PR_URL" ]; then
-            options+=("⚡ Start Codex review (+ live preview)")
-        fi
-
-        # Add ACR options if available and this is a PR session
-        if [ "$HAS_ACR" = "true" ] && [ -n "$PR_URL" ]; then
-            options+=("🤖 Run ACR (parallel AI reviewers)")
-            options+=("🔀 ACR → Claude (ACR first, then deep dive)")
-            if [ "$HAS_CODEX" = "true" ]; then
-                options+=("🚀 ACR → Codex (+ live preview)")
-            fi
-        fi
-
-        options+=(
-            "👁 Open live preview"
-            "💻 Open in editor (VS Code/Cursor)"
-            "📊 View diff"
-        )
+        # Utility options
+        options+=("💻 Open in editor")
+        options+=("📊 View diff")
 
         if [ -n "$PR_URL" ]; then
             options+=("🌐 Open PR in browser")
-            options+=("🔁 Refresh PR (fetch updates)")
+            options+=("🔄 Refresh PR")
         fi
 
-        options+=("📄 View session info")
-        options+=("🗑 Cancel and delete session")
-        options+=("← Back to main menu")
+        options+=("📄 Session info")
+        options+=("🗑 Delete session")
+        options+=("← Back")
 
         local choice=$(printf '%s\n' "${options[@]}" | fzf \
-            --height=~50% \
+            --height=~40% \
             --layout=reverse \
             --border=rounded \
             --no-info \
@@ -6197,131 +6328,103 @@ pre_session_menu() {
             --ansi)
 
         case "$choice" in
-            *"live preview"*)
-                # Start the dashboard server (single server for all sessions)
-                start_dashboard_server
-                sleep 1
+            *"Review"*)
+                local tool=$(pick_tool "review" "$PR_URL")
+                case "$tool" in
+                    *"ACR"*"Claude"*)
+                        # ACR first, then Claude - must come before *"Claude"*
+                        run_acr_quick "$SESSION_DIR" "$PR_BASE"
+                        switch_to_review_mode "$SESSION_DIR"
+                        echo ""
+                        dim "Type /exit when done to return here."
+                        sleep 1
+                        tput reset 2>/dev/null || clear
+                        cd "$SESSION_DIR/repo" && claude --add-dir "$SESSION_DIR" -- "ACR review complete. Read ACR_REVIEW.md in the session directory for the parallel review results, then create a comprehensive REVIEW.md."
+                        post_session_menu "$SESSION_DIR"
+                        return 0
+                        ;;
+                    *"ACR only"*)
+                        run_acr_review "$SESSION_DIR" "$PR_BASE"
+                        ;;
+                    *"Codex"*)
+                        run_codex_review "$SESSION_DIR" "$PR_BASE" "false"
+                        post_session_menu "$SESSION_DIR"
+                        return 0
+                        ;;
+                    *"Claude"*)
+                        # Plain Claude - must come after ACR patterns
+                        switch_to_review_mode "$SESSION_DIR"
+                        echo ""
+                        dim "Type /exit when done to return here."
+                        sleep 1
+                        tput reset 2>/dev/null || clear
+                        cd "$SESSION_DIR/repo" && claude --add-dir "$SESSION_DIR" -- "Begin"
+                        post_session_menu "$SESSION_DIR"
+                        return 0
+                        ;;
+                    *) ;; # Back - continue loop
+                esac
                 ;;
-            *"investigation"*)
-                echo ""
-                # Switch to investigation mode
-                switch_to_investigation_mode "$SESSION_DIR"
-
-                # Check if findings already exist
-                local existing_findings=""
-                [ -f "$SESSION_DIR/FINDINGS.md" ] && [ -s "$SESSION_DIR/FINDINGS.md" ] && existing_findings="yes"
-
-                if [ -n "$existing_findings" ]; then
-                    dim "Existing findings found. Claude will summarize and continue."
-                else
-                    dim "Starting investigation."
-                fi
-                dim "Type /exit when done to return here."
-                echo ""
-                sleep 1
-
-                tput reset 2>/dev/null || clear
-                cd "$SESSION_DIR/repo"
-
-                if [ -n "$existing_findings" ]; then
-                    claude "Read FINDINGS.md and give me a brief summary of the key discoveries (bullet points, max 5-7 items). Then let me know you're ready to continue the investigation."
-                else
-                    claude "Begin"
-                fi
-
-                post_session_menu "$SESSION_DIR"
-                return 0
+            *"Investigate"*)
+                local tool=$(pick_tool "investigation" "$PR_URL")
+                case "$tool" in
+                    *"Claude"*)
+                        switch_to_investigation_mode "$SESSION_DIR"
+                        echo ""
+                        dim "Type /exit when done to return here."
+                        sleep 1
+                        tput reset 2>/dev/null || clear
+                        cd "$SESSION_DIR/repo" && claude --add-dir "$SESSION_DIR" -- "Begin"
+                        post_session_menu "$SESSION_DIR"
+                        return 0
+                        ;;
+                    *"Codex"*)
+                        info "Codex investigation not yet implemented"
+                        sleep 1
+                        ;;
+                    *) ;; # Back
+                esac
                 ;;
-            *"review"*|*"re-review"*)
-                echo ""
-                # Switch to review mode
-                switch_to_review_mode "$SESSION_DIR"
-
-                # Check if review already exists (files are in session root)
-                local existing_review=""
-                [ -f "$SESSION_DIR/REVIEW.md" ] && [ -s "$SESSION_DIR/REVIEW.md" ] && existing_review="yes"
-
-                if [ -n "$existing_review" ]; then
-                    dim "Existing review found. Claude will summarize and continue."
-                else
-                    dim "Starting review."
-                fi
-                dim "Type /exit when done to return here."
-                echo ""
-                sleep 1
-
-                tput reset 2>/dev/null || clear
-                cd "$SESSION_DIR/repo"
-
-                if [ -n "$existing_review" ]; then
-                    claude "Read REVIEW.md and give me a brief summary of the key findings (bullet points, max 5-7 items). Then let me know you're ready to discuss or continue refining the review."
-                else
-                    claude "Begin"
-                fi
-
-                post_session_menu "$SESSION_DIR"
-                return 0
+            *"Develop"*)
+                local tool=$(pick_tool "development" "$PR_URL")
+                case "$tool" in
+                    *"Claude"*)
+                        switch_to_development_mode "$SESSION_DIR"
+                        echo ""
+                        dim "Type /exit when done to return here."
+                        sleep 1
+                        tput reset 2>/dev/null || clear
+                        cd "$SESSION_DIR/repo" && claude --add-dir "$SESSION_DIR" -- "Begin"
+                        post_session_menu "$SESSION_DIR"
+                        return 0
+                        ;;
+                    *"Codex"*)
+                        info "Codex development not yet implemented"
+                        sleep 1
+                        ;;
+                    *) ;; # Back
+                esac
                 ;;
-            *"Run ACR"*)
-                run_acr_review "$SESSION_DIR" "$PR_BASE"
-                ;;
-            *"ACR → Claude"*)
-                # Run ACR first, then go directly to Claude (no confirmation)
-                run_acr_quick "$SESSION_DIR" "$PR_BASE"
-                tput reset 2>/dev/null || clear
-                cd "$SESSION_DIR/repo"
-                claude "I've received ACR review results in the CLAUDE.md context. Please analyze them and create a comprehensive REVIEW.md."
-                post_session_menu "$SESSION_DIR"
-                return 0
-                ;;
-            *"Start Codex"*)
-                run_codex_review "$SESSION_DIR" "$PR_BASE" "false"
-                post_session_menu "$SESSION_DIR"
-                return 0
-                ;;
-            *"ACR → Codex"*)
-                run_codex_review "$SESSION_DIR" "$PR_BASE" "true"
-                post_session_menu "$SESSION_DIR"
-                return 0
-                ;;
-            *"editor"*|*"VS Code"*|*"Cursor"*)
+            *"editor"*)
                 open_in_editor "$SESSION_DIR/repo"
                 ;;
-            *"View diff"*)
+            *"diff"*|*"Diff"*)
                 view_diff "$SESSION_DIR"
                 ;;
-            *"Switch mode"*)
-                prompt_mode_switch "$SESSION_DIR"
+            *"PR"*"browser"*|*"Open PR"*)
+                [ -n "$PR_URL" ] && open "${PR_URL}/files"
+                sleep 1
                 ;;
-            *"Open PR"*)
-                if [ -n "$PR_URL" ]; then
-                    # Open directly to Files Changed tab
-                    open "${PR_URL}/files" 2>/dev/null || xdg-open "${PR_URL}/files" 2>/dev/null || true
-                    success "Opened PR files in browser"
-                    sleep 1
-                fi
-                ;;
-            *"Refresh PR"*)
+            *"Refresh"*)
                 refresh_pr_session "$SESSION_DIR"
                 ;;
-            *"session info"*)
-                if [ -f "$SESSION_DIR/session-info.txt" ]; then
-                    gum pager < "$SESSION_DIR/session-info.txt"
-                fi
+            *"info"*|*"Info"*)
+                gum pager < "$SESSION_DIR/session-info.txt"
                 ;;
-            *"Cancel"*|*"delete"*)
-                if gum confirm --default=false "Delete this session?"; then
-                    rm -rf "$SESSION_DIR"
-                    success "Session deleted"
-                    sleep 1
-                    return 1
-                fi
+            *"Delete"*)
+                gum confirm --default=false "Delete session?" && rm -rf "$SESSION_DIR" && return 1
                 ;;
-            *"Back to main"*)
-                return 1
-                ;;
-            *)
-                # ESC pressed or empty selection - go back
+            *"Back"*|*)
                 return 1
                 ;;
         esac
