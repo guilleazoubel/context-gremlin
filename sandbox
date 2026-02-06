@@ -4408,7 +4408,12 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         """Post a review comment to the PR on GitHub"""
         import subprocess
         import re
+        import tempfile
         try:
+            # Validate inputs
+            if not file_path or not comment:
+                self.send_error(400, 'Missing file path or comment')
+                return
             # Get PR info from session
             pr_number = None
             repo_owner = None
@@ -4480,26 +4485,81 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                 'side': 'RIGHT'  # Comment on the new version of the file
             }
 
-            # Post comment using gh api
+            # Try posting as a review comment (on specific line)
+            # This requires the line to be part of the PR diff
+            # Use --input to pass comment body via stdin to avoid shell escaping issues
+            api_payload = json.dumps({
+                'body': comment,
+                'commit_id': commit_sha,
+                'path': file_path,
+                'line': int(line),
+                'side': 'RIGHT'
+            })
+
             result = subprocess.run(
                 [
                     'gh', 'api',
                     f'repos/{repo_owner}/{repo_name}/pulls/{pr_number}/comments',
                     '-X', 'POST',
-                    '-f', f'body={comment}',
-                    '-f', f'commit_id={commit_sha}',
-                    '-f', f'path={file_path}',
-                    '-F', f'line={int(line)}',
-                    '-f', 'side=RIGHT'
+                    '--input', '-'
                 ],
+                input=api_payload,
                 capture_output=True,
                 text=True
             )
 
+            # If line comment fails, try as a general PR comment with file reference
             if result.returncode != 0:
                 error_msg = result.stderr or result.stdout
-                self.send_error(500, f'GitHub API error: {error_msg}')
-                return
+
+                # Check if it's a "line not part of diff" error
+                if 'pull_request_review_thread' in error_msg or 'Validation Failed' in error_msg or 'line' in error_msg.lower():
+                    # Fall back to general PR comment with file:line in body
+                    comment_with_location = f"**📍 {file_path}:{line}**\n\n{comment}"
+
+                    # Write to temp file to avoid escaping issues
+                    with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+                        f.write(comment_with_location)
+                        temp_path = f.name
+
+                    try:
+                        result = subprocess.run(
+                            [
+                                'gh', 'pr', 'comment', str(pr_number),
+                                '--repo', f'{repo_owner}/{repo_name}',
+                                '--body-file', temp_path
+                            ],
+                            capture_output=True,
+                            text=True,
+                            cwd=str(repo_path)
+                        )
+                    finally:
+                        os.unlink(temp_path)
+
+                    if result.returncode != 0:
+                        fallback_error = result.stderr or result.stdout
+                        self.send_error(500, f'GitHub API error (both line and general comment failed): {fallback_error}')
+                        return
+
+                    # General comment doesn't return JSON with URL, construct it
+                    comment_url = f'https://github.com/{repo_owner}/{repo_name}/pull/{pr_number}'
+
+                    self.send_response(200)
+                    self.send_header('Content-type', 'application/json')
+                    self.send_header('Access-Control-Allow-Origin', '*')
+                    self.end_headers()
+                    self.wfile.write(json.dumps({
+                        'status': 'posted',
+                        'comment_url': comment_url,
+                        'pr': pr_number,
+                        'file': file_path,
+                        'line': line,
+                        'note': 'Posted as general comment (line not in diff)'
+                    }).encode())
+                    return
+                else:
+                    self.send_error(500, f'GitHub API error: {error_msg}')
+                    return
 
             # Parse response to get comment URL
             try:
