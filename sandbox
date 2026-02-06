@@ -1377,6 +1377,75 @@ select_pr() {
     return 0
 }
 
+# Fetch PR comments and reviews for context
+fetch_pr_comments() {
+    local SESSION_DIR="$1"
+    local OWNER="$2"
+    local REPO="$3"
+    local PR_NUMBER="$4"
+    local OUTPUT_FILE="$SESSION_DIR/PR_DISCUSSION.md"
+
+    dim "Fetching PR comments and reviews..."
+
+    # Start the markdown file
+    cat > "$OUTPUT_FILE" << 'HEADER'
+# PR Discussion & Review History
+
+> This file contains existing comments, reviews, and discussions from the PR.
+> Use this context to avoid duplicating feedback and to understand decisions already made.
+
+HEADER
+
+    # Fetch review comments (comments on specific lines of code)
+    local review_comments=$(gh api "repos/$OWNER/$REPO/pulls/$PR_NUMBER/comments" --paginate 2>/dev/null || echo "[]")
+    local review_count=$(echo "$review_comments" | jq 'length')
+
+    if [ "$review_count" != "0" ] && [ "$review_count" != "null" ]; then
+        echo "## Code Review Comments ($review_count)" >> "$OUTPUT_FILE"
+        echo "" >> "$OUTPUT_FILE"
+
+        echo "$review_comments" | jq -r '.[] | "### 📍 `\(.path):\(.line // .original_line // "?")`\n**@\(.user.login)** on \(.created_at | split("T")[0]):\n\n\(.body)\n\n---\n"' >> "$OUTPUT_FILE" 2>/dev/null
+    fi
+
+    # Fetch PR reviews (approve/request changes/comment)
+    local reviews=$(gh api "repos/$OWNER/$REPO/pulls/$PR_NUMBER/reviews" --paginate 2>/dev/null || echo "[]")
+    local reviews_count=$(echo "$reviews" | jq 'length')
+
+    if [ "$reviews_count" != "0" ] && [ "$reviews_count" != "null" ]; then
+        echo "## PR Reviews ($reviews_count)" >> "$OUTPUT_FILE"
+        echo "" >> "$OUTPUT_FILE"
+
+        echo "$reviews" | jq -r '.[] | select(.body != "" and .body != null) | "### \(if .state == "APPROVED" then "✅" elif .state == "CHANGES_REQUESTED" then "⚠️" else "💬" end) \(.state) by @\(.user.login)\n\(.created_at | split("T")[0])\n\n\(.body)\n\n---\n"' >> "$OUTPUT_FILE" 2>/dev/null
+    fi
+
+    # Fetch general PR comments (conversation)
+    local issue_comments=$(gh api "repos/$OWNER/$REPO/issues/$PR_NUMBER/comments" --paginate 2>/dev/null || echo "[]")
+    local issue_count=$(echo "$issue_comments" | jq 'length')
+
+    if [ "$issue_count" != "0" ] && [ "$issue_count" != "null" ]; then
+        echo "## General Discussion ($issue_count)" >> "$OUTPUT_FILE"
+        echo "" >> "$OUTPUT_FILE"
+
+        echo "$issue_comments" | jq -r '.[] | "### 💬 @\(.user.login) on \(.created_at | split("T")[0])\n\n\(.body)\n\n---\n"' >> "$OUTPUT_FILE" 2>/dev/null
+    fi
+
+    # Add summary at the end
+    local total=$((review_count + reviews_count + issue_count))
+    if [ "$total" -gt 0 ]; then
+        echo "" >> "$OUTPUT_FILE"
+        echo "---" >> "$OUTPUT_FILE"
+        echo "*Total: $review_count code comments, $reviews_count reviews, $issue_count discussion comments*" >> "$OUTPUT_FILE"
+
+        # Also create symlink in repo for Claude to find
+        [ -d "$SESSION_DIR/repo" ] && ln -sf "../PR_DISCUSSION.md" "$SESSION_DIR/repo/PR_DISCUSSION.md" 2>/dev/null
+
+        dim "  Found $total existing comments/reviews"
+    else
+        echo "*No existing comments or reviews on this PR.*" >> "$OUTPUT_FILE"
+        dim "  No existing comments found"
+    fi
+}
+
 create_pr_session() {
     show_context "New PR Review"
 
@@ -1931,6 +2000,9 @@ The REVIEW.md should always show the CURRENT state, not accumulate history.
 
 **BEGIN NOW: Classify the PR type, then run macro analysis, then parallel micro analyses. Include code snippets for every finding.**
 CLAUDE_EOF
+
+    # Fetch PR comments and reviews for context
+    fetch_pr_comments "$SESSION_DIR" "$OWNER" "$REPO" "$PR_NUMBER"
 
     # Setup output files with symlinks (survives repo deletion)
     setup_output_files "$SESSION_DIR"
@@ -2841,10 +2913,13 @@ Write to `REVIEW.md` with this structure:
 ## Available Context
 
 - **session-info.txt** - PR metadata, Jira ticket details
+- **PR_DISCUSSION.md** - Existing PR comments, reviews, and discussions (READ THIS FIRST!)
 - **ACR_REVIEW.md** - Automated review results (if present - USE AS INPUT, but do your own analysis)
 - **FINDINGS.md** - Investigation results (if investigated first)
 
-> ⚠️ If ACR_REVIEW.md exists, read it for context, but perform your OWN comprehensive review. ACR provides hints, not conclusions.
+> ⚠️ **IMPORTANT**: Read PR_DISCUSSION.md first to understand what feedback has already been given.
+> Don't duplicate existing comments. Note if issues were already discussed or marked as "by design".
+> If ACR_REVIEW.md exists, use it as context but perform your OWN comprehensive review.
 
 **BEGIN YOUR COMPREHENSIVE REVIEW NOW.**
 REVIEW_MODE
@@ -6692,6 +6767,15 @@ REREVIEW_EOF
 NOTICE_EOF
         cat "$SESSION_DIR/repo/CLAUDE.md" >> "$temp_file"
         mv "$temp_file" "$SESSION_DIR/repo/CLAUDE.md"
+    fi
+
+    # Refresh PR comments/discussions
+    local OWNER=""
+    local REPO_NAME=""
+    if [[ "$REPO" =~ ^([^/]+)/([^/]+)$ ]]; then
+        OWNER="${BASH_REMATCH[1]}"
+        REPO_NAME="${BASH_REMATCH[2]}"
+        fetch_pr_comments "$SESSION_DIR" "$OWNER" "$REPO_NAME" "$PR_NUMBER"
     fi
 
     # Ask if user wants to start Claude immediately for re-review
