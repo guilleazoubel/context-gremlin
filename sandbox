@@ -4283,6 +4283,8 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             line = data.get('line', 0)
             comment = data.get('comment', '')
             self.post_pr_comment(session_path, file_path, line, comment)
+        elif parsed.path == '/api/refresh-discussion':
+            self.refresh_pr_discussion(session_path)
         else:
             self.send_error(404, 'Not found')
 
@@ -4653,6 +4655,131 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                 'pr': pr_number,
                 'file': file_path,
                 'line': line
+            }).encode())
+
+        except Exception as e:
+            self.send_error(500, str(e))
+
+    def refresh_pr_discussion(self, session_path):
+        """Refresh PR comments and discussions"""
+        import subprocess
+        import re
+        try:
+            # Get PR info from session
+            pr_number = None
+            repo_owner = None
+            repo_name = None
+
+            session_json = session_path / 'session.json'
+            info_file = session_path / 'session-info.txt'
+
+            # Try V2 format first
+            if session_json.exists():
+                with open(session_json) as f:
+                    content = f.read().strip()
+                if content:
+                    data = json.loads(content)
+                    pr_info = data.get('pr', {})
+                    pr_number = pr_info.get('number')
+                    project = data.get('project', '')
+                    match = re.search(r'github\.com/([^/]+)/([^/]+)', project)
+                    if match:
+                        repo_owner = match.group(1)
+                        repo_name = match.group(2).replace('.git', '')
+
+            # Fall back to V1 format
+            if not pr_number and info_file.exists():
+                content = info_file.read_text()
+                match = re.search(r'PR #(\d+)', content)
+                if match:
+                    pr_number = match.group(1)
+                match = re.search(r'Repository:\s*([^\n]+)', content)
+                if match:
+                    repo_str = match.group(1).strip()
+                    if '/' in repo_str:
+                        parts = repo_str.split('/')
+                        if len(parts) >= 2:
+                            repo_owner = parts[-2]
+                            repo_name = parts[-1].replace('.git', '')
+
+            if not all([pr_number, repo_owner, repo_name]):
+                self.send_error(400, 'Could not determine PR info')
+                return
+
+            output_file = session_path / 'PR_DISCUSSION.md'
+
+            # Fetch review comments
+            result = subprocess.run(
+                ['gh', 'api', f'repos/{repo_owner}/{repo_name}/pulls/{pr_number}/comments', '--paginate'],
+                capture_output=True, text=True
+            )
+            review_comments = json.loads(result.stdout) if result.returncode == 0 else []
+
+            # Fetch PR reviews
+            result = subprocess.run(
+                ['gh', 'api', f'repos/{repo_owner}/{repo_name}/pulls/{pr_number}/reviews', '--paginate'],
+                capture_output=True, text=True
+            )
+            reviews = json.loads(result.stdout) if result.returncode == 0 else []
+
+            # Fetch issue comments
+            result = subprocess.run(
+                ['gh', 'api', f'repos/{repo_owner}/{repo_name}/issues/{pr_number}/comments', '--paginate'],
+                capture_output=True, text=True
+            )
+            issue_comments = json.loads(result.stdout) if result.returncode == 0 else []
+
+            # Write markdown file
+            with open(output_file, 'w') as f:
+                f.write("# PR Discussion & Review History\\n\\n")
+                f.write("> This file contains existing comments, reviews, and discussions from the PR.\\n")
+                f.write("> Use this context to avoid duplicating feedback and to understand decisions already made.\\n\\n")
+
+                if review_comments:
+                    f.write(f"## Code Review Comments ({len(review_comments)})\\n\\n")
+                    for c in review_comments:
+                        line = c.get('line') or c.get('original_line') or '?'
+                        f.write(f"### 📍 `{c.get('path', '?')}:{line}`\\n")
+                        f.write(f"**@{c.get('user', {}).get('login', '?')}** on {c.get('created_at', '')[:10]}:\\n\\n")
+                        f.write(f"{c.get('body', '')}\\n\\n---\\n\\n")
+
+                if reviews:
+                    reviews_with_body = [r for r in reviews if r.get('body')]
+                    if reviews_with_body:
+                        f.write(f"## PR Reviews ({len(reviews_with_body)})\\n\\n")
+                        for r in reviews_with_body:
+                            state = r.get('state', '')
+                            icon = '✅' if state == 'APPROVED' else '⚠️' if state == 'CHANGES_REQUESTED' else '💬'
+                            f.write(f"### {icon} {state} by @{r.get('user', {}).get('login', '?')}\\n")
+                            f.write(f"{r.get('created_at', '')[:10]}\\n\\n")
+                            f.write(f"{r.get('body', '')}\\n\\n---\\n\\n")
+
+                if issue_comments:
+                    f.write(f"## General Discussion ({len(issue_comments)})\\n\\n")
+                    for c in issue_comments:
+                        f.write(f"### 💬 @{c.get('user', {}).get('login', '?')} on {c.get('created_at', '')[:10]}\\n\\n")
+                        f.write(f"{c.get('body', '')}\\n\\n---\\n\\n")
+
+                total = len(review_comments) + len([r for r in reviews if r.get('body')]) + len(issue_comments)
+                f.write(f"\\n---\\n*Total: {len(review_comments)} code comments, {len([r for r in reviews if r.get('body')])} reviews, {len(issue_comments)} discussion comments*\\n")
+
+            # Create symlink in repo
+            repo_path = session_path / 'repo'
+            if repo_path.exists():
+                symlink_path = repo_path / 'PR_DISCUSSION.md'
+                if symlink_path.exists():
+                    symlink_path.unlink()
+                symlink_path.symlink_to('../PR_DISCUSSION.md')
+
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                'status': 'refreshed',
+                'review_comments': len(review_comments),
+                'reviews': len([r for r in reviews if r.get('body')]),
+                'issue_comments': len(issue_comments)
             }).encode())
 
         except Exception as e:
@@ -5119,6 +5246,7 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                 <div class="session-details-actions">
                     <button class="btn-focus" id="btnStart" onclick="startClaude()">▶️ Start Claude</button>
                     <button class="btn-focus" id="btnFocus" onclick="focusTerminal()">🎯 Focus Terminal</button>
+                    <button class="btn-focus" id="btnRefreshDiscussion" onclick="refreshDiscussion()" style="display:none;">💬 Refresh Discussion</button>
                     <button class="btn-archive" id="btnArchive" onclick="archiveSession()">📦 Archive</button>
                     <button class="btn-delete" id="btnDelete" onclick="deleteSession()">🗑️ Delete</button>
                 </div>
@@ -5368,6 +5496,14 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             const archiveBtn = document.getElementById('btnArchive');
             archiveBtn.disabled = session.archived;
             archiveBtn.innerHTML = session.archived ? '📦 Archived' : '📦 Archive';
+
+            // Show/hide Refresh Discussion button (only for PR sessions)
+            const refreshDiscBtn = document.getElementById('btnRefreshDiscussion');
+            if (session.pr && !session.archived) {
+                refreshDiscBtn.style.display = 'inline-flex';
+            } else {
+                refreshDiscBtn.style.display = 'none';
+            }
         }
 
         let currentVersion = 'current';
@@ -5502,7 +5638,7 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             if (!currentSession) return;
             const session = sessions.find(s => s.name === currentSession);
             if (session?.archived) {
-                alert('Cannot start Claude on archived session (repo deleted)');
+                showToast('Cannot start Claude on archived session (repo deleted)', 'error');
                 return;
             }
             try {
@@ -5511,15 +5647,54 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ session: currentSession })
                 });
+                if (!res.ok) {
+                    const errorText = await res.text();
+                    throw new Error(errorText || 'Server error');
+                }
                 const data = await res.json();
                 if (data.status === 'started') {
+                    showToast('Claude session started in new terminal');
                     // Refresh to show terminal as active
                     setTimeout(() => loadSessions(), 1000);
+                } else {
+                    showToast('Unexpected response: ' + JSON.stringify(data), 'error');
                 }
             } catch (e) {
                 console.error('Start Claude failed', e);
-                alert('Failed to start Claude session');
+                showToast('Failed to start Claude: ' + e.message, 'error');
             }
+        }
+
+        async function refreshDiscussion() {
+            if (!currentSession) return;
+            const session = sessions.find(s => s.name === currentSession);
+            if (!session?.pr) {
+                showToast('Not a PR session', 'error');
+                return;
+            }
+            const btn = document.getElementById('btnRefreshDiscussion');
+            btn.disabled = true;
+            btn.innerHTML = '⏳ Refreshing...';
+            try {
+                const res = await fetch('/api/refresh-discussion', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ session: currentSession })
+                });
+                if (!res.ok) {
+                    throw new Error('Server error');
+                }
+                const data = await res.json();
+                if (data.status === 'refreshed') {
+                    const total = data.review_comments + data.reviews + data.issue_comments;
+                    showToast(`Discussion refreshed: ${total} comments (${data.review_comments} code, ${data.reviews} reviews, ${data.issue_comments} general)`);
+                }
+            } catch (e) {
+                console.error('Refresh discussion failed', e);
+                showToast('Failed to refresh discussion: ' + e.message, 'error');
+            }
+            btn.disabled = false;
+            btn.innerHTML = '💬 Refresh Discussion';
         }
 
         async function focusTerminal() {
@@ -6975,6 +7150,7 @@ pre_session_menu() {
         if [ -n "$PR_URL" ]; then
             options+=("🌐 Open PR in browser")
             options+=("🔄 Refresh PR")
+            options+=("💬 Refresh Discussion")
         fi
 
         options+=("📄 Session info")
@@ -7234,6 +7410,30 @@ post_session_menu() {
                     [ -f "$SESSION_DIR/REVIEW.md" ] && [ -s "$SESSION_DIR/REVIEW.md" ] && review_file="$SESSION_DIR/REVIEW.md"
                     [ -f "$SESSION_DIR/FINDINGS.md" ] && [ -s "$SESSION_DIR/FINDINGS.md" ] && findings_file="$SESSION_DIR/FINDINGS.md"
                 fi
+                ;;
+            *"Refresh Discussion"*)
+                # Refresh PR comments and discussions
+                local PR_NUMBER=$(grep "^PR #" "$SESSION_DIR/session-info.txt" 2>/dev/null | head -1 | sed 's/PR #\([0-9]*\).*/\1/')
+                local REPO=$(grep "^Repository:" "$SESSION_DIR/session-info.txt" 2>/dev/null | head -1 | cut -d: -f2 | xargs)
+                if [ -n "$PR_NUMBER" ] && [ -n "$REPO" ]; then
+                    local OWNER="${REPO%/*}"
+                    local REPO_NAME="${REPO#*/}"
+                    fetch_pr_comments "$SESSION_DIR" "$OWNER" "$REPO_NAME" "$PR_NUMBER"
+
+                    # Show summary of what was fetched
+                    if [ -f "$SESSION_DIR/PR_DISCUSSION.md" ]; then
+                        local total=$(tail -1 "$SESSION_DIR/PR_DISCUSSION.md" | grep -oE '[0-9]+' | paste -sd+ - | bc 2>/dev/null || echo "0")
+                        success "PR discussion refreshed ($total total comments)"
+
+                        # Offer to view the discussion
+                        if gum confirm "View PR discussion?"; then
+                            view_markdown_nice "$SESSION_DIR/PR_DISCUSSION.md"
+                        fi
+                    fi
+                else
+                    error "Could not find PR info in session"
+                fi
+                sleep 1
                 ;;
             *"View output"*)
                 # Let user choose which file to view
