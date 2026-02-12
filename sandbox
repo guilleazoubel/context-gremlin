@@ -4254,6 +4254,20 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         except:
             data = {}
 
+        # Handle endpoints that don't require a session FIRST
+        if parsed.path == '/api/pr-info':
+            pr_url = data.get('url', '')
+            self.get_pr_info(pr_url)
+            return
+        elif parsed.path == '/api/create-session':
+            mode = data.get('mode')
+            url = data.get('url')
+            jira = data.get('jira')
+            focus = data.get('focus')
+            self.create_new_session(mode, url, jira, focus)
+            return
+
+        # All other endpoints require a valid session
         session_name = data.get('session', '')
 
         # Validate session name to prevent path traversal
@@ -4295,18 +4309,6 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         elif parsed.path == '/api/refresh-pr':
             mode = data.get('mode', 'claude')
             self.refresh_pr(session_path, mode)
-        elif parsed.path == '/api/pr-info':
-            # Fetch PR info without creating session (for Jira auto-detection)
-            pr_url = data.get('url', '')
-            self.get_pr_info(pr_url)
-            return
-        elif parsed.path == '/api/create-session':
-            # Create session doesn't need existing session_path
-            mode = data.get('mode')
-            url = data.get('url')
-            jira = data.get('jira')
-            focus = data.get('focus')
-            self.create_new_session(mode, url, jira, focus)
         elif parsed.path == '/api/run-app':
             self.run_application(session_path)
         elif parsed.path == '/api/commit':
