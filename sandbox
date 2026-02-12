@@ -4273,7 +4273,8 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             self.delete_session(session_path)
         elif parsed.path == '/api/switch-mode':
             new_mode = data.get('mode', '')
-            self.switch_session_mode(session_path, new_mode)
+            extra_data = data.get('extra', {})
+            self.switch_session_mode(session_path, new_mode, extra_data)
         elif parsed.path == '/api/focus-terminal':
             self.focus_terminal(session_path)
         elif parsed.path == '/api/start-claude':
@@ -4285,6 +4286,32 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             self.post_pr_comment(session_path, file_path, line, comment)
         elif parsed.path == '/api/refresh-discussion':
             self.refresh_pr_discussion(session_path)
+        elif parsed.path == '/api/fix-finding':
+            finding_data = data.get('finding', {})
+            fix_all = data.get('fix_all', False)
+            self.fix_finding(session_path, finding_data, fix_all)
+        elif parsed.path == '/api/import-pr-comments':
+            self.import_pr_comments(session_path)
+        elif parsed.path == '/api/refresh-pr':
+            mode = data.get('mode', 'claude')
+            self.refresh_pr(session_path, mode)
+        elif parsed.path == '/api/pr-info':
+            # Fetch PR info without creating session (for Jira auto-detection)
+            pr_url = data.get('url', '')
+            self.get_pr_info(pr_url)
+            return
+        elif parsed.path == '/api/create-session':
+            # Create session doesn't need existing session_path
+            mode = data.get('mode')
+            url = data.get('url')
+            jira = data.get('jira')
+            focus = data.get('focus')
+            self.create_new_session(mode, url, jira, focus)
+        elif parsed.path == '/api/run-app':
+            self.run_application(session_path)
+        elif parsed.path == '/api/commit':
+            message = data.get('message', '')
+            self.commit_changes(session_path, message)
         else:
             self.send_error(404, 'Not found')
 
@@ -4312,9 +4339,10 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         except Exception as e:
             self.send_error(500, str(e))
 
-    def switch_session_mode(self, session_path, new_mode):
-        """Switch session mode (review/investigation/development)"""
+    def switch_session_mode(self, session_path, new_mode, extra_data=None):
+        """Switch session mode (review/investigation/development) with optional extra context"""
         import datetime
+        import subprocess
         try:
             session_json = session_path / 'session.json'
             if not session_json.exists():
@@ -4326,6 +4354,16 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
 
             old_mode = data.get('mode', 'unknown')
             data['mode'] = new_mode
+
+            # Handle mode-specific extra data
+            if extra_data:
+                if new_mode == 'review' and extra_data.get('pr_url'):
+                    # Store PR URL for reference
+                    data.setdefault('pr', {})['url'] = extra_data['pr_url']
+                elif new_mode == 'development' and extra_data.get('jira'):
+                    data.setdefault('jira', {})['ticket'] = extra_data['jira']
+                elif new_mode == 'investigation' and extra_data.get('focus'):
+                    data['focus'] = extra_data['focus']
 
             # Add history entry
             if 'history' not in data:
@@ -4340,11 +4378,39 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             with open(session_json, 'w') as f:
                 json.dump(data, f, indent=2)
 
+            # Update CLAUDE.md based on new mode
+            repo_path = session_path / 'repo'
+            claude_md = repo_path / 'CLAUDE.md'
+            if repo_path.exists() and claude_md.exists():
+                # Read existing CLAUDE.md to preserve any Jira context
+                existing_content = claude_md.read_text()
+
+                # Generate new mode-specific header
+                if new_mode == 'review':
+                    mode_header = "# PR Review Session\\n\\nYou are reviewing this pull request."
+                elif new_mode == 'development':
+                    jira = data.get('jira', {}).get('ticket', '')
+                    mode_header = f"# Development Session\\n\\nYou are implementing changes.\\nJira: {jira}" if jira else "# Development Session\\n\\nYou are implementing changes."
+                else:
+                    focus = data.get('focus', '')
+                    mode_header = f"# Investigation Session\\n\\nFocus: {focus}" if focus else "# Investigation Session"
+
+                # Preserve Jira context section if it exists
+                jira_section = ""
+                if "## Jira Context" in existing_content:
+                    jira_match = existing_content.split("## Jira Context")
+                    if len(jira_match) > 1:
+                        jira_section = "\\n\\n## Jira Context" + jira_match[1].split("##")[0]
+
+                # Write updated CLAUDE.md
+                with open(claude_md, 'w') as f:
+                    f.write(mode_header + jira_section)
+
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', '*')
             self.end_headers()
-            self.wfile.write(json.dumps({'status': 'switched', 'mode': new_mode}).encode())
+            self.wfile.write(json.dumps({'status': 'switched', 'from': old_mode, 'to': new_mode}).encode())
         except Exception as e:
             self.send_error(500, str(e))
 
@@ -4487,6 +4553,10 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         import re
         import tempfile
         try:
+            # Debug logging
+            print(f"[DEBUG] Posting comment to session: {session_path}", flush=True)
+            print(f"[DEBUG] File: {file_path}, Line: {line}", flush=True)
+
             # Validate inputs
             if not file_path or not comment:
                 self.send_error(400, 'Missing file path or comment')
@@ -4506,7 +4576,8 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                 if content:
                     data = json.loads(content)
                     pr_info = data.get('pr', {})
-                    pr_number = pr_info.get('number')
+                    # Ensure PR number is string
+                    pr_number = str(pr_info.get('number', '')).strip() or None
                     project = data.get('project', '')
                     # Parse owner/repo from project URL
                     match = re.search(r'github\.com/([^/]+)/([^/]+)', project)
@@ -4530,6 +4601,9 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                         if len(parts) >= 2:
                             repo_owner = parts[-2]
                             repo_name = parts[-1].replace('.git', '')
+
+            # Debug: Log extracted values
+            print(f"[DEBUG] Extracted: PR#{pr_number}, Owner={repo_owner}, Repo={repo_name}", flush=True)
 
             if not all([pr_number, repo_owner, repo_name]):
                 self.send_error(400, f'Could not determine PR info: pr={pr_number}, owner={repo_owner}, repo={repo_name}')
@@ -4785,6 +4859,684 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         except Exception as e:
             self.send_error(500, str(e))
 
+    def fix_finding(self, session_path, finding_data, fix_all):
+        """Launch Claude to fix a finding or all findings"""
+        import subprocess
+        import datetime
+
+        try:
+            repo_path = session_path / 'repo'
+            if not repo_path.exists():
+                self.send_error(400, 'Session repo not found (may be archived)')
+                return
+
+            # Create logs directory
+            logs_dir = session_path / 'logs'
+            logs_dir.mkdir(exist_ok=True)
+            log_file = logs_dir / f"terminal-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
+
+            if fix_all:
+                prompt = """FIX ALL FINDINGS MODE:
+1. Read REVIEW.md and identify all open findings
+2. Work through each finding systematically
+3. After fixing each one, update its status in REVIEW.md
+4. When done, summarize what was fixed
+
+DO NOT COMMIT - user will test and commit manually."""
+            else:
+                finding = finding_data
+                prompt = f"""FIX SINGLE FINDING:
+
+**Finding #{finding.get('number', '?')}: {finding.get('title', 'Unknown')}**
+
+Location: `{finding.get('file', '')}:{finding.get('line', '')}`
+
+**Problem:** {finding.get('problem', 'See REVIEW.md')}
+
+**Impact:** {finding.get('impact', '')}
+
+**Suggested Fix:** {finding.get('suggested', '')}
+
+Instructions:
+1. Navigate to the file and line indicated
+2. Understand the context
+3. Implement the fix
+4. Update REVIEW.md to mark this finding as fixed
+
+DO NOT COMMIT - user will test and commit manually."""
+
+            # Escape the prompt for shell
+            escaped_prompt = prompt.replace("'", "'\\''")
+            claude_cmd = f"cd '{repo_path}' && script -q '{log_file}' claude --add-dir '{session_path}' '{escaped_prompt}'"
+
+            session_name = session_path.name
+
+            # Try iTerm2 first
+            if Path('/Applications/iTerm.app').exists():
+                script = f'''
+tell application "iTerm"
+    activate
+    if (count of windows) = 0 then
+        create window with default profile
+    end if
+    tell current window
+        create tab with default profile
+        tell current session
+            set name to "🔧 Fix: {session_name}"
+            write text "{claude_cmd}"
+        end tell
+    end tell
+end tell
+'''
+            else:
+                script = f'''
+tell application "Terminal"
+    activate
+    do script "{claude_cmd}"
+end tell
+'''
+            subprocess.run(['osascript', '-e', script], capture_output=True, text=True)
+
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                'status': 'started',
+                'mode': 'fix_all' if fix_all else 'fix_one',
+                'log_file': str(log_file)
+            }).encode())
+
+        except Exception as e:
+            self.send_error(500, str(e))
+
+    def import_pr_comments(self, session_path):
+        """Fetch PR comments and add them as findings to REVIEW.md"""
+        import subprocess
+        import re
+
+        try:
+            # Get PR info from session (try V2 then V1)
+            pr_number = None
+            owner = None
+            repo = None
+
+            session_json = session_path / 'session.json'
+            info_file = session_path / 'session-info.txt'
+
+            # Try V2 format first
+            if session_json.exists():
+                try:
+                    content = session_json.read_text().strip()
+                    if content:
+                        data = json.loads(content)
+                        pr_info = data.get('pr', {})
+                        pr_number = pr_info.get('number')
+                        project = data.get('project', '')
+                        match = re.search(r'github\.com/([^/]+)/([^/]+)', project)
+                        if match:
+                            owner = match.group(1)
+                            repo = match.group(2).replace('.git', '')
+                except:
+                    pass
+
+            # Fall back to V1 format (session-info.txt)
+            if not pr_number and info_file.exists():
+                content = info_file.read_text()
+                # Extract PR number from "PR #930:" pattern
+                match = re.search(r'PR #(\d+)', content)
+                if match:
+                    pr_number = match.group(1)
+                # Extract repo from "Repository: org/repo" or URL pattern
+                match = re.search(r'Repository:\s*([^\n]+)', content)
+                if match:
+                    repo_str = match.group(1).strip()
+                    # Handle "org/repo" format
+                    if '/' in repo_str and 'github.com' not in repo_str:
+                        parts = repo_str.split('/')
+                        if len(parts) >= 2:
+                            owner = parts[0]
+                            repo = parts[1].replace('.git', '')
+                    # Handle full URL
+                    elif 'github.com' in repo_str:
+                        url_match = re.search(r'github\.com/([^/]+)/([^/\s]+)', repo_str)
+                        if url_match:
+                            owner = url_match.group(1)
+                            repo = url_match.group(2).replace('.git', '')
+
+            if not all([pr_number, owner, repo]):
+                self.send_error(400, f'Could not determine PR info: pr={pr_number}, owner={owner}, repo={repo}')
+                return
+
+            # Fetch review comments
+            result = subprocess.run(
+                ['gh', 'api', f'repos/{owner}/{repo}/pulls/{pr_number}/comments', '--paginate'],
+                capture_output=True, text=True
+            )
+            review_comments = json.loads(result.stdout) if result.returncode == 0 and result.stdout.strip() else []
+
+            # Read existing REVIEW.md to check for duplicates
+            review_file = session_path / 'REVIEW.md'
+            if not review_file.exists():
+                review_file = session_path / 'repo' / 'REVIEW.md'
+            existing_content = review_file.read_text() if review_file.exists() else ''
+
+            # Build new findings from comments
+            new_findings = []
+            finding_num = len(re.findall(r'#### Finding #\\d+', existing_content)) + 1
+
+            for comment in review_comments:
+                body = comment.get('body', '')
+                path = comment.get('path', '')
+                line = comment.get('line') or comment.get('original_line', 0)
+                author = comment.get('user', {}).get('login', 'unknown')
+
+                # Skip if already in REVIEW.md
+                snippet = body[:50].replace('\\n', ' ')
+                if snippet in existing_content:
+                    continue
+
+                new_findings.append({
+                    'number': finding_num,
+                    'title': f'PR Comment by @{author}',
+                    'file': path,
+                    'line': line,
+                    'body': body,
+                    'author': author,
+                    'source': 'pr_comment'
+                })
+                finding_num += 1
+
+            # Append new findings to REVIEW.md
+            if new_findings:
+                with open(review_file, 'a') as f:
+                    f.write('\\n\\n---\\n\\n## Imported PR Comments\\n\\n')
+                    for finding in new_findings:
+                        f.write(f"#### Finding #{finding['number']}: {finding['title']}\\n\\n")
+                        f.write(f"📍 **Location:** `{finding['file']}:{finding['line']}`\\n\\n")
+                        f.write(f"**Source:** PR comment by @{finding['author']}\\n\\n")
+                        f.write(f"**Comment:**\\n{finding['body']}\\n\\n")
+                        f.write("**Status:** ⚠️ Open\\n\\n")
+
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                'status': 'imported',
+                'new_findings': len(new_findings),
+                'total_comments': len(review_comments)
+            }).encode())
+
+        except Exception as e:
+            self.send_error(500, str(e))
+
+    def refresh_pr(self, session_path, mode):
+        """Refresh PR and launch re-review in new terminal"""
+        import subprocess
+        import re
+        import datetime
+
+        try:
+            repo_path = session_path / 'repo'
+            if not repo_path.exists():
+                self.send_error(400, 'Repo not found (session may be archived)')
+                return
+
+            # Get PR info from session (try V2 then V1)
+            session_json = session_path / 'session.json'
+            info_file = session_path / 'session-info.txt'
+
+            pr_number = None
+            pr_base = 'main'
+
+            # Try V2 format first
+            if session_json.exists():
+                try:
+                    content = session_json.read_text().strip()
+                    if content:
+                        data = json.loads(content)
+                        pr_number = data.get('pr', {}).get('number')
+                        pr_base = data.get('pr', {}).get('base', 'main')
+                except:
+                    pass  # Fall through to V1 format
+
+            # Fall back to V1 format (session-info.txt)
+            if not pr_number and info_file.exists():
+                content = info_file.read_text()
+                # Match "PR #930:" pattern
+                match = re.search(r'PR #(\d+)', content)
+                if match:
+                    pr_number = match.group(1)
+                # Match "Branch: feature/name → main" pattern
+                match = re.search(r'Branch:.*→\s*(\S+)', content)
+                if match:
+                    pr_base = match.group(1)
+
+            if not pr_number:
+                self.send_error(400, 'Could not find PR number')
+                return
+
+            # Build the refresh command
+            logs_dir = session_path / 'logs'
+            logs_dir.mkdir(exist_ok=True)
+            log_file = logs_dir / f"terminal-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
+
+            session_name = session_path.name
+
+            # Build command with script inside (matches fix_finding pattern)
+            if mode == 'acr+claude':
+                prompt = "RE-REVIEW with ACR: Check ACR_REVIEW.md and update REVIEW.md"
+                escaped_prompt = prompt.replace("'", "'\\''")
+                claude_cmd = f"cd '{repo_path}' && git fetch origin 'pull/{pr_number}/head:pr-{pr_number}-refresh' && git checkout 'pr-{pr_number}-refresh' && echo '=== Running ACR ===' && acr -r 5 -a claude -b {pr_base} --local > ACR_REVIEW.md 2>&1 && echo '=== Starting Claude ===' && script -q '{log_file}' claude --add-dir '{session_path}' '{escaped_prompt}'"
+            else:
+                prompt = "RE-REVIEW: PR updated. Check for new commits and update REVIEW.md"
+                escaped_prompt = prompt.replace("'", "'\\''")
+                claude_cmd = f"cd '{repo_path}' && git fetch origin 'pull/{pr_number}/head:pr-{pr_number}-refresh' && git checkout 'pr-{pr_number}-refresh' && script -q '{log_file}' claude --add-dir '{session_path}' '{escaped_prompt}'"
+
+            print(f"[DEBUG refresh_pr] claude_cmd: {claude_cmd[:200]}...", flush=True)
+            print(f"[DEBUG refresh_pr] iTerm exists: {Path('/Applications/iTerm.app').exists()}", flush=True)
+
+            if Path('/Applications/iTerm.app').exists():
+                script = f'''
+tell application "iTerm"
+    activate
+    if (count of windows) = 0 then
+        create window with default profile
+    end if
+    tell current window
+        create tab with default profile
+        tell current session
+            set name to "🔄 Re-review: {session_name}"
+            write text "{claude_cmd}"
+        end tell
+    end tell
+end tell
+'''
+            else:
+                script = f'''
+tell application "Terminal"
+    activate
+    do script "{claude_cmd}"
+end tell
+'''
+            result = subprocess.run(['osascript', '-e', script], capture_output=True, text=True)
+            print(f"[DEBUG refresh_pr] osascript returncode: {result.returncode}", flush=True)
+            print(f"[DEBUG refresh_pr] osascript stdout: {result.stdout}", flush=True)
+            print(f"[DEBUG refresh_pr] osascript stderr: {result.stderr}", flush=True)
+            osascript_error = result.stderr if result.returncode != 0 else None
+
+            # Update session.json with terminal info (so Focus Terminal works)
+            session_json = session_path / 'session.json'
+            if session_json.exists():
+                try:
+                    with open(session_json) as f:
+                        data = json.load(f)
+                    data['terminal'] = {
+                        'log_file': str(log_file),
+                        'tab_name': f"🔄 Re-review: {session_name}",
+                        'started': datetime.datetime.now().isoformat()
+                    }
+                    if 'history' not in data:
+                        data['history'] = []
+                    data['history'].append({
+                        'timestamp': datetime.datetime.now().isoformat(),
+                        'action': 'refresh_pr_started',
+                        'mode': mode,
+                        'source': 'dashboard'
+                    })
+                    with open(session_json, 'w') as f:
+                        json.dump(data, f, indent=2)
+                except:
+                    pass  # Don't fail if session.json update fails
+
+            # Also create marker file for v1 sessions
+            terminal_marker = session_path / '.terminal_log'
+            terminal_marker.write_text(str(log_file))
+
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            response = {
+                'status': 'started',
+                'mode': mode,
+                'pr': pr_number,
+                'log_file': str(log_file)
+            }
+            if osascript_error:
+                response['osascript_error'] = osascript_error
+            self.wfile.write(json.dumps(response).encode())
+
+        except Exception as e:
+            self.send_error(500, str(e))
+
+    def get_pr_info(self, pr_url):
+        """Fetch PR info for Jira auto-detection"""
+        import subprocess
+        import re
+        try:
+            if not pr_url:
+                self.send_error(400, 'Missing PR URL')
+                return
+
+            # Parse PR URL
+            match = re.match(r'https://github\.com/([^/]+)/([^/]+)/pull/(\d+)', pr_url)
+            if not match:
+                self.send_error(400, 'Invalid PR URL format')
+                return
+
+            owner = match.group(1)
+            repo = match.group(2)
+            pr_number = match.group(3)
+
+            # Fetch PR info via gh cli
+            result = subprocess.run(
+                ['gh', 'pr', 'view', pr_number, '--repo', f'{owner}/{repo}',
+                 '--json', 'title,headRefName,baseRefName,author'],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+
+            if result.returncode != 0:
+                self.send_error(500, f'Failed to fetch PR: {result.stderr}')
+                return
+
+            pr_data = json.loads(result.stdout)
+            branch = pr_data.get('headRefName', '')
+
+            # Extract Jira ticket from branch name
+            detected_jira = None
+            if branch:
+                # Try start of branch first (e.g., HB-404-fix-login)
+                jira_match = re.match(r'^([A-Za-z]+-\d+)', branch)
+                if jira_match:
+                    detected_jira = jira_match.group(1).upper()
+                else:
+                    # Try anywhere in branch name
+                    jira_match = re.search(r'([A-Za-z]+-\d+)', branch)
+                    if jira_match:
+                        detected_jira = jira_match.group(1).upper()
+
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                'pr_number': pr_number,
+                'title': pr_data.get('title', ''),
+                'branch': branch,
+                'base': pr_data.get('baseRefName', ''),
+                'author': pr_data.get('author', {}).get('login', ''),
+                'detected_jira': detected_jira
+            }).encode())
+
+        except subprocess.TimeoutExpired:
+            self.send_error(500, 'PR fetch timed out')
+        except Exception as e:
+            self.send_error(500, str(e))
+
+    def create_new_session(self, mode, url, jira=None, focus=None):
+        """Create a new session via the sandbox script"""
+        import subprocess
+        import re
+        import datetime
+
+        try:
+            if not mode or not url:
+                self.send_error(400, 'Missing mode or URL')
+                return
+
+            if mode == 'development' and not jira:
+                self.send_error(400, 'Development mode requires Jira ticket')
+                return
+
+            is_pr_url = '/pull/' in url
+
+            if mode == 'review' and not is_pr_url:
+                self.send_error(400, 'Review mode requires a PR URL')
+                return
+
+            # Build command to run sandbox in non-interactive mode
+            env = os.environ.copy()
+            env['SANDBOX_MODE'] = mode
+            env['SANDBOX_URL'] = url
+            if jira:
+                env['SANDBOX_JIRA'] = jira
+            if focus:
+                env['SANDBOX_FOCUS'] = focus
+
+            # Find the sandbox script
+            sandbox_path = Path(SESSIONS_DIR).parent / 'sandbox'
+            if not sandbox_path.exists():
+                sandbox_path = Path(__file__).parent / 'sandbox'
+
+            result = subprocess.run(
+                [str(sandbox_path), '--create-session'],
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=120
+            )
+
+            if result.returncode != 0:
+                self.send_error(500, f'Session creation failed: {result.stderr}')
+                return
+
+            session_name = result.stdout.strip().split('\\n')[-1]
+
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                'status': 'created',
+                'session': session_name,
+                'mode': mode
+            }).encode())
+
+        except subprocess.TimeoutExpired:
+            self.send_error(500, 'Session creation timed out')
+        except Exception as e:
+            self.send_error(500, str(e))
+
+    def run_application(self, session_path):
+        """Run the application in a new terminal"""
+        import subprocess
+
+        try:
+            repo_path = session_path / 'repo'
+            if not repo_path.exists():
+                self.send_error(400, 'Repo not found (session may be archived)')
+                return
+
+            # Load project config
+            projects_config = Path.home() / '.sandbox' / 'projects.json'
+            run_cmd = None
+
+            # Get project URL from session
+            session_json = session_path / 'session.json'
+            project_url = ''
+            if session_json.exists():
+                with open(session_json) as f:
+                    content = f.read().strip()
+                if content:
+                    data = json.loads(content)
+                    project_url = data.get('project', '')
+
+            # Extract repo key
+            import re
+            match = re.search(r'(github\\.com/[^/]+/[^/]+)', project_url)
+            repo_key = match.group(1) if match else ''
+
+            if projects_config.exists() and repo_key:
+                with open(projects_config) as f:
+                    projects = json.load(f)
+                config = projects.get(repo_key, {})
+                run_cmd = config.get('run_cmd')
+
+            # If no config, try to detect from package.json
+            if not run_cmd:
+                package_json = repo_path / 'package.json'
+                if package_json.exists():
+                    with open(package_json) as f:
+                        pkg = json.load(f)
+                    scripts = pkg.get('scripts', {})
+                    if 'dev' in scripts:
+                        run_cmd = 'npm run dev'
+                    elif 'start' in scripts:
+                        run_cmd = 'npm start'
+
+            if not run_cmd:
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(json.dumps({
+                    'status': 'needs_config',
+                    'message': 'No run command configured for this project'
+                }).encode())
+                return
+
+            # Check if already running
+            running_file = Path(SESSIONS_DIR) / '.running_apps.json'
+            running = {}
+            if running_file.exists():
+                with open(running_file) as f:
+                    running = json.load(f)
+
+            if repo_key in running and running[repo_key] != session_path.name:
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(json.dumps({
+                    'status': 'already_running',
+                    'other_session': running[repo_key],
+                    'message': f'App already running in session: {running[repo_key]}'
+                }).encode())
+                return
+
+            # Mark as running
+            if repo_key:
+                running[repo_key] = session_path.name
+                with open(running_file, 'w') as f:
+                    json.dump(running, f)
+
+            session_name = session_path.name
+
+            if Path('/Applications/iTerm.app').exists():
+                script = f'''
+tell application "iTerm"
+    activate
+    if (count of windows) = 0 then
+        create window with default profile
+    end if
+    tell current window
+        create tab with default profile
+        tell current session
+            set name to "▶️ App: {session_name}"
+            write text "cd '{repo_path}' && {run_cmd}"
+        end tell
+    end tell
+end tell
+'''
+            else:
+                script = f'''
+tell application "Terminal"
+    activate
+    do script "cd '{repo_path}' && {run_cmd}"
+end tell
+'''
+            subprocess.run(['osascript', '-e', script], capture_output=True, text=True)
+
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                'status': 'started',
+                'command': run_cmd
+            }).encode())
+
+        except Exception as e:
+            self.send_error(500, str(e))
+
+    def commit_changes(self, session_path, message):
+        """Show git status and optionally commit"""
+        import subprocess
+
+        try:
+            repo_path = session_path / 'repo'
+            if not repo_path.exists():
+                self.send_error(400, 'Repo not found (session may be archived)')
+                return
+
+            # Get git status
+            result = subprocess.run(
+                ['git', 'status', '--porcelain'],
+                cwd=str(repo_path),
+                capture_output=True,
+                text=True
+            )
+
+            if not result.stdout.strip():
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(json.dumps({
+                    'status': 'no_changes',
+                    'message': 'No changes to commit'
+                }).encode())
+                return
+
+            # If no message provided, return status for preview
+            if not message:
+                diff_result = subprocess.run(
+                    ['git', 'diff', '--stat', 'HEAD'],
+                    cwd=str(repo_path),
+                    capture_output=True,
+                    text=True
+                )
+
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(json.dumps({
+                    'status': 'preview',
+                    'changes': result.stdout.strip(),
+                    'diff_stat': diff_result.stdout.strip()
+                }).encode())
+                return
+
+            # Stage and commit
+            subprocess.run(['git', 'add', '-A'], cwd=str(repo_path))
+            result = subprocess.run(
+                ['git', 'commit', '-m', message],
+                cwd=str(repo_path),
+                capture_output=True,
+                text=True
+            )
+
+            if result.returncode != 0:
+                self.send_error(500, f'Commit failed: {result.stderr}')
+                return
+
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                'status': 'committed',
+                'message': message
+            }).encode())
+
+        except Exception as e:
+            self.send_error(500, str(e))
+
     def send_sessions_list(self):
         sessions = []
         for entry in sorted(Path(SESSIONS_DIR).iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
@@ -4860,6 +5612,7 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
 
             info = {
                 'session_type': data.get('mode', 'unknown'),
+                'mode': data.get('mode', 'unknown'),
                 'project': data.get('project', ''),
                 'created': data.get('created', ''),
                 'status': data.get('status', 'active'),
@@ -5229,6 +5982,50 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         .toast.success { background: #1a3a1a; color: #00ff88; border: 1px solid #00ff88; }
         .toast.error { background: #3a1a1a; color: #ff6b6b; border: 1px solid #ff6b6b; }
         @keyframes slideIn { from { transform: translateY(100%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+        /* Floating Action Button Menu */
+        .fab-menu { position: fixed; bottom: 2rem; right: 2rem; z-index: 100; }
+        .fab-trigger {
+            width: 56px; height: 56px; border-radius: 50%;
+            background: linear-gradient(135deg, #00ff88, #00cc6a);
+            border: none; font-size: 1.5rem; cursor: pointer;
+            box-shadow: 0 4px 12px rgba(0,255,136,0.3);
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+        .fab-trigger:hover { transform: scale(1.1); box-shadow: 0 6px 16px rgba(0,255,136,0.4); }
+        .fab-trigger.open { transform: rotate(45deg); }
+        .fab-actions {
+            display: none; flex-direction: column; gap: 0.5rem;
+            margin-bottom: 1rem; align-items: flex-end;
+        }
+        .fab-actions.open { display: flex; animation: fadeInUp 0.2s ease; }
+        .fab-action {
+            display: flex; align-items: center; gap: 0.5rem;
+            background: #1a1a1a; border: 1px solid #333; border-radius: 24px;
+            padding: 0.5rem 1rem; color: #fff; cursor: pointer;
+            transition: all 0.2s; white-space: nowrap;
+        }
+        .fab-action:hover { background: #2a2a2a; border-color: #00ff88; }
+        .fab-action:disabled { opacity: 0.4; cursor: not-allowed; }
+        .fab-icon { font-size: 1rem; }
+        .fab-label { font-size: 0.85rem; }
+        @keyframes fadeInUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        /* Modal styles */
+        .modal { position: fixed; inset: 0; background: rgba(0,0,0,0.8); display: flex; align-items: center; justify-content: center; z-index: 200; }
+        .modal-content { background: #1a1a1a; border: 1px solid #333; border-radius: 12px; padding: 1.5rem; max-width: 450px; width: 90%; }
+        .modal-content h3 { margin-bottom: 1rem; color: #fff; }
+        .modal-content label { display: block; margin: 0.75rem 0 0.25rem; color: #888; font-size: 0.85rem; }
+        .modal-content input[type="text"] { width: 100%; padding: 0.5rem; background: #222; border: 1px solid #444; border-radius: 6px; color: #e0e0e0; }
+        .modal-content input[type="text"]:focus { outline: none; border-color: #00ff88; }
+        .modal-actions { display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1.5rem; }
+        .modal-actions button { padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer; border: 1px solid #444; background: #222; color: #e0e0e0; }
+        .modal-actions button:hover { border-color: #666; }
+        .modal-actions button.primary { background: #00ff88; color: #000; border-color: #00ff88; }
+        .modal-actions button.primary:hover { background: #00cc6a; }
+        .mode-options { display: flex; gap: 0.5rem; margin: 1rem 0; flex-wrap: wrap; }
+        .mode-btn { padding: 0.5rem 1rem; border-radius: 6px; cursor: pointer; border: 1px solid #444; background: #222; color: #e0e0e0; transition: all 0.2s; }
+        .mode-btn:hover { border-color: #666; }
+        .mode-btn.active, .mode-btn.selected { background: #00ff88; color: #000; border-color: #00ff88; }
+        .mode-btn:disabled { opacity: 0.5; cursor: not-allowed; }
     </style>
 </head>
 <body>
@@ -5277,6 +6074,42 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             </div>
         </div>
     </div>
+    <!-- Floating Action Menu -->
+    <div id="fabMenu" class="fab-menu">
+        <div class="fab-actions" id="fabActions">
+            <button class="fab-action" onclick="runApplication()" data-requires="repo">
+                <span class="fab-icon">▶️</span>
+                <span class="fab-label">Run App</span>
+            </button>
+            <button class="fab-action" onclick="fixAllFindings()" data-requires="review">
+                <span class="fab-icon">🔧</span>
+                <span class="fab-label">Fix All</span>
+            </button>
+            <button class="fab-action" onclick="importPRComments()" data-requires="pr">
+                <span class="fab-icon">📥</span>
+                <span class="fab-label">Import Comments</span>
+            </button>
+            <button class="fab-action" onclick="showRefreshPRModal()" data-requires="pr">
+                <span class="fab-icon">🔄</span>
+                <span class="fab-label">Refresh PR</span>
+            </button>
+            <button class="fab-action" onclick="showSwitchModeModal()">
+                <span class="fab-icon">🔀</span>
+                <span class="fab-label">Switch Mode</span>
+            </button>
+            <button class="fab-action" onclick="commitChanges()" data-requires="repo">
+                <span class="fab-icon">💾</span>
+                <span class="fab-label">Commit</span>
+            </button>
+            <button class="fab-action" onclick="showNewSessionModal()">
+                <span class="fab-icon">➕</span>
+                <span class="fab-label">New Session</span>
+            </button>
+        </div>
+        <button class="fab-trigger" onclick="toggleFAB()">
+            <span id="fabIcon">⚡</span>
+        </button>
+    </div>
     <script>
         let sessions = [];
         let currentSession = null;
@@ -5315,6 +6148,7 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                     <div class="session-folder">${s.name}</div>
                     <div class="session-meta">
                         ${s.has_terminal ? '<span class="badge-terminal">● Active</span>' : ''}
+                        ${s.mode || s.session_type ? '<span style="color:#a78bfa;">' + (s.mode || s.session_type) + '</span>' : ''}
                         ${s.has_review ? '<span class="badge-review">Review</span>' : ''}
                         ${s.has_findings ? '<span class="badge-findings">Findings</span>' : ''}
                         ${s.has_devlog ? '<span class="badge-devlog">Devlog</span>' : ''}
@@ -5871,8 +6705,40 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                         copyBtn.innerHTML = '📋 Open';
                     };
 
+                    // Add Fix button (only if session isn't archived)
+                    const fixBtn = document.createElement('button');
+                    fixBtn.className = 'btn-post-pr';
+                    fixBtn.innerHTML = '🔧 Fix';
+                    fixBtn.title = 'Fix this finding with Claude';
+                    fixBtn.onclick = async function() {
+                        fixBtn.disabled = true;
+                        fixBtn.innerHTML = '⏳';
+                        try {
+                            const res = await fetch('/api/fix-finding', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    session: currentSession,
+                                    finding: finding,
+                                    fix_all: false
+                                })
+                            });
+                            if (res.ok) {
+                                showToast('Claude launched to fix finding #' + finding.number);
+                                fixBtn.innerHTML = '✅';
+                            } else {
+                                throw new Error(await res.text());
+                            }
+                        } catch (e) {
+                            showToast('Failed: ' + e.message, 'error');
+                            fixBtn.innerHTML = '🔧 Fix';
+                            fixBtn.disabled = false;
+                        }
+                    };
+
                     btnContainer.appendChild(btn);
                     btnContainer.appendChild(copyBtn);
+                    btnContainer.appendChild(fixBtn);
                     h4.appendChild(btnContainer);
                 }
             });
@@ -6013,6 +6879,520 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             loadSessions();
             if (currentSession) loadContent();
         }, 5000);
+
+        // ==================== FAB Menu ====================
+        let fabOpen = false;
+
+        function toggleFAB() {
+            fabOpen = !fabOpen;
+            document.getElementById('fabActions').classList.toggle('open', fabOpen);
+            document.querySelector('.fab-trigger').classList.toggle('open', fabOpen);
+            document.getElementById('fabIcon').textContent = fabOpen ? '✕' : '⚡';
+            if (fabOpen) updateFABState();
+        }
+
+        function updateFABState() {
+            const session = sessions.find(s => s.name === currentSession);
+            const hasRepo = session && !session.archived;
+            const hasPR = session?.pr;
+            const hasReview = session?.has_review;
+
+            document.querySelectorAll('.fab-action').forEach(btn => {
+                const requires = btn.dataset.requires;
+                if (requires === 'repo') btn.disabled = !hasRepo;
+                else if (requires === 'pr') btn.disabled = !hasPR || !hasRepo;
+                else if (requires === 'review') btn.disabled = !hasReview || !hasRepo;
+            });
+        }
+
+        // ==================== Modal Utilities ====================
+        function closeModal() {
+            const modal = document.querySelector('.modal');
+            if (modal) modal.remove();
+        }
+
+        // Close modal on escape key
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') closeModal();
+        });
+
+        // ==================== Mode Switching (Feature 3) ====================
+        let pendingModeSwitch = null;
+
+        function showSwitchModeModal() {
+            const session = sessions.find(s => s.name === currentSession);
+            if (!session) {
+                showToast('Select a session first', 'error');
+                return;
+            }
+
+            const currentMode = session.mode || session.session_type || 'unknown';
+            const detectedJira = session.jira || extractJiraFromBranch(session.branch);
+
+            const modal = document.createElement('div');
+            modal.className = 'modal';
+            modal.onclick = function(e) { if (e.target === modal) closeModal(); };
+            modal.innerHTML = `
+                <div class="modal-content">
+                    <h3>🔀 Switch Mode</h3>
+                    <p style="color:#888;margin-bottom:1rem;">Current: <strong>${currentMode}</strong></p>
+                    <div class="mode-options">
+                        <button class="mode-btn ${currentMode === 'review' ? 'active' : ''}"
+                                onclick="selectSwitchMode('review')" ${currentMode === 'review' ? 'disabled' : ''}>
+                            📝 Review
+                        </button>
+                        <button class="mode-btn ${currentMode === 'development' ? 'active' : ''}"
+                                onclick="selectSwitchMode('development')" ${currentMode === 'development' ? 'disabled' : ''}>
+                            🛠️ Development
+                        </button>
+                        <button class="mode-btn ${currentMode === 'investigation' ? 'active' : ''}"
+                                onclick="selectSwitchMode('investigation')" ${currentMode === 'investigation' ? 'disabled' : ''}>
+                            🔍 Investigation
+                        </button>
+                    </div>
+                    <div id="modeExtraFields">
+                        ${detectedJira ? '<p style="color:#888;font-size:0.9rem;">Detected Jira: <strong>' + detectedJira + '</strong></p>' : ''}
+                    </div>
+                    <div class="modal-actions">
+                        <button onclick="closeModal()">Cancel</button>
+                        <button id="confirmModeSwitch" class="primary" onclick="confirmSwitchMode()" disabled>Switch</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+            pendingModeSwitch = null;
+        }
+
+        function selectSwitchMode(mode) {
+            pendingModeSwitch = mode;
+            document.querySelectorAll('.mode-options .mode-btn').forEach(b => b.classList.remove('selected'));
+            event.target.classList.add('selected');
+            document.getElementById('confirmModeSwitch').disabled = false;
+
+            const fields = document.getElementById('modeExtraFields');
+            if (mode === 'review') {
+                fields.innerHTML = `
+                    <label>PR URL (optional - for switching to a different PR):</label>
+                    <input type="text" id="modePrUrl" placeholder="https://github.com/org/repo/pull/123">
+                `;
+            } else if (mode === 'development') {
+                const session = sessions.find(s => s.name === currentSession);
+                const detected = session?.jira || extractJiraFromBranch(session?.branch);
+                fields.innerHTML = `
+                    <label>Jira Ticket:</label>
+                    <input type="text" id="modeJira" value="${detected || ''}" placeholder="PROJ-123">
+                `;
+            } else if (mode === 'investigation') {
+                fields.innerHTML = `
+                    <label>Focus Area (optional):</label>
+                    <input type="text" id="modeFocus" placeholder="What are you investigating?">
+                `;
+            }
+        }
+
+        function extractJiraFromBranch(branch) {
+            if (!branch) return null;
+            const match = branch.match(/([A-Z]{2,}-\\d+)/i);
+            return match ? match[1].toUpperCase() : null;
+        }
+
+        async function confirmSwitchMode() {
+            if (!pendingModeSwitch || !currentSession) return;
+
+            const extraData = {};
+            if (pendingModeSwitch === 'review') {
+                const prUrl = document.getElementById('modePrUrl')?.value;
+                if (prUrl) extraData.pr_url = prUrl;
+            } else if (pendingModeSwitch === 'development') {
+                const jira = document.getElementById('modeJira')?.value;
+                if (jira) extraData.jira = jira;
+            } else if (pendingModeSwitch === 'investigation') {
+                const focus = document.getElementById('modeFocus')?.value;
+                if (focus) extraData.focus = focus;
+            }
+
+            try {
+                const res = await fetch('/api/switch-mode', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        session: currentSession,
+                        mode: pendingModeSwitch,
+                        extra: extraData
+                    })
+                });
+
+                if (res.ok) {
+                    showToast('Switched to ' + pendingModeSwitch + ' mode');
+                    closeModal();
+                    toggleFAB();
+                    await loadSessions();
+                    renderSessionDetails();
+                } else {
+                    throw new Error(await res.text());
+                }
+            } catch (e) {
+                showToast('Failed to switch mode: ' + e.message, 'error');
+            }
+        }
+
+        // ==================== Fix Findings (Feature 4) ====================
+        async function fixAllFindings() {
+            if (!currentSession) return;
+
+            if (!confirm('Launch Claude to fix ALL open findings in REVIEW.md?\\n\\nClaude will work through each finding systematically.')) {
+                return;
+            }
+
+            try {
+                const res = await fetch('/api/fix-finding', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        session: currentSession,
+                        fix_all: true
+                    })
+                });
+                if (res.ok) {
+                    showToast('Claude launched to fix all findings');
+                    toggleFAB();
+                } else {
+                    throw new Error(await res.text());
+                }
+            } catch (e) {
+                showToast('Failed: ' + e.message, 'error');
+            }
+        }
+
+        // ==================== Import PR Comments (Feature 5) ====================
+        async function importPRComments() {
+            if (!currentSession) return;
+
+            const btn = event.target.closest('.fab-action');
+            btn.disabled = true;
+            btn.querySelector('.fab-label').textContent = 'Importing...';
+
+            try {
+                const res = await fetch('/api/import-pr-comments', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ session: currentSession })
+                });
+
+                const data = await res.json();
+                if (res.ok) {
+                    showToast('Imported ' + data.new_findings + ' new findings from ' + data.total_comments + ' PR comments');
+                    toggleFAB();
+                    loadContent();
+                } else {
+                    throw new Error(data.error || 'Import failed');
+                }
+            } catch (e) {
+                showToast('Failed: ' + e.message, 'error');
+            }
+
+            btn.disabled = false;
+            btn.querySelector('.fab-label').textContent = 'Import Comments';
+        }
+
+        // ==================== Refresh PR (Feature 6) ====================
+        let refreshPRMode = 'claude';
+
+        function showRefreshPRModal() {
+            const modal = document.createElement('div');
+            modal.className = 'modal';
+            modal.onclick = function(e) { if (e.target === modal) closeModal(); };
+            modal.innerHTML = `
+                <div class="modal-content">
+                    <h3>🔄 Refresh PR & Re-review</h3>
+                    <p style="color:#888;">Fetch latest commits and start a new review session.</p>
+                    <div class="mode-options" style="margin: 1rem 0;">
+                        <button class="mode-btn selected" onclick="selectRefreshMode(this, 'claude')">
+                            🤖 Claude Only
+                        </button>
+                        <button class="mode-btn" onclick="selectRefreshMode(this, 'acr+claude')">
+                            🔀 ACR + Claude
+                        </button>
+                    </div>
+                    <p style="color:#666;font-size:0.85rem;">This will open a new terminal window.</p>
+                    <div class="modal-actions">
+                        <button onclick="closeModal()">Cancel</button>
+                        <button class="primary" onclick="executeRefreshPR()">Start Re-review</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+            refreshPRMode = 'claude';
+        }
+
+        function selectRefreshMode(btn, mode) {
+            refreshPRMode = mode;
+            document.querySelectorAll('.mode-options .mode-btn').forEach(b => b.classList.remove('selected'));
+            btn.classList.add('selected');
+        }
+
+        async function executeRefreshPR() {
+            try {
+                const res = await fetch('/api/refresh-pr', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        session: currentSession,
+                        mode: refreshPRMode
+                    })
+                });
+
+                if (res.ok) {
+                    const data = await res.json();
+                    if (data.osascript_error) {
+                        showToast('Terminal error: ' + data.osascript_error, 'error');
+                    } else {
+                        showToast('Re-review started in new terminal');
+                    }
+                    closeModal();
+                    toggleFAB();
+                } else {
+                    throw new Error(await res.text());
+                }
+            } catch (e) {
+                showToast('Failed: ' + e.message, 'error');
+            }
+        }
+
+        // ==================== New Session (Feature 7) ====================
+        let newSessionMode = 'review';
+
+        function showNewSessionModal() {
+            const modal = document.createElement('div');
+            modal.className = 'modal';
+            modal.onclick = function(e) { if (e.target === modal) closeModal(); };
+            modal.innerHTML = `
+                <div class="modal-content" style="max-width: 500px;">
+                    <h3>➕ New Session</h3>
+                    <div class="mode-options" style="margin-bottom: 1rem;">
+                        <button class="mode-btn selected" onclick="switchNewSessionTab('review')">📝 Review</button>
+                        <button class="mode-btn" onclick="switchNewSessionTab('investigation')">🔍 Investigate</button>
+                        <button class="mode-btn" onclick="switchNewSessionTab('development')">🛠️ Develop</button>
+                    </div>
+                    <div id="newSessionFields">
+                        <label>PR URL:</label>
+                        <input type="text" id="newSessionUrl" placeholder="https://github.com/org/repo/pull/123">
+                        <label>Jira Ticket (optional):</label>
+                        <input type="text" id="newSessionJira" placeholder="PROJ-123">
+                    </div>
+                    <div class="modal-actions">
+                        <button onclick="closeModal()">Cancel</button>
+                        <button class="primary" onclick="createNewSession()">Create Session</button>
+                    </div>
+                </div>
+            `;
+            document.body.appendChild(modal);
+            newSessionMode = 'review';
+        }
+
+        function switchNewSessionTab(mode) {
+            newSessionMode = mode;
+            document.querySelectorAll('.modal-content .mode-options .mode-btn').forEach(t => t.classList.remove('selected'));
+            event.target.classList.add('selected');
+
+            const fields = document.getElementById('newSessionFields');
+            if (mode === 'review') {
+                fields.innerHTML = `
+                    <label>PR URL:</label>
+                    <input type="text" id="newSessionUrl" placeholder="https://github.com/org/repo/pull/123" onblur="fetchPRInfo()">
+                    <div id="prInfoDisplay" style="font-size:0.85rem;color:#888;margin:0.5rem 0;display:none;"></div>
+                    <label>Jira Ticket (optional):</label>
+                    <input type="text" id="newSessionJira" placeholder="PROJ-123">
+                    <div id="jiraDetectedHint" style="font-size:0.8rem;color:#00ff88;margin-top:0.25rem;display:none;"></div>
+                `;
+            } else if (mode === 'investigation') {
+                fields.innerHTML = `
+                    <label>Repository URL:</label>
+                    <input type="text" id="newSessionUrl" placeholder="https://github.com/org/repo">
+                    <label>Focus Area (optional):</label>
+                    <input type="text" id="newSessionFocus" placeholder="What are you investigating?">
+                `;
+            } else if (mode === 'development') {
+                fields.innerHTML = `
+                    <label>Repository URL:</label>
+                    <input type="text" id="newSessionUrl" placeholder="https://github.com/org/repo">
+                    <label>Jira Ticket (required):</label>
+                    <input type="text" id="newSessionJira" placeholder="PROJ-123" required>
+                `;
+            }
+        }
+
+        async function fetchPRInfo() {
+            const urlInput = document.getElementById('newSessionUrl');
+            const jiraInput = document.getElementById('newSessionJira');
+            const prInfoDisplay = document.getElementById('prInfoDisplay');
+            const jiraHint = document.getElementById('jiraDetectedHint');
+
+            if (!urlInput || !urlInput.value || !urlInput.value.includes('/pull/')) return;
+
+            try {
+                prInfoDisplay.style.display = 'block';
+                prInfoDisplay.textContent = '⏳ Fetching PR info...';
+
+                const res = await fetch('/api/pr-info', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ url: urlInput.value })
+                });
+
+                if (!res.ok) {
+                    prInfoDisplay.textContent = '⚠️ Could not fetch PR info';
+                    prInfoDisplay.style.color = '#ffa500';
+                    return;
+                }
+
+                const data = await res.json();
+
+                // Show PR info
+                prInfoDisplay.innerHTML = `📝 <strong>PR #${data.pr_number}:</strong> ${data.title}<br>🌿 <strong>Branch:</strong> ${data.branch} → ${data.base}<br>👤 <strong>Author:</strong> @${data.author}`;
+                prInfoDisplay.style.color = '#888';
+
+                // Auto-fill Jira if detected and field is empty
+                if (data.detected_jira && jiraInput && !jiraInput.value) {
+                    jiraInput.value = data.detected_jira;
+                    if (jiraHint) {
+                        jiraHint.style.display = 'block';
+                        jiraHint.textContent = '✓ Auto-detected from branch: ' + data.branch;
+                    }
+                }
+            } catch (e) {
+                console.error('Failed to fetch PR info', e);
+                prInfoDisplay.textContent = '⚠️ Error fetching PR info';
+                prInfoDisplay.style.color = '#ff6b6b';
+            }
+        }
+
+        async function createNewSession() {
+            const url = document.getElementById('newSessionUrl')?.value;
+            const jira = document.getElementById('newSessionJira')?.value;
+            const focus = document.getElementById('newSessionFocus')?.value;
+
+            if (!url) {
+                showToast('URL is required', 'error');
+                return;
+            }
+
+            if (newSessionMode === 'development' && !jira) {
+                showToast('Jira ticket is required for development mode', 'error');
+                return;
+            }
+
+            try {
+                const res = await fetch('/api/create-session', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        mode: newSessionMode,
+                        url: url,
+                        jira: jira,
+                        focus: focus
+                    })
+                });
+
+                const data = await res.json();
+                if (res.ok) {
+                    showToast('Session created: ' + data.session);
+                    closeModal();
+                    toggleFAB();
+                    await loadSessions();
+                    selectSession(data.session);
+                } else {
+                    throw new Error(data.error || 'Failed to create session');
+                }
+            } catch (e) {
+                showToast('Failed: ' + e.message, 'error');
+            }
+        }
+
+        // ==================== Run Application (Feature 8) ====================
+        async function runApplication() {
+            if (!currentSession) return;
+
+            try {
+                const res = await fetch('/api/run-app', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ session: currentSession })
+                });
+
+                const data = await res.json();
+
+                if (data.status === 'started') {
+                    showToast('App started: ' + data.command);
+                    toggleFAB();
+                } else if (data.status === 'already_running') {
+                    if (confirm('App already running in "' + data.other_session + '".\\n\\nSwitch to that session?')) {
+                        selectSession(data.other_session);
+                        toggleFAB();
+                    }
+                } else if (data.status === 'needs_config') {
+                    const cmd = prompt('Enter run command for this project:', 'pnpm dev');
+                    if (cmd) {
+                        // Save config and retry
+                        await saveProjectConfig(cmd);
+                    }
+                }
+            } catch (e) {
+                showToast('Failed: ' + e.message, 'error');
+            }
+        }
+
+        async function saveProjectConfig(runCmd) {
+            showToast('Please add run command to ~/.sandbox/projects.json', 'error');
+        }
+
+        // ==================== Commit Changes (Feature 9) ====================
+        async function commitChanges() {
+            if (!currentSession) return;
+
+            try {
+                // First get preview
+                const previewRes = await fetch('/api/commit', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ session: currentSession })
+                });
+
+                const preview = await previewRes.json();
+
+                if (preview.status === 'no_changes') {
+                    showToast('No changes to commit');
+                    return;
+                }
+
+                // Show commit dialog
+                const message = prompt(
+                    'Changes to commit:\\n\\n' + preview.diff_stat + '\\n\\nEnter commit message:',
+                    ''
+                );
+
+                if (!message) return;
+
+                const commitRes = await fetch('/api/commit', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        session: currentSession,
+                        message: message
+                    })
+                });
+
+                const result = await commitRes.json();
+                if (result.status === 'committed') {
+                    showToast('Changes committed successfully');
+                    toggleFAB();
+                } else {
+                    throw new Error(result.message || 'Commit failed');
+                }
+            } catch (e) {
+                showToast('Failed: ' + e.message, 'error');
+            }
+        }
     </script>
 </body>
 </html>'''
@@ -8210,6 +9590,170 @@ if [ "$DASHBOARD_AUTO_START" = "true" ]; then
     if ! is_dashboard_running; then
         start_dashboard_server >/dev/null 2>&1 &
     fi
+fi
+
+# ============================================================================
+# NON-INTERACTIVE SESSION CREATION (for web UI)
+# ============================================================================
+
+create_pr_session_noninteractive() {
+    local PR_URL="$1"
+    local JIRA_TICKET="$2"
+
+    # Parse PR URL
+    if [[ "$PR_URL" =~ github\.com/([^/]+)/([^/]+)/pull/([0-9]+) ]]; then
+        local OWNER="${BASH_REMATCH[1]}"
+        local REPO="${BASH_REMATCH[2]}"
+        local PR_NUMBER="${BASH_REMATCH[3]}"
+    else
+        echo "ERROR: Invalid PR URL" >&2
+        exit 1
+    fi
+
+    local REPO_URL="https://github.com/$OWNER/$REPO.git"
+    local SESSION_NAME="pr-${REPO}-${PR_NUMBER}-$(date +%Y%m%d-%H%M%S)"
+    local SESSION_DIR="$SESSIONS_DIR/$SESSION_NAME"
+
+    mkdir -p "$SESSION_DIR"
+    cd "$SESSION_DIR"
+
+    # Clone and checkout PR
+    git clone --depth=50 "$REPO_URL" repo 2>/dev/null
+    cd repo
+    git fetch origin "pull/$PR_NUMBER/head:pr-$PR_NUMBER" 2>/dev/null
+    git checkout "pr-$PR_NUMBER" 2>/dev/null
+
+    # Get PR metadata
+    local PR_JSON=$(gh pr view "$PR_NUMBER" --repo "$OWNER/$REPO" --json title,body,headRefName,baseRefName,author,additions,deletions,changedFiles,url 2>/dev/null)
+
+    local PR_TITLE=$(echo "$PR_JSON" | jq -r '.title // "PR #'"$PR_NUMBER"'"')
+    local PR_HEAD=$(echo "$PR_JSON" | jq -r '.headRefName // "unknown"')
+    local PR_BASE=$(echo "$PR_JSON" | jq -r '.baseRefName // "main"')
+    local PR_AUTHOR=$(echo "$PR_JSON" | jq -r '.author.login // "unknown"')
+
+    # Auto-detect Jira from branch name if not provided
+    if [ -z "$JIRA_TICKET" ] && [ -n "$PR_HEAD" ]; then
+        # Extract Jira ticket pattern from branch (e.g., HB-404-fix-login -> HB-404)
+        local detected=$(echo "$PR_HEAD" | grep -oE '^[A-Za-z]+-[0-9]+' | head -1 | tr '[:lower:]' '[:upper:]')
+        if [ -z "$detected" ]; then
+            detected=$(echo "$PR_HEAD" | grep -oE '[A-Za-z]+-[0-9]+' | head -1 | tr '[:lower:]' '[:upper:]')
+        fi
+        [ -n "$detected" ] && JIRA_TICKET="$detected"
+    fi
+
+    # Create session.json
+    local extra_json=$(cat <<EOF
+{
+    "pr": {
+        "number": "$PR_NUMBER",
+        "title": "$PR_TITLE",
+        "url": "https://github.com/$OWNER/$REPO/pull/$PR_NUMBER",
+        "head": "$PR_HEAD",
+        "base": "$PR_BASE",
+        "author": "$PR_AUTHOR"
+    }
+}
+EOF
+)
+    [ -n "$JIRA_TICKET" ] && extra_json=$(echo "$extra_json" | jq ". + {jira: {ticket: \"$JIRA_TICKET\"}}")
+
+    create_session_json "$SESSION_DIR" "review" "https://github.com/$OWNER/$REPO" "$extra_json"
+
+    # Create CLAUDE.md for review mode
+    generate_claude_md "$SESSION_DIR" "review" "PR #$PR_NUMBER: $PR_TITLE by @$PR_AUTHOR"
+
+    # Output session name for the API
+    echo "$SESSION_NAME"
+}
+
+create_investigation_session_noninteractive() {
+    local REPO_URL="$1"
+    local FOCUS="$2"
+    local JIRA_TICKET="$3"
+
+    # Parse repo URL
+    local REPO_NAME=$(basename "$REPO_URL" .git)
+    local SESSION_NAME="inv-${REPO_NAME}-$(date +%Y%m%d-%H%M%S)"
+    local SESSION_DIR="$SESSIONS_DIR/$SESSION_NAME"
+
+    mkdir -p "$SESSION_DIR"
+    cd "$SESSION_DIR"
+
+    # Clone repo
+    git clone --depth=50 "$REPO_URL" repo 2>/dev/null
+
+    # Create session.json
+    local extra_json=$(cat <<EOF
+{
+    "focus": "$FOCUS"
+}
+EOF
+)
+    [ -n "$JIRA_TICKET" ] && extra_json=$(echo "$extra_json" | jq ". + {jira: {ticket: \"$JIRA_TICKET\"}}")
+
+    create_session_json "$SESSION_DIR" "investigation" "$REPO_URL" "$extra_json"
+
+    # Create CLAUDE.md for investigation mode
+    generate_claude_md "$SESSION_DIR" "investigation" "$FOCUS"
+
+    echo "$SESSION_NAME"
+}
+
+create_development_session_noninteractive() {
+    local REPO_URL="$1"
+    local JIRA_TICKET="$2"
+
+    # Parse repo URL
+    local REPO_NAME=$(basename "$REPO_URL" .git)
+    local BRANCH_NAME="feature/${JIRA_TICKET}"
+    local SESSION_NAME="dev-${REPO_NAME}-${JIRA_TICKET}-$(date +%Y%m%d-%H%M%S)"
+    local SESSION_DIR="$SESSIONS_DIR/$SESSION_NAME"
+
+    mkdir -p "$SESSION_DIR"
+    cd "$SESSION_DIR"
+
+    # Clone repo and create branch
+    git clone --depth=50 "$REPO_URL" repo 2>/dev/null
+    cd repo
+    git checkout -b "$BRANCH_NAME" 2>/dev/null
+
+    # Create session.json
+    local extra_json=$(cat <<EOF
+{
+    "jira": {
+        "ticket": "$JIRA_TICKET"
+    },
+    "branch": "$BRANCH_NAME"
+}
+EOF
+)
+
+    create_session_json "$SESSION_DIR" "development" "$REPO_URL" "$extra_json"
+
+    # Create CLAUDE.md for development mode
+    generate_claude_md "$SESSION_DIR" "development" "Jira: $JIRA_TICKET"
+
+    echo "$SESSION_NAME"
+}
+
+# Handle --create-session argument (called from web UI)
+if [ "$1" = "--create-session" ]; then
+    case "$SANDBOX_MODE" in
+        review)
+            create_pr_session_noninteractive "$SANDBOX_URL" "$SANDBOX_JIRA"
+            ;;
+        investigation)
+            create_investigation_session_noninteractive "$SANDBOX_URL" "$SANDBOX_FOCUS" "$SANDBOX_JIRA"
+            ;;
+        development)
+            create_development_session_noninteractive "$SANDBOX_URL" "$SANDBOX_JIRA"
+            ;;
+        *)
+            echo "ERROR: Unknown mode $SANDBOX_MODE" >&2
+            exit 1
+            ;;
+    esac
+    exit 0
 fi
 
 main_menu
