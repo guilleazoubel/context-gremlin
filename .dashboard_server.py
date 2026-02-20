@@ -1557,6 +1557,11 @@ end tell
 
             session_name = session_path.name
 
+            # Auto-install deps if node_modules missing and package.json exists
+            install_prefix = ''
+            if (repo_path / 'package.json').exists() and not (repo_path / 'node_modules').exists():
+                install_prefix = 'npm install && '
+
             if Path('/Applications/iTerm.app').exists():
                 script = f'''
 tell application "iTerm"
@@ -1568,7 +1573,7 @@ tell application "iTerm"
         create tab with default profile
         tell current session
             set name to "▶️ App: {session_name}"
-            write text "cd '{repo_path}' && {run_cmd}"
+            write text "cd '{repo_path}' && {install_prefix}{run_cmd}"
         end tell
     end tell
 end tell
@@ -1577,7 +1582,7 @@ end tell
                 script = f'''
 tell application "Terminal"
     activate
-    do script "cd '{repo_path}' && {run_cmd}"
+    do script "cd '{repo_path}' && {install_prefix}{run_cmd}"
 end tell
 '''
             subprocess.run(['osascript', '-e', script], capture_output=True, text=True)
