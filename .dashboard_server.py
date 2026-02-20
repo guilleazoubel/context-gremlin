@@ -1846,6 +1846,7 @@ end tell
 
     def parse_session_json(self, path):
         """Parse V2 session.json format"""
+        import re
         try:
             with open(path) as f:
                 content = f.read().strip()
@@ -1874,6 +1875,19 @@ end tell
                 info['author'] = pr.get('author', '')
                 info['branch'] = f"{pr.get('head', '')} → {pr.get('base', '')}" if pr.get('head') else ''
                 info['display_title'] = f"PR #{pr.get('number', '')}: {pr.get('title', '')}"
+                info['url'] = pr.get('url', '')
+                # Derive repository from project URL or PR URL
+                project_url = data.get('project', '')
+                if project_url:
+                    info['repository'] = project_url
+                elif pr.get('url'):
+                    info['repository'] = re.sub(r'/pull/\d+.*$', '', pr['url'])
+                # Extract Jira ticket from branch name or PR title
+                head_branch = pr.get('head', '')
+                pr_title = pr.get('title', '')
+                jira_match = re.search(r'([A-Z]{2,}-\d+)', head_branch) or re.search(r'([A-Z]{2,}-\d+)', pr_title)
+                if jira_match:
+                    info['jira'] = jira_match.group(1)
             elif mode == 'development':
                 jira = data.get('jira', {})
                 info['jira'] = jira.get('ticket', '')
@@ -2721,6 +2735,25 @@ end tell
             max-width: 280px;
             line-height: 1.5;
         }
+
+        /* ===== FINDINGS TRACKER ===== */
+        .findings-tracker { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 20px; overflow: hidden; }
+        .ft-header { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+        .ft-title { font-weight: 600; font-size: 13px; }
+        .ft-count { font-size: 12px; color: var(--text-tertiary); }
+        .ft-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+        .ft-table th { text-align: left; padding: 6px 12px; color: var(--text-tertiary); font-weight: 500; border-bottom: 1px solid var(--border); }
+        .ft-table td { padding: 6px 12px; border-bottom: 1px solid var(--border-subtle, rgba(255,255,255,0.04)); }
+        .ft-table tr:last-child td { border-bottom: none; }
+        .ft-table tr:hover { background: var(--bg-hover); }
+        .ft-link { color: var(--text-primary); text-decoration: none; }
+        .ft-link:hover { text-decoration: underline; }
+        .ft-loc { font-family: 'SF Mono', monospace; font-size: 11px; color: var(--text-secondary); }
+        .sev-badge { padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; }
+        .sev-critical { background: rgba(239,68,68,0.15); color: #f87171; }
+        .sev-important { background: rgba(251,191,36,0.15); color: #fbbf24; }
+        .sev-minor { background: rgba(96,165,250,0.15); color: #60a5fa; }
+        .sev-info { background: rgba(148,163,184,0.15); color: #94a3b8; }
 
         /* ===== FINDING ACTIONS ===== */
         .finding-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; }
@@ -3585,7 +3618,14 @@ end tell
                     }
                     const convertedText = convertEmojis(text);
                     document.getElementById('content').innerHTML = header + marked.parse(convertedText);
-                    if (state.currentTab === 'review') addPRCommentButtons(convertedText);
+                    if (state.currentTab === 'review') {
+                        const findings = parseFindingsFromMarkdown(convertedText);
+                        const tracker = buildFindingsTracker(convertedText, findings);
+                        if (tracker) {
+                            document.getElementById('content').insertAdjacentHTML('afterbegin', tracker);
+                        }
+                        addPRCommentButtons(convertedText);
+                    }
                 } else {
                     document.getElementById('content').innerHTML = renderEmptyState('📝', 'No content yet', 'Waiting for ' + state.currentTab + ' to be generated...');
                 }
@@ -3672,12 +3712,12 @@ end tell
     // ========================================
     function parseFindingsFromMarkdown(rawMarkdown) {
         const findings = [];
-        const findingRegex = /####\\s*Finding\\s*#?(\\d+)[:\\s]*([^\\n]+)\\n([\\s\\S]*?)(?=####|$)/gi;
+        const findingRegex = /####\\s*(?:Finding\\s*#?)?([A-Za-z]*-?\\d+)[.:\\s]+([^\\n]+)\\n([\\s\\S]*?)(?=####|$)/gi;
         let match;
 
         while ((match = findingRegex.exec(rawMarkdown)) !== null) {
             const findingBody = match[3];
-            const locMatch = findingBody.match(/📍\\s*\\*\\*Location:\\*\\*\\s*`([^`]+)`/);
+            const locMatch = findingBody.match(/(?:📍\\s*\\*\\*Location:\\*\\*|\\*\\*File:\\*\\*)\\s*`([^`]+)`/);
             if (!locMatch) continue;
             const location = locMatch[1];
             const fileLineMatch = location.match(/^([^:]+):(\\d+)(?:-(\\d+))?/);
@@ -3757,6 +3797,46 @@ end tell
         return btnContainer;
     }
 
+    function buildFindingsTracker(rawMarkdown, findings) {
+        if (!findings || findings.length === 0) return '';
+
+        function getSeverity(f, rawMarkdown) {
+            const num = f.number || '';
+            if (num.startsWith('C') || num.startsWith('c')) return { label: 'Critical', cls: 'sev-critical' };
+            if (num.startsWith('I') || num.startsWith('i')) return { label: 'Important', cls: 'sev-important' };
+            if (num.startsWith('M') || num.startsWith('m')) return { label: 'Minor', cls: 'sev-minor' };
+            const idx = rawMarkdown.indexOf('#### ' + (num.match(/^\\d+$/) ? 'Finding #' + num : num));
+            if (idx > -1) {
+                const before = rawMarkdown.substring(Math.max(0, idx - 200), idx);
+                if (/###\\s*Critical/i.test(before)) return { label: 'Critical', cls: 'sev-critical' };
+                if (/###\\s*Important/i.test(before)) return { label: 'Important', cls: 'sev-important' };
+                if (/###\\s*Minor/i.test(before)) return { label: 'Minor', cls: 'sev-minor' };
+            }
+            return { label: 'Info', cls: 'sev-info' };
+        }
+
+        let html = '<div class="findings-tracker">';
+        html += '<div class="ft-header"><span class="ft-title">📋 Findings Tracker</span>';
+        html += '<span class="ft-count">' + findings.length + ' finding' + (findings.length > 1 ? 's' : '') + '</span></div>';
+        html += '<table class="ft-table"><thead><tr>';
+        html += '<th>#</th><th>Severity</th><th>Title</th><th>Location</th>';
+        html += '</tr></thead><tbody>';
+
+        findings.forEach(function(f) {
+            const sev = getSeverity(f, rawMarkdown);
+            const anchor = 'finding-' + (f.number || '').replace(/[^a-z0-9-]/gi, '-').toLowerCase();
+            html += '<tr>';
+            html += '<td><strong>' + escapeHtml(f.number || '?') + '</strong></td>';
+            html += '<td><span class="sev-badge ' + sev.cls + '">' + sev.label + '</span></td>';
+            html += '<td><a href="#' + anchor + '" class="ft-link">' + escapeHtml(f.title || 'Untitled') + '</a></td>';
+            html += '<td class="ft-loc">' + escapeHtml(f.file + ':' + f.line) + '</td>';
+            html += '</tr>';
+        });
+
+        html += '</tbody></table></div>';
+        return html;
+    }
+
     function addPRCommentButtons(rawMarkdown) {
         const session = getCurrentSession();
         if (!session || !session.pr || session.archived) return;
@@ -3768,9 +3848,13 @@ end tell
         h4s.forEach(function(h4) {
             const text = h4.textContent || '';
             const finding = findings.find(f =>
-                text.includes(f.title?.substring(0, 30)) || (f.number && text.includes('#' + f.number))
+                text.includes(f.title?.substring(0, 30)) ||
+                (f.number && text.includes('#' + f.number)) ||
+                (f.number && text.match(new RegExp('\\\\b' + f.number.replace('-', '[\\\\-.]') + '[.\\\\s]')))
             );
             if (finding) {
+                const anchor = 'finding-' + (finding.number || '').replace(/[^a-z0-9-]/gi, '-').toLowerCase();
+                h4.id = anchor;
                 h4.appendChild(createFindingActionButtons(finding));
             }
         });
