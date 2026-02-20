@@ -1693,6 +1693,15 @@ end tell
             if not info:
                 continue
 
+            # Detect session type from folder name if mode is unknown/missing
+            if info.get('session_type', 'unknown') == 'unknown' or info.get('mode', 'unknown') == 'unknown':
+                if entry.name.startswith('pr-'):
+                    info['session_type'] = info['mode'] = 'review'
+                elif entry.name.startswith('dev-'):
+                    info['session_type'] = info['mode'] = 'development'
+                elif entry.name.startswith('inv-'):
+                    info['session_type'] = info['mode'] = 'investigation'
+
             info['name'] = entry.name
             # Check for output files in both root and repo/ folder
             def has_file(name):
