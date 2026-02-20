@@ -81,7 +81,8 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         elif parsed.path == '/api/focus-terminal':
             self.focus_terminal(session_path)
         elif parsed.path == '/api/start-claude':
-            self.start_claude_session(session_path)
+            prompt = data.get('prompt', '')
+            self.start_claude_session(session_path, prompt)
         elif parsed.path == '/api/start-acr-claude':
             self.start_acr_then_claude(session_path)
         elif parsed.path == '/api/post-pr-comment':
@@ -287,7 +288,7 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         except Exception as e:
             self.send_error(500, str(e))
 
-    def start_claude_session(self, session_path):
+    def start_claude_session(self, session_path, prompt=''):
         """Start Claude in a new terminal with logging"""
         import subprocess
         import datetime
@@ -307,7 +308,13 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             # Build the command
             # Use --add-dir to allow Claude to write to session folder without permission prompts
             # direnv allow prevents ".envrc is blocked" errors when cd'ing into repos with .envrc
-            claude_cmd = f"direnv allow '{repo_path}/.envrc' 2>/dev/null; cd '{repo_path}' && script -q '{log_file}' claude --add-dir '{session_path}'"
+            if prompt:
+                # With prompt: run directly (script(1) swallows prompt args)
+                escaped_prompt = prompt.replace("'", "'\\''")
+                claude_cmd = f"direnv allow '{repo_path}/.envrc' 2>/dev/null; cd '{repo_path}' && claude --add-dir '{session_path}' -- '{escaped_prompt}'"
+            else:
+                # No prompt: use script for logging
+                claude_cmd = f"direnv allow '{repo_path}/.envrc' 2>/dev/null; cd '{repo_path}' && script -q '{log_file}' claude --add-dir '{session_path}'"
 
             # Try iTerm2 first, fall back to Terminal.app
             if Path('/Applications/iTerm.app').exists():
@@ -445,8 +452,9 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                 except (json.JSONDecodeError, ValueError):
                     pass
 
-            # Now start Claude
-            self.start_claude_session(session_path)
+            # Now start Claude with ACR-aware review prompt
+            acr_prompt = "ACR has provided initial findings in ACR_REVIEW.md - use this as CONTEXT only. Now perform YOUR OWN comprehensive code review following the CLAUDE.md guidelines. Understand the scope, analyze every change, evaluate through all lenses (correctness, security, complexity, clarity, DRY, proper-fix-vs-hack), and write a thorough REVIEW.md with detailed findings including problem, impact, and suggested fixes."
+            self.start_claude_session(session_path, acr_prompt)
             return  # start_claude_session handles the response
 
         except subprocess.TimeoutExpired:
@@ -4176,9 +4184,12 @@ end tell
         const sessionName = state.newSession.data.sessionName || state.currentSession;
         if (!sessionName) { showToast('No session to start', 'error'); return; }
         try {
+            const reviewPrompt = 'Perform a comprehensive code review following CLAUDE.md. First understand the scope and WHY these changes exist. Then analyze every change through all lenses: correctness, security, complexity, clarity, DRY, and whether this is a proper fix or a hack. Write a thorough REVIEW.md with detailed findings including what is happening, the problem, impact, and suggested fixes.';
             const endpoint = tool === 'acr+claude' ? API.START_ACR_CLAUDE : API.START_CLAUDE;
             if (tool === 'acr+claude') showToast('Running ACR review, then starting Claude...', 'info');
-            const data = await apiPost(endpoint, { session: sessionName }, { includeSession: false });
+            const payload = { session: sessionName };
+            if (tool !== 'acr+claude') payload.prompt = reviewPrompt;
+            const data = await apiPost(endpoint, payload, { includeSession: false });
             showToast((tool === 'acr+claude' ? 'ACR completed! Claude' : 'Claude') + ' review started');
             setTimeout(function() { loadSessions(); }, 1000);
         } catch (e) { showToast('Failed: ' + e.message, 'error'); }

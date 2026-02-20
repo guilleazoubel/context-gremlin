@@ -9952,7 +9952,7 @@ create_pr_session_noninteractive() {
     git checkout "pr-$PR_NUMBER" 2>/dev/null
 
     # Get PR metadata
-    local PR_JSON=$(gh pr view "$PR_NUMBER" --repo "$OWNER/$REPO" --json title,body,headRefName,baseRefName,author,additions,deletions,changedFiles,url 2>/dev/null)
+    local PR_JSON=$(gh pr view "$PR_NUMBER" --repo "$OWNER/$REPO" --json title,headRefName,baseRefName,author,additions,deletions,changedFiles,url 2>/dev/null)
 
     local PR_TITLE=$(echo "$PR_JSON" | jq -r '.title // "PR #'"$PR_NUMBER"'"')
     local PR_HEAD=$(echo "$PR_JSON" | jq -r '.headRefName // "unknown"')
@@ -9983,9 +9983,43 @@ create_pr_session_noninteractive() {
 }
 EOF
 )
-    [ -n "$JIRA_TICKET" ] && extra_json=$(echo "$extra_json" | jq ". + {jira: {ticket: \"$JIRA_TICKET\"}}")
+    [ -n "$JIRA_TICKET" ] && extra_json=$(echo "$extra_json" | jq ". + {jira: {ticket: \"$JIRA_TICKET\"}}" 2>/dev/null || echo "$extra_json")
 
     create_session_json "$SESSION_DIR" "review" "https://github.com/$OWNER/$REPO" "$extra_json"
+
+    # Fallback: if session.json is empty/invalid, create minimal one
+    if ! jq -e type "$SESSION_DIR/session.json" >/dev/null 2>&1; then
+        cat > "$SESSION_DIR/session.json" <<FALLBACK
+{
+  "id": "$SESSION_NAME",
+  "mode": "review",
+  "project": "https://github.com/$OWNER/$REPO",
+  "created": "$(date -Iseconds)",
+  "status": "active",
+  "pr": {"number": "$PR_NUMBER", "title": "$PR_TITLE", "url": "https://github.com/$OWNER/$REPO/pull/$PR_NUMBER", "head": "$PR_HEAD", "base": "$PR_BASE", "author": "$PR_AUTHOR"},
+  "history": []
+}
+FALLBACK
+    fi
+
+    # Always create session-info.txt as dashboard fallback
+    cat > "$SESSION_DIR/session-info.txt" <<INFO_EOF
+================================================================================
+SESSION INFO
+================================================================================
+Type:       PR Review
+Created:    $(date '+%Y-%m-%d %H:%M:%S')
+Session:    $SESSION_NAME
+
+PR #$PR_NUMBER: $PR_TITLE
+URL:        https://github.com/$OWNER/$REPO/pull/$PR_NUMBER
+Author:     $PR_AUTHOR
+Branch:     $PR_HEAD → $PR_BASE
+
+Repository: $OWNER/$REPO
+$([ -n "$JIRA_TICKET" ] && echo "Jira:       $JIRA_TICKET")
+================================================================================
+INFO_EOF
 
     # Create CLAUDE.md for review mode
     generate_claude_md "$SESSION_DIR" "review" "PR #$PR_NUMBER: $PR_TITLE by @$PR_AUTHOR"
