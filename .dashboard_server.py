@@ -818,19 +818,9 @@ Instructions:
 
 DO NOT COMMIT - user will test and commit manually."""
 
-            # Write prompt to file and wrapper script to avoid script(1) argument issues
-            prompt_file = session_path / '.claude-prompt.txt'
-            prompt_file.write_text(prompt)
-            wrapper = session_path / '.run-claude.sh'
-            with open(wrapper, 'w') as wf:
-                wf.write("#!/bin/bash\n")
-                wf.write(f"direnv allow '{repo_path}/.envrc' 2>/dev/null\n")
-                wf.write(f"cd '{repo_path}'\n")
-                wf.write(f'prompt=$(cat \'{prompt_file}\')\n')
-                wf.write(f"claude --add-dir '{session_path}' \"$prompt\"\n")
-            wrapper.chmod(0o755)
-
-            claude_cmd = f"script -q '{log_file}' '{wrapper}'"
+            # Run claude directly — use '--' to end options so prompt isn't consumed by --add-dir (variadic)
+            escaped_prompt = prompt.replace("'", "'\\''")
+            claude_cmd = f"direnv allow '{repo_path}/.envrc' 2>/dev/null; cd '{repo_path}' && claude --add-dir '{session_path}' -- '{escaped_prompt}'"
 
             session_name = session_path.name
 
@@ -1255,23 +1245,12 @@ Re-evaluate based on current state of ALL findings (fixed + remaining + new).
 
             prompt = f"RE-REVIEW MODE: PR has been updated with {commit_count} new commit(s). Read RE-REVIEW.md for what changed, then update REVIEW.md in-place."
 
-            # Write prompt to file and wrapper script to avoid script(1) argument issues
-            prompt_file = session_path / '.claude-prompt.txt'
-            prompt_file.write_text(prompt)
-            wrapper = session_path / '.run-claude.sh'
-            with open(wrapper, 'w') as wf:
-                wf.write("#!/bin/bash\n")
-                wf.write(f"direnv allow '{repo_path}/.envrc' 2>/dev/null\n")
-                wf.write(f"cd '{repo_path}'\n")
-                if mode == 'acr+claude':
-                    wf.write(f"echo '=== Running ACR ==='\n")
-                    wf.write(f"acr -r 5 -a claude -b {pr_base} --local > '{session_path}/ACR_REVIEW.md' 2>&1\n")
-                    wf.write(f"echo '=== Starting Claude ==='\n")
-                wf.write(f'prompt=$(cat \'{prompt_file}\')\n')
-                wf.write(f"claude --add-dir '{session_path}' \"$prompt\"\n")
-            wrapper.chmod(0o755)
-
-            claude_cmd = f"script -q '{log_file}' '{wrapper}'"
+            # Run claude directly (not via script(1) — script swallows the prompt argument)
+            escaped_prompt = prompt.replace("'", "'\\''")
+            if mode == 'acr+claude':
+                claude_cmd = f"direnv allow '{repo_path}/.envrc' 2>/dev/null; cd '{repo_path}' && echo '=== Running ACR ===' && acr -r 5 -a claude -b {pr_base} --local > '{session_path}/ACR_REVIEW.md' 2>&1 && echo '=== Starting Claude ===' && claude --add-dir '{session_path}' -- '{escaped_prompt}'"
+            else:
+                claude_cmd = f"direnv allow '{repo_path}/.envrc' 2>/dev/null; cd '{repo_path}' && claude --add-dir '{session_path}' -- '{escaped_prompt}'"
 
             if Path('/Applications/iTerm.app').exists():
                 script = f'''
