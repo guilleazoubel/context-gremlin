@@ -331,22 +331,25 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             # Update session.json if it exists
             session_json = session_path / 'session.json'
             if session_json.exists():
-                with open(session_json) as f:
-                    data = json.load(f)
-                data['terminal'] = {
-                    'log_file': str(log_file),
-                    'tab_name': session_name,
-                    'started': datetime.datetime.now().isoformat()
-                }
-                if 'history' not in data:
-                    data['history'] = []
-                data['history'].append({
-                    'timestamp': datetime.datetime.now().isoformat(),
-                    'action': 'terminal_started',
-                    'source': 'dashboard'
-                })
-                with open(session_json, 'w') as f:
-                    json.dump(data, f, indent=2)
+                try:
+                    with open(session_json) as f:
+                        data = json.load(f)
+                    data['terminal'] = {
+                        'log_file': str(log_file),
+                        'tab_name': session_name,
+                        'started': datetime.datetime.now().isoformat()
+                    }
+                    if 'history' not in data:
+                        data['history'] = []
+                    data['history'].append({
+                        'timestamp': datetime.datetime.now().isoformat(),
+                        'action': 'terminal_started',
+                        'source': 'dashboard'
+                    })
+                    with open(session_json, 'w') as f:
+                        json.dump(data, f, indent=2)
+                except (json.JSONDecodeError, ValueError):
+                    pass  # session.json is empty or invalid — skip metadata update
 
             # Also create a simple marker file for v1 sessions
             terminal_marker = session_path / '.terminal_log'
@@ -380,9 +383,12 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             base_branch = 'main'
             session_json = session_path / 'session.json'
             if session_json.exists():
-                with open(session_json) as f:
-                    data = json.load(f)
-                base_branch = data.get('pr', {}).get('base', 'main')
+                try:
+                    with open(session_json) as f:
+                        data = json.load(f)
+                    base_branch = data.get('pr', {}).get('base', 'main')
+                except (json.JSONDecodeError, ValueError):
+                    pass
 
             # Prepare ACR output file
             acr_output = session_path / 'ACR_REVIEW.md'
@@ -416,17 +422,20 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
 
             # Update session history
             if session_json.exists():
-                with open(session_json) as f:
-                    data = json.load(f)
-                if 'history' not in data:
-                    data['history'] = []
-                data['history'].append({
-                    'timestamp': datetime.datetime.now().isoformat(),
-                    'action': 'acr_review_completed',
-                    'source': 'dashboard'
-                })
-                with open(session_json, 'w') as f:
-                    json.dump(data, f, indent=2)
+                try:
+                    with open(session_json) as f:
+                        data = json.load(f)
+                    if 'history' not in data:
+                        data['history'] = []
+                    data['history'].append({
+                        'timestamp': datetime.datetime.now().isoformat(),
+                        'action': 'acr_review_completed',
+                        'source': 'dashboard'
+                    })
+                    with open(session_json, 'w') as f:
+                        json.dump(data, f, indent=2)
+                except (json.JSONDecodeError, ValueError):
+                    pass
 
             # Now start Claude
             self.start_claude_session(session_path)
