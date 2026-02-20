@@ -129,8 +129,11 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         try:
             session_json = session_path / 'session.json'
             if session_json.exists():
-                with open(session_json, 'r') as f:
-                    data = json.load(f)
+                try:
+                    with open(session_json, 'r') as f:
+                        data = json.load(f)
+                except (json.JSONDecodeError, ValueError):
+                    data = {}
                 data['display_title'] = new_title
                 with open(session_json, 'w') as f:
                     json.dump(data, f, indent=2)
@@ -167,8 +170,11 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_error(400, 'Session does not have v2 format')
                 return
 
-            with open(session_json) as f:
-                data = json.load(f)
+            try:
+                with open(session_json) as f:
+                    data = json.load(f)
+            except (json.JSONDecodeError, ValueError):
+                data = {}
 
             old_mode = data.get('mode', 'unknown')
             data['mode'] = new_mode
@@ -1655,67 +1661,171 @@ end tell
             self.send_error(500, str(e))
 
     def send_sessions_list(self):
+        import re, datetime, time
         sessions = []
-        for entry in sorted(Path(SESSIONS_DIR).iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
-            if entry.is_dir() and not entry.name.startswith('.'):
-                session_json = entry / 'session.json'
-                info_file = entry / 'session-info.txt'
+        now = time.time()
+        for entry in Path(SESSIONS_DIR).iterdir():
+            if not entry.is_dir() or entry.name.startswith('.'):
+                continue
+            session_json = entry / 'session.json'
+            info_file = entry / 'session-info.txt'
 
-                info = {}
+            info = {}
 
-                # V2 format: session.json (but fall back to v1 if empty/invalid)
-                if session_json.exists():
-                    info = self.parse_session_json(session_json)
+            # V2 format: session.json (but fall back to v1 if empty/invalid)
+            if session_json.exists():
+                info = self.parse_session_json(session_json)
 
-                # V1 format: session-info.txt (fallback if v2 missing or invalid)
-                if not info and info_file.exists():
-                    info = self.parse_session_info(info_file)
-                    # Detect session type from folder name for v1
-                    if entry.name.startswith('pr-'):
-                        info['session_type'] = 'review'
-                    elif entry.name.startswith('dev-'):
-                        info['session_type'] = 'development'
-                    elif entry.name.startswith('inv-'):
-                        info['session_type'] = 'investigation'
-                    else:
-                        info['session_type'] = 'unknown'
+            # V1 format: session-info.txt (fallback if v2 missing or invalid)
+            if not info and info_file.exists():
+                info = self.parse_session_info(info_file)
+                # Detect session type from folder name for v1
+                if entry.name.startswith('pr-'):
+                    info['session_type'] = 'review'
+                elif entry.name.startswith('dev-'):
+                    info['session_type'] = 'development'
+                elif entry.name.startswith('inv-'):
+                    info['session_type'] = 'investigation'
+                else:
+                    info['session_type'] = 'unknown'
 
-                # Skip if we couldn't get any info
-                if not info:
-                    continue
+            # Skip if we couldn't get any info
+            if not info:
+                continue
 
-                info['name'] = entry.name
-                # Check for output files in both root and repo/ folder
-                def has_file(name):
-                    root = entry / name
-                    repo = entry / 'repo' / name
-                    return (root.exists() and root.stat().st_size > 0) or (repo.exists() and repo.stat().st_size > 0)
-                info['has_review'] = has_file('REVIEW.md')
-                info['has_findings'] = has_file('FINDINGS.md')
-                info['has_devlog'] = has_file('DEVLOG.md')
-                info['archived'] = not (entry / 'repo').exists()
+            info['name'] = entry.name
+            # Check for output files in both root and repo/ folder
+            def has_file(name):
+                root = entry / name
+                repo = entry / 'repo' / name
+                return (root.exists() and root.stat().st_size > 0) or (repo.exists() and repo.stat().st_size > 0)
+            info['has_review'] = has_file('REVIEW.md')
+            info['has_findings'] = has_file('FINDINGS.md')
+            info['has_devlog'] = has_file('DEVLOG.md')
+            info['archived'] = not (entry / 'repo').exists()
 
-                # Check for archived review versions (REVIEW-v1.md, REVIEW-v2.md, etc.)
-                review_versions = []
-                for f in entry.glob('REVIEW-v*.md'):
-                    if f.stat().st_size > 0:
-                        version = f.stem.replace('REVIEW-', '')
-                        review_versions.append(version)
-                info['review_versions'] = sorted(review_versions)
+            # Check for archived review versions (REVIEW-v1.md, REVIEW-v2.md, etc.)
+            review_versions = []
+            for f in entry.glob('REVIEW-v*.md'):
+                if f.stat().st_size > 0:
+                    version = f.stem.replace('REVIEW-', '')
+                    review_versions.append(version)
+            info['review_versions'] = sorted(review_versions)
 
-                # Check for RE-REVIEW.md (indicates re-review in progress)
-                info['has_rereview'] = (entry / 'repo' / 'RE-REVIEW.md').exists()
+            # Check for RE-REVIEW.md (indicates re-review in progress)
+            info['has_rereview'] = (entry / 'repo' / 'RE-REVIEW.md').exists()
 
-                # Check terminal status
-                info['has_terminal'] = self.check_terminal_active(entry)
+            # Check terminal status
+            info['has_terminal'] = self.check_terminal_active(entry)
 
-                sessions.append(info)
+            # --- Stable timestamps ---
+            # Parse creation time from folder name (e.g. pr-name-20260219-172956)
+            created_ts = 0
+            m = re.search(r'(\d{8})-(\d{6})$', entry.name)
+            if m:
+                try:
+                    dt = datetime.datetime.strptime(m.group(1) + m.group(2), '%Y%m%d%H%M%S')
+                    created_ts = dt.timestamp()
+                except ValueError:
+                    pass
+            if not created_ts:
+                # Fallback: use created field from session-info or session.json
+                created_str = info.get('created', '')
+                if created_str:
+                    for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S'):
+                        try:
+                            created_ts = datetime.datetime.strptime(created_str[:19], fmt).timestamp()
+                            break
+                        except ValueError:
+                            pass
+            if not created_ts:
+                created_ts = entry.stat().st_ctime
+            info['created_ts'] = created_ts
+
+            # Last activity: mtime of the directory
+            info['last_activity_ts'] = entry.stat().st_mtime
+
+            # Stale: no activity in 3+ days (and not archived)
+            days_inactive = (now - info['last_activity_ts']) / 86400
+            info['stale'] = days_inactive > 3 and not info['archived']
+
+            sessions.append((entry, info))
+
+        # Check PR states in parallel (uncached ones only)
+        from concurrent.futures import ThreadPoolExecutor
+        pr_sessions = [(entry, info) for entry, info in sessions
+                       if info.get('pr') and info.get('session_type') == 'review']
+        if pr_sessions:
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                futures = {pool.submit(self._get_pr_state, entry, info): info
+                           for entry, info in pr_sessions}
+                for future in futures:
+                    info = futures[future]
+                    try:
+                        info['pr_state'] = future.result(timeout=6)
+                    except Exception:
+                        pass
+
+        # Unwrap (entry, info) tuples
+        sessions = [info for _, info in sessions]
+
+        # Sort: live terminal first, then by creation date (newest first)
+        # Archived always last
+        def sort_key(s):
+            archived = 1 if s.get('archived') else 0
+            live = 0 if s.get('has_terminal') else 1
+            return (archived, live, -s.get('created_ts', 0))
+        sessions.sort(key=sort_key)
 
         self.send_response(200)
         self.send_header('Content-type', 'application/json')
         self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
         self.wfile.write(json.dumps(sessions).encode())
+
+    # Cache PR state checks (module-level would be better but this works in single-process server)
+    _pr_state_cache = {}  # {session_name: {'state': 'MERGED', 'checked': timestamp}}
+
+    def _get_pr_state(self, session_path, info):
+        """Get PR state (OPEN/MERGED/CLOSED), cached to avoid hammering GitHub API"""
+        import subprocess, time
+        session_name = session_path.name
+        now = time.time()
+
+        # Check cache: terminal states never change, open states re-check every 5 min
+        cached = self._pr_state_cache.get(session_name)
+        if cached:
+            state = cached['state']
+            if state in ('MERGED', 'CLOSED'):
+                return state
+            if now - cached['checked'] < 300:  # 5 min TTL for OPEN
+                return state
+
+        # Extract repo from session info
+        repo = info.get('repository', '')
+        pr_num = info.get('pr', '')
+        if not pr_num or not repo:
+            return None
+
+        # Parse org/repo — may be a URL or plain "org/repo" slug
+        import re
+        repo_match = re.search(r'github\.com[:/]([^/]+/[^/\s]+?)(?:\.git)?$', repo)
+        repo_slug = repo_match.group(1) if repo_match else repo.strip().rstrip('/')
+        if '/' not in repo_slug:
+            return None
+
+        try:
+            result = subprocess.run(
+                ['gh', 'pr', 'view', str(pr_num), '--repo', repo_slug, '--json', 'state', '-q', '.state'],
+                capture_output=True, text=True, timeout=5
+            )
+            if result.returncode == 0:
+                state = result.stdout.strip()  # OPEN, MERGED, or CLOSED
+                self._pr_state_cache[session_name] = {'state': state, 'checked': now}
+                return state
+        except Exception:
+            pass
+        return None
 
     def parse_session_json(self, path):
         """Parse V2 session.json format"""
@@ -2251,6 +2361,12 @@ end tell
         .tag-devlog { background: rgba(167,139,250,0.1); color: #a78bfa; }
         .tag-archived { background: rgba(136,136,150,0.1); color: var(--text-tertiary); }
         .tag-terminal { background: var(--green-bg); color: var(--green); }
+        .tag-merged { background: rgba(167,139,250,0.15); color: #a78bfa; }
+        .tag-closed { background: rgba(255,107,107,0.1); color: #ff6b6b; }
+        .tag-stale { background: rgba(136,136,150,0.1); color: var(--text-tertiary); }
+        .session-item.dimmed .si-title { opacity: 0.55; }
+        .session-item.dimmed .si-folder { opacity: 0.4; }
+        .session-item.dimmed:not(.active):hover .si-title { opacity: 0.75; }
 
         @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
 
@@ -3126,14 +3242,28 @@ end tell
             Object.values(s).some(v => typeof v === 'string' && v.toLowerCase().includes(filter))
         );
 
-        const active = filtered.filter(s => !s.archived);
+        // Server already sorts: live first, then by creation date, archived last.
+        // Group into visual sections.
+        const live = filtered.filter(s => !s.archived && s.has_terminal);
+        const active = filtered.filter(s => !s.archived && !s.has_terminal && !s.stale && s.pr_state !== 'MERGED' && s.pr_state !== 'CLOSED');
+        const done = filtered.filter(s => !s.archived && !s.has_terminal && (s.stale || s.pr_state === 'MERGED' || s.pr_state === 'CLOSED'));
         const archived = filtered.filter(s => s.archived);
 
         let html = '';
 
+        if (live.length > 0) {
+            html += '<div class="section-label">Live &middot; ' + live.length + '</div>';
+            html += live.map(s => renderSessionItem(s)).join('');
+        }
+
         if (active.length > 0) {
             html += '<div class="section-label">Active &middot; ' + active.length + '</div>';
             html += active.map(s => renderSessionItem(s)).join('');
+        }
+
+        if (done.length > 0) {
+            html += '<div class="section-label">Done / Stale &middot; ' + done.length + '</div>';
+            html += done.map(s => renderSessionItem(s)).join('');
         }
 
         if (archived.length > 0) {
@@ -3152,16 +3282,23 @@ end tell
         const isActive = state.currentSession === s.name;
         const title = escapeHtml(s.display_title || s.name);
         const mode = s.mode || s.session_type || '';
+        const isStale = s.stale && !s.has_terminal;
+        const isMerged = s.pr_state === 'MERGED';
+        const isClosed = s.pr_state === 'CLOSED';
+        const dimmed = isStale || isMerged || isClosed || s.archived;
 
         let tags = '';
         if (s.has_terminal) tags += '<span class="tag tag-terminal">Live</span>';
+        if (isMerged) tags += '<span class="tag tag-merged">Merged</span>';
+        if (isClosed) tags += '<span class="tag tag-closed">Closed</span>';
         if (mode) tags += '<span class="tag tag-mode">' + mode + '</span>';
         if (s.has_review) tags += '<span class="tag tag-review">Review</span>';
         if (s.has_findings) tags += '<span class="tag tag-findings">Findings</span>';
         if (s.has_devlog) tags += '<span class="tag tag-devlog">Devlog</span>';
+        if (isStale && !isMerged && !isClosed) tags += '<span class="tag tag-stale">Stale</span>';
         if (s.archived) tags += '<span class="tag tag-archived">Archived</span>';
 
-        return '<div class="session-item ' + (isActive ? 'active' : '') + '" onclick="selectSession(&quot;' + s.name + '&quot;)">' +
+        return '<div class="session-item ' + (isActive ? 'active' : '') + (dimmed ? ' dimmed' : '') + '" onclick="selectSession(&quot;' + s.name + '&quot;)">' +
             '<div class="si-title">' + (s.has_terminal ? '<span class="live-indicator"></span>' : '') + title + '</div>' +
             '<div class="si-folder">' + s.name + '</div>' +
             '<div class="si-tags">' + tags + '</div>' +
