@@ -99,7 +99,8 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             self.import_pr_comments(session_path)
         elif parsed.path == '/api/refresh-pr':
             mode = data.get('mode', 'claude')
-            self.refresh_pr(session_path, mode)
+            force = data.get('force', False)
+            self.refresh_pr(session_path, mode, force)
         elif parsed.path == '/api/run-app':
             self.run_application(session_path)
         elif parsed.path == '/api/commit':
@@ -993,7 +994,7 @@ end tell
         except Exception as e:
             self.send_error(500, str(e))
 
-    def refresh_pr(self, session_path, mode):
+    def refresh_pr(self, session_path, mode, force=False):
         """Refresh PR: fetch new commits, archive review, create re-review instructions,
         refresh discussion, then launch agent — matching terminal's refresh_pr_session flow."""
         import subprocess
@@ -1072,7 +1073,7 @@ end tell
             ).stdout.strip()
 
             # --- Step 2: Check if there are new commits ---
-            if old_commit == new_commit:
+            if old_commit == new_commit and not force:
                 # Clean up the temporary branch
                 subprocess.run(['git', 'branch', '-D', f'pr-{pr_number}-new'],
                                cwd=str(repo_path), capture_output=True, text=True)
@@ -1086,27 +1087,36 @@ end tell
                 }).encode())
                 return
 
-            # Get new commit log
-            log_result = subprocess.run(
-                ['git', 'log', '--oneline', f'{old_commit}..{new_commit}'],
-                cwd=str(repo_path), capture_output=True, text=True
-            )
-            new_commits_text = log_result.stdout.strip()
-            commit_count = len([l for l in new_commits_text.split('\\n') if l.strip()]) if new_commits_text else 0
+            if old_commit == new_commit:
+                # Force mode: no new commits but proceed anyway
+                # Clean up temp branch since there's nothing to checkout
+                subprocess.run(['git', 'branch', '-D', f'pr-{pr_number}-new'],
+                               cwd=str(repo_path), capture_output=True, text=True)
+                new_commits_text = '(no new commits — forced re-review)'
+                commit_count = 0
+                changes_since = ''
+            else:
+                # Normal flow: new commits exist
+                log_result = subprocess.run(
+                    ['git', 'log', '--oneline', f'{old_commit}..{new_commit}'],
+                    cwd=str(repo_path), capture_output=True, text=True
+                )
+                new_commits_text = log_result.stdout.strip()
+                commit_count = len([l for l in new_commits_text.split('\n') if l.strip()]) if new_commits_text else 0
 
-            # --- Step 3: Checkout new branch, replace old ---
-            subprocess.run(['git', 'checkout', f'pr-{pr_number}-new'],
-                           cwd=str(repo_path), capture_output=True, text=True)
-            subprocess.run(['git', 'branch', '-D', f'pr-{pr_number}'],
-                           cwd=str(repo_path), capture_output=True, text=True)
-            subprocess.run(['git', 'branch', '-m', f'pr-{pr_number}'],
-                           cwd=str(repo_path), capture_output=True, text=True)
+                # Checkout new branch, replace old
+                subprocess.run(['git', 'checkout', f'pr-{pr_number}-new'],
+                               cwd=str(repo_path), capture_output=True, text=True)
+                subprocess.run(['git', 'branch', '-D', f'pr-{pr_number}'],
+                               cwd=str(repo_path), capture_output=True, text=True)
+                subprocess.run(['git', 'branch', '-m', f'pr-{pr_number}'],
+                               cwd=str(repo_path), capture_output=True, text=True)
 
-            # Get diff stats (changes since last review)
-            changes_since = subprocess.run(
-                ['git', 'diff', '--stat', f'{old_commit}...pr-{pr_number}'],
-                cwd=str(repo_path), capture_output=True, text=True
-            ).stdout.strip()
+                # Get diff stats (changes since last review)
+                changes_since = subprocess.run(
+                    ['git', 'diff', '--stat', f'{old_commit}...pr-{pr_number}'],
+                    cwd=str(repo_path), capture_output=True, text=True
+                ).stdout.strip()
 
             # --- Step 4: Update session-info.txt ---
             if info_file.exists():
@@ -1452,7 +1462,7 @@ end tell
                 self.send_error(500, f'Session creation failed: {result.stderr}')
                 return
 
-            session_name = result.stdout.strip().split('\\n')[-1]
+            session_name = result.stdout.strip().split('\n')[-1]
 
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
@@ -3819,20 +3829,33 @@ end tell
         btn.classList.add('selected');
     }
 
-    async function executeRefreshPR() {
+    async function executeRefreshPR(force) {
         const btn = document.querySelector('.modal-btn.primary');
         if (btn) { btn.disabled = true; btn.textContent = 'Fetching PR updates...'; }
         try {
-            const data = await apiPost(API.REFRESH_PR, { mode: state.refreshPRMode });
+            const payload = { mode: state.refreshPRMode };
+            if (force) payload.force = true;
+            const data = await apiPost(API.REFRESH_PR, payload);
             if (data.status === 'up_to_date') {
-                showToast(data.message || 'PR is already up to date', 'info');
+                // Show message in the modal instead of just a toast
+                const modal = document.querySelector('.modal-content');
+                if (modal) {
+                    modal.innerHTML =
+                        '<h3>PR is up to date</h3>' +
+                        '<p class="modal-desc">No new commits found since last refresh.</p>' +
+                        '<div class="modal-footer">' +
+                        '<button class="modal-btn" onclick="closeModal()">Close</button>' +
+                        '<button class="modal-btn primary" onclick="executeRefreshPR(true)">Force Re-review Anyway</button>' +
+                        '</div>';
+                }
             } else if (data.osascript_error) {
                 showToast('Terminal error: ' + data.osascript_error, 'error');
+                closeModal();
             } else {
                 const msg = 'Re-review started — ' + (data.commits || '?') + ' new commit(s), v' + (data.version || '?');
                 showToast(msg);
+                closeModal();
             }
-            closeModal();
         } catch (e) { showToast('Failed: ' + e.message, 'error'); closeModal(); }
     }
 
