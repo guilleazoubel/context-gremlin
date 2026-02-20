@@ -299,7 +299,8 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
 
             # Build the command
             # Use --add-dir to allow Claude to write to session folder without permission prompts
-            claude_cmd = f"cd '{repo_path}' && script -q '{log_file}' claude --add-dir '{session_path}'"
+            # direnv allow prevents ".envrc is blocked" errors when cd'ing into repos with .envrc
+            claude_cmd = f"direnv allow '{repo_path}/.envrc' 2>/dev/null; cd '{repo_path}' && script -q '{log_file}' claude --add-dir '{session_path}'"
 
             # Try iTerm2 first, fall back to Terminal.app
             if Path('/Applications/iTerm.app').exists():
@@ -635,9 +636,84 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         except Exception as e:
             self.send_error(500, str(e))
 
+    def _do_refresh_discussion(self, session_path, repo_owner, repo_name, pr_number):
+        """Internal: fetch PR comments/reviews and write PR_DISCUSSION.md. Returns counts dict."""
+        import subprocess
+
+        output_file = session_path / 'PR_DISCUSSION.md'
+
+        # Fetch review comments
+        result = subprocess.run(
+            ['gh', 'api', f'repos/{repo_owner}/{repo_name}/pulls/{pr_number}/comments', '--paginate'],
+            capture_output=True, text=True
+        )
+        review_comments = json.loads(result.stdout) if result.returncode == 0 else []
+
+        # Fetch PR reviews
+        result = subprocess.run(
+            ['gh', 'api', f'repos/{repo_owner}/{repo_name}/pulls/{pr_number}/reviews', '--paginate'],
+            capture_output=True, text=True
+        )
+        reviews = json.loads(result.stdout) if result.returncode == 0 else []
+
+        # Fetch issue comments
+        result = subprocess.run(
+            ['gh', 'api', f'repos/{repo_owner}/{repo_name}/issues/{pr_number}/comments', '--paginate'],
+            capture_output=True, text=True
+        )
+        issue_comments = json.loads(result.stdout) if result.returncode == 0 else []
+
+        # Write markdown file
+        with open(output_file, 'w') as f:
+            f.write("# PR Discussion & Review History\n\n")
+            f.write("> This file contains existing comments, reviews, and discussions from the PR.\n")
+            f.write("> Use this context to avoid duplicating feedback and to understand decisions already made.\n\n")
+
+            if review_comments:
+                f.write(f"## Code Review Comments ({len(review_comments)})\n\n")
+                for c in review_comments:
+                    line = c.get('line') or c.get('original_line') or '?'
+                    f.write(f"### 📍 `{c.get('path', '?')}:{line}`\n")
+                    f.write(f"**@{c.get('user', {}).get('login', '?')}** on {c.get('created_at', '')[:10]}:\n\n")
+                    f.write(f"{c.get('body', '')}\n\n---\n\n")
+
+            if reviews:
+                reviews_with_body = [r for r in reviews if r.get('body')]
+                if reviews_with_body:
+                    f.write(f"## PR Reviews ({len(reviews_with_body)})\n\n")
+                    for r in reviews_with_body:
+                        state = r.get('state', '')
+                        icon = '✅' if state == 'APPROVED' else '⚠️' if state == 'CHANGES_REQUESTED' else '💬'
+                        f.write(f"### {icon} {state} by @{r.get('user', {}).get('login', '?')}\n")
+                        f.write(f"{r.get('created_at', '')[:10]}\n\n")
+                        f.write(f"{r.get('body', '')}\n\n---\n\n")
+
+            if issue_comments:
+                f.write(f"## General Discussion ({len(issue_comments)})\n\n")
+                for c in issue_comments:
+                    f.write(f"### 💬 @{c.get('user', {}).get('login', '?')} on {c.get('created_at', '')[:10]}\n\n")
+                    f.write(f"{c.get('body', '')}\n\n---\n\n")
+
+            total = len(review_comments) + len([r for r in reviews if r.get('body')]) + len(issue_comments)
+            f.write(f"\n---\n*Total: {len(review_comments)} code comments, {len([r for r in reviews if r.get('body')])} reviews, {len(issue_comments)} discussion comments*\n")
+
+        # Create symlink in repo
+        repo_path = session_path / 'repo'
+        if repo_path.exists():
+            symlink_path = repo_path / 'PR_DISCUSSION.md'
+            if symlink_path.exists():
+                symlink_path.unlink()
+            symlink_path.symlink_to('../PR_DISCUSSION.md')
+
+        reviews_with_body = [r for r in reviews if r.get('body')]
+        return {
+            'review_comments': len(review_comments),
+            'reviews': len(reviews_with_body),
+            'issue_comments': len(issue_comments)
+        }
+
     def refresh_pr_discussion(self, session_path):
         """Refresh PR comments and discussions"""
-        import subprocess
         import re
         try:
             # Get PR info from session
@@ -681,70 +757,7 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                 self.send_error(400, 'Could not determine PR info')
                 return
 
-            output_file = session_path / 'PR_DISCUSSION.md'
-
-            # Fetch review comments
-            result = subprocess.run(
-                ['gh', 'api', f'repos/{repo_owner}/{repo_name}/pulls/{pr_number}/comments', '--paginate'],
-                capture_output=True, text=True
-            )
-            review_comments = json.loads(result.stdout) if result.returncode == 0 else []
-
-            # Fetch PR reviews
-            result = subprocess.run(
-                ['gh', 'api', f'repos/{repo_owner}/{repo_name}/pulls/{pr_number}/reviews', '--paginate'],
-                capture_output=True, text=True
-            )
-            reviews = json.loads(result.stdout) if result.returncode == 0 else []
-
-            # Fetch issue comments
-            result = subprocess.run(
-                ['gh', 'api', f'repos/{repo_owner}/{repo_name}/issues/{pr_number}/comments', '--paginate'],
-                capture_output=True, text=True
-            )
-            issue_comments = json.loads(result.stdout) if result.returncode == 0 else []
-
-            # Write markdown file
-            with open(output_file, 'w') as f:
-                f.write("# PR Discussion & Review History\\n\\n")
-                f.write("> This file contains existing comments, reviews, and discussions from the PR.\\n")
-                f.write("> Use this context to avoid duplicating feedback and to understand decisions already made.\\n\\n")
-
-                if review_comments:
-                    f.write(f"## Code Review Comments ({len(review_comments)})\\n\\n")
-                    for c in review_comments:
-                        line = c.get('line') or c.get('original_line') or '?'
-                        f.write(f"### 📍 `{c.get('path', '?')}:{line}`\\n")
-                        f.write(f"**@{c.get('user', {}).get('login', '?')}** on {c.get('created_at', '')[:10]}:\\n\\n")
-                        f.write(f"{c.get('body', '')}\\n\\n---\\n\\n")
-
-                if reviews:
-                    reviews_with_body = [r for r in reviews if r.get('body')]
-                    if reviews_with_body:
-                        f.write(f"## PR Reviews ({len(reviews_with_body)})\\n\\n")
-                        for r in reviews_with_body:
-                            state = r.get('state', '')
-                            icon = '✅' if state == 'APPROVED' else '⚠️' if state == 'CHANGES_REQUESTED' else '💬'
-                            f.write(f"### {icon} {state} by @{r.get('user', {}).get('login', '?')}\\n")
-                            f.write(f"{r.get('created_at', '')[:10]}\\n\\n")
-                            f.write(f"{r.get('body', '')}\\n\\n---\\n\\n")
-
-                if issue_comments:
-                    f.write(f"## General Discussion ({len(issue_comments)})\\n\\n")
-                    for c in issue_comments:
-                        f.write(f"### 💬 @{c.get('user', {}).get('login', '?')} on {c.get('created_at', '')[:10]}\\n\\n")
-                        f.write(f"{c.get('body', '')}\\n\\n---\\n\\n")
-
-                total = len(review_comments) + len([r for r in reviews if r.get('body')]) + len(issue_comments)
-                f.write(f"\\n---\\n*Total: {len(review_comments)} code comments, {len([r for r in reviews if r.get('body')])} reviews, {len(issue_comments)} discussion comments*\\n")
-
-            # Create symlink in repo
-            repo_path = session_path / 'repo'
-            if repo_path.exists():
-                symlink_path = repo_path / 'PR_DISCUSSION.md'
-                if symlink_path.exists():
-                    symlink_path.unlink()
-                symlink_path.symlink_to('../PR_DISCUSSION.md')
+            counts = self._do_refresh_discussion(session_path, repo_owner, repo_name, pr_number)
 
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
@@ -752,9 +765,7 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(json.dumps({
                 'status': 'refreshed',
-                'review_comments': len(review_comments),
-                'reviews': len([r for r in reviews if r.get('body')]),
-                'issue_comments': len(issue_comments)
+                **counts
             }).encode())
 
         except Exception as e:
@@ -808,7 +819,7 @@ DO NOT COMMIT - user will test and commit manually."""
 
             # Escape the prompt for shell
             escaped_prompt = prompt.replace("'", "'\\''")
-            claude_cmd = f"cd '{repo_path}' && script -q '{log_file}' claude --add-dir '{session_path}' '{escaped_prompt}'"
+            claude_cmd = f"direnv allow '{repo_path}/.envrc' 2>/dev/null; cd '{repo_path}' && script -q '{log_file}' claude --add-dir '{session_path}' '{escaped_prompt}'"
 
             session_name = session_path.name
 
@@ -924,7 +935,7 @@ end tell
 
             # Build new findings from comments
             new_findings = []
-            finding_num = len(re.findall(r'#### Finding #\\d+', existing_content)) + 1
+            finding_num = len(re.findall(r'#### Finding #\d+', existing_content)) + 1
 
             for comment in review_comments:
                 body = comment.get('body', '')
@@ -933,7 +944,7 @@ end tell
                 author = comment.get('user', {}).get('login', 'unknown')
 
                 # Skip if already in REVIEW.md
-                snippet = body[:50].replace('\\n', ' ')
+                snippet = body[:50].replace('\n', ' ')
                 if snippet in existing_content:
                     continue
 
@@ -951,13 +962,13 @@ end tell
             # Append new findings to REVIEW.md
             if new_findings:
                 with open(review_file, 'a') as f:
-                    f.write('\\n\\n---\\n\\n## Imported PR Comments\\n\\n')
+                    f.write('\n\n---\n\n## Imported PR Comments\n\n')
                     for finding in new_findings:
-                        f.write(f"#### Finding #{finding['number']}: {finding['title']}\\n\\n")
-                        f.write(f"📍 **Location:** `{finding['file']}:{finding['line']}`\\n\\n")
-                        f.write(f"**Source:** PR comment by @{finding['author']}\\n\\n")
-                        f.write(f"**Comment:**\\n{finding['body']}\\n\\n")
-                        f.write("**Status:** ⚠️ Open\\n\\n")
+                        f.write(f"#### Finding #{finding['number']}: {finding['title']}\n\n")
+                        f.write(f"📍 **Location:** `{finding['file']}:{finding['line']}`\n\n")
+                        f.write(f"**Source:** PR comment by @{finding['author']}\n\n")
+                        f.write(f"**Comment:**\n{finding['body']}\n\n")
+                        f.write("**Status:** ⚠️ Open\n\n")
 
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
@@ -973,10 +984,12 @@ end tell
             self.send_error(500, str(e))
 
     def refresh_pr(self, session_path, mode):
-        """Refresh PR and launch re-review in new terminal"""
+        """Refresh PR: fetch new commits, archive review, create re-review instructions,
+        refresh discussion, then launch agent — matching terminal's refresh_pr_session flow."""
         import subprocess
         import re
         import datetime
+        import shutil
 
         try:
             repo_path = session_path / 'repo'
@@ -984,14 +997,15 @@ end tell
                 self.send_error(400, 'Repo not found (session may be archived)')
                 return
 
-            # Get PR info from session (try V2 then V1)
+            # --- Get PR info from session (try V2 then V1) ---
             session_json = session_path / 'session.json'
             info_file = session_path / 'session-info.txt'
 
             pr_number = None
             pr_base = 'main'
+            repo_owner = None
+            repo_name = None
 
-            # Try V2 format first
             if session_json.exists():
                 try:
                     content = session_json.read_text().strip()
@@ -999,44 +1013,234 @@ end tell
                         data = json.loads(content)
                         pr_number = data.get('pr', {}).get('number')
                         pr_base = data.get('pr', {}).get('base', 'main')
+                        project = data.get('project', '')
+                        match = re.search(r'github\.com/([^/]+)/([^/]+)', project)
+                        if match:
+                            repo_owner = match.group(1)
+                            repo_name = match.group(2).replace('.git', '')
                 except:
-                    pass  # Fall through to V1 format
+                    pass
 
-            # Fall back to V1 format (session-info.txt)
             if not pr_number and info_file.exists():
                 content = info_file.read_text()
-                # Match "PR #930:" pattern
                 match = re.search(r'PR #(\d+)', content)
                 if match:
                     pr_number = match.group(1)
-                # Match "Branch: feature/name → main" pattern
                 match = re.search(r'Branch:.*→\s*(\S+)', content)
                 if match:
                     pr_base = match.group(1)
+                match = re.search(r'Repository:\s*([^\n]+)', content)
+                if match:
+                    repo_str = match.group(1).strip()
+                    if '/' in repo_str:
+                        parts = repo_str.split('/')
+                        if len(parts) >= 2:
+                            repo_owner = parts[-2]
+                            repo_name = parts[-1].replace('.git', '')
 
             if not pr_number:
                 self.send_error(400, 'Could not find PR number')
                 return
 
-            # Build the refresh command
+            # --- Step 1: Get current commit and fetch latest PR ---
+            old_commit = subprocess.run(
+                ['git', 'rev-parse', 'HEAD'],
+                cwd=str(repo_path), capture_output=True, text=True
+            ).stdout.strip()
+
+            fetch_result = subprocess.run(
+                ['git', 'fetch', 'origin', f'pull/{pr_number}/head:pr-{pr_number}-new'],
+                cwd=str(repo_path), capture_output=True, text=True
+            )
+            if fetch_result.returncode != 0:
+                self.send_error(500, f'Git fetch failed: {fetch_result.stderr.strip()}')
+                return
+
+            new_commit = subprocess.run(
+                ['git', 'rev-parse', f'pr-{pr_number}-new'],
+                cwd=str(repo_path), capture_output=True, text=True
+            ).stdout.strip()
+
+            # --- Step 2: Check if there are new commits ---
+            if old_commit == new_commit:
+                # Clean up the temporary branch
+                subprocess.run(['git', 'branch', '-D', f'pr-{pr_number}-new'],
+                               cwd=str(repo_path), capture_output=True, text=True)
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(json.dumps({
+                    'status': 'up_to_date',
+                    'message': 'PR is already up to date (no new commits)'
+                }).encode())
+                return
+
+            # Get new commit log
+            log_result = subprocess.run(
+                ['git', 'log', '--oneline', f'{old_commit}..{new_commit}'],
+                cwd=str(repo_path), capture_output=True, text=True
+            )
+            new_commits_text = log_result.stdout.strip()
+            commit_count = len([l for l in new_commits_text.split('\\n') if l.strip()]) if new_commits_text else 0
+
+            # --- Step 3: Checkout new branch, replace old ---
+            subprocess.run(['git', 'checkout', f'pr-{pr_number}-new'],
+                           cwd=str(repo_path), capture_output=True, text=True)
+            subprocess.run(['git', 'branch', '-D', f'pr-{pr_number}'],
+                           cwd=str(repo_path), capture_output=True, text=True)
+            subprocess.run(['git', 'branch', '-m', f'pr-{pr_number}'],
+                           cwd=str(repo_path), capture_output=True, text=True)
+
+            # Get diff stats (changes since last review)
+            changes_since = subprocess.run(
+                ['git', 'diff', '--stat', f'{old_commit}...pr-{pr_number}'],
+                cwd=str(repo_path), capture_output=True, text=True
+            ).stdout.strip()
+
+            # --- Step 4: Update session-info.txt ---
+            if info_file.exists():
+                with open(info_file, 'a') as f:
+                    f.write(f"\nREFRESHED: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                    f.write(f"Previous commit: {old_commit}\n")
+                    f.write(f"New commit: {new_commit}\n")
+                    f.write(f"New commits: {commit_count}\n")
+
+            # --- Step 5: Archive old REVIEW.md ---
+            version = 1
+            while (session_path / f'REVIEW-v{version}.md').exists():
+                version += 1
+
+            review_file = session_path / 'REVIEW.md'
+            if review_file.exists() and review_file.stat().st_size > 0:
+                shutil.copy2(str(review_file), str(session_path / f'REVIEW-v{version}.md'))
+
+            next_version = version + 1
+            today = datetime.datetime.now().strftime('%Y-%m-%d')
+
+            # --- Step 6: Create RE-REVIEW.md with instructions ---
+            rereview_content = f"""# Re-Review: v{next_version}
+
+## What Changed
+
+| Info | Value |
+|------|-------|
+| **Previous** | v{version} (commit `{old_commit[:8]}`) |
+| **Current** | v{next_version} (commit `{new_commit[:8]}`) |
+| **New Commits** | {commit_count} |
+
+### New Commits
+```
+{new_commits_text}
+```
+
+### Files Changed Since Last Review
+```
+{changes_since}
+```
+
+---
+
+## Re-Review Instructions
+
+**Update REVIEW.md in-place. Do NOT append sections.**
+
+### 1. Check Each Open Finding
+For each finding in "Open Findings":
+- **Fixed?** → Move to "Resolved Findings", note the fix
+- **Still present?** → Keep in place
+- **Partially fixed?** → Update the description
+
+### 2. Update the Tracker Table
+```markdown
+| ID | Finding | Severity | Status | Since |
+|----|---------|----------|--------|-------|
+| 1 | Null check missing | 🔴 Critical | ✅ Fixed | v1→v{next_version} |
+| 2 | SQL injection | 🟠 High | ⚠️ Open | v1 |
+| 3 | New issue found | 🟡 Medium | ⚠️ Open | v{next_version} |
+```
+
+### 3. Check for New Issues
+Review the new commits for any NEW problems introduced.
+Add new findings with "Since: v{next_version}"
+
+### 4. Update Review History (IMPORTANT!)
+The Review History table MUST have a new row for this version. Find the table that looks like:
+```markdown
+## Review History
+
+| Version | Date | Commit | Action |
+|---------|------|--------|--------|
+| v1 | 2026-01-27 | e627b8f | Initial review - Approved |
+```
+
+ADD a new row (do NOT replace existing rows):
+```markdown
+| v{next_version} | {today} | {new_commit[:8]} | Re-review: X fixed, Y new issues |
+```
+
+### 5. Update Verdict
+Re-evaluate based on current state of ALL findings (fixed + remaining + new).
+
+---
+
+**CRITICAL: The Review History table must show ALL versions (v1, v2, etc). Do NOT remove previous rows.**
+
+**BEGIN: Read REVIEW.md, check findings against new code, update in-place.**
+"""
+            with open(repo_path / 'RE-REVIEW.md', 'w') as f:
+                f.write(rereview_content)
+
+            # --- Step 7: Update CLAUDE.md with re-review notice ---
+            claude_md = repo_path / 'CLAUDE.md'
+            if claude_md.exists():
+                original = claude_md.read_text()
+                # Remove any previous re-review notice
+                cleaned = re.sub(r'# ⚠️ RE-REVIEW MODE.*?---\n\n', '', original, flags=re.DOTALL)
+
+                notice = f"""# ⚠️ RE-REVIEW MODE (v{next_version})
+
+**PR updated: {commit_count} new commit(s) since last review.**
+
+## What to do:
+1. Read `RE-REVIEW.md` for what changed
+2. Update `REVIEW.md` **in-place** (don't append sections)
+3. Move fixed items to "Resolved Findings" section
+4. Add any new issues found in the new commits
+5. **IMPORTANT**: Add a new row to the Review History table for v{next_version}
+
+## Review History Must Show:
+- v1: Initial review
+- v{next_version}: This re-review (add this row!)
+
+---
+
+"""
+                with open(claude_md, 'w') as f:
+                    f.write(notice + cleaned)
+
+            # --- Step 8: Refresh PR discussion/comments ---
+            discussion_counts = None
+            if repo_owner and repo_name:
+                try:
+                    discussion_counts = self._do_refresh_discussion(session_path, repo_owner, repo_name, pr_number)
+                except:
+                    pass  # Don't fail if discussion refresh fails
+
+            # --- Step 9: Launch agent in terminal ---
             logs_dir = session_path / 'logs'
             logs_dir.mkdir(exist_ok=True)
             log_file = logs_dir / f"terminal-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
-
             session_name = session_path.name
 
-            # Build command with script inside (matches fix_finding pattern)
-            if mode == 'acr+claude':
-                prompt = "RE-REVIEW with ACR: Check ACR_REVIEW.md and update REVIEW.md"
-                escaped_prompt = prompt.replace("'", "'\\''")
-                claude_cmd = f"cd '{repo_path}' && git fetch origin 'pull/{pr_number}/head:pr-{pr_number}-refresh' && git checkout 'pr-{pr_number}-refresh' && echo '=== Running ACR ===' && acr -r 5 -a claude -b {pr_base} --local > ACR_REVIEW.md 2>&1 && echo '=== Starting Claude ===' && script -q '{log_file}' claude --add-dir '{session_path}' '{escaped_prompt}'"
-            else:
-                prompt = "RE-REVIEW: PR updated. Check for new commits and update REVIEW.md"
-                escaped_prompt = prompt.replace("'", "'\\''")
-                claude_cmd = f"cd '{repo_path}' && git fetch origin 'pull/{pr_number}/head:pr-{pr_number}-refresh' && git checkout 'pr-{pr_number}-refresh' && script -q '{log_file}' claude --add-dir '{session_path}' '{escaped_prompt}'"
+            prompt = f"RE-REVIEW MODE: PR has been updated with {commit_count} new commit(s). Read RE-REVIEW.md for what changed, then update REVIEW.md in-place."
+            escaped_prompt = prompt.replace("'", "'\\''")
 
-            print(f"[DEBUG refresh_pr] claude_cmd: {claude_cmd[:200]}...", flush=True)
-            print(f"[DEBUG refresh_pr] iTerm exists: {Path('/Applications/iTerm.app').exists()}", flush=True)
+            direnv_allow = f"direnv allow '{repo_path}/.envrc' 2>/dev/null; "
+            if mode == 'acr+claude':
+                claude_cmd = f"{direnv_allow}cd '{repo_path}' && echo '=== Running ACR ===' && acr -r 5 -a claude -b {pr_base} --local > '{session_path}/ACR_REVIEW.md' 2>&1 && echo '=== Starting Claude ===' && script -q '{log_file}' claude --add-dir '{session_path}' '{escaped_prompt}'"
+            else:
+                claude_cmd = f"{direnv_allow}cd '{repo_path}' && script -q '{log_file}' claude --add-dir '{session_path}' '{escaped_prompt}'"
 
             if Path('/Applications/iTerm.app').exists():
                 script = f'''
@@ -1062,36 +1266,34 @@ tell application "Terminal"
 end tell
 '''
             result = subprocess.run(['osascript', '-e', script], capture_output=True, text=True)
-            print(f"[DEBUG refresh_pr] osascript returncode: {result.returncode}", flush=True)
-            print(f"[DEBUG refresh_pr] osascript stdout: {result.stdout}", flush=True)
-            print(f"[DEBUG refresh_pr] osascript stderr: {result.stderr}", flush=True)
             osascript_error = result.stderr if result.returncode != 0 else None
 
-            # Update session.json with terminal info (so Focus Terminal works)
-            session_json = session_path / 'session.json'
+            # --- Step 10: Update session.json ---
             if session_json.exists():
                 try:
                     with open(session_json) as f:
-                        data = json.load(f)
-                    data['terminal'] = {
+                        sdata = json.load(f)
+                    sdata['terminal'] = {
                         'log_file': str(log_file),
                         'tab_name': f"🔄 Re-review: {session_name}",
                         'started': datetime.datetime.now().isoformat()
                     }
-                    if 'history' not in data:
-                        data['history'] = []
-                    data['history'].append({
+                    if 'history' not in sdata:
+                        sdata['history'] = []
+                    sdata['history'].append({
                         'timestamp': datetime.datetime.now().isoformat(),
                         'action': 'refresh_pr_started',
                         'mode': mode,
-                        'source': 'dashboard'
+                        'source': 'dashboard',
+                        'old_commit': old_commit,
+                        'new_commit': new_commit,
+                        'commit_count': commit_count
                     })
                     with open(session_json, 'w') as f:
-                        json.dump(data, f, indent=2)
+                        json.dump(sdata, f, indent=2)
                 except:
-                    pass  # Don't fail if session.json update fails
+                    pass
 
-            # Also create marker file for v1 sessions
             terminal_marker = session_path / '.terminal_log'
             terminal_marker.write_text(str(log_file))
 
@@ -1102,11 +1304,15 @@ end tell
             response = {
                 'status': 'started',
                 'mode': mode,
-                'pr': pr_number,
+                'pr': str(pr_number),
+                'commits': commit_count,
+                'version': next_version,
                 'log_file': str(log_file)
             }
             if osascript_error:
                 response['osascript_error'] = osascript_error
+            if discussion_counts:
+                response['discussion'] = discussion_counts
             self.wfile.write(json.dumps(response).encode())
 
         except Exception as e:
@@ -3593,12 +3799,20 @@ end tell
     }
 
     async function executeRefreshPR() {
+        const btn = document.querySelector('.modal-btn.primary');
+        if (btn) { btn.disabled = true; btn.textContent = 'Fetching PR updates...'; }
         try {
             const data = await apiPost(API.REFRESH_PR, { mode: state.refreshPRMode });
-            if (data.osascript_error) showToast('Terminal error: ' + data.osascript_error, 'error');
-            else showToast('Re-review started in new terminal');
+            if (data.status === 'up_to_date') {
+                showToast(data.message || 'PR is already up to date', 'info');
+            } else if (data.osascript_error) {
+                showToast('Terminal error: ' + data.osascript_error, 'error');
+            } else {
+                const msg = 'Re-review started — ' + (data.commits || '?') + ' new commit(s), v' + (data.version || '?');
+                showToast(msg);
+            }
             closeModal();
-        } catch (e) { showToast('Failed: ' + e.message, 'error'); }
+        } catch (e) { showToast('Failed: ' + e.message, 'error'); closeModal(); }
     }
 
     // ========================================
