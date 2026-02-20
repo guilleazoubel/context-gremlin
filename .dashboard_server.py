@@ -1557,10 +1557,13 @@ end tell
 
             session_name = session_path.name
 
-            # Auto-install deps if node_modules missing and package.json exists
-            install_prefix = ''
+            # Auto-setup: install deps and pull env vars if needed
+            setup_steps = []
             if (repo_path / 'package.json').exists() and not (repo_path / 'node_modules').exists():
-                install_prefix = 'npm install && '
+                setup_steps.append('npm install')
+            if not (repo_path / '.env.local').exists():
+                setup_steps.append('vercel env pull .env.local 2>/dev/null || true')
+            install_prefix = ' && '.join(setup_steps) + ' && ' if setup_steps else ''
 
             if Path('/Applications/iTerm.app').exists():
                 script = f'''
