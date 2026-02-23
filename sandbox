@@ -72,6 +72,31 @@ EOF
 # Load config at startup
 load_config
 
+# Create dashboard config.json with empty defaults if it doesn't exist
+if [ ! -f "$CONFIG_DIR/config.json" ]; then
+    mkdir -p "$CONFIG_DIR"
+    cat > "$CONFIG_DIR/config.json" << 'CFGEOF'
+{
+  "jira_base_url": "",
+  "vercel_preview_url_template": ""
+}
+CFGEOF
+fi
+
+# Auto-populate jira_base_url from jira.conf if not already set
+if [ -f "$HOME/.config/sandbox/jira.conf" ]; then
+    _jira_domain=""
+    eval "$(grep '^JIRA_DOMAIN=' "$HOME/.config/sandbox/jira.conf")" 2>/dev/null && _jira_domain="$JIRA_DOMAIN"
+    if [ -n "$_jira_domain" ]; then
+        _current_jira_url=$(jq -r '.jira_base_url // ""' "$CONFIG_DIR/config.json" 2>/dev/null)
+        if [ -z "$_current_jira_url" ]; then
+            local_tmp=$(jq --arg url "https://$_jira_domain/browse/" '.jira_base_url = $url' "$CONFIG_DIR/config.json" 2>/dev/null)
+            [ -n "$local_tmp" ] && echo "$local_tmp" > "$CONFIG_DIR/config.json"
+        fi
+    fi
+    unset _jira_domain _current_jira_url
+fi
+
 # ============================================================================
 # V2 SESSION MODEL
 # ============================================================================
@@ -311,16 +336,35 @@ You are reviewing this pull request. Focus on:
 - Test coverage
 
 ## Guidelines
+- ONLY review files that are part of this PR's diff — never flag issues in unchanged files
 - Be constructive and specific
-- Explain the "why" behind suggestions
+- Explain the "why" behind suggestions — what breaks, for whom, when
 - Prioritize issues by severity
-- Acknowledge good patterns when you see them
+- For each finding, explain what the code is trying to do before explaining the issue
+- Findings should be ready to post as PR comments
 
 ## Output
-Write your review to `REVIEW.md` in this directory. Structure it as:
+Write your review to `REVIEW.md` in this directory.
+
+### Finding Format
+Each finding in "Key findings" MUST use this exact structure:
+
+#### N. Brief descriptive title
+**File:** `path/to/file.ext:lineNumber` (or `path/to/file.ext:startLine-endLine` for ranges)
+
+**What the code does:** [What this code is trying to accomplish — show you understand the intent]
+
+**Problem:** [What's wrong — be specific about what breaks, when, and for whom]
+
+**Impact:** [Real-world consequence: security risk, user-facing bug, data corruption, etc.]
+
+**Suggested fix:**
+[Description and/or code block]
+
+### Overall Structure
 1. Summary
-2. Key findings (Critical, Important, Minor)
-3. Specific file-by-file feedback
+2. Key findings (Critical, Important, Minor) using the format above
+3. File-by-file feedback
 4. Recommended actions
 REVIEW_TEMPLATE
             # Replace context placeholder
@@ -484,6 +528,16 @@ JIRA_EMAIL="$JIRA_EMAIL"
 JIRA_API_TOKEN="$JIRA_API_TOKEN"
 JIRACONF
     chmod 600 "$JIRA_CONFIG"
+
+    # Also update dashboard config with Jira base URL for clickable links
+    local dashboard_config="$CONFIG_DIR/config.json"
+    if [ -f "$dashboard_config" ] && [ -n "$JIRA_DOMAIN" ]; then
+        local jira_url="https://$JIRA_DOMAIN/browse/"
+        local tmp=$(jq --arg url "$jira_url" '.jira_base_url = $url' "$dashboard_config" 2>/dev/null)
+        if [ -n "$tmp" ]; then
+            echo "$tmp" > "$dashboard_config"
+        fi
+    fi
 }
 
 # Extract Jira ticket ID and domain from URL or input
@@ -1580,7 +1634,13 @@ create_pr_session() {
     local JIRA_TICKET_ID=""
     local JIRA_CONTEXT=""
     local JIRA_TICKET_TYPE=""
+    local JIRA_SUMMARY=""
     prompt_jira_ticket "pr" "$PR_HEAD"
+
+    # Extract Jira summary if ticket was linked
+    if [ -n "$JIRA_TICKET_JSON" ]; then
+        JIRA_SUMMARY=$(echo "$JIRA_TICKET_JSON" | jq -r '.fields.summary // empty' 2>/dev/null)
+    fi
 
     local SESSION_NAME="pr-${REPO}-${PR_NUMBER}-$(date +%Y%m%d-%H%M%S)"
     local SESSION_DIR="$SESSIONS_DIR/$SESSION_NAME"
@@ -1659,6 +1719,8 @@ EOF
         --arg deletions "$PR_DELETIONS" \
         --arg files "$PR_FILES" \
         --arg jira "${JIRA_TICKET_ID:-}" \
+        --arg jira_type "${JIRA_TICKET_TYPE:-}" \
+        --arg jira_summary "${JIRA_SUMMARY:-}" \
         '{
             pr: {
                 number: $number,
@@ -1671,7 +1733,7 @@ EOF
                 deletions: ($deletions | tonumber),
                 files: ($files | tonumber)
             },
-            jira: (if ($jira | length) > 0 then {ticket: $jira} else null end)
+            jira: (if ($jira | length) > 0 then {ticket: $jira, type: $jira_type, summary: $jira_summary} else null end)
         }')
     create_session_json "$SESSION_DIR" "review" "https://github.com/$OWNER/$REPO" "$extra_json"
 
@@ -1721,6 +1783,13 @@ $(generate_jira_guidance "$JIRA_TICKET_TYPE" "pr")")
 ## Review Instructions
 
 You are an expert code reviewer helping evaluate this PR. **Begin immediately.**
+
+## CRITICAL RULE: Only Review Changed Files
+
+**ONLY review files that are part of this PR's diff.** The changed files are listed above in "Changed Files".
+- Do NOT flag issues in files not listed in "Changed Files"
+- Do NOT explore the broader codebase looking for problems unrelated to this PR
+- If a changed file interacts with another file in a problematic way, mention it but keep the finding location in the changed file
 
 ---
 
@@ -1899,18 +1968,17 @@ This helps the reviewer understand the issue without having to look up the code.
 📍 **Location:** \`path/to/file.ts:XX-YY\`
 📊 **Status:** ⚠️ Open (since v1)
 
-**Current Code:**
-\`\`\`typescript
-// Show the problematic code (5-15 lines with context)
-const problematicCode = something.wrong();
-\`\`\`
+**What the code does:** [Describe what this code is trying to accomplish — show you understand the developer's intent]
 
-**Problem:** [Explain what's wrong and WHY it's critical - security? data loss? crash?]
+**The issue:** [Explain what's wrong in concrete terms. Not just "this is bad" but exactly what breaks, when, and for whom]
+
+**Why this matters:** [Impact — security risk? user-facing bug? silent data corruption? maintenance burden? Be specific about the real-world consequence]
+
+**Context / Insight:** [Any helpful codebase context — "this pattern is used elsewhere at X but with Y safeguard", or "the previous version had this check but it was removed in this rewrite", or "this is a common pitfall with this library because..."]
 
 **Suggested Fix:**
-\`\`\`typescript
-// Show how it should look
-const fixedCode = something.correct();
+\`\`\`suggestion
+// Code suggestion if applicable
 \`\`\`
 
 ---
@@ -2228,10 +2296,12 @@ EOF
         --arg focus "$INVESTIGATION_DISPLAY" \
         --arg branch "$BRANCH_INFO" \
         --arg jira "${JIRA_TICKET_ID:-}" \
+        --arg jira_type "${JIRA_TICKET_TYPE:-}" \
+        --arg jira_summary "${JIRA_SUMMARY:-}" \
         '{
             focus: $focus,
             branch: $branch,
-            jira: (if ($jira | length) > 0 then {ticket: $jira} else null end)
+            jira: (if ($jira | length) > 0 then {ticket: $jira, type: $jira_type, summary: $jira_summary} else null end)
         }')
     create_session_json "$SESSION_DIR" "investigation" "$REPO_URL" "$extra_json"
 
@@ -4239,6 +4309,8 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         elif parsed.path == '/api/session':
             session = params.get('session', [''])[0]
             self.send_session_details(session)
+        elif parsed.path == '/api/config':
+            self.send_dashboard_config()
         elif parsed.path == '/' or parsed.path == '/index.html':
             self.send_dashboard()
         else:
@@ -4594,7 +4666,7 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             self.send_error(500, str(e))
 
     def start_acr_then_claude(self, session_path):
-        """Run ACR quick review, then start Claude in a new terminal"""
+        """Run ACR then Claude, both inside a terminal tab so the API returns immediately"""
         import subprocess
         import datetime
         try:
@@ -4616,46 +4688,57 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                 except (json.JSONDecodeError, ValueError):
                     pass
 
-            # Prepare ACR output file
-            acr_output = session_path / 'ACR_REVIEW.md'
+            # Build command that runs ACR then Claude in the terminal
+            acr_prompt = "ACR has provided initial findings in ACR_REVIEW.md - use this as CONTEXT only. Now perform YOUR OWN comprehensive code review following the CLAUDE.md guidelines. Understand the scope, analyze every change, evaluate through all lenses (correctness, security, complexity, clarity, DRY, proper-fix-vs-hack), and write a thorough REVIEW.md with detailed findings including problem, impact, and suggested fixes."
+            escaped_prompt = acr_prompt.replace("'", "'\\''")
+            claude_cmd = f"direnv allow '{repo_path}/.envrc' 2>/dev/null; cd '{repo_path}' && echo '=== Running ACR ===' && acr -r 5 -a claude -b {base_branch} -t 10m --local > '{session_path}/ACR_REVIEW.md' 2>&1; echo '=== Starting Claude ===' && claude --add-dir '{session_path}' -- '{escaped_prompt}'"
 
-            # Create header
-            with open(acr_output, 'w') as f:
-                f.write("# ACR Review Results\n\n")
-                f.write(f"- **Reviewers**: 5\n")
-                f.write(f"- **Agents**: claude\n")
-                f.write(f"- **Base**: {base_branch}\n")
-                f.write(f"- **Date**: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-                f.write("\n---\n\n")
+            # Create logs directory
+            logs_dir = session_path / 'logs'
+            logs_dir.mkdir(exist_ok=True)
+            log_file = logs_dir / f"terminal-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
 
-            # Run ACR in the repo directory
-            acr_result = subprocess.run(
-                ['acr', '-r', '5', '-a', 'claude', '-b', base_branch, '-t', '10m', '--local'],
-                cwd=str(repo_path),
-                capture_output=True,
-                text=True,
-                timeout=660  # 11 minutes to allow ACR to timeout first
-            )
+            # Open in terminal tab
+            if Path('/Applications/iTerm.app').exists():
+                script = f'''
+                tell application "iTerm"
+                    activate
+                    if (count of windows) = 0 then
+                        create window with default profile
+                    end if
+                    tell current window
+                        create tab with default profile
+                        tell current session
+                            set name to "🧪 {session_name}"
+                            write text "{claude_cmd}"
+                        end tell
+                    end tell
+                end tell
+                '''
+            else:
+                script = f'''
+                tell application "Terminal"
+                    activate
+                    do script "{claude_cmd}"
+                end tell
+                '''
+            subprocess.run(['osascript', '-e', script], capture_output=True, text=True)
 
-            # Append ACR output
-            with open(acr_output, 'a') as f:
-                f.write(acr_result.stdout)
-                if acr_result.stderr:
-                    f.write("\n\n### Stderr\n```\n")
-                    f.write(acr_result.stderr)
-                    f.write("\n```\n")
-                f.write("\n---\n\n*Generated by ACR (Agentic Code Reviewer)*\n")
-
-            # Update session history
+            # Update session.json
             if session_json.exists():
                 try:
                     with open(session_json) as f:
                         data = json.load(f)
+                    data['terminal'] = {
+                        'log_file': str(log_file),
+                        'tab_name': session_name,
+                        'started': datetime.datetime.now().isoformat()
+                    }
                     if 'history' not in data:
                         data['history'] = []
                     data['history'].append({
                         'timestamp': datetime.datetime.now().isoformat(),
-                        'action': 'acr_review_completed',
+                        'action': 'acr_claude_started',
                         'source': 'dashboard'
                     })
                     with open(session_json, 'w') as f:
@@ -4663,17 +4746,20 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                 except (json.JSONDecodeError, ValueError):
                     pass
 
-            # Now start Claude with ACR-aware review prompt
-            acr_prompt = "ACR has provided initial findings in ACR_REVIEW.md - use this as CONTEXT only. Now perform YOUR OWN comprehensive code review following the CLAUDE.md guidelines. Understand the scope, analyze every change, evaluate through all lenses (correctness, security, complexity, clarity, DRY, proper-fix-vs-hack), and write a thorough REVIEW.md with detailed findings including problem, impact, and suggested fixes."
-            self.start_claude_session(session_path, acr_prompt)
-            return  # start_claude_session handles the response
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                'status': 'started',
+                'log_file': str(log_file),
+                'session': session_name
+            }).encode())
 
-        except subprocess.TimeoutExpired:
-            self.send_error(500, 'ACR timed out after 11 minutes')
         except FileNotFoundError:
             self.send_error(500, 'ACR not installed. Install with: brew install richhaase/tap/acr')
         except Exception as e:
-            self.send_error(500, f'ACR failed: {str(e)}')
+            self.send_error(500, f'Failed to start ACR + Claude: {str(e)}')
 
     def post_pr_comment(self, session_path, file_path, line, comment):
         """Post a review comment to the PR on GitHub"""
@@ -5033,7 +5119,7 @@ Location: `{finding.get('file', '')}:{finding.get('line', '')}`
 
 **Impact:** {finding.get('impact', '')}
 
-**Suggested Fix:** {finding.get('suggested', '')}
+**Suggested Fix:** {finding.get('suggestion', '')}
 
 Instructions:
 1. Navigate to the file and line indicated
@@ -5473,7 +5559,7 @@ Re-evaluate based on current state of ALL findings (fixed + remaining + new).
             # Run claude directly (not via script(1) — script swallows the prompt argument)
             escaped_prompt = prompt.replace("'", "'\\''")
             if mode == 'acr+claude':
-                claude_cmd = f"direnv allow '{repo_path}/.envrc' 2>/dev/null; cd '{repo_path}' && echo '=== Running ACR ===' && acr -r 5 -a claude -b {pr_base} --local > '{session_path}/ACR_REVIEW.md' 2>&1 && echo '=== Starting Claude ===' && claude --add-dir '{session_path}' -- '{escaped_prompt}'"
+                claude_cmd = f"direnv allow '{repo_path}/.envrc' 2>/dev/null; cd '{repo_path}' && echo '=== Running ACR ===' && acr -r 5 -a claude -b {pr_base} --local > '{session_path}/ACR_REVIEW.md' 2>&1; echo '=== Starting Claude ===' && claude --add-dir '{session_path}' -- '{escaped_prompt}'"
             else:
                 claude_cmd = f"direnv allow '{repo_path}/.envrc' 2>/dev/null; cd '{repo_path}' && claude --add-dir '{session_path}' -- '{escaped_prompt}'"
 
@@ -5887,6 +5973,24 @@ end tell
         except Exception as e:
             self.send_error(500, str(e))
 
+    def send_dashboard_config(self):
+        config_path = Path.home() / '.sandbox' / 'config.json'
+        defaults = {
+            'jira_base_url': '',
+            'vercel_preview_url_template': ''
+        }
+        try:
+            if config_path.exists():
+                with open(config_path) as f:
+                    user_config = json.load(f)
+                defaults.update(user_config)
+        except Exception:
+            pass
+        self.send_response(200)
+        self.send_header('Content-type', 'application/json')
+        self.end_headers()
+        self.wfile.write(json.dumps(defaults).encode())
+
     def send_sessions_list(self):
         import re, datetime, time
         sessions = []
@@ -5916,9 +6020,22 @@ end tell
                 else:
                     info['session_type'] = 'unknown'
 
-            # Skip if we couldn't get any info
+            # Show broken sessions so they can be deleted from the UI
             if not info:
-                continue
+                info = {
+                    'display_title': f'⚠ Broken session: {entry.name}',
+                    'status': 'broken',
+                    'created': '',
+                    'project': '',
+                }
+                if entry.name.startswith('pr-'):
+                    info['session_type'] = info['mode'] = 'review'
+                elif entry.name.startswith('dev-'):
+                    info['session_type'] = info['mode'] = 'development'
+                elif entry.name.startswith('inv-'):
+                    info['session_type'] = info['mode'] = 'investigation'
+                else:
+                    info['session_type'] = info['mode'] = 'unknown'
 
             # Detect session type from folder name if mode is unknown/missing
             if info.get('session_type', 'unknown') == 'unknown' or info.get('mode', 'unknown') == 'unknown':
@@ -6101,14 +6218,21 @@ end tell
                     info['repository'] = project_url
                 elif pr.get('url'):
                     info['repository'] = re.sub(r'/pull/\d+.*$', '', pr['url'])
-                # Extract Jira ticket from branch name or PR title
-                head_branch = pr.get('head', '')
-                pr_title = pr.get('title', '')
-                jira_match = re.search(r'([A-Z]{2,}-\d+)', head_branch) or re.search(r'([A-Z]{2,}-\d+)', pr_title)
-                if jira_match:
-                    info['jira'] = jira_match.group(1)
+                # Extract Jira ticket from session.json first, then fallback to regex on branch/PR title
+                jira_data = data.get('jira', {}) or {}
+                jira_ticket = jira_data.get('ticket', '')
+                if not jira_ticket:
+                    head_branch = pr.get('head', '')
+                    pr_title = pr.get('title', '')
+                    jira_match = re.search(r'([A-Z]{2,}-\d+)', head_branch) or re.search(r'([A-Z]{2,}-\d+)', pr_title)
+                    if jira_match:
+                        jira_ticket = jira_match.group(1)
+                if jira_ticket:
+                    info['jira'] = jira_ticket
+                if jira_data.get('summary'):
+                    info['summary'] = jira_data['summary']
             elif mode == 'development':
-                jira = data.get('jira', {})
+                jira = data.get('jira', {}) or {}
                 info['jira'] = jira.get('ticket', '')
                 info['summary'] = jira.get('summary', '')
                 info['branch'] = data.get('branch', '')
@@ -6118,6 +6242,9 @@ end tell
             elif mode == 'investigation':
                 info['focus'] = data.get('focus', '')
                 info['display_title'] = f"Investigation: {data.get('focus', '')[:50]}"
+                jira_data = data.get('jira', {}) or {}
+                if jira_data.get('ticket'):
+                    info['jira'] = jira_data['ticket']
 
             # Override display_title if custom one was set
             if data.get('display_title'):
@@ -7292,9 +7419,8 @@ end tell
         REFRESH_INTERVAL_MS: 5000,
         TOAST_DURATION_MS: 4000,
         TERMINAL_LINES: 200,
-        JIRA_BASE_URL: 'https://aplaceformom.atlassian.net/browse/',
-        PREVIEW_URL_TEMPLATE: 'https://grace-frontend-dev-git-{slug}.preview.findcare.dev.aplaceformom.com/',
-        PREVIEW_REPO_MATCH: 'grace-frontend'
+        JIRA_BASE_URL: '',
+        VERCEL_PREVIEW_URL_TEMPLATE: ''
     };
 
     const API = {
@@ -7316,7 +7442,8 @@ end tell
         CREATE_SESSION: '/api/create-session',
         PR_INFO: '/api/pr-info',
         RUN_APP: '/api/run-app',
-        COMMIT: '/api/commit'
+        COMMIT: '/api/commit',
+        CONFIG: '/api/config'
     };
 
     // ========================================
@@ -7478,13 +7605,12 @@ end tell
     }
 
     function buildPreviewUrl(session) {
-        const base = buildRepoBaseUrl(session);
-        if (!session.branch || !base.includes(CONFIG.PREVIEW_REPO_MATCH)) return null;
+        if (!session.branch || !CONFIG.VERCEL_PREVIEW_URL_TEMPLATE) return null;
         var headBranch = session.branch
             .replace(/\\s*→\\s*.*/g, '').replace(/\\s*->\\s*.*/g, '')
             .replace(/\\s+(main|master)$/i, '').trim();
         var branchSlug = headBranch.replace(/\\//g, '-').toLowerCase();
-        return CONFIG.PREVIEW_URL_TEMPLATE.replace('{slug}', branchSlug);
+        return CONFIG.VERCEL_PREVIEW_URL_TEMPLATE.replace('{slug}', branchSlug);
     }
 
     // ========================================
@@ -7644,7 +7770,11 @@ end tell
         }
 
         if (session.jira) {
-            meta += '<a class="sh-link" href="' + CONFIG.JIRA_BASE_URL + session.jira + '" target="_blank">🎫 ' + session.jira + '</a>';
+            if (CONFIG.JIRA_BASE_URL) {
+                meta += '<a class="sh-link" href="' + CONFIG.JIRA_BASE_URL + session.jira + '" target="_blank">🎫 ' + session.jira + '</a>';
+            } else {
+                meta += '<span class="sh-info">🎫 ' + escapeHtml(session.jira) + '</span>';
+            }
         }
 
         const previewUrl = buildPreviewUrl(session);
@@ -7914,10 +8044,12 @@ end tell
     async function deleteSession() {
         if (!state.currentSession) return;
         const session = getCurrentSession();
-        if (!confirm('DELETE session "' + (session?.display_title || state.currentSession) + '"?\\n\\nThis permanently deletes ALL files. Cannot be undone.')) return;
+        const sessionName = state.currentSession;
+        const displayTitle = session?.display_title || sessionName;
+        if (!confirm('DELETE "' + displayTitle + '"?\\n\\nFolder: ' + sessionName + '\\n\\nThis permanently deletes ALL files. Cannot be undone.')) return;
         try {
-            await apiPost(API.DELETE);
-            state.currentSession = null;
+            await apiPost(API.DELETE, { session: sessionName });
+            if (state.currentSession === sessionName) state.currentSession = null;
             await loadSessions();
             document.getElementById('sessionHeader').classList.remove('visible');
             document.getElementById('toolbar').style.display = 'none';
@@ -7931,39 +8063,71 @@ end tell
     // ========================================
     function parseFindingsFromMarkdown(rawMarkdown) {
         const findings = [];
-        const findingRegex = /####\\s*(?:Finding\\s*#?)?([A-Za-z]*-?\\d+)[.:\\s]+([^\\n]+)\\n([\\s\\S]*?)(?=####|$)/gi;
+        const findingRegex = /####\\s*(?:Finding\\s*#?)?([A-Za-z]*-?\\d+)[.:\\s]+([^\\n]+)\\n([\\s\\S]*?)(?=####|###\\s|$)/gi;
         let match;
 
+        // Helper: extract a section from finding body between bold markdown headers.
+        function extractSection(body, labels) {
+            for (let i = 0; i < labels.length; i++) {
+                const re = new RegExp('\\\\*\\\\*' + labels[i] + ':?\\\\*\\\\*\\\\s*([\\\\s\\\\S]*?)(?=\\n\\\\*\\\\*(?:[A-Z]|[a-z])[^*]*:\\\\*\\\\*|\\n---\\\\s*$|$)', 's');
+                const m = body.match(re);
+                if (m) return m[1].trim();
+            }
+            return '';
+        }
+
+        // Helper: extract code block from a section that starts with the given label
+        function extractCodeAfterLabel(body, labelPattern) {
+            const re = new RegExp('\\\\*\\\\*' + labelPattern + '[^*]*\\\\*\\\\*[\\\\s\\\\S]*?```[a-z]*\\n([\\\\s\\\\S]*?)```');
+            const m = body.match(re);
+            return m ? m[1].trim() : '';
+        }
+
         while ((match = findingRegex.exec(rawMarkdown)) !== null) {
+            const rawTitle = match[2].trim();
             const findingBody = match[3];
-            const locMatch = findingBody.match(/(?:📍\\s*\\*\\*Location:\\*\\*|\\*\\*File:\\*\\*)\\s*`([^`]+)`/);
+
+            // Try body first: **File:** `path:line` or 📍 **Location:** `path:line`
+            let locMatch = findingBody.match(/(?:📍\\s*\\*\\*Location:\\*\\*|\\*\\*File:\\*\\*)\\s*`([^`]+)`/);
+            let locFromTitle = false;
+
+            // Fallback: location in header (e.g., "Title \\u2014 `file.ts:42`")
+            if (!locMatch) {
+                locMatch = rawTitle.match(/`([^`]+\\.[a-zA-Z]+:\\d+[^`]*)`\\s*$/);
+                locFromTitle = true;
+            }
+
             if (!locMatch) continue;
             const location = locMatch[1];
-            const fileLineMatch = location.match(/^([^:]+):(\\d+)(?:-(\\d+))?/);
+            const fileLineMatch = location.match(/^([^:]+):(\\d+)(?:[,-](\\d+))?/);
             if (!fileLineMatch) continue;
 
-            const problemMatch = findingBody.match(/\\*\\*Problem:?\\*\\*\\s*([^*]+?)(?=\\*\\*|$)/s) || findingBody.match(/Problem:\\s*([^\\n]+)/i);
-            const problem = problemMatch ? problemMatch[1].trim().replace(/\\n+/g, ' ') : '';
-            const impactMatch = findingBody.match(/\\*\\*Impact:?\\*\\*\\s*([^*]+?)(?=\\*\\*|$)/s) || findingBody.match(/\\*\\*Why[^:]*:\\*\\*\\s*([^*]+?)(?=\\*\\*|$)/s) || findingBody.match(/Impact:\\s*([^\\n]+)/i);
-            const impact = impactMatch ? impactMatch[1].trim().replace(/\\n+/g, ' ') : '';
-            const suggestedMatch = findingBody.match(/\\*\\*Suggest[^:]*:?\\*\\*\\s*([^`*]+?)(?=```|\\*\\*|$)/s) || findingBody.match(/\\*\\*(?:Fix|Recommendation):?\\*\\*\\s*([^`*]+?)(?=```|\\*\\*|$)/s);
-            const suggested = suggestedMatch ? suggestedMatch[1].trim().replace(/\\n+/g, ' ') : '';
-            const codeMatch = findingBody.match(/\\*\\*Suggest[^*]*\\*\\*[\\s\\S]*?```(?:suggestion|[a-z]*)\\n([\\s\\S]*?)```/);
-            const suggestedCode = codeMatch ? codeMatch[1].trim() : '';
+            // Clean title: remove trailing location suffix if extracted from header
+            const title = locFromTitle ? rawTitle.replace(/\\s*[\\u2014\\u2013-]+\\s*`[^`]+`\\s*$/, '').trim() : rawTitle;
+
+            const intent = extractSection(findingBody, ['What the code does']);
+            const problem = extractSection(findingBody, ['The issue', 'Problem']);
+            const impact = extractSection(findingBody, ['Why this matters', 'Impact']);
+            const context = extractSection(findingBody, ['Context\\\\s*/\\\\s*Insight', 'Context']);
+            const suggestion = extractSection(findingBody, ['Suggest[^*:]*', 'Fix', 'Recommendation']);
+            const suggestedCode = extractCodeAfterLabel(findingBody, 'Suggest');
+            const currentCode = extractCodeAfterLabel(findingBody, 'Current Code');
 
             findings.push({
-                number: match[1], title: match[2].trim(),
+                number: match[1], title: title,
                 file: fileLineMatch[1], line: parseInt(fileLineMatch[2]),
                 endLine: fileLineMatch[3] ? parseInt(fileLineMatch[3]) : null,
-                problem: problem, impact: impact,
-                suggested: suggested, suggestedCode: suggestedCode
+                intent: intent, problem: problem, impact: impact,
+                context: context, suggestion: suggestion,
+                suggestedCode: suggestedCode, currentCode: currentCode
             });
         }
 
-        const simpleRegex = /####\\s*(?:Finding\\s*#?\\d+[:\\s]*)?([\\s\\S]*?)\\n[\\s\\S]*?(?:📍|\\*\\*Location:\\*\\*)\\s*`?([^`\\n]+\\.[a-z]+:\\d+[^`\\n]*)`?/gi;
+        // Fallback: simpler pattern for findings that don't match the structured format
+        const simpleRegex = /####\\s*(?:Finding\\s*#?\\d+[:\\s]*)?([\\s\\S]*?)\\n[\\s\\S]*?(?:📍|\\*\\*(?:Location|File):\\*\\*)\\s*`?([^`\\n]+\\.[a-z]+:\\d+[^`\\n]*)`?/gi;
         while ((match = simpleRegex.exec(rawMarkdown)) !== null) {
             const location = match[2].trim();
-            const locMatch = location.match(/^([^:]+):(\\d+)(?:-(\\d+))?/);
+            const locMatch = location.match(/^([^:]+):(\\d+)(?:[,-](\\d+))?/);
             if (locMatch && !findings.some(f => f.file === locMatch[1] && f.line === parseInt(locMatch[2]))) {
                 findings.push({ title: match[1].trim(), file: locMatch[1], line: parseInt(locMatch[2]), endLine: locMatch[3] ? parseInt(locMatch[3]) : null, problem: match[1].trim() });
             }
@@ -8024,12 +8188,16 @@ end tell
             if (num.startsWith('C') || num.startsWith('c')) return { label: 'Critical', cls: 'sev-critical' };
             if (num.startsWith('I') || num.startsWith('i')) return { label: 'Important', cls: 'sev-important' };
             if (num.startsWith('M') || num.startsWith('m')) return { label: 'Minor', cls: 'sev-minor' };
-            const idx = rawMarkdown.indexOf('#### ' + (num.match(/^\\d+$/) ? 'Finding #' + num : num));
+            let idx = rawMarkdown.indexOf('#### ' + (num.match(/^\\d+$/) ? 'Finding #' + num : num));
+            if (idx === -1 && num.match(/^\\d+$/)) idx = rawMarkdown.indexOf('#### ' + num + '.');
             if (idx > -1) {
-                const before = rawMarkdown.substring(Math.max(0, idx - 200), idx);
-                if (/###\\s*Critical/i.test(before)) return { label: 'Critical', cls: 'sev-critical' };
-                if (/###\\s*Important/i.test(before)) return { label: 'Important', cls: 'sev-important' };
-                if (/###\\s*Minor/i.test(before)) return { label: 'Minor', cls: 'sev-minor' };
+                const headingIdx = rawMarkdown.lastIndexOf('\\n### ', idx);
+                if (headingIdx > -1) {
+                    const heading = rawMarkdown.substring(headingIdx, headingIdx + 30);
+                    if (/###\\s*Critical/i.test(heading)) return { label: 'Critical', cls: 'sev-critical' };
+                    if (/###\\s*Important/i.test(heading)) return { label: 'Important', cls: 'sev-important' };
+                    if (/###\\s*Minor/i.test(heading)) return { label: 'Minor', cls: 'sev-minor' };
+                }
             }
             return { label: 'Info', cls: 'sev-info' };
         }
@@ -8080,17 +8248,18 @@ end tell
     }
 
     function formatFindingComment(finding) {
-        let comment = '**' + finding.title + '**\\n\\n';
-        if (finding.problem) comment += '**Problem:** ' + finding.problem + '\\n\\n';
-        if (finding.impact) comment += '**Impact:** ' + finding.impact + '\\n\\n';
-        if (finding.suggested) {
-            comment += '**Suggested Fix:** ' + finding.suggested;
-            if (finding.suggestedCode) comment += '\\n```suggestion\\n' + finding.suggestedCode + '\\n```';
-            comment += '\\n';
-        } else if (finding.suggestedCode) {
-            comment += '**Suggested Fix:**\\n```suggestion\\n' + finding.suggestedCode + '\\n```\\n';
+        const loc = finding.file + ':' + finding.line + (finding.endLine ? '-' + finding.endLine : '');
+        let c = '### ' + finding.title + '\\n';
+        c += '📍 `' + loc + '`\\n\\n';
+        if (finding.intent) c += '**What the code does:** ' + finding.intent + '\\n\\n';
+        if (finding.problem) c += '**Problem:** ' + finding.problem + '\\n\\n';
+        if (finding.impact) c += '**Impact:** ' + finding.impact + '\\n\\n';
+        if (finding.context) c += '**Context:** ' + finding.context + '\\n\\n';
+        if (finding.suggestion) {
+            c += '**Suggestion:** ' + finding.suggestion + '\\n';
         }
-        return comment.trim();
+        if (finding.suggestedCode) c += '\\n```suggestion\\n' + finding.suggestedCode + '\\n```\\n';
+        return c.trim();
     }
 
     async function postToPR(btn) {
@@ -8130,6 +8299,7 @@ end tell
             showToast('Comment copied! Opening PR...');
         }).catch(function() { showToast('Could not copy', 'error'); });
 
+        // Open the PR files diff view (user can navigate to the right file/line)
         let prUrl = session.url || '';
         if (!prUrl && session.repository) {
             prUrl = session.repository.includes('github.com') ? session.repository : 'https://github.com/' + session.repository;
@@ -8269,19 +8439,28 @@ end tell
         const btn = document.querySelector('.modal-btn.primary');
         if (btn) { btn.disabled = true; btn.textContent = 'Fetching PR updates...'; }
         try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(function() { controller.abort(); }, 90000);
             const payload = { mode: state.refreshPRMode };
             if (force) payload.force = true;
-            const data = await apiPost(API.REFRESH_PR, payload);
+            const res = await fetch(API.REFRESH_PR, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(Object.assign({ session: state.currentSession }, payload)),
+                signal: controller.signal
+            });
+            clearTimeout(timeoutId);
+            if (!res.ok) { const t = await res.text(); throw new Error(t || 'Server error'); }
+            const data = await res.json();
             if (data.status === 'up_to_date') {
-                // Show message in the modal instead of just a toast
-                const modal = document.querySelector('.modal-content');
+                const modal = document.querySelector('.modal-box');
                 if (modal) {
                     modal.innerHTML =
-                        '<h3>PR is up to date</h3>' +
-                        '<p class="modal-desc">No new commits found since last refresh.</p>' +
+                        '<h3>No new commits detected</h3>' +
+                        '<p class="modal-desc">The PR has no new commits since the last review.</p>' +
+                        '<p class="modal-desc" style="font-size:0.85em;opacity:0.8">If you pulled changes manually or want to re-run the review, you can force a re-review.</p>' +
                         '<div class="modal-footer">' +
                         '<button class="modal-btn" onclick="closeModal()">Close</button>' +
-                        '<button class="modal-btn primary" onclick="executeRefreshPR(true)">Force Re-review Anyway</button>' +
+                        '<button class="modal-btn primary" onclick="executeRefreshPR(true)">Re-review Anyway</button>' +
                         '</div>';
                 }
             } else if (data.osascript_error) {
@@ -8292,7 +8471,11 @@ end tell
                 showToast(msg);
                 closeModal();
             }
-        } catch (e) { showToast('Failed: ' + e.message, 'error'); closeModal(); }
+        } catch (e) {
+            const msg = e.name === 'AbortError' ? 'Request timed out — git fetch may be slow or waiting for auth' : e.message;
+            showToast('Failed: ' + msg, 'error');
+            closeModal();
+        }
     }
 
     // ========================================
@@ -8560,9 +8743,21 @@ end tell
     }
 
     // ========================================
+    // CONFIG LOADING
+    // ========================================
+    async function loadConfig() {
+        try {
+            const res = await fetch(API.CONFIG);
+            const cfg = await res.json();
+            if (cfg.jira_base_url) CONFIG.JIRA_BASE_URL = cfg.jira_base_url;
+            if (cfg.vercel_preview_url_template) CONFIG.VERCEL_PREVIEW_URL_TEMPLATE = cfg.vercel_preview_url_template;
+        } catch (e) {}
+    }
+
+    // ========================================
     // INIT & AUTO-REFRESH
     // ========================================
-    loadSessions();
+    loadConfig().then(() => loadSessions());
     setInterval(function() {
         if (state.modalOpen) return;
         loadSessions();
@@ -8584,11 +8779,17 @@ end tell
     def log_message(self, format, *args):
         pass  # Suppress logging
 
+class ThreadingServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
+    def handle_error(self, request, client_address):
+        pass  # Suppress thread errors (e.g. broken pipe from disconnected clients)
+
 if __name__ == '__main__':
     import sys
-    socketserver.TCPServer.allow_reuse_address = True
     try:
-        with socketserver.TCPServer(("127.0.0.1", PORT), DashboardHandler) as httpd:
+        with ThreadingServer(("127.0.0.1", PORT), DashboardHandler) as httpd:
             print(f"Dashboard server running on http://127.0.0.1:{PORT}", flush=True)
             httpd.serve_forever()
     except OSError as e:
@@ -10765,14 +10966,16 @@ launch_live_dashboard() {
 # ENTRY
 # ============================================================================
 
-# Always start dashboard on launch and stop on exit
-cleanup_on_exit() {
-    stop_dashboard_server 2>/dev/null
-}
-trap cleanup_on_exit EXIT INT TERM
+# Skip dashboard lifecycle when called as a subprocess (e.g. --create-session)
+if [ "$1" != "--create-session" ]; then
+    cleanup_on_exit() {
+        stop_dashboard_server 2>/dev/null
+    }
+    trap cleanup_on_exit EXIT INT TERM
 
-if ! is_dashboard_running; then
-    start_dashboard_server >/dev/null 2>&1 &
+    if ! is_dashboard_running; then
+        start_dashboard_server >/dev/null 2>&1 &
+    fi
 fi
 
 # ============================================================================
