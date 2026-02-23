@@ -4571,6 +4571,34 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         except Exception as e:
             self.send_error(500, str(e))
 
+    def setup_output_files(self, session_path):
+        """Ensure REVIEW.md and FINDINGS.md live in session root with symlinks in repo/.
+        Python equivalent of the bash setup_output_files()."""
+        repo_path = session_path / 'repo'
+        if not repo_path.exists():
+            return
+
+        for filename in ('REVIEW.md', 'FINDINGS.md'):
+            root_file = session_path / filename
+            repo_file = repo_path / filename
+
+            # If repo has a real file (not symlink), move content to session root
+            if repo_file.exists() and not repo_file.is_symlink():
+                if not root_file.exists() or root_file.stat().st_size == 0:
+                    import shutil
+                    shutil.move(str(repo_file), str(root_file))
+                else:
+                    repo_file.unlink()
+
+            # Create empty file in session root if it doesn't exist
+            if not root_file.exists():
+                root_file.touch()
+
+            # Remove any existing file/link in repo and create fresh symlink
+            if repo_file.exists() or repo_file.is_symlink():
+                repo_file.unlink()
+            repo_file.symlink_to(Path('..') / filename)
+
     def start_claude_session(self, session_path, prompt=''):
         """Start Claude in a new terminal with logging"""
         import subprocess
@@ -4582,6 +4610,9 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             if not repo_path.exists():
                 self.send_error(400, 'Session repo not found (may be archived)')
                 return
+
+            # Ensure output files are in session root with symlinks
+            self.setup_output_files(session_path)
 
             # Create logs directory
             logs_dir = session_path / 'logs'
@@ -4676,6 +4707,9 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             if not repo_path.exists():
                 self.send_error(400, 'Session repo not found (may be archived)')
                 return
+
+            # Ensure output files are in session root with symlinks
+            self.setup_output_files(session_path)
 
             # Get base branch from session.json
             base_branch = 'main'
@@ -5427,6 +5461,9 @@ end tell
                     f.write(f"New commit: {new_commit}\n")
                     f.write(f"New commits: {commit_count}\n")
 
+            # --- Step 4b: Ensure output files are in session root ---
+            self.setup_output_files(session_path)
+
             # --- Step 5: Archive old REVIEW.md ---
             version = 1
             while (session_path / f'REVIEW-v{version}.md').exists():
@@ -5472,18 +5509,15 @@ For each finding in "Open Findings":
 - **Still present?** → Keep in place
 - **Partially fixed?** → Update the description
 
-### 2. Update the Tracker Table
-```markdown
-| ID | Finding | Severity | Status | Since |
-|----|---------|----------|--------|-------|
-| 1 | Null check missing | 🔴 Critical | ✅ Fixed | v1→v{next_version} |
-| 2 | SQL injection | 🟠 High | ⚠️ Open | v1 |
-| 3 | New issue found | 🟡 Medium | ⚠️ Open | v{next_version} |
-```
+### 2. Update Finding Status
+For each finding, update the heading to reflect its current status:
+- Fixed: Add ✅ prefix, e.g., `#### ✅ 1. normalizeString returns untrimmed value`
+- Still open: Leave heading unchanged
+- New findings: Number continuing from the last finding
 
 ### 3. Check for New Issues
 Review the new commits for any NEW problems introduced.
-Add new findings with "Since: v{next_version}"
+Add new findings numbered continuing from the last finding.
 
 ### 4. Update Review History (IMPORTANT!)
 The Review History table MUST have a new row for this version. Find the table that looks like:
@@ -5509,8 +5543,14 @@ Re-evaluate based on current state of ALL findings (fixed + remaining + new).
 
 **BEGIN: Read REVIEW.md, check findings against new code, update in-place.**
 """
-            with open(repo_path / 'RE-REVIEW.md', 'w') as f:
+            # Write RE-REVIEW.md to session root
+            with open(session_path / 'RE-REVIEW.md', 'w') as f:
                 f.write(rereview_content)
+            # Symlink into repo so Claude can find it
+            repo_rereview = repo_path / 'RE-REVIEW.md'
+            if repo_rereview.exists() or repo_rereview.is_symlink():
+                repo_rereview.unlink()
+            repo_rereview.symlink_to(Path('..') / 'RE-REVIEW.md')
 
             # --- Step 7: Update CLAUDE.md with re-review notice ---
             claude_md = repo_path / 'CLAUDE.md'
@@ -6066,7 +6106,7 @@ end tell
             info['review_versions'] = sorted(review_versions)
 
             # Check for RE-REVIEW.md (indicates re-review in progress)
-            info['has_rereview'] = (entry / 'repo' / 'RE-REVIEW.md').exists()
+            info['has_rereview'] = (entry / 'RE-REVIEW.md').exists() or (entry / 'repo' / 'RE-REVIEW.md').exists()
 
             # Check terminal status
             info['has_terminal'] = self.check_terminal_active(entry)
@@ -7100,6 +7140,8 @@ end tell
         .sev-important { background: rgba(251,191,36,0.15); color: #fbbf24; }
         .sev-minor { background: rgba(96,165,250,0.15); color: #60a5fa; }
         .sev-info { background: rgba(148,163,184,0.15); color: #94a3b8; }
+        .status-fixed { background: var(--green-bg); color: var(--green); }
+        .status-open { background: var(--amber-bg); color: var(--amber); }
 
         /* ===== FINDING ACTIONS ===== */
         .finding-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; }
@@ -8063,7 +8105,7 @@ end tell
     // ========================================
     function parseFindingsFromMarkdown(rawMarkdown) {
         const findings = [];
-        const findingRegex = /####\\s*(?:Finding\\s*#?)?([A-Za-z]*-?\\d+)[.:\\s]+([^\\n]+)\\n([\\s\\S]*?)(?=####|###\\s|$)/gi;
+        const findingRegex = /####\\s*(?:✅\\s*)?(?:Finding\\s*#?)?([A-Za-z]*-?\\d+)[.:\\s]+([^\\n]+)\\n([\\s\\S]*?)(?=####|###\\s|$)/gi;
         let match;
 
         // Helper: extract a section from finding body between bold markdown headers.
@@ -8183,6 +8225,10 @@ end tell
     function buildFindingsTracker(rawMarkdown, findings) {
         if (!findings || findings.length === 0) return '';
 
+        // Detect re-review mode: session has archived versions or markdown has Review History
+        const session = getCurrentSession();
+        const isRereview = (session && (session.review_versions || []).length > 0) || /## Review History/.test(rawMarkdown);
+
         function getSeverity(f, rawMarkdown) {
             const num = f.number || '';
             if (num.startsWith('C') || num.startsWith('c')) return { label: 'Critical', cls: 'sev-critical' };
@@ -8190,6 +8236,9 @@ end tell
             if (num.startsWith('M') || num.startsWith('m')) return { label: 'Minor', cls: 'sev-minor' };
             let idx = rawMarkdown.indexOf('#### ' + (num.match(/^\\d+$/) ? 'Finding #' + num : num));
             if (idx === -1 && num.match(/^\\d+$/)) idx = rawMarkdown.indexOf('#### ' + num + '.');
+            // Also search for ✅-prefixed headings
+            if (idx === -1) idx = rawMarkdown.indexOf('#### ✅ ' + (num.match(/^\\d+$/) ? 'Finding #' + num : num));
+            if (idx === -1 && num.match(/^\\d+$/)) idx = rawMarkdown.indexOf('#### ✅ ' + num + '.');
             if (idx > -1) {
                 const headingIdx = rawMarkdown.lastIndexOf('\\n### ', idx);
                 if (headingIdx > -1) {
@@ -8202,21 +8251,46 @@ end tell
             return { label: 'Info', cls: 'sev-info' };
         }
 
+        function getStatus(f, rawMarkdown) {
+            const num = f.number || '';
+            // Look for ✅ prefix in h4 heading: #### ✅ 1. title
+            const patterns = [
+                '#### ✅ ' + num + '.',
+                '#### ✅ ' + num + ':',
+                '#### ✅ ' + num + ' ',
+                '#### ✅ Finding #' + num,
+                '#### \\u2705 ' + num
+            ];
+            for (let i = 0; i < patterns.length; i++) {
+                if (rawMarkdown.indexOf(patterns[i]) > -1) return { label: 'Fixed', cls: 'status-fixed' };
+            }
+            // Also check if the heading line contains ✅ anywhere
+            const re = new RegExp('####[^\\\\n]*' + num.replace(/[.*+?^${}()|[\\\\]\\\\]/g, '\\\\$&') + '[^\\\\n]*✅', 'i');
+            if (re.test(rawMarkdown)) return { label: 'Fixed', cls: 'status-fixed' };
+            return { label: 'Open', cls: 'status-open' };
+        }
+
         let html = '<div class="findings-tracker">';
         html += '<div class="ft-header"><span class="ft-title">📋 Findings Tracker</span>';
         html += '<span class="ft-count">' + findings.length + ' finding' + (findings.length > 1 ? 's' : '') + '</span></div>';
         html += '<table class="ft-table"><thead><tr>';
         html += '<th>#</th><th>Severity</th><th>Title</th><th>Location</th>';
+        if (isRereview) html += '<th>Status</th>';
         html += '</tr></thead><tbody>';
 
         findings.forEach(function(f) {
             const sev = getSeverity(f, rawMarkdown);
             const anchor = 'finding-' + (f.number || '').replace(/[^a-z0-9-]/gi, '-').toLowerCase();
+            const title = (f.title || 'Untitled').replace(/^✅\\s*/, '');
             html += '<tr>';
             html += '<td><strong>' + escapeHtml(f.number || '?') + '</strong></td>';
             html += '<td><span class="sev-badge ' + sev.cls + '">' + sev.label + '</span></td>';
-            html += '<td><a href="#' + anchor + '" class="ft-link">' + escapeHtml(f.title || 'Untitled') + '</a></td>';
+            html += '<td><a href="#' + anchor + '" class="ft-link">' + escapeHtml(title) + '</a></td>';
             html += '<td class="ft-loc">' + escapeHtml(f.file + ':' + f.line) + '</td>';
+            if (isRereview) {
+                const status = getStatus(f, rawMarkdown);
+                html += '<td><span class="sev-badge ' + status.cls + '">' + status.label + '</span></td>';
+            }
             html += '</tr>';
         });
 
@@ -9600,8 +9674,8 @@ refresh_pr_session() {
 
     local next_version=$((version + 1))
 
-    # Create RE-REVIEW.md with streamlined instructions
-    cat > "$SESSION_DIR/repo/RE-REVIEW.md" << REREVIEW_EOF
+    # Create RE-REVIEW.md in session root, symlink into repo
+    cat > "$SESSION_DIR/RE-REVIEW.md" << REREVIEW_EOF
 # Re-Review: v${next_version}
 
 ## What Changed
@@ -9634,18 +9708,15 @@ For each finding in "Open Findings":
 - **Still present?** → Keep in place
 - **Partially fixed?** → Update the description
 
-### 2. Update the Tracker Table
-\`\`\`markdown
-| ID | Finding | Severity | Status | Since |
-|----|---------|----------|--------|-------|
-| 1 | Null check missing | 🔴 Critical | ✅ Fixed | v1→v${next_version} |
-| 2 | SQL injection | 🟠 High | ⚠️ Open | v1 |
-| 3 | New issue found | 🟡 Medium | ⚠️ Open | v${next_version} |
-\`\`\`
+### 2. Update Finding Status
+For each finding, update the heading to reflect its current status:
+- Fixed: Add ✅ prefix, e.g., \`#### ✅ 1. normalizeString returns untrimmed value\`
+- Still open: Leave heading unchanged
+- New findings: Number continuing from the last finding
 
 ### 3. Check for New Issues
 Review the new commits for any NEW problems introduced.
-Add new findings with "Since: v${next_version}"
+Add new findings numbered continuing from the last finding.
 
 ### 4. Update Review History (IMPORTANT!)
 The Review History table MUST have a new row for this version. Find the table that looks like:
@@ -9671,6 +9742,8 @@ Re-evaluate based on current state of ALL findings (fixed + remaining + new).
 
 **BEGIN: Read REVIEW.md, check findings against new code, update in-place.**
 REREVIEW_EOF
+    rm -f "$SESSION_DIR/repo/RE-REVIEW.md"
+    ln -sf "../RE-REVIEW.md" "$SESSION_DIR/repo/RE-REVIEW.md"
 
     success "PR refreshed! RE-REVIEW.md created with instructions"
     sleep 1
