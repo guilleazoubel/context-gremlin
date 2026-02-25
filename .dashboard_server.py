@@ -102,6 +102,24 @@ class TerminalOutputService:
         return data.decode('utf-8', errors='replace')
 # END TERMINAL OUTPUT SERVICE
 
+_SESSION_COLORS = ['#ef4444','#eab308','#22c55e','#06b6d4','#3b82f6','#a855f7','#ec4899','#f97316']
+
+def session_color(name):
+    """Deterministic color for a session name (djb2 hash)."""
+    h = 5381
+    for c in name:
+        h = ((h << 5) + h + ord(c)) & 0xffffffff
+    return _SESSION_COLORS[h % len(_SESSION_COLORS)]
+
+def iterm_color_escape(hex_color):
+    """Return printf command that sets iTerm2 tab color via escape sequences.
+
+    Backslashes are doubled so the command survives AppleScript string interpolation:
+    Python produces \\\\033 -> AppleScript sees \\033 -> shell printf interprets \\033 as ESC.
+    """
+    r, g, b = int(hex_color[1:3], 16), int(hex_color[3:5], 16), int(hex_color[5:7], 16)
+    return f"printf '\\\\033]6;1;bg;red;brightness;{r}\\\\a\\\\033]6;1;bg;green;brightness;{g}\\\\a\\\\033]6;1;bg;blue;brightness;{b}\\\\a'"
+
 class DashboardHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
@@ -445,6 +463,7 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
 
             # Try iTerm2 first, fall back to Terminal.app
             if Path('/Applications/iTerm.app').exists():
+                color_cmd = iterm_color_escape(session_color(session_name))
                 script = f'''
                 tell application "iTerm"
                     activate
@@ -455,6 +474,7 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                         create tab with default profile
                         tell current session
                             set name to "🧪 {session_name}"
+                            write text "{color_cmd}"
                             write text "{claude_cmd}"
                         end tell
                     end tell
@@ -547,6 +567,7 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
 
             # Open in terminal tab
             if Path('/Applications/iTerm.app').exists():
+                color_cmd = iterm_color_escape(session_color(session_name))
                 script = f'''
                 tell application "iTerm"
                     activate
@@ -557,6 +578,7 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                         create tab with default profile
                         tell current session
                             set name to "🧪 {session_name}"
+                            write text "{color_cmd}"
                             write text "{claude_cmd}"
                         end tell
                     end tell
@@ -1495,6 +1517,7 @@ Re-evaluate based on current state of ALL findings (fixed + remaining + new).
                 claude_cmd = f"direnv allow '{repo_path}/.envrc' 2>/dev/null; cd '{repo_path}' && claude --add-dir '{session_path}' -- '{escaped_prompt}'"
 
             if Path('/Applications/iTerm.app').exists():
+                color_cmd = iterm_color_escape(session_color(session_name))
                 script = f'''
 tell application "iTerm"
     activate
@@ -1505,6 +1528,7 @@ tell application "iTerm"
         create tab with default profile
         tell current session
             set name to "🔄 Re-review: {session_name}"
+            write text "{color_cmd}"
             write text "{claude_cmd}"
         end tell
     end tell
@@ -2570,6 +2594,7 @@ end tell
             border-radius: var(--radius-md);
             cursor: pointer;
             border: 1px solid transparent;
+            border-left: 3px solid var(--session-color, transparent);
             transition: all var(--transition);
             margin-bottom: 2px;
         }
@@ -2580,8 +2605,9 @@ end tell
         }
 
         .session-item.active {
-            background: var(--accent-bg);
-            border-color: var(--accent-border);
+            background: color-mix(in srgb, var(--session-color, var(--accent-bg)) 15%, var(--bg-surface));
+            border-color: var(--session-color, var(--accent-border));
+            border-left: 3px solid var(--session-color, var(--accent-border));
         }
 
         .session-item .si-title {
@@ -2602,6 +2628,17 @@ end tell
             border-radius: 50%;
             animation: pulse 2s infinite;
             flex-shrink: 0;
+        }
+
+        .session-item .si-title .session-color-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            flex-shrink: 0;
+        }
+
+        .session-item .si-title .live-indicator.has-color {
+            box-shadow: 0 0 0 2px var(--bg-surface), 0 0 0 3.5px var(--session-color);
         }
 
         .session-item .si-folder {
@@ -3342,6 +3379,13 @@ end tell
         CONFIG: '/api/config'
     };
 
+    const SESSION_COLORS = ['#ef4444','#eab308','#22c55e','#06b6d4','#3b82f6','#a855f7','#ec4899','#f97316'];
+    function getSessionColor(name) {
+        let h = 5381;
+        for (let i = 0; i < name.length; i++) h = ((h << 5) + h + name.charCodeAt(i)) & 0xffffffff;
+        return SESSION_COLORS[(h >>> 0) % SESSION_COLORS.length];
+    }
+
     // ========================================
     // STATE
     // ========================================
@@ -3589,8 +3633,16 @@ end tell
         if (isStale && !isMerged && !isClosed) tags += '<span class="tag tag-stale">Stale</span>';
         if (s.archived) tags += '<span class="tag tag-archived">Archived</span>';
 
-        return '<div class="session-item ' + (isActive ? 'active' : '') + (dimmed ? ' dimmed' : '') + '" onclick="selectSession(&quot;' + s.name + '&quot;)">' +
-            '<div class="si-title">' + (s.has_terminal ? '<span class="live-indicator"></span>' : '') + title + '</div>' +
+        const color = getSessionColor(s.name);
+        let indicator;
+        if (s.has_terminal) {
+            indicator = '<span class="live-indicator has-color" style="--session-color:' + color + '"></span>';
+        } else {
+            indicator = '<span class="session-color-dot" style="background:' + color + '"></span>';
+        }
+
+        return '<div class="session-item ' + (isActive ? 'active' : '') + (dimmed ? ' dimmed' : '') + '" style="--session-color:' + color + '" onclick="selectSession(&quot;' + s.name + '&quot;)">' +
+            '<div class="si-title">' + indicator + title + '</div>' +
             '<div class="si-folder">' + s.name + '</div>' +
             '<div class="si-tags">' + tags + '</div>' +
         '</div>';
