@@ -4290,6 +4290,99 @@ from urllib.parse import urlparse, parse_qs
 PORT = 8765
 SESSIONS_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# ============================================================
+# TERMINAL OUTPUT SERVICE (isolated — modify without touching other code)
+# ============================================================
+class TerminalOutputService:
+    """Encapsulates all terminal output reading and processing logic."""
+    import re as _re
+
+    # ANSI escape patterns
+    _ANSI_PATTERNS = [
+        r'\x1b\[[^a-zA-Z]*[a-zA-Z]', # CSI sequences (incl. DEC private mode)
+        r'\x1b\][^\x07]*\x07',       # OSC sequences (title, etc.)
+        r'\x1b[()][AB012]',          # Character set selection
+        r'\x1b[78DEHM]',             # Other escape sequences
+        r'\x0f|\x0e',                # Shift In/Out
+        r'\r',                       # Carriage returns
+    ]
+    _ANSI_RE = _re.compile('|'.join(_ANSI_PATTERNS))
+
+    @staticmethod
+    def find_log_file(session_path):
+        """Discover the terminal log file for a session."""
+        session_path = Path(session_path)
+        log_file = None
+
+        # Try session.json first for log file path
+        session_json = session_path / 'session.json'
+        if session_json.exists():
+            try:
+                content = session_json.read_text().strip()
+                if content:
+                    data = json.loads(content)
+                    log_file = data.get('terminal', {}).get('log_file', '')
+            except (json.JSONDecodeError, KeyError):
+                pass
+
+        # Fallback: look for any log file in logs/
+        if not log_file or not Path(log_file).exists():
+            logs_dir = session_path / 'logs'
+            if logs_dir.exists():
+                log_files = sorted(logs_dir.glob('*.log'), key=lambda x: x.stat().st_mtime, reverse=True)
+                if log_files:
+                    log_file = str(log_files[0])
+
+        return log_file if log_file and Path(log_file).exists() else None
+
+    @classmethod
+    def strip_ansi(cls, text):
+        """Remove all ANSI escape codes from text."""
+        return cls._ANSI_RE.sub('', text)
+
+    # Screen-clear sequences that indicate a full TUI redraw
+    _SCREEN_CLEAR_RE = _re.compile(
+        rb'\x1b\[\?1049h'    # Alternate screen buffer enter
+        rb'|\x1b\[2J'        # Erase entire screen
+        rb'|\x1b\[H\x1b\[J' # Cursor home + erase to end
+    )
+
+    @classmethod
+    def get_output(cls, session_path, lines=100, raw=False):
+        """Read and tail terminal output. Returns raw (with ANSI) or plain text."""
+        try:
+            log_file = cls.find_log_file(session_path)
+            if not log_file:
+                return ''
+            if raw:
+                return cls._get_raw_output(log_file)
+            with open(log_file, 'r', errors='replace') as f:
+                all_lines = f.readlines()
+            content = ''.join(all_lines[-lines:])
+            return cls.strip_ansi(content)
+        except Exception as e:
+            return f'Error reading terminal log: {e}'
+
+    @classmethod
+    def _get_raw_output(cls, log_file):
+        """Read raw terminal output, starting from last screen-clear boundary."""
+        import os
+        max_bytes = 512 * 1024  # Read last 512KB
+        file_size = os.path.getsize(log_file)
+        with open(log_file, 'rb') as f:
+            if file_size > max_bytes:
+                f.seek(-max_bytes, 2)
+            data = f.read()
+        # Find last screen-clear boundary for clean TUI replay
+        matches = list(cls._SCREEN_CLEAR_RE.finditer(data))
+        if matches:
+            data = data[matches[-1].start():]
+        elif len(data) > 128 * 1024:
+            # No screen clear found, take last 128KB
+            data = data[-128 * 1024:]
+        return data.decode('utf-8', errors='replace')
+# END TERMINAL OUTPUT SERVICE
+
 class DashboardHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
@@ -4305,7 +4398,8 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         elif parsed.path == '/api/terminal':
             session = params.get('session', [''])[0]
             lines = int(params.get('lines', ['100'])[0])
-            self.send_terminal_output(session, lines)
+            raw = params.get('raw', [''])[0] == '1'
+            self.send_terminal_output(session, lines, raw)
         elif parsed.path == '/api/session':
             session = params.get('session', [''])[0]
             self.send_session_details(session)
@@ -4988,6 +5082,13 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
 
         output_file = session_path / 'PR_DISCUSSION.md'
 
+        # Get authenticated GitHub username to tag our own comments
+        gh_user_result = subprocess.run(
+            ['gh', 'api', 'user', '--jq', '.login'],
+            capture_output=True, text=True
+        )
+        our_username = gh_user_result.stdout.strip() if gh_user_result.returncode == 0 else ''
+
         # Fetch review comments
         result = subprocess.run(
             ['gh', 'api', f'repos/{repo_owner}/{repo_name}/pulls/{pr_number}/comments', '--paginate'],
@@ -5019,8 +5120,11 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                 f.write(f"## Code Review Comments ({len(review_comments)})\n\n")
                 for c in review_comments:
                     line = c.get('line') or c.get('original_line') or '?'
+                    comment_author = c.get('user', {}).get('login', '?')
+                    is_ours = our_username and comment_author == our_username
+                    tag = '📤 **Posted from review** · ' if is_ours else ''
                     f.write(f"### 📍 `{c.get('path', '?')}:{line}`\n")
-                    f.write(f"**@{c.get('user', {}).get('login', '?')}** on {c.get('created_at', '')[:10]}:\n\n")
+                    f.write(f"{tag}**@{comment_author}** on {c.get('created_at', '')[:10]}:\n\n")
                     f.write(f"{c.get('body', '')}\n\n---\n\n")
 
             if reviews:
@@ -5266,6 +5370,13 @@ end tell
                 self.send_error(400, f'Could not determine PR info: pr={pr_number}, owner={owner}, repo={repo}')
                 return
 
+            # Step 1: Get authenticated GitHub username
+            gh_user_result = subprocess.run(
+                ['gh', 'api', 'user', '--jq', '.login'],
+                capture_output=True, text=True
+            )
+            our_username = gh_user_result.stdout.strip() if gh_user_result.returncode == 0 else ''
+
             # Fetch review comments
             result = subprocess.run(
                 ['gh', 'api', f'repos/{owner}/{repo}/pulls/{pr_number}/comments', '--paginate'],
@@ -5273,48 +5384,107 @@ end tell
             )
             review_comments = json.loads(result.stdout) if result.returncode == 0 and result.stdout.strip() else []
 
-            # Read existing REVIEW.md to check for duplicates
+            # Read existing REVIEW.md
             review_file = session_path / 'REVIEW.md'
             if not review_file.exists():
                 review_file = session_path / 'repo' / 'REVIEW.md'
             existing_content = review_file.read_text() if review_file.exists() else ''
 
-            # Build new findings from comments
-            new_findings = []
-            finding_num = len(re.findall(r'#### Finding #\d+', existing_content)) + 1
+            # Step 2: Parse existing findings from REVIEW.md with file:line locations
+            finding_pattern = re.compile(
+                r'(####\s*(?:✅\s*)?(?:Finding\s*#?)?([A-Za-z]*-?\d+)[.:\s]+([^\n]+)\n[\s\S]*?)'
+                r'(?=####|###\s|$)', re.IGNORECASE
+            )
+            findings_map = {}  # (normalized_file, line) -> { number, title, heading_offset, end_offset }
+            for m in finding_pattern.finditer(existing_content):
+                finding_body = m.group(0)
+                finding_number = m.group(2)
+                loc_match = re.search(r'(?:📍\s*\*\*Location:\*\*|\*\*File:\*\*)\s*`([^`]+)`', finding_body)
+                if not loc_match:
+                    # Try title location pattern (e.g., "Title — `file.ts:42`")
+                    loc_match = re.search(r'`([^`]+\.[a-zA-Z]+:\d+[^`]*)`', m.group(3))
+                if loc_match:
+                    loc_str = loc_match.group(1)
+                    fl_match = re.match(r'^([^:]+):(\d+)', loc_str)
+                    if fl_match:
+                        norm_file = fl_match.group(1).lstrip('./')
+                        line_num = int(fl_match.group(2))
+                        findings_map[(norm_file, line_num)] = {
+                            'number': finding_number,
+                            'title': m.group(3).strip(),
+                            'heading_offset': m.start(),
+                            'end_offset': m.end(),
+                        }
+
+            # Step 3: Classify each PR comment into 3 buckets
+            skipped_own = 0
+            replies = []      # { finding_number, author, date, body, end_offset }
+            external = []     # { file, line, author, date, body }
 
             for comment in review_comments:
                 body = comment.get('body', '')
                 path = comment.get('path', '')
-                line = comment.get('line') or comment.get('original_line', 0)
+                comment_line = comment.get('line') or comment.get('original_line', 0)
                 author = comment.get('user', {}).get('login', 'unknown')
+                date = comment.get('created_at', '')[:10]
 
-                # Skip if already in REVIEW.md
+                # Dedup check: skip if body snippet already in content
                 snippet = body[:50].replace('\n', ' ')
                 if snippet in existing_content:
                     continue
 
-                new_findings.append({
-                    'number': finding_num,
-                    'title': f'PR Comment by @{author}',
-                    'file': path,
-                    'line': line,
-                    'body': body,
-                    'author': author,
-                    'source': 'pr_comment'
-                })
-                finding_num += 1
+                # Normalize path for lookup
+                norm_path = path.lstrip('./')
+                matched_finding = findings_map.get((norm_path, int(comment_line) if comment_line else 0))
 
-            # Append new findings to REVIEW.md
-            if new_findings:
-                with open(review_file, 'a') as f:
-                    f.write('\n\n---\n\n## Imported PR Comments\n\n')
-                    for finding in new_findings:
-                        f.write(f"#### Finding #{finding['number']}: {finding['title']}\n\n")
-                        f.write(f"📍 **Location:** `{finding['file']}:{finding['line']}`\n\n")
-                        f.write(f"**Source:** PR comment by @{finding['author']}\n\n")
-                        f.write(f"**Comment:**\n{finding['body']}\n\n")
-                        f.write("**Status:** ⚠️ Open\n\n")
+                if matched_finding:
+                    if our_username and author == our_username:
+                        # Our own posted finding — skip
+                        skipped_own += 1
+                    else:
+                        # Reply to our finding from another developer
+                        replies.append({
+                            'finding_number': matched_finding['number'],
+                            'end_offset': matched_finding['end_offset'],
+                            'author': author,
+                            'date': date,
+                            'body': body,
+                        })
+                else:
+                    # External comment with no matching finding
+                    external.append({
+                        'file': path,
+                        'line': comment_line,
+                        'author': author,
+                        'date': date,
+                        'body': body,
+                    })
+
+            # Step 4: Insert replies inline under matching findings (bottom-to-top)
+            modified_content = existing_content
+            if replies:
+                # Sort by end_offset descending so insertions don't shift earlier offsets
+                replies.sort(key=lambda r: r['end_offset'], reverse=True)
+                for reply in replies:
+                    # Build blockquote
+                    quoted_body = '\n'.join(f'> {line}' for line in reply['body'].split('\n'))
+                    insert_text = f"\n> 💬 **@{reply['author']}** replied on {reply['date']}:\n{quoted_body}\n"
+                    # Insert just before end_offset (before the next heading)
+                    offset = reply['end_offset']
+                    modified_content = modified_content[:offset] + insert_text + modified_content[offset:]
+
+            # Step 5: Append external comments in a separate section
+            if external:
+                modified_content += '\n\n---\n\n## External PR Comments\n\n'
+                for ext in external:
+                    modified_content += f"### 📍 `{ext['file']}:{ext['line']}`\n"
+                    modified_content += f"**@{ext['author']}** on {ext['date']}:\n\n"
+                    modified_content += f"{ext['body']}\n\n---\n\n"
+
+            # Write back if changed
+            if modified_content != existing_content:
+                with open(review_file, 'w') as f:
+                    f.write(modified_content)
 
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
@@ -5322,7 +5492,9 @@ end tell
             self.end_headers()
             self.wfile.write(json.dumps({
                 'status': 'imported',
-                'new_findings': len(new_findings),
+                'skipped_own': skipped_own,
+                'replies_added': len(replies),
+                'external_added': len(external),
                 'total_comments': len(review_comments)
             }).encode())
 
@@ -6337,47 +6509,10 @@ end tell
             pass
         return False
 
-    def send_terminal_output(self, session_name, lines=100):
-        """Stream terminal output from session log file"""
-        import re
+    def send_terminal_output(self, session_name, lines=100, raw=False):
+        """Stream terminal output from session log file (delegates to TerminalOutputService)"""
         session_path = Path(SESSIONS_DIR) / session_name
-        content = ""
-
-        try:
-            # Try session.json first for log file path
-            session_json = session_path / 'session.json'
-            log_file = None
-
-            if session_json.exists():
-                with open(session_json) as f:
-                    content = f.read().strip()
-                if content:
-                    data = json.loads(content)
-                    log_file = data.get('terminal', {}).get('log_file', '')
-
-            # Fallback: look for any log file
-            if not log_file or not Path(log_file).exists():
-                logs_dir = session_path / 'logs'
-                if logs_dir.exists():
-                    log_files = sorted(logs_dir.glob('*.log'), key=lambda x: x.stat().st_mtime, reverse=True)
-                    if log_files:
-                        log_file = str(log_files[0])
-
-            if log_file and Path(log_file).exists():
-                with open(log_file, 'r', errors='replace') as f:
-                    all_lines = f.readlines()
-                    content = ''.join(all_lines[-lines:])
-                    # Strip ANSI escape codes for cleaner display
-                    # Handle: colors, cursor movement, clearing, etc.
-                    content = re.sub(r'\x1b\[[0-9;]*[a-zA-Z]', '', content)  # CSI sequences
-                    content = re.sub(r'\x1b\][^\x07]*\x07', '', content)  # OSC sequences (title, etc.)
-                    content = re.sub(r'\x1b[()][AB012]', '', content)  # Character set selection
-                    content = re.sub(r'\x1b[78DEHM]', '', content)  # Other escape sequences
-                    content = re.sub(r'\x0f|\x0e', '', content)  # Shift In/Out
-                    content = re.sub(r'\r', '', content)  # Carriage returns
-        except Exception as e:
-            content = f"Error reading terminal log: {e}"
-
+        content = TerminalOutputService.get_output(session_path, lines, raw=raw)
         self.send_response(200)
         self.send_header('Content-type', 'text/plain; charset=utf-8')
         self.send_header('Access-Control-Allow-Origin', '*')
@@ -6556,6 +6691,9 @@ end tell
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css">
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.min.js"></script>
     <style>
         :root {
             --bg-base: #0c0c0e;
@@ -7070,19 +7208,16 @@ end tell
         .content td { color: var(--text-secondary); }
         .content img { max-width: 100%; border-radius: var(--radius-md); }
 
-        .terminal-output {
-            background: var(--bg-elevated);
-            color: var(--green);
-            font-family: var(--font-mono);
-            font-size: 12px;
-            line-height: 1.5;
-            white-space: pre-wrap;
-            padding: 16px;
-            border-radius: var(--radius-md);
-            overflow: auto;
-            max-height: calc(100vh - 280px);
-            border: 1px solid var(--border);
-        }
+        /* ============================================================ */
+        /* TERMINAL DISPLAY STYLES (isolated — modify without touching other code) */
+        /* ============================================================ */
+        .terminal-wrapper { display: flex; flex-direction: column; height: calc(100vh - 280px); }
+        .terminal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; flex-shrink: 0; }
+        .terminal-header h2 { margin: 0; border: none; padding: 0; font-size: 15px; }
+        .terminal-container { flex: 1; min-height: 0; border-radius: var(--radius-md); overflow: hidden; border: 1px solid var(--border); background: #0c0c0e; }
+        .terminal-container .xterm { padding: 8px; }
+        .terminal-loading { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--text-tertiary); font-family: var(--font-mono); font-size: 13px; }
+        /* END TERMINAL DISPLAY STYLES */
 
         /* ===== EMPTY STATE ===== */
         .empty-state {
@@ -7746,6 +7881,9 @@ end tell
     // SESSION SELECTION & HEADER
     // ========================================
     async function selectSession(name) {
+        // Deactivate terminal polling from previous session
+        TerminalDisplay.deactivate();
+
         state.currentSession = name;
         const session = getCurrentSession();
 
@@ -7762,7 +7900,11 @@ end tell
         renderSessionHeader();
         renderToolbar();
         renderActionBar();
-        await loadContent();
+        if (state.currentTab === 'terminal') {
+            TerminalDisplay.activate(name);
+        } else {
+            await loadContent();
+        }
     }
 
     function renderSessionHeader() {
@@ -7958,11 +8100,21 @@ end tell
     }
 
     function switchTab(type) {
+        // Deactivate terminal if switching away
+        if (state.currentTab === 'terminal' && type !== 'terminal') {
+            TerminalDisplay.deactivate();
+        }
         state.currentTab = type;
         state.currentVersion = 'current';
         document.getElementById('versionSelect').value = 'current';
+        state.lastContent = '';
         renderToolbar();
-        loadContent();
+        // Terminal has its own lifecycle
+        if (type === 'terminal') {
+            TerminalDisplay.activate(state.currentSession);
+        } else {
+            loadContent();
+        }
     }
 
     function switchVersion(version) {
@@ -7970,32 +8122,146 @@ end tell
         loadContent();
     }
 
+    // ============================================================
+    // TERMINAL DISPLAY (fully isolated — modify without touching other code)
+    // Integration: only activate(session) and deactivate() are called externally
+    // Uses xterm.js to render raw terminal output with colors and TUI support
+    // ============================================================
+    const TerminalDisplay = {
+        _lastContent: '',
+        _session: null,
+        _pollInterval: null,
+        _pollMs: 2000,
+        _term: null,
+        _fitAddon: null,
+        _resizeHandler: null,
+
+        activate(sessionName) {
+            this._session = sessionName;
+            this._lastContent = '';
+            const contentEl = document.getElementById('content');
+            contentEl.innerHTML =
+                '<div class="terminal-wrapper">' +
+                    '<div class="terminal-header">' +
+                        '<h2>Terminal Output</h2>' +
+                        '<button class="btn-action primary" onclick="focusTerminal()">Focus Terminal</button>' +
+                    '</div>' +
+                    '<div class="terminal-container" id="xterm-container">' +
+                        '<div class="terminal-loading">Loading terminal...</div>' +
+                    '</div>' +
+                '</div>';
+            setTimeout(() => this._createTerminal(), 50);
+            this._update();
+            this._startPolling();
+        },
+
+        _createTerminal() {
+            const container = document.getElementById('xterm-container');
+            if (!container || typeof Terminal === 'undefined') return;
+            container.innerHTML = '';
+            this._term = new Terminal({
+                disableStdin: true,
+                convertEol: false,
+                cursorBlink: false,
+                scrollback: 5000,
+                fontSize: 13,
+                fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace",
+                theme: {
+                    background: '#0c0c0e',
+                    foreground: '#ededef',
+                    cursor: '#ededef',
+                    selectionBackground: 'rgba(255,255,255,0.15)',
+                    black: '#1a1a2e',
+                    red: '#e5484d',
+                    green: '#3dd68c',
+                    yellow: '#f0b429',
+                    blue: '#5b9ef0',
+                    magenta: '#7c5cfc',
+                    cyan: '#7ee7fc',
+                    white: '#ededef',
+                    brightBlack: '#6e6e80',
+                    brightRed: '#f16a6d',
+                    brightGreen: '#5ceaa0',
+                    brightYellow: '#f5c84c',
+                    brightBlue: '#79b4f5',
+                    brightMagenta: '#9b80fd',
+                    brightCyan: '#a0effc',
+                    brightWhite: '#ffffff'
+                }
+            });
+            this._fitAddon = new FitAddon.FitAddon();
+            this._term.loadAddon(this._fitAddon);
+            this._term.open(container);
+            this._fitAddon.fit();
+            this._resizeHandler = () => { if (this._fitAddon) this._fitAddon.fit(); };
+            window.addEventListener('resize', this._resizeHandler);
+        },
+
+        deactivate() {
+            this._stopPolling();
+            this._session = null;
+            if (this._resizeHandler) {
+                window.removeEventListener('resize', this._resizeHandler);
+                this._resizeHandler = null;
+            }
+            if (this._term) {
+                this._term.dispose();
+                this._term = null;
+            }
+            this._fitAddon = null;
+            this._lastContent = '';
+        },
+
+        _startPolling() {
+            this._stopPolling();
+            this._pollInterval = setInterval(() => this._update(), this._pollMs);
+        },
+
+        _stopPolling() {
+            if (this._pollInterval) { clearInterval(this._pollInterval); this._pollInterval = null; }
+        },
+
+        async _update() {
+            if (!this._session) return;
+            try {
+                const res = await fetch(API.TERMINAL + '?session=' + encodeURIComponent(this._session) + '&lines=' + CONFIG.TERMINAL_LINES + '&raw=1');
+                const text = await res.text();
+                if (text === this._lastContent) return;
+                this._lastContent = text;
+                if (this._term) {
+                    this._term.reset();
+                    if (text.trim()) {
+                        this._term.write(text);
+                    } else {
+                        this._term.write('\x1b[90mNo terminal output yet...\x1b[0m');
+                    }
+                }
+                document.getElementById('statusText').textContent = 'Updated ' + new Date().toLocaleTimeString();
+            } catch (e) {
+                console.error('Terminal update failed', e);
+            }
+        },
+
+        async focus() {
+            if (!this._session) return;
+            try {
+                const data = await apiPost(API.FOCUS_TERMINAL);
+                if (!data.found) showToast('Terminal not found. Is a Claude session running?', 'error');
+            } catch (e) { showToast('Focus terminal failed', 'error'); }
+        },
+
+        reset() {
+            this.deactivate();
+        }
+    };
+    // END TERMINAL DISPLAY
+
     // ========================================
     // CONTENT LOADING
     // ========================================
     async function loadContent() {
         if (!state.currentSession) return;
         try {
-            if (state.currentTab === 'terminal') {
-                const res = await fetch(API.TERMINAL + '?session=' + encodeURIComponent(state.currentSession) + '&lines=' + CONFIG.TERMINAL_LINES);
-                const text = await res.text();
-                if (text !== state.lastContent) {
-                    state.lastContent = text;
-                    if (text.trim()) {
-                        document.getElementById('content').innerHTML =
-                            '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">' +
-                            '<h2 style="margin:0;border:none;padding:0;font-size:15px;">Terminal Output</h2>' +
-                            '<button class="btn-action primary" onclick="focusTerminal()">🎯 Focus Terminal</button>' +
-                            '</div>' +
-                            '<div class="terminal-output">' + escapeHtml(text) + '</div>';
-                    } else {
-                        document.getElementById('content').innerHTML = renderEmptyState('💻', 'No terminal output', 'Start a Claude session to see output here');
-                    }
-                }
-                document.getElementById('statusText').textContent = 'Updated ' + new Date().toLocaleTimeString();
-                return;
-            }
-
             var url = API.CONTENT + '?session=' + encodeURIComponent(state.currentSession) + '&type=' + state.currentTab;
             if (state.currentVersion !== 'current') url += '&version=' + encodeURIComponent(state.currentVersion);
             const res = await fetch(url);
@@ -8076,11 +8342,7 @@ end tell
     }
 
     async function focusTerminal() {
-        if (!state.currentSession) return;
-        try {
-            const data = await apiPost(API.FOCUS_TERMINAL);
-            if (!data.found) showToast('Terminal not found. Is a Claude session running?', 'error');
-        } catch (e) { showToast('Focus terminal failed', 'error'); }
+        TerminalDisplay.focus();
     }
 
     async function deleteSession() {
@@ -8835,7 +9097,7 @@ end tell
     setInterval(function() {
         if (state.modalOpen) return;
         loadSessions();
-        if (state.currentSession) loadContent();
+        if (state.currentSession && state.currentTab !== 'terminal') loadContent();
     }, CONFIG.REFRESH_INTERVAL_MS);
 
     document.addEventListener('keydown', function(e) {
