@@ -5644,7 +5644,7 @@ end tell
             ).stdout.strip()
 
             fetch_result = subprocess.run(
-                ['git', 'fetch', 'origin', f'pull/{pr_number}/head:pr-{pr_number}-new'],
+                ['git', 'fetch', 'origin', f'pull/{pr_number}/head'],
                 cwd=str(repo_path), capture_output=True, text=True
             )
             if fetch_result.returncode != 0:
@@ -5652,15 +5652,12 @@ end tell
                 return
 
             new_commit = subprocess.run(
-                ['git', 'rev-parse', f'pr-{pr_number}-new'],
+                ['git', 'rev-parse', 'FETCH_HEAD'],
                 cwd=str(repo_path), capture_output=True, text=True
             ).stdout.strip()
 
             # --- Step 2: Check if there are new commits ---
             if old_commit == new_commit and not force:
-                # Clean up the temporary branch
-                subprocess.run(['git', 'branch', '-D', f'pr-{pr_number}-new'],
-                               cwd=str(repo_path), capture_output=True, text=True)
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')
                 self.send_header('Access-Control-Allow-Origin', '*')
@@ -5673,9 +5670,6 @@ end tell
 
             if old_commit == new_commit:
                 # Force mode: no new commits but proceed anyway
-                # Clean up temp branch since there's nothing to checkout
-                subprocess.run(['git', 'branch', '-D', f'pr-{pr_number}-new'],
-                               cwd=str(repo_path), capture_output=True, text=True)
                 new_commits_text = '(no new commits — forced re-review)'
                 commit_count = 0
                 changes_since = ''
@@ -5688,17 +5682,21 @@ end tell
                 new_commits_text = log_result.stdout.strip()
                 commit_count = len([l for l in new_commits_text.split('\n') if l.strip()]) if new_commits_text else 0
 
-                # Checkout new branch, replace old
-                subprocess.run(['git', 'checkout', f'pr-{pr_number}-new'],
-                               cwd=str(repo_path), capture_output=True, text=True)
-                subprocess.run(['git', 'branch', '-D', f'pr-{pr_number}'],
-                               cwd=str(repo_path), capture_output=True, text=True)
-                subprocess.run(['git', 'branch', '-m', f'pr-{pr_number}'],
-                               cwd=str(repo_path), capture_output=True, text=True)
+                # Reset to latest PR code
+                reset_result = subprocess.run(
+                    ['git', 'reset', '--hard', 'FETCH_HEAD'],
+                    cwd=str(repo_path), capture_output=True, text=True
+                )
+                if reset_result.returncode != 0:
+                    self.send_error(500, f'Git reset failed: {reset_result.stderr.strip()}')
+                    return
+
+                # Re-create session file symlinks (reset may have removed them)
+                self.setup_output_files(session_path)
 
                 # Get diff stats (changes since last review)
                 changes_since = subprocess.run(
-                    ['git', 'diff', '--stat', f'{old_commit}...pr-{pr_number}'],
+                    ['git', 'diff', '--stat', f'{old_commit}...HEAD'],
                     cwd=str(repo_path), capture_output=True, text=True
                 ).stdout.strip()
 
