@@ -403,13 +403,13 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             self.send_error(500, str(e))
 
     def setup_output_files(self, session_path):
-        """Ensure REVIEW.md and FINDINGS.md live in session root with symlinks in repo/.
+        """Ensure REVIEW.md, FINDINGS.md, and CLAUDE.md live in session root with symlinks in repo/.
         Python equivalent of the bash setup_output_files()."""
         repo_path = session_path / 'repo'
         if not repo_path.exists():
             return
 
-        for filename in ('REVIEW.md', 'FINDINGS.md'):
+        for filename in ('REVIEW.md', 'FINDINGS.md', 'CLAUDE.md'):
             root_file = session_path / filename
             repo_file = repo_path / filename
 
@@ -429,6 +429,36 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             if repo_file.exists() or repo_file.is_symlink():
                 repo_file.unlink()
             repo_file.symlink_to(Path('..') / filename)
+
+        # Configure Claude permissions: allow research tools + session file writes
+        claude_dir = repo_path / '.claude'
+        claude_dir.mkdir(exist_ok=True)
+        session_abs = str(session_path.resolve())
+        settings = {
+            "permissions": {
+                "allow": [
+                    "Bash(git status *)",
+                    "Bash(git log *)",
+                    "Bash(git diff *)",
+                    "Bash(git show *)",
+                    "Bash(git branch *)",
+                    "Bash(git rev-parse *)",
+                    "Bash(ls *)",
+                    "Bash(cat *)",
+                    "Bash(head *)",
+                    "Bash(tail *)",
+                    "Bash(find *)",
+                    "Bash(wc *)",
+                    "Bash(gh pr view *)",
+                    "Bash(gh pr diff *)",
+                    f"Write({session_abs}/**)",
+                    f"Edit({session_abs}/**)"
+                ],
+                "deny": []
+            }
+        }
+        import json as _json
+        (claude_dir / 'settings.local.json').write_text(_json.dumps(settings, indent=2) + '\n')
 
     def start_claude_session(self, session_path, prompt=''):
         """Start Claude in a new terminal with logging"""
