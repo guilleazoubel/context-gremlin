@@ -317,7 +317,7 @@ generate_claude_md() {
     local context="$3"  # Mode-specific context (PR info, Jira details, focus area)
 
     local repo_dir="$session_dir/repo"
-    local claude_md="$repo_dir/CLAUDE.md"
+    local claude_md="$session_dir/CLAUDE.md"
 
     case "$mode" in
         review)
@@ -1087,6 +1087,7 @@ setup_output_files() {
     # Create output files in session root if they don't exist
     [ ! -f "$SESSION_DIR/REVIEW.md" ] && touch "$SESSION_DIR/REVIEW.md"
     [ ! -f "$SESSION_DIR/FINDINGS.md" ] && touch "$SESSION_DIR/FINDINGS.md"
+    [ ! -f "$SESSION_DIR/CLAUDE.md" ] && touch "$SESSION_DIR/CLAUDE.md"
 
     # Create symlinks in repo directory (remove existing files first)
     if [ -d "$SESSION_DIR/repo" ]; then
@@ -1095,11 +1096,14 @@ setup_output_files() {
             mv "$SESSION_DIR/repo/REVIEW.md" "$SESSION_DIR/REVIEW.md"
         [ -f "$SESSION_DIR/repo/FINDINGS.md" ] && [ ! -L "$SESSION_DIR/repo/FINDINGS.md" ] && \
             mv "$SESSION_DIR/repo/FINDINGS.md" "$SESSION_DIR/FINDINGS.md"
+        [ -f "$SESSION_DIR/repo/CLAUDE.md" ] && [ ! -L "$SESSION_DIR/repo/CLAUDE.md" ] && \
+            mv "$SESSION_DIR/repo/CLAUDE.md" "$SESSION_DIR/CLAUDE.md"
 
         # Remove any existing files/links and create fresh symlinks
-        rm -f "$SESSION_DIR/repo/REVIEW.md" "$SESSION_DIR/repo/FINDINGS.md"
+        rm -f "$SESSION_DIR/repo/REVIEW.md" "$SESSION_DIR/repo/FINDINGS.md" "$SESSION_DIR/repo/CLAUDE.md"
         ln -sf "../REVIEW.md" "$SESSION_DIR/repo/REVIEW.md"
         ln -sf "../FINDINGS.md" "$SESSION_DIR/repo/FINDINGS.md"
+        ln -sf "../CLAUDE.md" "$SESSION_DIR/repo/CLAUDE.md"
 
         # Configure Claude permissions to allow writing to session folder without prompts
         mkdir -p "$SESSION_DIR/repo/.claude"
@@ -1739,7 +1743,7 @@ EOF
     create_session_json "$SESSION_DIR" "review" "https://github.com/$OWNER/$REPO" "$extra_json"
 
     # Create CLAUDE.md inside repo/ so Claude auto-reads it
-    cat > repo/CLAUDE.md << CLAUDE_EOF
+    cat > CLAUDE.md << CLAUDE_EOF
 # PR Review Session - AUTO-START REVIEW
 
 > **IMPORTANT**: Start the review immediately upon reading this file. Do not wait for user input.
@@ -2313,7 +2317,7 @@ EOF
         PROBLEM_CONTEXT="$JIRA_CONTEXT"
     fi
 
-    cat > repo/CLAUDE.md << CLAUDE_EOF
+    cat > CLAUDE.md << CLAUDE_EOF
 # Investigation Session - AUTO-START
 
 > **CRITICAL**: Read this entire document carefully. It contains all the context you need to understand what you're investigating and what is expected.
@@ -2748,7 +2752,7 @@ _Track your commits here:_
 DEVLOG_EOF
 
     # Create CLAUDE.md with development instructions
-    cat > repo/CLAUDE.md << CLAUDE_DEV_EOF
+    cat > CLAUDE.md << CLAUDE_DEV_EOF
 # Development Session: $ticket_id
 
 ## Context
@@ -2799,6 +2803,7 @@ Then update DEVLOG.md with your findings and implementation plan.
 CLAUDE_DEV_EOF
 
     # Setup output files with symlinks
+    setup_output_files "$SESSION_DIR"
     touch "$SESSION_DIR/DEVLOG.md"
     ln -sf "../DEVLOG.md" "$SESSION_DIR/repo/DEVLOG.md" 2>/dev/null || true
 
