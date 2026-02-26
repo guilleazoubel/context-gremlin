@@ -102,7 +102,7 @@ class TerminalOutputService:
         return data.decode('utf-8', errors='replace')
 # END TERMINAL OUTPUT SERVICE
 
-_SESSION_COLORS = ['#ef4444','#eab308','#22c55e','#06b6d4','#3b82f6','#a855f7','#ec4899','#f97316']
+_SESSION_COLORS = ['#ef4444','#f97316','#eab308','#84cc16','#22c55e','#14b8a6','#06b6d4','#0ea5e9','#3b82f6','#6366f1','#8b5cf6','#a855f7','#d946ef','#ec4899','#f43f5e']
 
 def session_color(name):
     """Deterministic color for a session name (djb2 hash)."""
@@ -403,13 +403,13 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             self.send_error(500, str(e))
 
     def setup_output_files(self, session_path):
-        """Ensure REVIEW.md, FINDINGS.md, and CLAUDE.md live in session root with symlinks in repo/.
+        """Ensure REVIEW.md and FINDINGS.md live in session root with symlinks in repo/.
         Python equivalent of the bash setup_output_files()."""
         repo_path = session_path / 'repo'
         if not repo_path.exists():
             return
 
-        for filename in ('REVIEW.md', 'FINDINGS.md', 'CLAUDE.md'):
+        for filename in ('REVIEW.md', 'FINDINGS.md'):
             root_file = session_path / filename
             repo_file = repo_path / filename
 
@@ -429,36 +429,6 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             if repo_file.exists() or repo_file.is_symlink():
                 repo_file.unlink()
             repo_file.symlink_to(Path('..') / filename)
-
-        # Configure Claude permissions: allow research tools + session file writes
-        claude_dir = repo_path / '.claude'
-        claude_dir.mkdir(exist_ok=True)
-        session_abs = str(session_path.resolve())
-        settings = {
-            "permissions": {
-                "allow": [
-                    "Bash(git status *)",
-                    "Bash(git log *)",
-                    "Bash(git diff *)",
-                    "Bash(git show *)",
-                    "Bash(git branch *)",
-                    "Bash(git rev-parse *)",
-                    "Bash(ls *)",
-                    "Bash(cat *)",
-                    "Bash(head *)",
-                    "Bash(tail *)",
-                    "Bash(find *)",
-                    "Bash(wc *)",
-                    "Bash(gh pr view *)",
-                    "Bash(gh pr diff *)",
-                    f"Write({session_abs}/**)",
-                    f"Edit({session_abs}/**)"
-                ],
-                "deny": []
-            }
-        }
-        import json as _json
-        (claude_dir / 'settings.local.json').write_text(_json.dumps(settings, indent=2) + '\n')
 
     def start_claude_session(self, session_path, prompt=''):
         """Start Claude in a new terminal with logging"""
@@ -1338,7 +1308,7 @@ end tell
             ).stdout.strip()
 
             fetch_result = subprocess.run(
-                ['git', 'fetch', 'origin', f'pull/{pr_number}/head'],
+                ['git', 'fetch', 'origin', f'pull/{pr_number}/head:pr-{pr_number}-new'],
                 cwd=str(repo_path), capture_output=True, text=True
             )
             if fetch_result.returncode != 0:
@@ -1346,12 +1316,15 @@ end tell
                 return
 
             new_commit = subprocess.run(
-                ['git', 'rev-parse', 'FETCH_HEAD'],
+                ['git', 'rev-parse', f'pr-{pr_number}-new'],
                 cwd=str(repo_path), capture_output=True, text=True
             ).stdout.strip()
 
             # --- Step 2: Check if there are new commits ---
             if old_commit == new_commit and not force:
+                # Clean up the temporary branch
+                subprocess.run(['git', 'branch', '-D', f'pr-{pr_number}-new'],
+                               cwd=str(repo_path), capture_output=True, text=True)
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')
                 self.send_header('Access-Control-Allow-Origin', '*')
@@ -1364,6 +1337,9 @@ end tell
 
             if old_commit == new_commit:
                 # Force mode: no new commits but proceed anyway
+                # Clean up temp branch since there's nothing to checkout
+                subprocess.run(['git', 'branch', '-D', f'pr-{pr_number}-new'],
+                               cwd=str(repo_path), capture_output=True, text=True)
                 new_commits_text = '(no new commits — forced re-review)'
                 commit_count = 0
                 changes_since = ''
@@ -1376,21 +1352,17 @@ end tell
                 new_commits_text = log_result.stdout.strip()
                 commit_count = len([l for l in new_commits_text.split('\n') if l.strip()]) if new_commits_text else 0
 
-                # Reset to latest PR code
-                reset_result = subprocess.run(
-                    ['git', 'reset', '--hard', 'FETCH_HEAD'],
-                    cwd=str(repo_path), capture_output=True, text=True
-                )
-                if reset_result.returncode != 0:
-                    self.send_error(500, f'Git reset failed: {reset_result.stderr.strip()}')
-                    return
-
-                # Re-create session file symlinks (reset may have removed them)
-                self.setup_output_files(session_path)
+                # Checkout new branch, replace old
+                subprocess.run(['git', 'checkout', f'pr-{pr_number}-new'],
+                               cwd=str(repo_path), capture_output=True, text=True)
+                subprocess.run(['git', 'branch', '-D', f'pr-{pr_number}'],
+                               cwd=str(repo_path), capture_output=True, text=True)
+                subprocess.run(['git', 'branch', '-m', f'pr-{pr_number}'],
+                               cwd=str(repo_path), capture_output=True, text=True)
 
                 # Get diff stats (changes since last review)
                 changes_since = subprocess.run(
-                    ['git', 'diff', '--stat', f'{old_commit}...HEAD'],
+                    ['git', 'diff', '--stat', f'{old_commit}...pr-{pr_number}'],
                     cwd=str(repo_path), capture_output=True, text=True
                 ).stdout.strip()
 
@@ -3407,7 +3379,7 @@ end tell
         CONFIG: '/api/config'
     };
 
-    const SESSION_COLORS = ['#ef4444','#eab308','#22c55e','#06b6d4','#3b82f6','#a855f7','#ec4899','#f97316'];
+    const SESSION_COLORS = ['#ef4444','#f97316','#eab308','#84cc16','#22c55e','#14b8a6','#06b6d4','#0ea5e9','#3b82f6','#6366f1','#8b5cf6','#a855f7','#d946ef','#ec4899','#f43f5e'];
     function getSessionColor(name) {
         let h = 5381;
         for (let i = 0; i < name.length; i++) h = ((h << 5) + h + name.charCodeAt(i)) & 0xffffffff;

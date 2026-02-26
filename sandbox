@@ -3558,8 +3558,8 @@ start_claude_terminal() {
     # Try iTerm2 first (macOS)
     if [ -d "/Applications/iTerm.app" ]; then
         # Compute session color for iTerm2 tab
-        local color_idx=$(echo -n "$SESSION_NAME" | cksum | awk '{print $1 % 8}')
-        local colors=("#ef4444" "#eab308" "#22c55e" "#06b6d4" "#3b82f6" "#a855f7" "#ec4899" "#f97316")
+        local color_idx=$(echo -n "$SESSION_NAME" | cksum | awk '{print $1 % 15}')
+        local colors=("#ef4444" "#f97316" "#eab308" "#84cc16" "#22c55e" "#14b8a6" "#06b6d4" "#0ea5e9" "#3b82f6" "#6366f1" "#8b5cf6" "#a855f7" "#d946ef" "#ec4899" "#f43f5e")
         local hex="${colors[$color_idx]}"
         local r=$((16#${hex:1:2})) g=$((16#${hex:3:2})) b=$((16#${hex:5:2}))
         local color_cmd="printf '\\\\033]6;1;bg;red;brightness;${r}\\\\a\\\\033]6;1;bg;green;brightness;${g}\\\\a\\\\033]6;1;bg;blue;brightness;${b}\\\\a'"
@@ -4408,7 +4408,7 @@ class TerminalOutputService:
         return data.decode('utf-8', errors='replace')
 # END TERMINAL OUTPUT SERVICE
 
-_SESSION_COLORS = ['#ef4444','#eab308','#22c55e','#06b6d4','#3b82f6','#a855f7','#ec4899','#f97316']
+_SESSION_COLORS = ['#ef4444','#f97316','#eab308','#84cc16','#22c55e','#14b8a6','#06b6d4','#0ea5e9','#3b82f6','#6366f1','#8b5cf6','#a855f7','#d946ef','#ec4899','#f43f5e']
 
 def session_color(name):
     """Deterministic color for a session name (djb2 hash)."""
@@ -7713,7 +7713,7 @@ end tell
         CONFIG: '/api/config'
     };
 
-    const SESSION_COLORS = ['#ef4444','#eab308','#22c55e','#06b6d4','#3b82f6','#a855f7','#ec4899','#f97316'];
+    const SESSION_COLORS = ['#ef4444','#f97316','#eab308','#84cc16','#22c55e','#14b8a6','#06b6d4','#0ea5e9','#3b82f6','#6366f1','#8b5cf6','#a855f7','#d946ef','#ec4899','#f43f5e'];
     function getSessionColor(name) {
         let h = 5381;
         for (let i = 0; i < name.length; i++) h = ((h << 5) + h + name.charCodeAt(i)) & 0xffffffff;
