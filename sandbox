@@ -9986,9 +9986,9 @@ refresh_pr_session() {
 
     echo ""
     gum spin --spinner dot --title "Fetching latest PR changes..." -- \
-        bash -c "git fetch origin 'pull/$PR_NUMBER/head:pr-$PR_NUMBER-new' 2>&1"
+        bash -c "git fetch origin 'pull/$PR_NUMBER/head' 2>&1"
 
-    local NEW_COMMIT=$(git rev-parse "pr-$PR_NUMBER-new" 2>/dev/null)
+    local NEW_COMMIT=$(git rev-parse "FETCH_HEAD" 2>/dev/null)
 
     if [ "$OLD_COMMIT" = "$NEW_COMMIT" ]; then
         success "PR is already up to date (no new commits)"
@@ -10011,15 +10011,19 @@ refresh_pr_session() {
         return 0
     fi
 
-    # Checkout new version
-    git checkout "pr-$PR_NUMBER-new" 2>/dev/null
-    git branch -D "pr-$PR_NUMBER" 2>/dev/null
-    git branch -m "pr-$PR_NUMBER" 2>/dev/null
+    # Reset to latest PR code
+    git reset --hard FETCH_HEAD 2>/dev/null
+    if [ $? -ne 0 ]; then
+        error "Git reset failed"
+        return 1
+    fi
+    # Re-create session file symlinks after reset
+    setup_output_files "$SESSION_DIR"
 
     # Get new diff stats
-    local NEW_DIFF_STAT=$(git diff --stat "$PR_BASE"..."pr-$PR_NUMBER" 2>/dev/null || echo "")
-    local NEW_CHANGED_FILES=$(git diff --name-only "$PR_BASE"..."pr-$PR_NUMBER" 2>/dev/null || echo "")
-    local CHANGES_SINCE=$(git diff --stat "$OLD_COMMIT"..."pr-$PR_NUMBER" 2>/dev/null || echo "")
+    local NEW_DIFF_STAT=$(git diff --stat "$PR_BASE"...HEAD 2>/dev/null || echo "")
+    local NEW_CHANGED_FILES=$(git diff --name-only "$PR_BASE"...HEAD 2>/dev/null || echo "")
+    local CHANGES_SINCE=$(git diff --stat "$OLD_COMMIT"...HEAD 2>/dev/null || echo "")
 
     # Update session info with refresh timestamp
     echo "" >> "$INFO_FILE"
