@@ -4516,6 +4516,9 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             finding_data = data.get('finding', {})
             fix_all = data.get('fix_all', False)
             self.fix_finding(session_path, finding_data, fix_all)
+        elif parsed.path == '/api/dismiss-finding':
+            finding_number = data.get('finding_number', '')
+            self.dismiss_finding(session_path, finding_number)
         elif parsed.path == '/api/import-pr-comments':
             self.import_pr_comments(session_path)
         elif parsed.path == '/api/refresh-pr':
@@ -5298,6 +5301,48 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         except Exception as e:
             self.send_error(500, str(e))
 
+    def dismiss_finding(self, session_path, finding_number):
+        """Toggle dismiss (🔇) prefix on a finding heading in REVIEW.md"""
+        import re as _re
+        try:
+            review_file = session_path / 'REVIEW.md'
+            if not review_file.exists():
+                self.send_error(404, 'REVIEW.md not found')
+                return
+
+            content = review_file.read_text()
+            escaped_num = _re.escape(str(finding_number))
+
+            # Match heading like: #### 1. Title  or  #### Finding #1: Title  or  #### 🔇 1. Title
+            pattern = r'(####\s*)(\U0001F507\s*)?((Finding\s*#?)?' + escaped_num + r'[.:\s])'
+            match = _re.search(pattern, content)
+            if not match:
+                self.send_error(404, f'Finding {finding_number} not found in REVIEW.md')
+                return
+
+            if match.group(2):
+                # Already dismissed — toggle off (undismiss)
+                new_content = content[:match.start()] + match.group(1) + match.group(3) + content[match.end():]
+                dismissed = False
+            else:
+                # Add dismiss prefix
+                new_content = content[:match.start()] + match.group(1) + '\U0001F507 ' + match.group(3) + content[match.end():]
+                dismissed = True
+
+            review_file.write_text(new_content)
+
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.send_header('Access-Control-Allow-Origin', '*')
+            self.end_headers()
+            self.wfile.write(json.dumps({
+                'status': 'ok',
+                'dismissed': dismissed,
+                'finding_number': finding_number
+            }).encode())
+        except Exception as e:
+            self.send_error(500, str(e))
+
     def fix_finding(self, session_path, finding_data, fix_all):
         """Launch Claude to fix a finding or all findings"""
         import subprocess
@@ -5751,20 +5796,25 @@ end tell
 **Update REVIEW.md in-place. Do NOT append sections.**
 
 ### 1. Check Each Open Finding
-For each finding in "Open Findings":
-- **Fixed?** → Move to "Resolved Findings", note the fix
-- **Still present?** → Keep in place
+For each finding in REVIEW.md:
+- **Fixed?** → Add ✅ prefix to heading, move to "Resolved Findings", note the fix
+- **Still present?** → Keep in place, leave heading unchanged
 - **Partially fixed?** → Update the description
+- **🔇 Dismissed?** → SKIP entirely. Findings prefixed with 🔇 were intentionally dismissed by the reviewer. Do not re-flag, update, or remove them.
 
 ### 2. Update Finding Status
 For each finding, update the heading to reflect its current status:
-- Fixed: Add ✅ prefix, e.g., `#### ✅ 1. normalizeString returns untrimmed value`
+- Fixed: `#### ✅ 1. normalizeString returns untrimmed value`
+- Dismissed (do not touch): `#### 🔇 3. Missing JSDoc on helper`
 - Still open: Leave heading unchanged
 - New findings: Number continuing from the last finding
 
-### 3. Check for New Issues
-Review the new commits for any NEW problems introduced.
-Add new findings numbered continuing from the last finding.
+### 3. Full Review of Current PR State
+Do a **comprehensive review of the entire PR diff** (not just new commits). This includes:
+- Review new commits for any problems introduced
+- Re-examine the full PR diff for any **Critical or Important** issues that may have been missed in previous reviews
+- Add new findings numbered continuing from the last finding
+- Focus on: bugs, security issues, logic errors, edge cases, performance problems
 
 ### 4. Update Review History (IMPORTANT!)
 The Review History table MUST have a new row for this version. Find the table that looks like:
@@ -5783,10 +5833,12 @@ ADD a new row (do NOT replace existing rows):
 
 ### 5. Update Verdict
 Re-evaluate based on current state of ALL findings (fixed + remaining + new).
+Only open Critical/Important findings should block approval.
 
 ---
 
 **CRITICAL: The Review History table must show ALL versions (v1, v2, etc). Do NOT remove previous rows.**
+**CRITICAL: Do NOT touch 🔇-prefixed findings. They are intentionally dismissed.**
 
 **BEGIN: Read REVIEW.md, check findings against new code, update in-place.**
 """
@@ -7367,6 +7419,7 @@ end tell
         .sev-info { background: rgba(148,163,184,0.15); color: #94a3b8; }
         .status-fixed { background: var(--green-bg); color: var(--green); }
         .status-open { background: var(--amber-bg); color: var(--amber); }
+        .status-dismissed { background: rgba(148,163,184,0.15); color: #94a3b8; text-decoration: line-through; }
 
         /* ===== FINDING ACTIONS ===== */
         .finding-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.5rem; }
@@ -7703,6 +7756,7 @@ end tell
         RENAME_SESSION: '/api/rename-session',
         SWITCH_MODE: '/api/switch-mode',
         FIX_FINDING: '/api/fix-finding',
+        DISMISS_FINDING: '/api/dismiss-finding',
         IMPORT_PR_COMMENTS: '/api/import-pr-comments',
         POST_PR_COMMENT: '/api/post-pr-comment',
         REFRESH_PR: '/api/refresh-pr',
@@ -8472,7 +8526,7 @@ end tell
     // ========================================
     function parseFindingsFromMarkdown(rawMarkdown) {
         const findings = [];
-        const findingRegex = /####\\s*(?:✅\\s*)?(?:Finding\\s*#?)?([A-Za-z]*-?\\d+)[.:\\s]+([^\\n]+)\\n([\\s\\S]*?)(?=####|###\\s|$)/gi;
+        const findingRegex = /####\\s*(?:[✅🔇]\\s*)?(?:Finding\\s*#?)?([A-Za-z]*-?\\d+)[.:\\s]+([^\\n]+)\\n([\\s\\S]*?)(?=####|###\\s|$)/gi;
         let match;
 
         // Helper: extract a section from finding body between bold markdown headers.
@@ -8583,9 +8637,27 @@ end tell
             }
         };
 
+        const dismissBtn = document.createElement('button');
+        dismissBtn.className = 'btn-inline btn-dismiss';
+        dismissBtn.innerHTML = '🔇 Dismiss';
+        dismissBtn.title = 'Dismiss this finding (skip in re-reviews)';
+        dismissBtn.onclick = async function() {
+            try {
+                await withButtonState(dismissBtn, { loading: '⏳', revert: true }, async function() {
+                    const res = await apiPost(API.DISMISS_FINDING, { finding_number: finding.number });
+                    const data = await res.json();
+                    showToast(data.dismissed ? 'Finding #' + finding.number + ' dismissed' : 'Finding #' + finding.number + ' restored');
+                    loadContent();
+                });
+            } catch (e) {
+                showToast('Failed: ' + e.message, 'error');
+            }
+        };
+
         btnContainer.appendChild(btn);
         btnContainer.appendChild(copyBtn);
         btnContainer.appendChild(fixBtn);
+        btnContainer.appendChild(dismissBtn);
         return btnContainer;
     }
 
@@ -8620,20 +8692,32 @@ end tell
 
         function getStatus(f, rawMarkdown) {
             const num = f.number || '';
+            const escaped = num.replace(/[.*+?^${}()|[\\\\]\\\\]/g, '\\\\$&');
             // Look for ✅ prefix in h4 heading: #### ✅ 1. title
-            const patterns = [
+            const fixedPatterns = [
                 '#### ✅ ' + num + '.',
                 '#### ✅ ' + num + ':',
                 '#### ✅ ' + num + ' ',
                 '#### ✅ Finding #' + num,
                 '#### \\u2705 ' + num
             ];
-            for (let i = 0; i < patterns.length; i++) {
-                if (rawMarkdown.indexOf(patterns[i]) > -1) return { label: 'Fixed', cls: 'status-fixed' };
+            for (let i = 0; i < fixedPatterns.length; i++) {
+                if (rawMarkdown.indexOf(fixedPatterns[i]) > -1) return { label: 'Fixed', cls: 'status-fixed' };
             }
-            // Also check if the heading line contains ✅ anywhere
-            const re = new RegExp('####[^\\\\n]*' + num.replace(/[.*+?^${}()|[\\\\]\\\\]/g, '\\\\$&') + '[^\\\\n]*✅', 'i');
-            if (re.test(rawMarkdown)) return { label: 'Fixed', cls: 'status-fixed' };
+            const fixedRe = new RegExp('####[^\\\\n]*' + escaped + '[^\\\\n]*✅', 'i');
+            if (fixedRe.test(rawMarkdown)) return { label: 'Fixed', cls: 'status-fixed' };
+            // Look for 🔇 prefix: #### 🔇 1. title
+            const dismissedPatterns = [
+                '#### 🔇 ' + num + '.',
+                '#### 🔇 ' + num + ':',
+                '#### 🔇 ' + num + ' ',
+                '#### 🔇 Finding #' + num
+            ];
+            for (let i = 0; i < dismissedPatterns.length; i++) {
+                if (rawMarkdown.indexOf(dismissedPatterns[i]) > -1) return { label: 'Dismissed', cls: 'status-dismissed' };
+            }
+            const dismissedRe = new RegExp('####[^\\\\n]*' + escaped + '[^\\\\n]*🔇', 'i');
+            if (dismissedRe.test(rawMarkdown)) return { label: 'Dismissed', cls: 'status-dismissed' };
             return { label: 'Open', cls: 'status-open' };
         }
 
@@ -10074,20 +10158,25 @@ $CHANGES_SINCE
 **Update REVIEW.md in-place. Do NOT append sections.**
 
 ### 1. Check Each Open Finding
-For each finding in "Open Findings":
-- **Fixed?** → Move to "Resolved Findings", note the fix
-- **Still present?** → Keep in place
+For each finding in REVIEW.md:
+- **Fixed?** → Add ✅ prefix to heading, move to "Resolved Findings", note the fix
+- **Still present?** → Keep in place, leave heading unchanged
 - **Partially fixed?** → Update the description
+- **🔇 Dismissed?** → SKIP entirely. Findings prefixed with 🔇 were intentionally dismissed by the reviewer. Do not re-flag, update, or remove them.
 
 ### 2. Update Finding Status
 For each finding, update the heading to reflect its current status:
-- Fixed: Add ✅ prefix, e.g., \`#### ✅ 1. normalizeString returns untrimmed value\`
+- Fixed: \`#### ✅ 1. normalizeString returns untrimmed value\`
+- Dismissed (do not touch): \`#### 🔇 3. Missing JSDoc on helper\`
 - Still open: Leave heading unchanged
 - New findings: Number continuing from the last finding
 
-### 3. Check for New Issues
-Review the new commits for any NEW problems introduced.
-Add new findings numbered continuing from the last finding.
+### 3. Full Review of Current PR State
+Do a **comprehensive review of the entire PR diff** (not just new commits). This includes:
+- Review new commits for any problems introduced
+- Re-examine the full PR diff for any **Critical or Important** issues that may have been missed in previous reviews
+- Add new findings numbered continuing from the last finding
+- Focus on: bugs, security issues, logic errors, edge cases, performance problems
 
 ### 4. Update Review History (IMPORTANT!)
 The Review History table MUST have a new row for this version. Find the table that looks like:
@@ -10106,6 +10195,7 @@ ADD a new row (do NOT replace existing rows):
 
 ### 5. Update Verdict
 Re-evaluate based on current state of ALL findings (fixed + remaining + new).
+Only open Critical/Important findings should block approval.
 
 ---
 
