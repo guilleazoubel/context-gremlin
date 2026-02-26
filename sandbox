@@ -341,7 +341,8 @@ You are reviewing this pull request. Focus on:
 - Explain the "why" behind suggestions — what breaks, for whom, when
 - Prioritize issues by severity
 - For each finding, explain what the code is trying to do before explaining the issue
-- Findings should be ready to post as PR comments
+- Format findings so they COULD be posted as PR comments (include file path and line numbers)
+- **DO NOT post comments, reviews, or any content to GitHub.** Do NOT run `gh pr comment`, `gh pr review`, or any `gh` command that modifies the PR. Your job is to write REVIEW.md only — the human will decide what to post.
 
 ## Output
 Write your review to `REVIEW.md` in this directory.
