@@ -1907,6 +1907,26 @@ First, determine what type of PR this is based on the title, description, and ch
 - Database schema changes
 - Config/environment changes
 
+### 3.8 Best Practices
+
+**React / Next.js (if applicable):**
+- **Waterfalls**: Use `Promise.all()` for independent fetches; move `await` into the branch where the value is actually used
+- **Bundle size**: Avoid barrel file imports (import from specific modules); use `next/dynamic` for heavy components; defer third-party scripts (analytics, logging) until after hydration
+- **Server components**: Use `React.cache()` for per-request dedup; minimize data serialized to client components; use `after()` for non-blocking operations
+- **Re-renders**: Use functional `setState` for stable callbacks; don't subscribe to state only used in event handlers; use `startTransition` for non-urgent updates
+- **Rendering**: Use ternary (`? :`) not `&&` for conditional rendering; extract static JSX outside components; use `content-visibility: auto` for long lists
+
+**UI / UX / Accessibility:**
+- **Semantic HTML**: Use correct elements (`button` not `div` with onClick, `nav`, `main`, `article`); ensure keyboard navigation works (Tab, Enter, Escape)
+- **Focus management**: Visible focus indicators; focus moves logically after actions (modal open/close, route change)
+- **Touch targets**: Minimum 44x44px for interactive elements on mobile
+- **Error/loading states**: All async operations show loading state; errors are shown to users with recovery options
+- **Layout stability**: Avoid layout shift (set dimensions on images/videos, use `loading="lazy"`)
+- **Forms**: Validation messages visible and associated with fields; submit buttons disabled during submission
+
+### 3.9 Repo-Specific Review Skills
+Check if \`.agents/skills/\` or \`.claude/skills/\` exists in this repo. If review-relevant skills are found (e.g., \`vercel-react-best-practices\`, \`web-design-guidelines\`, \`grace-design-system\`), invoke them on the changed files and incorporate their findings into your review.
+
 ---
 
 ## PHASE 4: Write Review
