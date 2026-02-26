@@ -1105,16 +1105,28 @@ setup_output_files() {
         ln -sf "../FINDINGS.md" "$SESSION_DIR/repo/FINDINGS.md"
         ln -sf "../CLAUDE.md" "$SESSION_DIR/repo/CLAUDE.md"
 
-        # Configure Claude permissions to allow writing to session folder without prompts
+        # Configure Claude permissions: allow research tools + session file writes
         mkdir -p "$SESSION_DIR/repo/.claude"
         cat > "$SESSION_DIR/repo/.claude/settings.local.json" << CLAUDE_SETTINGS
 {
   "permissions": {
     "allow": [
-      "Read(**)",
-      "Edit(**)",
+      "Bash(git status *)",
+      "Bash(git log *)",
+      "Bash(git diff *)",
+      "Bash(git show *)",
+      "Bash(git branch *)",
+      "Bash(git rev-parse *)",
+      "Bash(ls *)",
+      "Bash(cat *)",
+      "Bash(head *)",
+      "Bash(tail *)",
+      "Bash(find *)",
+      "Bash(wc *)",
+      "Bash(gh pr view *)",
+      "Bash(gh pr diff *)",
       "Write($SESSION_DIR/**)",
-      "Write($SESSION_DIR/repo/**)"
+      "Edit($SESSION_DIR/**)"
     ],
     "deny": []
   }
