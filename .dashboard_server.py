@@ -583,6 +583,7 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                         create tab with default profile
                         tell current session
                             set name to "🧪 {session_name}"
+                            write text "printf '\\\\033]1;🧪 {session_name}\\\\a'"
                             write text "{color_cmd}"
                             write text "{claude_cmd}"
                         end tell
@@ -687,6 +688,7 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                         create tab with default profile
                         tell current session
                             set name to "🧪 {session_name}"
+                            write text "printf '\\\\033]1;🧪 {session_name}\\\\a'"
                             write text "{color_cmd}"
                             write text "{claude_cmd}"
                         end tell
@@ -1211,6 +1213,7 @@ tell application "iTerm"
         create tab with default profile
         tell current session
             set name to "{tab_label}"
+            write text "printf '\\\\033]1;{tab_label}\\\\a'"
             write text "{color_cmd}"
             write text "{claude_cmd}"
         end tell
@@ -1719,6 +1722,7 @@ tell application "iTerm"
         create tab with default profile
         tell current session
             set name to "🔄 Re-review: {session_name}"
+            write text "printf '\\\\033]1;🔄 Re-review: {session_name}\\\\a'"
             write text "{color_cmd}"
             write text "{claude_cmd}"
         end tell
@@ -1934,6 +1938,7 @@ tell application "iTerm"
         create tab with default profile
         tell current session
             set name to "📂 {session_name}"
+            write text "printf '\\\\033]1;📂 {session_name}\\\\a'"
             write text "{color_cmd}"
             write text "cd '{repo_path}' && clear && pwd && git status"
         end tell
@@ -2063,6 +2068,7 @@ tell application "iTerm"
         create tab with default profile
         tell current session
             set name to "▶️ App: {session_name}"
+            write text "printf '\\\\033]1;▶️ App: {session_name}\\\\a'"
             write text "cd '{repo_path}' && {install_prefix}{run_cmd}"
         end tell
     end tell
