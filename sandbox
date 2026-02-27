@@ -5477,41 +5477,75 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             logs_dir.mkdir(exist_ok=True)
             log_file = logs_dir / f"terminal-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
 
-            if fix_all:
-                prompt = """FIX ALL FINDINGS MODE:
-1. Read REVIEW.md and identify all open findings
-2. Work through each finding systematically
-3. After fixing each one, update its status in REVIEW.md
-4. When done, summarize what was fixed
+            # Load session context
+            session_json = session_path / 'session.json'
+            jira_context = ''
+            dev_prompt = ''
+            if session_json.exists():
+                try:
+                    with open(session_json) as f:
+                        sdata = json.load(f)
+                    jira_ticket = sdata.get('jira', {}).get('ticket', '')
+                    if jira_ticket:
+                        jira_context = f'Jira Ticket: {jira_ticket}'
+                    dev_prompt = sdata.get('dev_prompt', '')
+                except (json.JSONDecodeError, ValueError):
+                    pass
 
-DO NOT COMMIT - user will test and commit manually."""
+            context_section = ''
+            if jira_context or dev_prompt:
+                context_section = '\n## Session Context\n'
+                if jira_context:
+                    context_section += f'{jira_context}\n'
+                if dev_prompt:
+                    context_section += f'{dev_prompt}\n'
+
+            if fix_all:
+                prompt = f"""FIX ALL OPEN FINDINGS
+
+You are a senior software engineer. Your CLAUDE.md in the session root has your full instructions.
+{context_section}
+## Instructions
+
+1. Read REVIEW.md and identify ALL open findings (skip any marked with a checkmark or dismiss emoji)
+2. Work through each finding, starting with Critical/Important severity first
+3. For each finding:
+   a. Understand the codebase context around the issue
+   b. Implement a proper fix following existing patterns (no hacks or workarounds)
+   c. Update the finding status in REVIEW.md
+4. Read FINDINGS.md and DEVLOG.md for additional context if they exist
+5. When done, summarize all fixes in DEVLOG.md
+
+DO NOT COMMIT - the user will review and commit manually."""
             else:
                 finding = finding_data
-                prompt = f"""FIX SINGLE FINDING:
+                prompt = f"""FIX FINDING #{finding.get('number', '?')}: {finding.get('title', 'Unknown')}
 
-**Finding #{finding.get('number', '?')}: {finding.get('title', 'Unknown')}**
+You are a senior software engineer. Your CLAUDE.md in the session root has your full instructions.
+{context_section}
+## Finding Details
 
-Location: `{finding.get('file', '')}:{finding.get('line', '')}`
+- **Location:** `{finding.get('file', '')}:{finding.get('line', '')}`
+- **Problem:** {finding.get('problem', 'See REVIEW.md')}
+- **Impact:** {finding.get('impact', '')}
+- **Suggested Fix:** {finding.get('suggestion', '')}
 
-**Problem:** {finding.get('problem', 'See REVIEW.md')}
+## Instructions
 
-**Impact:** {finding.get('impact', '')}
+1. Read the surrounding code to understand context and existing patterns
+2. Read FINDINGS.md and DEVLOG.md for additional context if they exist
+3. Implement a proper fix — no hacks, no workarounds, follow existing conventions
+4. Update this finding status in REVIEW.md
 
-**Suggested Fix:** {finding.get('suggestion', '')}
+DO NOT COMMIT - the user will review and commit manually."""
 
-Instructions:
-1. Navigate to the file and line indicated
-2. Understand the context
-3. Implement the fix
-4. Update REVIEW.md to mark this finding as fixed
-
-DO NOT COMMIT - user will test and commit manually."""
-
-            # Run claude directly — use '--' to end options so prompt isn't consumed by --add-dir (variadic)
+            # Run claude directly
             escaped_prompt = prompt.replace("'", "'\\''")
             claude_cmd = f"direnv allow '{repo_path}/.envrc' 2>/dev/null; cd '{repo_path}' && claude --add-dir '{session_path}' -- '{escaped_prompt}'"
 
             session_name = session_path.name
+            color_cmd = iterm_color_escape(session_color(session_name))
+            tab_label = f"🔧 Fix All: {session_name}" if fix_all else f"🔧 Fix: {session_name}"
 
             # Try iTerm2 first
             if Path('/Applications/iTerm.app').exists():
@@ -5524,7 +5558,8 @@ tell application "iTerm"
     tell current window
         create tab with default profile
         tell current session
-            set name to "🔧 Fix: {session_name}"
+            set name to "{tab_label}"
+            write text "{color_cmd}"
             write text "{claude_cmd}"
         end tell
     end tell
