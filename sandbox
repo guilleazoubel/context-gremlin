@@ -3144,32 +3144,57 @@ switch_to_development_mode() {
     local jira_context=$(extract_jira_context "$claude_file")
 
     cat > "$claude_file" << 'DEV_MODE'
-# Development Mode
+# Development Mode — Senior Engineer
 
-> **Focus: Implement features/fixes, document in DEVLOG.md**
+> You are a senior software engineer. Read and understand the codebase's patterns, conventions, and architecture BEFORE writing any code.
 
-## Your Task
+## Task Context
 
-1. Implement the requested feature or fix
-2. Write clean, tested code
-3. Document progress in **DEVLOG.md**
+[Task details will be appended below from Jira ticket and/or custom instructions]
+
+## Engineering Principles
+
+- **DRY** — Don't repeat yourself; extract shared logic into reusable functions
+- **Low complexity** — Simple, readable solutions over clever ones
+- **No hacks** — Every solution must be the "right" way, not a workaround or shortcut
+- **Maintainability** — Code should be easy for the next developer to understand and modify
+- **Follow existing patterns** — Match the codebase's naming conventions, file structure, and coding style
+- **Small, focused changes** — One concern per commit; don't mix refactoring with features
+
+## Before Writing Code
+
+1. **Explore the codebase** — Understand existing architecture, patterns, and conventions
+2. **Read context files** — Check FINDINGS.md, REVIEW.md, DEVLOG.md for prior work and open issues
+3. **Understand the "why"** — Know the goal behind the task, not just the surface request
+4. **Plan your approach** — Think through the design before typing code
+
+## Development Process
+
+1. Implement changes following the codebase's conventions
+2. Write or update tests for your changes
+3. Run tests after every meaningful change
+4. Make incremental, logical commits with clear messages
+5. Document progress and decisions in **DEVLOG.md**
+
+## What NOT to Do
+
+- Don't introduce new patterns that conflict with existing ones
+- Don't add unnecessary abstractions or over-engineer
+- Don't leave TODO/FIXME comments as solutions
+- Don't bypass existing safety checks, validations, or linting rules
+- Don't commit broken or untested code
+- Don't write hacks, workarounds, or "temporary" fixes that become permanent
 
 ## Available Context Files
 
-- **session-info.txt** - Jira ticket details, requirements
-- **FINDINGS.md** - Investigation results (read this first if exists!)
-- **REVIEW.md** - Code review findings (fix issues found here!)
-
-## Development Guidelines
-
-1. **Read context first** - Check FINDINGS.md and REVIEW.md
-2. **Small commits** - Make incremental, logical commits
-3. **Test as you go** - Run tests after changes
-4. **Document** - Update DEVLOG.md with progress
+- **session-info.txt** — Task/ticket details and requirements
+- **FINDINGS.md** — Investigation notes (read if exists!)
+- **REVIEW.md** — Code review findings (fix issues found here!)
+- **DEVLOG.md** — Your development log (write progress here)
 
 ## DEVLOG Format
 
-Write your progress to `DEVLOG.md` using this structure:
+Write your progress to `DEVLOG.md`:
 
 ```markdown
 # Development Log
@@ -3190,9 +3215,6 @@ Write your progress to `DEVLOG.md` using this structure:
 ## Testing
 - [ ] Unit tests pass
 - [ ] Manual testing done
-
-## Notes
-[Any important observations or decisions]
 ```
 
 **BEGIN DEVELOPMENT NOW.**
@@ -4553,6 +4575,10 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         elif parsed.path == '/api/rename-session':
             new_title = data.get('title', '')
             self.rename_session(session_path, new_title)
+        elif parsed.path == '/api/open-terminal':
+            self.open_terminal(session_path)
+        elif parsed.path == '/api/open-code':
+            self.open_code(session_path)
         else:
             self.send_error(404, 'Not found')
 
@@ -6127,6 +6153,50 @@ end tell
 
         except subprocess.TimeoutExpired:
             self.send_error(500, 'Session creation timed out')
+        except Exception as e:
+            self.send_error(500, str(e))
+
+    def open_terminal(self, session_path):
+        """Open a terminal in the session repo folder"""
+        import subprocess
+        try:
+            repo_path = session_path / 'repo'
+            if not repo_path.exists():
+                self.send_error(400, 'Repo not found')
+                return
+            session_name = session_path.name
+            color = session_color(session_name)
+            color_cmd = iterm_color_escape(color)
+            # Try iTerm2 first
+            script = f'''
+tell application "iTerm"
+    activate
+    tell current window
+        create tab with default profile
+        tell current session
+            set name to "📂 {session_name}"
+            write text "{color_cmd}"
+            write text "cd '{repo_path}' && clear && pwd && git status"
+        end tell
+    end tell
+end tell'''
+            subprocess.run(['osascript', '-e', script], check=True)
+            self.send_json({'status': 'opened'})
+        except Exception as e:
+            self.send_error(500, str(e))
+
+    def open_code(self, session_path):
+        """Open VS Code in the session repo folder"""
+        import subprocess
+        try:
+            repo_path = session_path / 'repo'
+            if not repo_path.exists():
+                self.send_error(400, 'Repo not found')
+                return
+            subprocess.Popen(['code', str(repo_path)])
+            self.send_json({'status': 'opened'})
+        except FileNotFoundError:
+            self.send_error(400, 'VS Code CLI (code) not found. Install it from VS Code: Cmd+Shift+P → "Shell Command: Install code"')
         except Exception as e:
             self.send_error(500, str(e))
 
@@ -8271,7 +8341,12 @@ end tell
         if (hasRepo) {
             html += '<span class="ab-divider"></span>';
             html += '<button class="btn-action" onclick="runApplication()">▶ Run App</button>';
-            html += '<button class="btn-action" onclick="commitChanges()">💾 Commit</button>';
+            const mode = session.mode || session.session_type || '';
+            if (mode === 'development') {
+                html += '<button class="btn-action" onclick="commitChanges()">💾 Commit</button>';
+            }
+            html += '<button class="btn-action" onclick="openTerminal()">🖥 Terminal</button>';
+            html += '<button class="btn-action" onclick="openCode()">📝 VS Code</button>';
         }
 
         bar.innerHTML = html;
@@ -9251,6 +9326,22 @@ end tell
                     '</div>'
                 );
             }
+        } catch (e) { showToast('Failed: ' + e.message, 'error'); }
+    }
+
+    async function openTerminal() {
+        if (!state.currentSession) return;
+        try {
+            await apiPost('/api/open-terminal');
+            showToast('Terminal opened');
+        } catch (e) { showToast('Failed: ' + e.message, 'error'); }
+    }
+
+    async function openCode() {
+        if (!state.currentSession) return;
+        try {
+            await apiPost('/api/open-code');
+            showToast('VS Code opened');
         } catch (e) { showToast('Failed: ' + e.message, 'error'); }
     }
 
