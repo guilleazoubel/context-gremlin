@@ -4704,7 +4704,9 @@ end tell
         } else if (mode === 'development') {
             const session = getCurrentSession();
             const detected = session?.jira || extractJiraFromBranch(session?.branch);
-            fields.innerHTML = '<label>Jira Ticket:</label><input type="text" id="modeJira" value="' + (detected || '') + '" placeholder="PROJ-123">';
+            fields.innerHTML = '<label>Jira Ticket:</label><input type="text" id="modeJira" value="' + (detected || '') + '" placeholder="PROJ-123">' +
+                '<label style="margin-top:8px;">Additional Instructions (optional):</label>' +
+                '<textarea id="modeDevPrompt" rows="3" placeholder="Describe what to build, focus areas, constraints..." style="width:100%;resize:vertical;"></textarea>';
         } else if (mode === 'investigation') {
             fields.innerHTML = '<label>Focus Area (optional):</label><input type="text" id="modeFocus" placeholder="What are you investigating?">';
         }
@@ -4720,7 +4722,10 @@ end tell
         if (!state.pendingModeSwitch || !state.currentSession) return;
         const extraData = {};
         if (state.pendingModeSwitch === 'review') { const v = document.getElementById('modePrUrl')?.value; if (v) extraData.pr_url = v; }
-        else if (state.pendingModeSwitch === 'development') { const v = document.getElementById('modeJira')?.value; if (v) extraData.jira = v; }
+        else if (state.pendingModeSwitch === 'development') {
+            const v = document.getElementById('modeJira')?.value; if (v) extraData.jira = v;
+            const p = document.getElementById('modeDevPrompt')?.value; if (p) extraData.dev_prompt = p;
+        }
         else if (state.pendingModeSwitch === 'investigation') { const v = document.getElementById('modeFocus')?.value; if (v) extraData.focus = v; }
 
         try {
