@@ -4654,8 +4654,11 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                 if new_mode == 'review' and extra_data.get('pr_url'):
                     # Store PR URL for reference
                     data.setdefault('pr', {})['url'] = extra_data['pr_url']
-                elif new_mode == 'development' and extra_data.get('jira'):
-                    data.setdefault('jira', {})['ticket'] = extra_data['jira']
+                elif new_mode == 'development':
+                    if extra_data.get('jira'):
+                        data.setdefault('jira', {})['ticket'] = extra_data['jira']
+                    if extra_data.get('dev_prompt'):
+                        data['dev_prompt'] = extra_data['dev_prompt']
                 elif new_mode == 'investigation' and extra_data.get('focus'):
                     data['focus'] = extra_data['focus']
 
@@ -4684,7 +4687,75 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                     mode_header = "# PR Review Session\\n\\nYou are reviewing this pull request."
                 elif new_mode == 'development':
                     jira = data.get('jira', {}).get('ticket', '')
-                    mode_header = f"# Development Session\\n\\nYou are implementing changes.\\nJira: {jira}" if jira else "# Development Session\\n\\nYou are implementing changes."
+                    dev_prompt = data.get('dev_prompt', '')
+
+                    task_context = ''
+                    if jira:
+                        task_context += f'Jira Ticket: {jira}\n'
+                    if dev_prompt:
+                        task_context += f'\n{dev_prompt}\n'
+                    if not task_context:
+                        task_context = '[No specific task context provided — read session-info.txt and context files]\n'
+
+                    mode_content = f"""# Development Mode — Senior Engineer
+
+> You are a senior software engineer. Read and understand the codebase's patterns, conventions, and architecture BEFORE writing any code.
+
+## Task Context
+
+{task_context}
+## Engineering Principles
+
+- **DRY** — Don't repeat yourself; extract shared logic into reusable functions
+- **Low complexity** — Simple, readable solutions over clever ones
+- **No hacks** — Every solution must be the "right" way, not a workaround or shortcut
+- **Maintainability** — Code should be easy for the next developer to understand and modify
+- **Follow existing patterns** — Match the codebase's naming conventions, file structure, and coding style
+- **Small, focused changes** — One concern per commit; don't mix refactoring with features
+
+## Before Writing Code
+
+1. **Explore the codebase** — Understand existing architecture, patterns, and conventions
+2. **Read context files** — Check FINDINGS.md, REVIEW.md, DEVLOG.md for prior work and open issues
+3. **Understand the "why"** — Know the goal behind the task, not just the surface request
+4. **Plan your approach** — Think through the design before typing code
+
+## Development Process
+
+1. Implement changes following the codebase's conventions
+2. Write or update tests for your changes
+3. Run tests after every meaningful change
+4. Make incremental, logical commits with clear messages
+5. Document progress and decisions in **DEVLOG.md**
+
+## What NOT to Do
+
+- Don't introduce new patterns that conflict with existing ones
+- Don't add unnecessary abstractions or over-engineer
+- Don't leave TODO/FIXME comments as solutions
+- Don't bypass existing safety checks, validations, or linting rules
+- Don't commit broken or untested code
+- Don't write hacks, workarounds, or "temporary" fixes that become permanent
+
+## Available Context Files
+
+- **session-info.txt** — Task/ticket details and requirements
+- **FINDINGS.md** — Investigation notes (read if exists!)
+- **REVIEW.md** — Code review findings (fix issues found here!)
+- **DEVLOG.md** — Your development log (write progress here)
+
+**BEGIN DEVELOPMENT NOW.**
+"""
+                    # Preserve Jira context if it exists in current file
+                    if "## Jira Context" in existing_content:
+                        jira_match = existing_content.split("## Jira Context")
+                        if len(jira_match) > 1:
+                            jira_section = "\n\n## Jira Context" + jira_match[1].split("##")[0]
+                            mode_content += jira_section
+
+                    with open(claude_md, 'w') as f:
+                        f.write(mode_content)
+                    mode_header = None  # Skip generic write below
                 else:
                     focus = data.get('focus', '')
                     mode_header = f"# Investigation Session\\n\\nFocus: {focus}" if focus else "# Investigation Session"
@@ -4696,9 +4767,10 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                     if len(jira_match) > 1:
                         jira_section = "\\n\\n## Jira Context" + jira_match[1].split("##")[0]
 
-                # Write updated CLAUDE.md
-                with open(claude_md, 'w') as f:
-                    f.write(mode_header + jira_section)
+                # Write updated CLAUDE.md (skip if development mode already wrote it)
+                if mode_header is not None:
+                    with open(claude_md, 'w') as f:
+                        f.write(mode_header + jira_section)
 
             self.send_response(200)
             self.send_header('Content-type', 'application/json')

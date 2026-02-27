@@ -227,6 +227,10 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         elif parsed.path == '/api/rename-session':
             new_title = data.get('title', '')
             self.rename_session(session_path, new_title)
+        elif parsed.path == '/api/open-terminal':
+            self.open_terminal(session_path)
+        elif parsed.path == '/api/open-code':
+            self.open_code(session_path)
         else:
             self.send_error(404, 'Not found')
 
@@ -302,8 +306,11 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                 if new_mode == 'review' and extra_data.get('pr_url'):
                     # Store PR URL for reference
                     data.setdefault('pr', {})['url'] = extra_data['pr_url']
-                elif new_mode == 'development' and extra_data.get('jira'):
-                    data.setdefault('jira', {})['ticket'] = extra_data['jira']
+                elif new_mode == 'development':
+                    if extra_data.get('jira'):
+                        data.setdefault('jira', {})['ticket'] = extra_data['jira']
+                    if extra_data.get('dev_prompt'):
+                        data['dev_prompt'] = extra_data['dev_prompt']
                 elif new_mode == 'investigation' and extra_data.get('focus'):
                     data['focus'] = extra_data['focus']
 
@@ -332,7 +339,75 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                     mode_header = "# PR Review Session\\n\\nYou are reviewing this pull request."
                 elif new_mode == 'development':
                     jira = data.get('jira', {}).get('ticket', '')
-                    mode_header = f"# Development Session\\n\\nYou are implementing changes.\\nJira: {jira}" if jira else "# Development Session\\n\\nYou are implementing changes."
+                    dev_prompt = data.get('dev_prompt', '')
+
+                    task_context = ''
+                    if jira:
+                        task_context += f'Jira Ticket: {jira}\n'
+                    if dev_prompt:
+                        task_context += f'\n{dev_prompt}\n'
+                    if not task_context:
+                        task_context = '[No specific task context provided — read session-info.txt and context files]\n'
+
+                    mode_content = f"""# Development Mode — Senior Engineer
+
+> You are a senior software engineer. Read and understand the codebase's patterns, conventions, and architecture BEFORE writing any code.
+
+## Task Context
+
+{task_context}
+## Engineering Principles
+
+- **DRY** — Don't repeat yourself; extract shared logic into reusable functions
+- **Low complexity** — Simple, readable solutions over clever ones
+- **No hacks** — Every solution must be the "right" way, not a workaround or shortcut
+- **Maintainability** — Code should be easy for the next developer to understand and modify
+- **Follow existing patterns** — Match the codebase's naming conventions, file structure, and coding style
+- **Small, focused changes** — One concern per commit; don't mix refactoring with features
+
+## Before Writing Code
+
+1. **Explore the codebase** — Understand existing architecture, patterns, and conventions
+2. **Read context files** — Check FINDINGS.md, REVIEW.md, DEVLOG.md for prior work and open issues
+3. **Understand the "why"** — Know the goal behind the task, not just the surface request
+4. **Plan your approach** — Think through the design before typing code
+
+## Development Process
+
+1. Implement changes following the codebase's conventions
+2. Write or update tests for your changes
+3. Run tests after every meaningful change
+4. Make incremental, logical commits with clear messages
+5. Document progress and decisions in **DEVLOG.md**
+
+## What NOT to Do
+
+- Don't introduce new patterns that conflict with existing ones
+- Don't add unnecessary abstractions or over-engineer
+- Don't leave TODO/FIXME comments as solutions
+- Don't bypass existing safety checks, validations, or linting rules
+- Don't commit broken or untested code
+- Don't write hacks, workarounds, or "temporary" fixes that become permanent
+
+## Available Context Files
+
+- **session-info.txt** — Task/ticket details and requirements
+- **FINDINGS.md** — Investigation notes (read if exists!)
+- **REVIEW.md** — Code review findings (fix issues found here!)
+- **DEVLOG.md** — Your development log (write progress here)
+
+**BEGIN DEVELOPMENT NOW.**
+"""
+                    # Preserve Jira context if it exists in current file
+                    if "## Jira Context" in existing_content:
+                        jira_match = existing_content.split("## Jira Context")
+                        if len(jira_match) > 1:
+                            jira_section = "\n\n## Jira Context" + jira_match[1].split("##")[0]
+                            mode_content += jira_section
+
+                    with open(claude_md, 'w') as f:
+                        f.write(mode_content)
+                    mode_header = None  # Skip generic write below
                 else:
                     focus = data.get('focus', '')
                     mode_header = f"# Investigation Session\\n\\nFocus: {focus}" if focus else "# Investigation Session"
@@ -344,9 +419,10 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                     if len(jira_match) > 1:
                         jira_section = "\\n\\n## Jira Context" + jira_match[1].split("##")[0]
 
-                # Write updated CLAUDE.md
-                with open(claude_md, 'w') as f:
-                    f.write(mode_header + jira_section)
+                # Write updated CLAUDE.md (skip if development mode already wrote it)
+                if mode_header is not None:
+                    with open(claude_md, 'w') as f:
+                        f.write(mode_header + jira_section)
 
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
@@ -406,13 +482,13 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             self.send_error(500, str(e))
 
     def setup_output_files(self, session_path):
-        """Ensure REVIEW.md and FINDINGS.md live in session root with symlinks in repo/.
+        """Ensure REVIEW.md, FINDINGS.md, and CLAUDE.md live in session root with symlinks in repo/.
         Python equivalent of the bash setup_output_files()."""
         repo_path = session_path / 'repo'
         if not repo_path.exists():
             return
 
-        for filename in ('REVIEW.md', 'FINDINGS.md'):
+        for filename in ('REVIEW.md', 'FINDINGS.md', 'CLAUDE.md'):
             root_file = session_path / filename
             repo_file = repo_path / filename
 
@@ -432,6 +508,36 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             if repo_file.exists() or repo_file.is_symlink():
                 repo_file.unlink()
             repo_file.symlink_to(Path('..') / filename)
+
+        # Configure Claude permissions: allow research tools + session file writes
+        claude_dir = repo_path / '.claude'
+        claude_dir.mkdir(exist_ok=True)
+        session_abs = str(session_path.resolve())
+        settings = {
+            "permissions": {
+                "allow": [
+                    "Bash(git status *)",
+                    "Bash(git log *)",
+                    "Bash(git diff *)",
+                    "Bash(git show *)",
+                    "Bash(git branch *)",
+                    "Bash(git rev-parse *)",
+                    "Bash(ls *)",
+                    "Bash(cat *)",
+                    "Bash(head *)",
+                    "Bash(tail *)",
+                    "Bash(find *)",
+                    "Bash(wc *)",
+                    "Bash(gh pr view *)",
+                    "Bash(gh pr diff *)",
+                    f"Write({session_abs}/**)",
+                    f"Edit({session_abs}/**)"
+                ],
+                "deny": []
+            }
+        }
+        import json as _json
+        (claude_dir / 'settings.local.json').write_text(_json.dumps(settings, indent=2) + '\n')
 
     def start_claude_session(self, session_path, prompt=''):
         """Start Claude in a new terminal with logging"""
@@ -1353,7 +1459,7 @@ end tell
             ).stdout.strip()
 
             fetch_result = subprocess.run(
-                ['git', 'fetch', 'origin', f'pull/{pr_number}/head:pr-{pr_number}-new'],
+                ['git', 'fetch', 'origin', f'pull/{pr_number}/head'],
                 cwd=str(repo_path), capture_output=True, text=True
             )
             if fetch_result.returncode != 0:
@@ -1361,15 +1467,12 @@ end tell
                 return
 
             new_commit = subprocess.run(
-                ['git', 'rev-parse', f'pr-{pr_number}-new'],
+                ['git', 'rev-parse', 'FETCH_HEAD'],
                 cwd=str(repo_path), capture_output=True, text=True
             ).stdout.strip()
 
             # --- Step 2: Check if there are new commits ---
             if old_commit == new_commit and not force:
-                # Clean up the temporary branch
-                subprocess.run(['git', 'branch', '-D', f'pr-{pr_number}-new'],
-                               cwd=str(repo_path), capture_output=True, text=True)
                 self.send_response(200)
                 self.send_header('Content-type', 'application/json')
                 self.send_header('Access-Control-Allow-Origin', '*')
@@ -1382,9 +1485,6 @@ end tell
 
             if old_commit == new_commit:
                 # Force mode: no new commits but proceed anyway
-                # Clean up temp branch since there's nothing to checkout
-                subprocess.run(['git', 'branch', '-D', f'pr-{pr_number}-new'],
-                               cwd=str(repo_path), capture_output=True, text=True)
                 new_commits_text = '(no new commits — forced re-review)'
                 commit_count = 0
                 changes_since = ''
@@ -1397,17 +1497,21 @@ end tell
                 new_commits_text = log_result.stdout.strip()
                 commit_count = len([l for l in new_commits_text.split('\n') if l.strip()]) if new_commits_text else 0
 
-                # Checkout new branch, replace old
-                subprocess.run(['git', 'checkout', f'pr-{pr_number}-new'],
-                               cwd=str(repo_path), capture_output=True, text=True)
-                subprocess.run(['git', 'branch', '-D', f'pr-{pr_number}'],
-                               cwd=str(repo_path), capture_output=True, text=True)
-                subprocess.run(['git', 'branch', '-m', f'pr-{pr_number}'],
-                               cwd=str(repo_path), capture_output=True, text=True)
+                # Reset to latest PR code
+                reset_result = subprocess.run(
+                    ['git', 'reset', '--hard', 'FETCH_HEAD'],
+                    cwd=str(repo_path), capture_output=True, text=True
+                )
+                if reset_result.returncode != 0:
+                    self.send_error(500, f'Git reset failed: {reset_result.stderr.strip()}')
+                    return
+
+                # Re-create session file symlinks (reset may have removed them)
+                self.setup_output_files(session_path)
 
                 # Get diff stats (changes since last review)
                 changes_since = subprocess.run(
-                    ['git', 'diff', '--stat', f'{old_commit}...pr-{pr_number}'],
+                    ['git', 'diff', '--stat', f'{old_commit}...HEAD'],
                     cwd=str(repo_path), capture_output=True, text=True
                 ).stdout.strip()
 
@@ -1773,6 +1877,50 @@ end tell
 
         except subprocess.TimeoutExpired:
             self.send_error(500, 'Session creation timed out')
+        except Exception as e:
+            self.send_error(500, str(e))
+
+    def open_terminal(self, session_path):
+        """Open a terminal in the session repo folder"""
+        import subprocess
+        try:
+            repo_path = session_path / 'repo'
+            if not repo_path.exists():
+                self.send_error(400, 'Repo not found')
+                return
+            session_name = session_path.name
+            color = session_color(session_name)
+            color_cmd = iterm_color_escape(color)
+            # Try iTerm2 first
+            script = f'''
+tell application "iTerm"
+    activate
+    tell current window
+        create tab with default profile
+        tell current session
+            set name to "📂 {session_name}"
+            write text "{color_cmd}"
+            write text "cd '{repo_path}' && clear && pwd && git status"
+        end tell
+    end tell
+end tell'''
+            subprocess.run(['osascript', '-e', script], check=True)
+            self.send_json({'status': 'opened'})
+        except Exception as e:
+            self.send_error(500, str(e))
+
+    def open_code(self, session_path):
+        """Open VS Code in the session repo folder"""
+        import subprocess
+        try:
+            repo_path = session_path / 'repo'
+            if not repo_path.exists():
+                self.send_error(400, 'Repo not found')
+                return
+            subprocess.Popen(['code', str(repo_path)])
+            self.send_json({'status': 'opened'})
+        except FileNotFoundError:
+            self.send_error(400, 'VS Code CLI (code) not found. Install it from VS Code: Cmd+Shift+P → "Shell Command: Install code"')
         except Exception as e:
             self.send_error(500, str(e))
 
@@ -3917,7 +4065,12 @@ end tell
         if (hasRepo) {
             html += '<span class="ab-divider"></span>';
             html += '<button class="btn-action" onclick="runApplication()">▶ Run App</button>';
-            html += '<button class="btn-action" onclick="commitChanges()">💾 Commit</button>';
+            const mode = session.mode || session.session_type || '';
+            if (mode === 'development') {
+                html += '<button class="btn-action" onclick="commitChanges()">💾 Commit</button>';
+            }
+            html += '<button class="btn-action" onclick="openTerminal()">🖥 Terminal</button>';
+            html += '<button class="btn-action" onclick="openCode()">📝 VS Code</button>';
         }
 
         bar.innerHTML = html;
@@ -4897,6 +5050,22 @@ end tell
                     '</div>'
                 );
             }
+        } catch (e) { showToast('Failed: ' + e.message, 'error'); }
+    }
+
+    async function openTerminal() {
+        if (!state.currentSession) return;
+        try {
+            await apiPost('/api/open-terminal');
+            showToast('Terminal opened');
+        } catch (e) { showToast('Failed: ' + e.message, 'error'); }
+    }
+
+    async function openCode() {
+        if (!state.currentSession) return;
+        try {
+            await apiPost('/api/open-code');
+            showToast('VS Code opened');
         } catch (e) { showToast('Failed: ' + e.message, 'error'); }
     }
 
