@@ -4048,13 +4048,14 @@ end tell
         const hasRepo = !session.archived;
         const hasPR = !!session.pr;
         const hasReview = !!session.has_review;
+        const mode = session.mode || session.session_type || '';
 
         let html = '<span class="ab-label">Actions</span>';
 
         if (hasRepo) {
             html += '<button class="btn-action" onclick="showSwitchModeModal()">🔀 Switch Mode</button>';
         }
-        if (hasReview && hasRepo) {
+        if (hasReview && hasRepo && mode === 'development') {
             html += '<button class="btn-action" onclick="fixAllFindings()">🔧 Fix All Findings</button>';
         }
         if (hasPR && hasRepo) {
@@ -4065,7 +4066,6 @@ end tell
         if (hasRepo) {
             html += '<span class="ab-divider"></span>';
             html += '<button class="btn-action" onclick="runApplication()">▶ Run App</button>';
-            const mode = session.mode || session.session_type || '';
             if (mode === 'development') {
                 html += '<button class="btn-action" onclick="commitChanges()">💾 Commit</button>';
             }
@@ -4421,6 +4421,8 @@ end tell
     function createFindingActionButtons(finding) {
         const btnContainer = document.createElement('span');
         btnContainer.className = 'finding-actions';
+        const session = getCurrentSession();
+        const isDev = (session?.mode || session?.session_type || '') === 'development';
 
         const btn = document.createElement('button');
         btn.className = 'btn-inline';
@@ -4475,7 +4477,7 @@ end tell
 
         btnContainer.appendChild(btn);
         btnContainer.appendChild(copyBtn);
-        btnContainer.appendChild(fixBtn);
+        if (isDev) btnContainer.appendChild(fixBtn);
         btnContainer.appendChild(dismissBtn);
         return btnContainer;
     }
