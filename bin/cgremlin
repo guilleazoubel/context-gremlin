@@ -88,9 +88,9 @@ CFGEOF
 fi
 
 # Auto-populate jira_base_url from jira.conf if not already set
-if [ -f "$HOME/.config/sandbox/jira.conf" ]; then
+if [ -f "$HOME/.config/cgremlin/jira.conf" ]; then
     _jira_domain=""
-    eval "$(grep '^JIRA_DOMAIN=' "$HOME/.config/sandbox/jira.conf")" 2>/dev/null && _jira_domain="$JIRA_DOMAIN"
+    eval "$(grep '^JIRA_DOMAIN=' "$HOME/.config/cgremlin/jira.conf")" 2>/dev/null && _jira_domain="$JIRA_DOMAIN"
     if [ -n "$_jira_domain" ]; then
         _current_jira_url=$(jq -r '.jira_base_url // ""' "$CONFIG_DIR/config.json" 2>/dev/null)
         if [ -z "$_current_jira_url" ]; then
@@ -517,7 +517,7 @@ export GUM_SPIN_SPINNER_FOREGROUND="212"
 # JIRA INTEGRATION
 # ============================================================================
 
-JIRA_CONFIG="$HOME/.config/sandbox/jira.conf"
+JIRA_CONFIG="$HOME/.config/cgremlin/jira.conf"
 
 # Load saved Jira credentials
 load_jira_config() {
@@ -600,7 +600,7 @@ setup_jira_credentials() {
         success "Connected as: $name"
 
         save_jira_config
-        success "Credentials saved to ~/.config/sandbox/jira.conf"
+        success "Credentials saved to ~/.config/cgremlin/jira.conf"
         return 0
     else
         error "Connection failed. Check your credentials."
