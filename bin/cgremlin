@@ -4251,7 +4251,7 @@ ACRCONTEXT
 # ============================================================================
 
 DASHBOARD_PORT=8765
-DASHBOARD_PID_FILE="$HOME/.sandbox_dashboard_pid"
+DASHBOARD_PID_FILE="$HOME/.cgremlin/dashboard.pid"
 
 start_dashboard_server() {
     # Always clean up first to ensure clean state
