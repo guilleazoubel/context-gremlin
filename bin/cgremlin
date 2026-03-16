@@ -6210,7 +6210,7 @@ end tell
             self.send_error(500, str(e))
 
     def create_new_session(self, mode, url, jira=None, focus=None):
-        """Create a new session via the sandbox script"""
+        """Create a new session via the cgremlin script"""
         import subprocess
         import re
         import datetime
@@ -6230,7 +6230,7 @@ end tell
                 self.send_error(400, 'Review mode requires a PR URL')
                 return
 
-            # Build command to run sandbox in non-interactive mode
+            # Build command to run cgremlin in non-interactive mode
             env = os.environ.copy()
             env['SANDBOX_MODE'] = mode
             env['SANDBOX_URL'] = url
@@ -6239,13 +6239,16 @@ end tell
             if focus:
                 env['SANDBOX_FOCUS'] = focus
 
-            # Find the sandbox script - it's in the same directory as this server script
-            sandbox_path = Path(SESSIONS_DIR) / 'sandbox'
-            if not sandbox_path.exists():
-                sandbox_path = Path(__file__).parent / 'sandbox'
+            # Find the cgremlin script
+            import shutil
+            cgremlin_path = os.environ.get('CGREMLIN_SCRIPT_PATH') or shutil.which('cgremlin')
+            if not cgremlin_path:
+                cgremlin_path = Path(SESSIONS_DIR) / 'cgremlin'
+            if not Path(cgremlin_path).exists():
+                cgremlin_path = Path(__file__).parent / 'cgremlin'
 
             result = subprocess.run(
-                [str(sandbox_path), '--create-session'],
+                [str(cgremlin_path), '--create-session'],
                 env=env,
                 capture_output=True,
                 text=True,
