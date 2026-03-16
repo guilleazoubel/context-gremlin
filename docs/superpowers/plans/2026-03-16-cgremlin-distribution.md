@@ -36,6 +36,7 @@ dev-*/
 # Generated files
 .dashboard_server.py
 .dashboard_new.html
+.dashboard.log
 
 # IDE / tool
 .playwright-mcp/
@@ -534,7 +535,7 @@ Change:
 ```
 To:
 ```python
-        config_path = Path.home() / '.cgremlin' / 'config'
+        config_path = Path.home() / '.cgremlin' / 'config.json'
 ```
 
 - [ ] **Step 3: Update HTML title (line 7023)**
@@ -804,9 +805,8 @@ gh repo create guilleazoubel/homebrew-cgremlin --public --description "Homebrew 
 - [ ] **Step 2: Clone it locally**
 
 ```bash
-cd /tmp
-git clone https://github.com/guilleazoubel/homebrew-cgremlin.git
-cd homebrew-cgremlin
+git clone https://github.com/guilleazoubel/homebrew-cgremlin.git "$HOME/homebrew-cgremlin"
+cd "$HOME/homebrew-cgremlin"
 ```
 
 - [ ] **Step 3: Create the formula directory and file**
@@ -885,7 +885,7 @@ curl -sL https://github.com/guilleazoubel/context-gremlin/archive/refs/tags/v0.1
 - [ ] **Step 4: Update formula with real sha256**
 
 ```bash
-cd /tmp/homebrew-cgremlin
+cd "$HOME/homebrew-cgremlin"
 ```
 
 Replace `PLACEHOLDER` in `Formula/cgremlin.rb` with the sha256 from step 3.
@@ -893,8 +893,9 @@ Replace `PLACEHOLDER` in `Formula/cgremlin.rb` with the sha256 from step 3.
 - [ ] **Step 5: Commit and push formula**
 
 ```bash
+cd "$HOME/homebrew-cgremlin"
 git add Formula/cgremlin.rb
-git commit --amend -m "Add cgremlin formula v0.1.0"
+git commit -m "Update cgremlin formula v0.1.0 with real sha256"
 git push -u origin main
 ```
 
