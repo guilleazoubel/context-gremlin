@@ -11,7 +11,7 @@ SESSIONS_DIR="${CGREMLIN_SESSIONS_DIR:-}"
 # CONFIGURATION SYSTEM
 # ============================================================================
 
-CONFIG_DIR="$HOME/.sandbox"
+CONFIG_DIR="$HOME/.cgremlin"
 CONFIG_FILE="$CONFIG_DIR/config"
 
 # Default configuration values
