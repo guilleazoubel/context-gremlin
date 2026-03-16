@@ -3599,7 +3599,7 @@ start_claude_terminal() {
 
     # Build the claude command based on mode
     # Use --add-dir to allow Claude to write to session folder without permission prompts
-    local claude_cmd="cd '$REPO_DIR' && claude --add-dir '$SESSION_DIR'"
+    local claude_cmd="cd '$REPO_DIR' && claude --model $MODEL --add-dir '$SESSION_DIR'"
 
     # Try iTerm2 first (macOS)
     if [ -d "/Applications/iTerm.app" ]; then
@@ -4364,6 +4364,23 @@ from urllib.parse import urlparse, parse_qs
 PORT = 8765
 SESSIONS_DIR = os.path.dirname(os.path.abspath(__file__))
 
+def get_model():
+    """Read MODEL from ~/.cgremlin/config, defaulting to sonnet."""
+    config_path = Path.home() / '.cgremlin' / 'config'
+    try:
+        if config_path.exists():
+            with open(config_path) as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith('#') or '=' not in line:
+                        continue
+                    key, _, val = line.partition('=')
+                    if key.strip() == 'MODEL':
+                        return val.strip().strip('"\'') or 'sonnet'
+    except Exception:
+        pass
+    return 'sonnet'
+
 # ============================================================
 # TERMINAL OUTPUT SERVICE (isolated — modify without touching other code)
 # ============================================================
@@ -4920,10 +4937,10 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             if prompt:
                 # With prompt: run directly (script(1) swallows prompt args)
                 escaped_prompt = prompt.replace("'", "'\\''")
-                claude_cmd = f"direnv allow '{repo_path}/.envrc' 2>/dev/null; cd '{repo_path}' && claude --add-dir '{session_path}' -- '{escaped_prompt}'"
+                claude_cmd = f"direnv allow '{repo_path}/.envrc' 2>/dev/null; cd '{repo_path}' && claude --model {get_model()} --add-dir '{session_path}' -- '{escaped_prompt}'"
             else:
                 # No prompt: use script for logging
-                claude_cmd = f"direnv allow '{repo_path}/.envrc' 2>/dev/null; cd '{repo_path}' && script -q '{log_file}' claude --add-dir '{session_path}'"
+                claude_cmd = f"direnv allow '{repo_path}/.envrc' 2>/dev/null; cd '{repo_path}' && script -q '{log_file}' claude --model {get_model()} --add-dir '{session_path}'"
 
             # Try iTerm2 first, fall back to Terminal.app
             if Path('/Applications/iTerm.app').exists():
@@ -5023,7 +5040,7 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             # Build command that runs ACR then Claude in the terminal
             acr_prompt = "ACR has provided initial findings in ACR_REVIEW.md - use this as CONTEXT only. Now perform YOUR OWN comprehensive code review following the CLAUDE.md guidelines. Understand the scope, analyze every change, evaluate through all lenses (correctness, security, complexity, clarity, DRY, proper-fix-vs-hack), and write a thorough REVIEW.md with detailed findings including problem, impact, and suggested fixes."
             escaped_prompt = acr_prompt.replace("'", "'\\''")
-            claude_cmd = f"direnv allow '{repo_path}/.envrc' 2>/dev/null; cd '{repo_path}' && echo '=== Running ACR ===' && acr -r 5 -a claude -b {base_branch} -t 10m --local > '{session_path}/ACR_REVIEW.md' 2>&1; echo '=== Starting Claude ===' && claude --add-dir '{session_path}' -- '{escaped_prompt}'"
+            claude_cmd = f"direnv allow '{repo_path}/.envrc' 2>/dev/null; cd '{repo_path}' && echo '=== Running ACR ===' && acr -r 5 -a claude -b {base_branch} -t 10m --local > '{session_path}/ACR_REVIEW.md' 2>&1; echo '=== Starting Claude ===' && claude --model {get_model()} --add-dir '{session_path}' -- '{escaped_prompt}'"
 
             # Create logs directory
             logs_dir = session_path / 'logs'
@@ -5550,7 +5567,7 @@ DO NOT COMMIT - the user will review and commit manually."""
 
             # Run claude directly
             escaped_prompt = prompt.replace("'", "'\\''")
-            claude_cmd = f"direnv allow '{repo_path}/.envrc' 2>/dev/null; cd '{repo_path}' && claude --add-dir '{session_path}' -- '{escaped_prompt}'"
+            claude_cmd = f"direnv allow '{repo_path}/.envrc' 2>/dev/null; cd '{repo_path}' && claude --model {get_model()} --add-dir '{session_path}' -- '{escaped_prompt}'"
 
             session_name = session_path.name
             color_cmd = iterm_color_escape(session_color(session_name))
@@ -6061,9 +6078,9 @@ Only open Critical/Important findings should block approval.
             # Run claude directly (not via script(1) — script swallows the prompt argument)
             escaped_prompt = prompt.replace("'", "'\\''")
             if mode == 'acr+claude':
-                claude_cmd = f"direnv allow '{repo_path}/.envrc' 2>/dev/null; cd '{repo_path}' && echo '=== Running ACR ===' && acr -r 5 -a claude -b {pr_base} --local > '{session_path}/ACR_REVIEW.md' 2>&1; echo '=== Starting Claude ===' && claude --add-dir '{session_path}' -- '{escaped_prompt}'"
+                claude_cmd = f"direnv allow '{repo_path}/.envrc' 2>/dev/null; cd '{repo_path}' && echo '=== Running ACR ===' && acr -r 5 -a claude -b {pr_base} --local > '{session_path}/ACR_REVIEW.md' 2>&1; echo '=== Starting Claude ===' && claude --model {get_model()} --add-dir '{session_path}' -- '{escaped_prompt}'"
             else:
-                claude_cmd = f"direnv allow '{repo_path}/.envrc' 2>/dev/null; cd '{repo_path}' && claude --add-dir '{session_path}' -- '{escaped_prompt}'"
+                claude_cmd = f"direnv allow '{repo_path}/.envrc' 2>/dev/null; cd '{repo_path}' && claude --model {get_model()} --add-dir '{session_path}' -- '{escaped_prompt}'"
 
             if Path('/Applications/iTerm.app').exists():
                 color_cmd = iterm_color_escape(session_color(session_name))
@@ -10715,7 +10732,7 @@ pre_session_menu() {
                         dim "Type /exit when done to return here."
                         sleep 1
                         tput reset 2>/dev/null || clear
-                        cd "$SESSION_DIR/repo" && claude --add-dir "$SESSION_DIR" -- "ACR has provided initial findings in ACR_REVIEW.md - use this as CONTEXT only. Now perform YOUR OWN comprehensive code review following the CLAUDE.md guidelines. Understand the scope, analyze every change, evaluate through all lenses (correctness, security, complexity, clarity, DRY, proper-fix-vs-hack), and write a thorough REVIEW.md with detailed findings including problem, impact, and suggested fixes."
+                        cd "$SESSION_DIR/repo" && claude --model $MODEL --add-dir "$SESSION_DIR" -- "ACR has provided initial findings in ACR_REVIEW.md - use this as CONTEXT only. Now perform YOUR OWN comprehensive code review following the CLAUDE.md guidelines. Understand the scope, analyze every change, evaluate through all lenses (correctness, security, complexity, clarity, DRY, proper-fix-vs-hack), and write a thorough REVIEW.md with detailed findings including problem, impact, and suggested fixes."
                         post_session_menu "$SESSION_DIR"
                         return 0
                         ;;
@@ -10734,7 +10751,7 @@ pre_session_menu() {
                         dim "Type /exit when done to return here."
                         sleep 1
                         tput reset 2>/dev/null || clear
-                        cd "$SESSION_DIR/repo" && claude --add-dir "$SESSION_DIR" -- "Perform a comprehensive code review following CLAUDE.md. First understand the scope and WHY these changes exist. Then analyze every change through all lenses: correctness, security, complexity, clarity, DRY, and whether this is a proper fix or a hack. Write a thorough REVIEW.md with detailed findings including what's happening, the problem, impact, and suggested fixes."
+                        cd "$SESSION_DIR/repo" && claude --model $MODEL --add-dir "$SESSION_DIR" -- "Perform a comprehensive code review following CLAUDE.md. First understand the scope and WHY these changes exist. Then analyze every change through all lenses: correctness, security, complexity, clarity, DRY, and whether this is a proper fix or a hack. Write a thorough REVIEW.md with detailed findings including what's happening, the problem, impact, and suggested fixes."
                         post_session_menu "$SESSION_DIR"
                         return 0
                         ;;
@@ -10750,7 +10767,7 @@ pre_session_menu() {
                         dim "Type /exit when done to return here."
                         sleep 1
                         tput reset 2>/dev/null || clear
-                        cd "$SESSION_DIR/repo" && claude --add-dir "$SESSION_DIR" -- "Begin"
+                        cd "$SESSION_DIR/repo" && claude --model $MODEL --add-dir "$SESSION_DIR" -- "Begin"
                         post_session_menu "$SESSION_DIR"
                         return 0
                         ;;
@@ -10770,7 +10787,7 @@ pre_session_menu() {
                         dim "Type /exit when done to return here."
                         sleep 1
                         tput reset 2>/dev/null || clear
-                        cd "$SESSION_DIR/repo" && claude --add-dir "$SESSION_DIR" -- "Begin"
+                        cd "$SESSION_DIR/repo" && claude --model $MODEL --add-dir "$SESSION_DIR" -- "Begin"
                         post_session_menu "$SESSION_DIR"
                         return 0
                         ;;
