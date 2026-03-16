@@ -6332,7 +6332,7 @@ end tell'''
                 return
 
             # Load project config
-            projects_config = Path.home() / '.sandbox' / 'projects.json'
+            projects_config = Path.home() / '.cgremlin' / 'projects.json'
             run_cmd = None
 
             # Get project URL from session
@@ -6527,7 +6527,7 @@ end tell
             self.send_error(500, str(e))
 
     def send_dashboard_config(self):
-        config_path = Path.home() / '.sandbox' / 'config.json'
+        config_path = Path.home() / '.cgremlin' / 'config.json'
         defaults = {
             'jira_base_url': '',
             'vercel_preview_url_template': ''
@@ -7027,7 +7027,7 @@ end tell
 <html lang="en">
 <head>
     <meta charset="utf-8">
-    <title>Sandbox Dashboard</title>
+    <title>Context Gremlin</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -7893,7 +7893,7 @@ end tell
 <body>
     <aside class="sidebar">
         <div class="sidebar-header">
-            <div class="logo">Sandbox</div>
+            <div class="logo">Context Gremlin</div>
             <button class="btn-new" onclick="showNewSessionModal()" title="New Session (⌘N)">
                 <svg viewBox="0 0 16 16"><line x1="8" y1="3" x2="8" y2="13"/><line x1="3" y1="8" x2="13" y2="8"/></svg>
                 New
@@ -9447,7 +9447,7 @@ end tell
                     '<h3>Run App — Configuration Needed</h3>' +
                     '<p class="modal-desc">No run command is configured for this project.</p>' +
                     '<p style="font-size:13px;">Add a <code>run_command</code> to your project in:</p>' +
-                    '<pre style="background:var(--bg-secondary);padding:12px;border-radius:var(--radius-md);font-size:12px;overflow-x:auto;">~/.sandbox/projects.json</pre>' +
+                    '<pre style="background:var(--bg-secondary);padding:12px;border-radius:var(--radius-md);font-size:12px;overflow-x:auto;">~/.cgremlin/projects.json</pre>' +
                     '<p style="font-size:12px;color:var(--text-tertiary);">Example: <code>"run_command": "pnpm dev"</code></p>' +
                     '<div class="modal-footer">' +
                     '<button class="modal-btn" onclick="closeModal()">Close</button>' +
