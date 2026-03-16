@@ -82,7 +82,21 @@ Files:
 
 #### 4. Internal Self-References
 
-The embedded Python server calls back to `sandbox --create-session`. This reference updates to find `cgremlin` (the running script's own path via `$0` or `command -v cgremlin`).
+**Python server → cgremlin callback:** The embedded Python server calls `sandbox --create-session` to create sessions. The lookup logic (currently checking `SESSIONS_DIR/sandbox` then `__file__/../sandbox`) must change to use `shutil.which('cgremlin')` as the primary lookup, falling back to `Path(__file__).parent / 'cgremlin'`. The bash wrapper must also pass its own path via the `CGREMLIN_SCRIPT_PATH` env var when launching the Python server, so the server can find it reliably regardless of install method.
+
+**Python config paths:** The embedded Python server hardcodes `Path.home() / '.sandbox' / 'projects.json'` and `Path.home() / '.sandbox' / 'config.json'`. These update to `Path.home() / '.cgremlin' / 'projects.json'` and `Path.home() / '.cgremlin' / 'config'`.
+
+**Dashboard PID file:** Moves from `~/.sandbox_dashboard_pid` to `~/.cgremlin/dashboard.pid`.
+
+**Jira config:** Moves from `~/.config/sandbox/jira.conf` to `~/.config/cgremlin/jira.conf`.
+
+**UI text strings:** Any user-visible strings referencing `~/.sandbox` or `sandbox` in the embedded HTML/JS update to `~/.cgremlin` and `cgremlin`.
+
+**Inter-process env vars:** The `SANDBOX_MODE`, `SANDBOX_URL`, `SANDBOX_JIRA`, `SANDBOX_FOCUS` env vars used between the Python server and `cgremlin --create-session` rename to `CGREMLIN_MODE`, `CGREMLIN_URL`, `CGREMLIN_JIRA`, `CGREMLIN_FOCUS`.
+
+#### 5. Config Parser Update
+
+The `load_config()` function must add a `SESSIONS_DIR)` case branch to handle the `sessions_dir` key from the config file, so the config-file override actually works.
 
 ### Homebrew Formula
 
@@ -100,8 +114,7 @@ class Cgremlin < Formula
   depends_on "fzf"
   depends_on "gh"
   depends_on "jq"
-  depends_on "python@3"
-  depends_on :macos
+  depends_on "python@3.13"
 
   def install
     bin.install "bin/cgremlin"
@@ -141,7 +154,7 @@ brew upgrade cgremlin
 1. Finalize changes in `context-gremlin` repo on `main` branch
 2. `git tag v0.1.0 && git push origin main --tags`
 3. Create GitHub Release from the tag
-4. Compute sha256 of the release tarball
+4. Compute sha256: `curl -sL https://github.com/guilleazoubel/context-gremlin/archive/refs/tags/v0.1.0.tar.gz | shasum -a 256`
 5. Create/update formula in `homebrew-cgremlin` with URL + sha256
 6. Push formula to `homebrew-cgremlin` repo
 
@@ -178,11 +191,16 @@ dev-*/
 # Generated files
 .dashboard_server.py
 .dashboard.log
+.dashboard_new.html
 
 # IDE / tool
-.playwright-mcp/
+.playwright-mpc/
 .claude/
 ```
+
+### Note on `.dashboard_server.py` Location
+
+The Python server script is written to `$SESSIONS_DIR/.dashboard_server.py` and uses `os.path.dirname(os.path.abspath(__file__))` to derive its working directory. This co-location of the server script alongside session directories is intentional and unchanged by this design. `.dashboard.log` is also written to the sessions directory.
 
 ## Out of Scope (Future Versions)
 
