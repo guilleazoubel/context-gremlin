@@ -5,8 +5,7 @@
 # ║         Isolated environments for PR reviews & code investigations         ║
 # ╚═══════════════════════════════════════════════════════════════════════════╝
 
-SESSIONS_DIR="$HOME/Agent-temp"
-mkdir -p "$SESSIONS_DIR"
+SESSIONS_DIR="${CGREMLIN_SESSIONS_DIR:-}"
 
 # ============================================================================
 # CONFIGURATION SYSTEM
@@ -44,6 +43,7 @@ load_config() {
                 MODEL) MODEL="$value" ;;
                 DASHBOARD_AUTO_START) DASHBOARD_AUTO_START="$value" ;;
                 DEFAULT_PROJECT) DEFAULT_PROJECT="$value" ;;
+                SESSIONS_DIR) [ -z "$CGREMLIN_SESSIONS_DIR" ] && SESSIONS_DIR="$value" ;;
             esac
         done < "$CONFIG_FILE"
     fi
@@ -71,6 +71,10 @@ EOF
 
 # Load config at startup
 load_config
+
+# Apply sessions directory default (env var > config file > default)
+SESSIONS_DIR="${SESSIONS_DIR:-$HOME/.cgremlin/sessions}"
+mkdir -p "$SESSIONS_DIR"
 
 # Create dashboard config.json with empty defaults if it doesn't exist
 if [ ! -f "$CONFIG_DIR/config.json" ]; then
