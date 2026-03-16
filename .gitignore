@@ -1,7 +1,10 @@
 # Runtime artifacts
 .DS_Store
 *.log
-*.png
+
+# Screenshots (not tracked)
+dashboard-*.png
+*.screenshot.png
 
 # Session directories (never committed)
 pr-*/

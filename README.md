@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/logo.png" alt="Context Gremlin" width="300" />
+</p>
+
 # Context Gremlin
 
 Agentic code review and investigation sessions powered by AI. Launch isolated environments for PR reviews, code investigations, and development — with a web dashboard for managing sessions.
