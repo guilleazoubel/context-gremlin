@@ -1,0 +1,18 @@
+# Runtime artifacts
+.DS_Store
+*.log
+*.png
+
+# Session directories (never committed)
+pr-*/
+inv-*/
+dev-*/
+
+# Generated files
+.dashboard_server.py
+.dashboard_new.html
+.dashboard.log
+
+# IDE / tool
+.playwright-mcp/
+.claude/
