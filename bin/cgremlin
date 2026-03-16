@@ -6232,12 +6232,12 @@ end tell
 
             # Build command to run cgremlin in non-interactive mode
             env = os.environ.copy()
-            env['SANDBOX_MODE'] = mode
-            env['SANDBOX_URL'] = url
+            env['CGREMLIN_MODE'] = mode
+            env['CGREMLIN_URL'] = url
             if jira:
-                env['SANDBOX_JIRA'] = jira
+                env['CGREMLIN_JIRA'] = jira
             if focus:
-                env['SANDBOX_FOCUS'] = focus
+                env['CGREMLIN_FOCUS'] = focus
 
             # Find the cgremlin script
             import shutil
@@ -11935,18 +11935,18 @@ EOF
 
 # Handle --create-session argument (called from web UI)
 if [ "$1" = "--create-session" ]; then
-    case "$SANDBOX_MODE" in
+    case "$CGREMLIN_MODE" in
         review)
-            create_pr_session_noninteractive "$SANDBOX_URL" "$SANDBOX_JIRA"
+            create_pr_session_noninteractive "$CGREMLIN_URL" "$CGREMLIN_JIRA"
             ;;
         investigation)
-            create_investigation_session_noninteractive "$SANDBOX_URL" "$SANDBOX_FOCUS" "$SANDBOX_JIRA"
+            create_investigation_session_noninteractive "$CGREMLIN_URL" "$CGREMLIN_FOCUS" "$CGREMLIN_JIRA"
             ;;
         development)
-            create_development_session_noninteractive "$SANDBOX_URL" "$SANDBOX_JIRA"
+            create_development_session_noninteractive "$CGREMLIN_URL" "$CGREMLIN_JIRA"
             ;;
         *)
-            echo "ERROR: Unknown mode $SANDBOX_MODE" >&2
+            echo "ERROR: Unknown mode $CGREMLIN_MODE" >&2
             exit 1
             ;;
     esac
