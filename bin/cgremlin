@@ -4381,6 +4381,20 @@ def get_model():
         pass
     return 'sonnet'
 
+def load_logo_b64():
+    """Load docs/logo.png relative to the cgremlin script and return base64 string, or None."""
+    import base64
+    script_path = os.environ.get('CGREMLIN_SCRIPT_PATH', '')
+    if not script_path:
+        return None
+    logo_path = Path(script_path).parent.parent / 'docs' / 'logo.png'
+    try:
+        if logo_path.exists():
+            return base64.b64encode(logo_path.read_bytes()).decode('ascii')
+    except Exception:
+        pass
+    return None
+
 # ============================================================
 # TERMINAL OUTPUT SERVICE (isolated — modify without touching other code)
 # ============================================================
@@ -7138,6 +7152,16 @@ end tell
             display: block;
         }
 
+        .logo-img {
+            height: 28px;
+            width: auto;
+            display: block;
+        }
+
+        .logo:has(.logo-img)::before {
+            display: none;
+        }
+
         .btn-new {
             display: flex;
             align-items: center;
@@ -9554,6 +9578,11 @@ end tell
 </script>
 </body>
 </html>'''
+        logo_b64 = load_logo_b64()
+        if logo_b64:
+            logo_img = f'<img src="data:image/png;base64,{logo_b64}" class="logo-img" alt="">'
+            html = html.replace('<div class="logo">Context Gremlin</div>',
+                f'<div class="logo">{logo_img}Context Gremlin</div>')
         self.send_response(200)
         self.send_header('Content-type', 'text/html')
         self.end_headers()
