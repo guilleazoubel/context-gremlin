@@ -4261,9 +4261,11 @@ start_dashboard_server() {
     local server_script="$SESSIONS_DIR/.dashboard_server.py"
     create_dashboard_server_script "$server_script"
 
-    # Start the server
+    # Start the server (resolve script path before cd changes working directory)
+    local _script_path
+    _script_path="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
     cd "$SESSIONS_DIR"
-    CGREMLIN_SCRIPT_PATH="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")" \
+    CGREMLIN_SCRIPT_PATH="$_script_path" \
         nohup python3 "$server_script" > "$SESSIONS_DIR/.dashboard.log" 2>&1 &
     local pid=$!
     echo "$pid" > "$DASHBOARD_PID_FILE"
