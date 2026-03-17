@@ -4508,6 +4508,43 @@ def iterm_color_escape(hex_color):
     r, g, b = int(hex_color[1:3], 16), int(hex_color[3:5], 16), int(hex_color[5:7], 16)
     return f"printf '\\\\033]6;1;bg;red;brightness;{r}\\\\a\\\\033]6;1;bg;green;brightness;{g}\\\\a\\\\033]6;1;bg;blue;brightness;{b}\\\\a'"
 
+def launch_in_terminal_tab(tab_label, claude_cmd, color_cmd=None):
+    """Launch a command in a new iTerm2 tab (or Terminal.app fallback).
+
+    Writes claude_cmd to a temp file so write-text only sends a short 'bash /tmp/...'
+    string — avoids quoting issues and shell-init timing problems with long commands.
+    Returns the completed subprocess result.
+    """
+    import subprocess, tempfile
+
+    tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.sh', prefix='cgremlin-', delete=False)
+    tmp.write(claude_cmd + '\n')
+    tmp.close()
+    os.chmod(tmp.name, 0o755)
+    cmd_file = tmp.name
+    color_line = f'\n            write text "{color_cmd}"' if color_cmd else ''
+
+    if Path('/Applications/iTerm.app').exists():
+        script = f'''tell application "iTerm"
+    activate
+    if (count of windows) = 0 then
+        create window with default profile
+    end if
+    tell current window
+        set newTab to create tab with default profile
+        tell current session of newTab
+            write text "printf '\\\\033]1;{tab_label}\\\\a'"{color_line}
+            write text "bash {cmd_file} ; rm -f {cmd_file}"
+        end tell
+    end tell
+end tell'''
+    else:
+        script = f'''tell application "Terminal"
+    activate
+    do script "bash {cmd_file} ; rm -f {cmd_file}"
+end tell'''
+    return subprocess.run(['osascript', '-e', script], capture_output=True, text=True)
+
 class DashboardHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         parsed = urlparse(self.path)
@@ -4961,32 +4998,7 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             # Try iTerm2 first, fall back to Terminal.app
             if Path('/Applications/iTerm.app').exists():
                 color_cmd = iterm_color_escape(session_color(session_name))
-                script = f'''
-                tell application "iTerm"
-                    activate
-                    if (count of windows) = 0 then
-                        create window with default profile
-                    end if
-                    tell current window
-                        create tab with default profile
-                        tell current session
-                            set name to "🧪 {session_name}"
-                            write text "printf '\\\\033]1;🧪 {session_name}\\\\a'"
-                            write text "{color_cmd}"
-                            write text "{claude_cmd}"
-                        end tell
-                    end tell
-                end tell
-                '''
-            else:
-                # Fall back to Terminal.app
-                script = f'''
-                tell application "Terminal"
-                    activate
-                    do script "{claude_cmd}"
-                end tell
-                '''
-            result = subprocess.run(['osascript', '-e', script], capture_output=True, text=True)
+            launch_in_terminal_tab(f"🧪 {session_name}", claude_cmd, color_cmd)
 
             # Update session.json if it exists
             session_json = session_path / 'session.json'
@@ -5064,33 +5076,8 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             log_file = logs_dir / f"terminal-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
 
             # Open in terminal tab
-            if Path('/Applications/iTerm.app').exists():
-                color_cmd = iterm_color_escape(session_color(session_name))
-                script = f'''
-                tell application "iTerm"
-                    activate
-                    if (count of windows) = 0 then
-                        create window with default profile
-                    end if
-                    tell current window
-                        create tab with default profile
-                        tell current session
-                            set name to "🧪 {session_name}"
-                            write text "printf '\\\\033]1;🧪 {session_name}\\\\a'"
-                            write text "{color_cmd}"
-                            write text "{claude_cmd}"
-                        end tell
-                    end tell
-                end tell
-                '''
-            else:
-                script = f'''
-                tell application "Terminal"
-                    activate
-                    do script "{claude_cmd}"
-                end tell
-                '''
-            subprocess.run(['osascript', '-e', script], capture_output=True, text=True)
+            color_cmd = iterm_color_escape(session_color(session_name))
+            launch_in_terminal_tab(f"🧪 {session_name}", claude_cmd, color_cmd)
 
             # Update session.json
             if session_json.exists():
@@ -5589,33 +5576,7 @@ DO NOT COMMIT - the user will review and commit manually."""
             color_cmd = iterm_color_escape(session_color(session_name))
             tab_label = f"🔧 Fix All: {session_name}" if fix_all else f"🔧 Fix: {session_name}"
 
-            # Try iTerm2 first
-            if Path('/Applications/iTerm.app').exists():
-                script = f'''
-tell application "iTerm"
-    activate
-    if (count of windows) = 0 then
-        create window with default profile
-    end if
-    tell current window
-        create tab with default profile
-        tell current session
-            set name to "{tab_label}"
-            write text "printf '\\\\033]1;{tab_label}\\\\a'"
-            write text "{color_cmd}"
-            write text "{claude_cmd}"
-        end tell
-    end tell
-end tell
-'''
-            else:
-                script = f'''
-tell application "Terminal"
-    activate
-    do script "{claude_cmd}"
-end tell
-'''
-            subprocess.run(['osascript', '-e', script], capture_output=True, text=True)
+            launch_in_terminal_tab(tab_label, claude_cmd, color_cmd)
 
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
@@ -6098,33 +6059,8 @@ Only open Critical/Important findings should block approval.
             else:
                 claude_cmd = f"direnv allow '{repo_path}/.envrc' 2>/dev/null; cd '{repo_path}' && claude --model {get_model()} --add-dir '{session_path}' -- '{escaped_prompt}'"
 
-            if Path('/Applications/iTerm.app').exists():
-                color_cmd = iterm_color_escape(session_color(session_name))
-                script = f'''
-tell application "iTerm"
-    activate
-    if (count of windows) = 0 then
-        create window with default profile
-    end if
-    tell current window
-        create tab with default profile
-        tell current session
-            set name to "🔄 Re-review: {session_name}"
-            write text "printf '\\\\033]1;🔄 Re-review: {session_name}\\\\a'"
-            write text "{color_cmd}"
-            write text "{claude_cmd}"
-        end tell
-    end tell
-end tell
-'''
-            else:
-                script = f'''
-tell application "Terminal"
-    activate
-    do script "{claude_cmd}"
-end tell
-'''
-            result = subprocess.run(['osascript', '-e', script], capture_output=True, text=True)
+            color_cmd = iterm_color_escape(session_color(session_name))
+            result = launch_in_terminal_tab(f"🔄 Re-review: {session_name}", claude_cmd, color_cmd)
             osascript_error = result.stderr if result.returncode != 0 else None
 
             # --- Step 10: Update session.json ---
@@ -6319,23 +6255,9 @@ end tell
                 self.send_error(400, 'Repo not found')
                 return
             session_name = session_path.name
-            color = session_color(session_name)
-            color_cmd = iterm_color_escape(color)
-            # Try iTerm2 first
-            script = f'''
-tell application "iTerm"
-    activate
-    tell current window
-        create tab with default profile
-        tell current session
-            set name to "📂 {session_name}"
-            write text "printf '\\\\033]1;📂 {session_name}\\\\a'"
-            write text "{color_cmd}"
-            write text "cd '{repo_path}' && clear && pwd && git status"
-        end tell
-    end tell
-end tell'''
-            subprocess.run(['osascript', '-e', script], check=True)
+            color_cmd = iterm_color_escape(session_color(session_name))
+            launch_in_terminal_tab(f"📂 {session_name}",
+                f"cd '{repo_path}' && clear && pwd && git status", color_cmd)
             self.send_json({'status': 'opened'})
         except Exception as e:
             self.send_error(500, str(e))
@@ -6448,31 +6370,8 @@ end tell'''
                 setup_steps.append('vercel env pull .env.local 2>/dev/null || true')
             install_prefix = ' && '.join(setup_steps) + ' && ' if setup_steps else ''
 
-            if Path('/Applications/iTerm.app').exists():
-                script = f'''
-tell application "iTerm"
-    activate
-    if (count of windows) = 0 then
-        create window with default profile
-    end if
-    tell current window
-        create tab with default profile
-        tell current session
-            set name to "▶️ App: {session_name}"
-            write text "printf '\\\\033]1;▶️ App: {session_name}\\\\a'"
-            write text "cd '{repo_path}' && {install_prefix}{run_cmd}"
-        end tell
-    end tell
-end tell
-'''
-            else:
-                script = f'''
-tell application "Terminal"
-    activate
-    do script "cd '{repo_path}' && {install_prefix}{run_cmd}"
-end tell
-'''
-            subprocess.run(['osascript', '-e', script], capture_output=True, text=True)
+            launch_in_terminal_tab(f"▶️ App: {session_name}",
+                f"cd '{repo_path}' && {install_prefix}{run_cmd}")
 
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
