@@ -368,9 +368,10 @@ review_list_grouped() {
 
     line="$(printf 'PR #%s  @%-14s %s\t%s' "$num" "${author:-?}" "$icon" "$sname")"
     if [ "$rp" = "true" ]; then
-      # Re-review finished → needs your attention again; show the resolution summary.
+      # Re-review has FINISHED (in-flight ones were caught above as "Agent
+      # reviewing"). This needs your attention now; show the resolution summary.
       local summary; summary=$(cat "$d/rereview_summary" 2>/dev/null)
-      icon="🔁 re-reviewed"; [ "$rs" = "failed" ] && icon="⚠ re-review failed"
+      icon="🔁 re-reviewed — check it"; [ "$rs" = "failed" ] && icon="⚠ re-review failed — retry"
       local reline="$(printf 'PR #%s  @%-14s %s' "$num" "${author:-?}" "$icon")"
       [ -n "$summary" ] && reline="${reline}  ·  ${summary}"
       rereview="${rereview}${reline}\t${sname}\trereview"$'\n'
@@ -388,11 +389,12 @@ review_list_grouped() {
       response="${response}$(printf 'PR #%s  @%-14s 💬 waiting on author' "$num" "${author:-?}")\t${sname}\tresponse"$'\n'
     fi
   done
+  # Attention zone first (things needing YOU), then passive/informational.
   [ -n "$mergemine" ] && { printf '── 🚀 Approved — MERGE YOURS ──\t\t\n'; printf '%b' "$mergemine"; }
-  printf '── 🔔 Ready for your review ──\t\t\n';    [ -n "$ready" ]    && printf '%b' "$ready"
-  [ -n "$inflight" ] && { printf '── 👀 Agent reviewing ──\t\t\n'; printf '%b' "$inflight"; }
-  printf '── 🔁 Waiting for re-review ──\t\t\n';    [ -n "$rereview" ] && printf '%b' "$rereview"
-  printf '── 💬 Waiting for response ──\t\t\n';     [ -n "$response" ] && printf '%b' "$response"
+  printf '── 🔔 Ready for your review ──\t\t\n';        [ -n "$ready" ]    && printf '%b' "$ready"
+  [ -n "$rereview" ] && { printf '── 🔁 Re-reviewed — check it ──\t\t\n'; printf '%b' "$rereview"; }
+  [ -n "$inflight" ] && { printf '── 👀 Agent reviewing ──\t\t\n';        printf '%b' "$inflight"; }
+  printf '── 💬 Waiting for response ──\t\t\n';         [ -n "$response" ] && printf '%b' "$response"
   [ -n "$approved" ] && { printf '── ✅ Approved (author will merge) ──\t\t\n'; printf '%b' "$approved"; }
 }
 
