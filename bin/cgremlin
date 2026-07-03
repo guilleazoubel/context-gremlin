@@ -301,7 +301,10 @@ mc_startup_sweep() {
     detect_interrupted "$d"
     auto_drop_merged "$d"
   done
-  ensure_agent_panes
+  # NOTE: we intentionally do NOT pre-create floating panes here. Zellij's
+  # floating layer shows all panes at once, so pre-warming one per PR made
+  # clicking a single PR reveal every pane. Panes are now created on demand,
+  # one at a time, by open_pr_row.
 }
 
 # Write shared engineering principles file to a session directory.
@@ -393,10 +396,15 @@ create_review_agent_pane() {
     [ -d "$SDIR/repo" ] || return 1
     [ -n "$ZELLIJ" ] || return 0
 
-    local num author
+    local num author pr_title_raw short_title
     num=$(read_session_field "$SDIR" "pr.number")
     author=$(read_session_field "$SDIR" "pr.author")
-    local pane_name="PR #${num} · @${author}"
+    pr_title_raw=$(read_session_field "$SDIR" "pr.title")
+    # Strip a leading conventional-commit prefix (feat(x): / fix: …) for a cleaner title,
+    # then truncate to keep the pane tab readable.
+    short_title=$(printf '%s' "$pr_title_raw" | sed -E 's/^[a-z]+(\([^)]*\))?!?:[[:space:]]*//')
+    [ ${#short_title} -gt 38 ] && short_title="${short_title:0:37}…"
+    local pane_name="@${author} · PR #${num} — ${short_title}"
 
     # Merge posting-command permissions into settings.local.json (idempotent).
     local sf="$SDIR/repo/.claude/settings.local.json"; mkdir -p "$SDIR/repo/.claude"
@@ -476,7 +484,9 @@ cd "$SDIR/repo" && exec claude --model "$MODEL" --add-dir "$SDIR"
 WRAPPER
     chmod +x "$wrapper"
 
-    zellij action new-pane --floating --name "$pane_name" -- bash "$wrapper" 2>/dev/null || true
+    # Large centered modal so the conversation is comfortable to read/work in.
+    zellij action new-pane --floating --name "$pane_name" \
+        --x 6% --y 6% --width 88% --height 88% -- bash "$wrapper" 2>/dev/null || true
 }
 
 # For each session that should have a floating agent pane but doesn't, create one.
@@ -504,21 +514,41 @@ ensure_agent_panes() {
     done
 }
 
-# Show the floating agent pane for a session. If the pane is not alive, recreate it first.
+# Show the floating agent pane for ONE session, and ONLY that one.
+#
+# Zellij's floating layer is all-or-nothing: toggling it reveals every floating
+# pane at once. So to show just the clicked PR we first close every OTHER PR's
+# agent pane (killing its claude process closes its pane), leaving a single
+# floating pane. Each PR's triage state lives in REVIEW.md, so closing a pane
+# loses only the live chat scrollback, not the decisions.
+#
+# The status pane is a tiled pane; the user can only click it while the floating
+# layer is hidden — so for an already-alive target, a single toggle reliably
+# SHOWS it.
 # Usage: open_pr_row <session-name>
 open_pr_row() {
     local session_name="$1"
     local SDIR="$SESSIONS_DIR/$session_name"
     [ -d "$SDIR/repo" ] || { echo "ERROR: repo missing for $session_name" >&2; return 1; }
 
+    # Close every OTHER PR's agent pane so only this one remains in the layer.
+    local d opid
+    for d in "$SESSIONS_DIR"/pr-*; do
+        [ "$d" = "$SDIR" ] && continue
+        opid=$(cat "$d/agent_pid" 2>/dev/null)
+        if [ -n "$opid" ] && kill -0 "$opid" 2>/dev/null; then
+            kill "$opid" 2>/dev/null || true
+            rm -f "$d/agent_pid"
+        fi
+    done
+
     local pid pid_file="$SDIR/agent_pid"
     pid=$(cat "$pid_file" 2>/dev/null)
     if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
         rm -f "$pid_file"
-        create_review_agent_pane "$SDIR"
-        # new-pane --floating auto-shows the floating layer; no toggle needed
+        create_review_agent_pane "$SDIR"   # new-pane --floating auto-shows the layer
     else
-        # Pane already exists; floating layer may be hidden — show it
+        # Pane alive and layer hidden (status pane was clickable) — show it.
         zellij action toggle-floating-panes 2>/dev/null || true
     fi
 }
