@@ -12628,20 +12628,18 @@ create_pr_session_noninteractive() {
     fi
 
     # Create session.json
-    local extra_json=$(cat <<EOF
-{
-    "pr": {
-        "number": "$PR_NUMBER",
-        "title": "$PR_TITLE",
-        "url": "https://github.com/$OWNER/$REPO/pull/$PR_NUMBER",
-        "head": "$PR_HEAD",
-        "base": "$PR_BASE",
-        "author": "$PR_AUTHOR"
-    }
-}
-EOF
-)
-    [ -n "$JIRA_TICKET" ] && extra_json=$(echo "$extra_json" | jq ". + {jira: {ticket: \"$JIRA_TICKET\"}}" 2>/dev/null || echo "$extra_json")
+    # Build with jq so titles containing quotes/backslashes/newlines are escaped
+    # (a hand-rolled heredoc broke create_session_json's --argjson on such titles).
+    local extra_json
+    extra_json=$(jq -n \
+        --arg number "$PR_NUMBER" \
+        --arg title "$PR_TITLE" \
+        --arg url "https://github.com/$OWNER/$REPO/pull/$PR_NUMBER" \
+        --arg head "$PR_HEAD" \
+        --arg base "$PR_BASE" \
+        --arg author "$PR_AUTHOR" \
+        '{pr: {number:$number, title:$title, url:$url, head:$head, base:$base, author:$author}}')
+    [ -n "$JIRA_TICKET" ] && extra_json=$(printf '%s' "$extra_json" | jq --arg t "$JIRA_TICKET" '. + {jira: {ticket:$t}}')
 
     create_session_json "$SESSION_DIR" "review" "https://github.com/$OWNER/$REPO" "$extra_json"
 
