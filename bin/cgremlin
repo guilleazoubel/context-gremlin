@@ -274,6 +274,27 @@ approve_pr() {
 }
 comment_pr()         { _post_review "$1" "--comment" "commented"          && _record_reviewed "$1"; }
 request_changes_pr() { _post_review "$1" "--request-changes" "changes-requested" && _record_reviewed "$1"; }
+# Reply to a review thread with the text in SESSION_DIR/.reply_body.md.
+reply_comment() {
+    local d="$SESSIONS_DIR/$1" tid="$2"
+    local body="$d/.reply_body.md"
+    [ -f "$body" ] || { echo "ERROR: $body not found" >&2; return 1; }
+    [ -n "$tid" ] || { echo "ERROR: thread id required" >&2; return 1; }
+    local text; text=$(cat "$body")
+    gh api graphql -f query='mutation($t:ID!,$b:String!){addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$t, body:$b}){comment{id}}}' \
+        -F t="$tid" -F b="$text" >/dev/null && echo "replied to $tid" || { echo "ERROR: reply failed" >&2; return 1; }
+}
+# Commit staged+unstaged changes in the session repo.
+commit_fix() {
+    local d="$SESSIONS_DIR/$1"; shift
+    local msg="$*"; [ -n "$msg" ] || msg="fix: address review comment"
+    ( cd "$d/repo" && git add -A && git commit -m "$msg" ) && echo "committed" || { echo "ERROR: commit failed" >&2; return 1; }
+}
+# Push the PR branch from the session repo.
+push_fix() {
+    local d="$SESSIONS_DIR/$1"
+    ( cd "$d/repo" && git push ) && echo "pushed" || { echo "ERROR: push failed" >&2; return 1; }
+}
 
 # After a successful comment/request-changes, snapshot the PR head so the watch daemon
 # can detect NEW commits, and clear any stale rereview flag.
@@ -12611,6 +12632,9 @@ fi
 if [ "$1" = "--approve-pr" ];          then [ -z "$2" ] && { echo "Usage: cgremlin --approve-pr <session>" >&2; exit 1; }; approve_pr "$2"; exit $?; fi
 if [ "$1" = "--comment-pr" ];          then [ -z "$2" ] && { echo "Usage: cgremlin --comment-pr <session>" >&2; exit 1; }; comment_pr "$2"; exit $?; fi
 if [ "$1" = "--request-changes-pr" ];  then [ -z "$2" ] && { echo "Usage: cgremlin --request-changes-pr <session>" >&2; exit 1; }; request_changes_pr "$2"; exit $?; fi
+if [ "$1" = "--reply-comment" ]; then [ -z "$3" ] && { echo "Usage: cgremlin --reply-comment <session> <thread-id>" >&2; exit 1; }; reply_comment "$2" "$3"; exit $?; fi
+if [ "$1" = "--commit-fix" ];   then [ -z "$2" ] && { echo "Usage: cgremlin --commit-fix <session> [msg]" >&2; exit 1; }; s="$2"; shift 2; commit_fix "$s" "$@"; exit $?; fi
+if [ "$1" = "--push-fix" ];     then [ -z "$2" ] && { echo "Usage: cgremlin --push-fix <session>" >&2; exit 1; }; push_fix "$2"; exit $?; fi
 
 # Handle --review-list-grouped argument (emit grouped open reviews for picker)
 if [ "$1" = "--review-list-grouped" ]; then
