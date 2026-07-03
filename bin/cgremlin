@@ -341,7 +341,7 @@ PRIN
 # Emit one line per open review: "<display>\t<session>\t<group>".
 # Section headers are emitted as display-only rows with empty session+group.
 review_list_grouped() {
-  local mergemine="" ready="" inflight="" rereview="" response="" approved=""
+  local mergemine="" ready="" inflight="" rereview="" response="" approved="" mycomments="" mytracking=""
   local d sname num author rs lc rp icon line
   local me_lc; me_lc=$(printf '%s' "${GITHUB_ME:-}" | tr '[:upper:]' '[:lower:]')
   for d in "$SESSIONS_DIR"/pr-*; do
@@ -354,14 +354,25 @@ review_list_grouped() {
     lc=$(read_lifecycle "$d")
     rp=$(read_rereview_pending "$d")
 
-    # Approved → stays until the PR merges. If it's YOUR PR, it's on you to
-    # merge (loud, top group); otherwise it's waiting on the author. Display-only.
-    if [ "$lc" = "approved" ]; then
-      if [ -n "$me_lc" ] && [ "$(printf '%s' "$author" | tr '[:upper:]' '[:lower:]')" = "$me_lc" ]; then
+    # --- My own PRs: never code-reviewed; their own lifecycle. ---
+    if pr_is_mine "$d"; then
+      local ms; ms=$(read_mine_stage "$d")
+      if [ "$lc" = "approved" ]; then
         mergemine="${mergemine}$(printf 'PR #%s  @%-14s 🚀 APPROVED — merge it!' "$num" "${author:-?}")\t\tmergemine"$'\n'
+      elif [ "$ms" = "ready" ]; then
+        local nc; nc=$(grep -c '^### ' "$d/COMMENTS.md" 2>/dev/null || echo 0)
+        mycomments="${mycomments}$(printf 'PR #%s  @%-14s 💬 %s comment(s) to address' "$num" "${author:-?}" "$nc")\t${sname}\tmycomments"$'\n'
+      elif [ "$ms" = "triaging" ]; then
+        inflight="${inflight}$(printf 'PR #%s  @%-14s 👀 triaging reviewer comments' "$num" "${author:-?}")\t\tinflight"$'\n'
       else
-        approved="${approved}$(printf 'PR #%s  @%-14s ✅ approved · author will merge' "$num" "${author:-?}")\t\tapproved"$'\n'
+        mytracking="${mytracking}$(printf 'PR #%s  @%-14s 📋 open · awaiting review' "$num" "${author:-?}")\t\tmyprs"$'\n'
       fi
+      continue
+    fi
+
+    # Approved → stays until the PR merges. Waiting on the author. Display-only.
+    if [ "$lc" = "approved" ]; then
+      approved="${approved}$(printf 'PR #%s  @%-14s ✅ approved · author will merge' "$num" "${author:-?}")\t\tapproved"$'\n'
       continue
     fi
 
@@ -401,15 +412,16 @@ review_list_grouped() {
       response="${response}$(printf 'PR #%s  @%-14s 💬 waiting on author' "$num" "${author:-?}")\t${sname}\tresponse"$'\n'
     fi
   done
-  # One unified "needs your attention" block — quick re-reviews listed first,
-  # then full fresh reviews. Then passive/informational groups.
-  [ -n "$mergemine" ] && { printf '── 🚀 Approved — MERGE YOURS ──\t\t\n'; printf '%b' "$mergemine"; }
+  # Action zone (needs YOU) first, then passive/informational, then my open PRs.
+  [ -n "$mergemine" ]  && { printf '── 🚀 Approved — MERGE YOURS ──\t\t\n';        printf '%b' "$mergemine"; }
+  [ -n "$mycomments" ] && { printf '── 💬 My PRs — comments to address ──\t\t\n'; printf '%b' "$mycomments"; }
   printf '── 🔔 Needs your attention ──\t\t\n'
   [ -n "$rereview" ] && printf '%b' "$rereview"
   [ -n "$ready" ]    && printf '%b' "$ready"
   [ -n "$inflight" ] && { printf '── 👀 Agent reviewing ──\t\t\n';        printf '%b' "$inflight"; }
   printf '── 💬 Waiting for response ──\t\t\n';         [ -n "$response" ] && printf '%b' "$response"
-  [ -n "$approved" ] && { printf '── ✅ Approved (author will merge) ──\t\t\n'; printf '%b' "$approved"; }
+  [ -n "$approved" ]   && { printf '── ✅ Approved (author will merge) ──\t\t\n'; printf '%b' "$approved"; }
+  [ -n "$mytracking" ] && { printf '── 📋 My pull requests ──\t\t\n';            printf '%b' "$mytracking"; }
 }
 
 render_status_table() {
