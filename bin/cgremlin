@@ -392,23 +392,57 @@ create_review_agent_pane() {
     pr_url=$(read_session_field "$SDIR" "pr.url")
     pr_head=$(read_session_field "$SDIR" "pr.head")
     cat > "$SDIR/AGENT_CONTEXT.md" <<CTX
-# PR Review Agent — PR #${num}: ${pr_title}
+# PR Review Triage — PR #${num}: ${pr_title}
 
 Author: @${author}
 Branch: ${pr_head}
 URL: ${pr_url}
+Session: $(basename "$SDIR")
 
-REVIEW.md in this directory contains the full automated pre-review findings.
-Read REVIEW.md first, then help the user understand the analysis, explore the code, and answer questions.
+## Role
+You walk the reviewer through the findings in \`REVIEW.md\` one at a time so they can decide, per finding, whether to post it or dismiss it. You are the UI: you render findings, discuss them, and record decisions. You do NOT re-analyze the PR or invent new findings, and you do NOT call \`gh\` directly — posting goes through the cgremlin helpers below.
 
-When the user is ready to post:
-1. Confirm the review type explicitly (Approve / Comment / Request-changes).
-2. Write the review body to: ${SDIR}/.review_body.md
-   (the session root — NOT the repo subdirectory)
+## First message — ALWAYS open with the summary menu
+Read \`REVIEW.md\`, then print a one-line roll-up and a numbered list. Nothing else. Example:
+
+    3 findings — 1 🔴  2 🟠.  Which to discuss? (number, or "all", or "approve")
+    1. 🔴  Race in checkout total      payment/cart.ts:88
+    2. 🟠  Null deref on empty list    ui/list.tsx:40
+    3. 🟠  Missing await on save       api/save.ts:12
+
+If REVIEW.md has no findings: say so and offer to approve.
+
+## When the reviewer picks a finding
+Show it tight — do not pad:
+- **Severity** and **location**
+- **Expected:** … **Actual:** … (this is how they judge it fast)
+- **Trigger:** the exact condition
+- **Fix:** the suggested snippet
+Then discuss / answer questions about that finding only.
+
+## Recording the decision (after discussing a finding)
+The reviewer says one of:
+- **"post it"** → post THIS finding now as a review comment:
+  1. Write just this finding's body to \`${SDIR}/.review_body.md\`
+  2. Run: \`cgremlin --comment-pr $(basename "$SDIR")\`
+  3. Set that finding's Status to \`posted\` in REVIEW.md.
+- **"hold it"** → set Status to \`held\` in REVIEW.md (queued for the final batch). Do not post yet.
+- **"dismiss"** → set Status to \`🔇 dismissed\` in REVIEW.md so re-reviews skip it.
+
+Update the Status column in REVIEW.md's Findings Tracker after EVERY decision, then return to the menu.
+
+## When the reviewer says "submit" / "done"
+1. Confirm the verdict explicitly: Approve / Comment / Request-changes.
+2. Write the review body (summary + every \`held\` finding) to \`${SDIR}/.review_body.md\`.
 3. Run exactly one of:
-   cgremlin --approve-pr $(basename "$SDIR")
-   cgremlin --comment-pr $(basename "$SDIR")
-   cgremlin --request-changes-pr $(basename "$SDIR")
+   \`cgremlin --approve-pr $(basename "$SDIR")\`  (archives + closes the session)
+   \`cgremlin --comment-pr $(basename "$SDIR")\`
+   \`cgremlin --request-changes-pr $(basename "$SDIR")\`
+
+## Constraints
+- Never post without an explicit decision from the reviewer.
+- Never run \`gh\` yourself — only the cgremlin helpers above post to GitHub.
+- Write \`.review_body.md\` to the session root path shown above, NOT the repo subdirectory.
 CTX
 
     # Wrapper: write own PID then exec-replace with claude.
@@ -637,69 +671,98 @@ generate_claude_md() {
     case "$mode" in
         review)
             cat > "$claude_md" << 'REVIEW_TEMPLATE'
-# PR Review Session
+# PR Review Session — AUTO-START
+
+Start immediately. Do not wait for user input.
 
 ## Project Skill (CHECK FIRST)
 Check if `/APFM:apfm-review` skill is available. If yes, run it and follow its output — skip everything below. If not available, proceed.
 
+## Role
+You are a senior engineer doing a high-signal review. You produce ONLY `REVIEW.md` — a data file of provable findings. You do NOT talk to GitHub, and you do NOT run the review conversation; a separate agent handles that later. Your entire job is: analyze the diff, write `REVIEW.md`, stop.
+
 ## Context
 {CONTEXT}
 
-## Your Task
-You are reviewing this pull request. Focus on:
-- Code quality and best practices
-- Potential bugs or edge cases
-- Security concerns
-- Performance implications
-- Test coverage
+## What counts as a finding — THE CONFIDENCE GATE (hard rule)
+Before you write ANY finding, you MUST be able to fill in all three concretely:
+- **Trigger** — the exact input, state, or call sequence that exercises it
+- **Expected** — what the code is supposed to do
+- **Actual** — what it actually does instead
 
-## Guidelines
-- ⛔ **SCOPE GATE**: ONLY review files in this PR's diff. Any finding whose file is NOT in the diff is INVALID — delete it before submitting. Self-check every finding.
-- Be constructive and specific
-- Explain the "why" behind suggestions — what breaks, for whom, when
-- Prioritize issues by severity
-- For each finding, explain what the code is trying to do before explaining the issue
-- Format findings so they COULD be posted as PR comments (include file path and line numbers)
-- **DO NOT post comments, reviews, or any content to GitHub.** Do NOT run `gh pr comment`, `gh pr review`, or any `gh` command that modifies the PR. Your job is to write REVIEW.md only — the human will decide what to post.
-- Follow PRINCIPLES.md for engineering standards.
-- This session may be opened as a floating panel for discussion. REVIEW.md holds the findings — help the user understand, refine, and act on them; do not start a new review.
+If you cannot state all three concretely, DROP the finding. Do not downgrade it, do not add it as a note. Vague concerns ("this might be slow", "consider refactoring", "could be cleaner") are NOT findings — delete them.
 
-When the user decides to act on this PR:
-1. Confirm the review TYPE with the user explicitly (Approve / Comment / Request-changes). Never post without confirmation.
-2. Write the review body (summary + the specific findings) to .review_body.md in the session root.
-3. Post by running ONE of: `cgremlin --approve-pr <SESSION_NAME>` | `cgremlin --comment-pr <SESSION_NAME>` | `cgremlin --request-changes-pr <SESSION_NAME>` (SESSION_NAME is the session directory's basename — derive it with `basename $(pwd)/..` or `ls -d $HOME/.cgremlin/sessions/pr-*-<PR_NUMBER>-* | tail -1 | xargs basename`).
-4. Mark the Findings-Tracker IDs you posted as `posted` in REVIEW.md so re-review can verify them.
-Approve archives and removes the PR from the panel; comment/request-changes move it to Waiting for re-review.
+## What to look for (only these)
+- **Correctness** — logic errors, null/undefined, off-by-one, async/await, unhandled edge cases that you can trigger
+- **Security** — injection, auth/authz bypass, sensitive-data exposure, secrets, missing input validation on a real path
+- **Regression** — a change that breaks existing behavior (shared util/component, API contract, schema, config)
+- **Performance** — ONLY if provable: point to the exact N+1, unbounded growth, or repeated work in the hot path. No hunches.
 
-## Output
-Write your review to `REVIEW.md` in this directory.
+## What to IGNORE (do not write these)
+- Code style, naming, formatting, DRY opinions
+- Complexity / "over-engineering" / architecture preferences
+- Missing docs or comments
+- Test coverage gaps (unless a specific untested path is a Trigger for a bug above)
+- Anything "nice to have"
 
-### Finding Format
-Each finding in "Key findings" MUST use this exact structure:
+## Scope gate (hard rule)
+⛔ Review ONLY files in this PR's diff. Any finding whose file is NOT in the diff is INVALID — delete it. Before finishing, re-read every finding and confirm its file is a changed file.
 
-#### N. Brief descriptive title
-**File:** `path/to/file.ext:lineNumber` (or `path/to/file.ext:startLine-endLine` for ranges)
+## Constraints
+- **DO NOT** post to GitHub. Never run `gh pr comment`, `gh pr review`, or any `gh` command that modifies the PR.
+- **DO NOT** write "ready-to-post comments", collaboration instructions, or a conversation. REVIEW.md is data, not a script.
+- Missing a real Critical/High is worse than writing fewer findings — but a false positive that wastes the reviewer's time is the failure mode we are fixing. When unsure, apply the confidence gate and drop it.
 
-**What the code does:** [What this code is trying to accomplish — show you understand the intent]
+## Severity (exactly three)
+- 🔴 **Critical** — correctness or security bug with concrete impact. Blocks merge.
+- 🟠 **High** — real bug, narrower impact. Should fix; reviewer decides.
+- 🟡 **Perf** — provable performance issue. Does not block.
 
-**Problem:** [What's wrong — be specific about what breaks, when, and for whom]
+## Output — write `REVIEW.md` in this directory, EXACTLY this structure
 
-**Impact:** [Real-world consequence: security risk, user-facing bug, data corruption, etc.]
+```
+# PR Review: #<number> — <title>
 
-**Suggested fix:**
-[Description and/or code block]
+## At a Glance
+| Type | Risk | Verdict |
+|------|------|---------|
+| Feature/Bug Fix/Refactor/Perf/Chore | 🟢 Low / 🟡 Med / 🔴 High | ✅ Approve / 🔄 Request Changes / 💬 Comment |
 
-### Overall Structure
-1. At a Glance: Type, Risk, Scope, Verdict
-2. Findings Tracker table (required):
-   `| ID | Finding | Severity | Status (open/posted/resolved) | Since |`
-3. Open Findings by severity — each with Location, What it does, The issue, Why it matters, Suggested fix (use the Finding Format above)
-4. Resolved Findings
-5. Verdict (rationale)
-6. Review History table (required):
-   `| Version | Date | Commit | Action |`
+## Findings Tracker
+| ID | Severity | Location | Finding | Status |
+|----|----------|----------|---------|--------|
+| 1 | 🔴 Critical | file.ts:88 | one-line summary | open |
 
-On re-review: update each prior finding's Status in place (resolved/still-open), add new findings, append a Review History row. Never drop prior findings.
+(If none: write "No high-confidence findings." and set Verdict ✅ Approve.)
+
+## Findings
+
+### 1. <short title>
+- **Severity:** 🔴 Critical
+- **Location:** `path/to/file.ext:LN-LN`
+- **Trigger:** <exact input/state that exercises it>
+- **Expected:** <what should happen>
+- **Actual:** <what happens instead>
+- **Fix:**
+  ```<lang>
+  <concrete fix snippet>
+  ```
+
+### 2. <short title>
+...
+
+## Verdict
+✅ Approve / 🔄 Request Changes / 💬 Comment — <one sentence rationale>
+
+## Review History
+| Version | Date | Commit | Action |
+|---------|------|--------|--------|
+| v1 | <date> | <sha> | Initial review |
+```
+
+`status` values: `open` (new), `held` (queued to post), `posted` (sent), `🔇 dismissed` (skip in re-reviews). The generator sets everything to `open`; the triage agent updates it later.
+
+BEGIN NOW: analyze the diff, apply the confidence gate, write REVIEW.md, stop.
 REVIEW_TEMPLATE
             # Replace context placeholder
             sed -i '' "s|{CONTEXT}|$context|g" "$claude_md" 2>/dev/null || \
@@ -6435,54 +6498,37 @@ DO NOT COMMIT - the user will review and commit manually."""
 
 ## Re-Review Instructions
 
-**Update REVIEW.md in-place. Do NOT append sections.**
+**Update REVIEW.md IN PLACE. Same schema as the initial review. Do NOT rewrite from scratch.**
 
-### 1. Check Each Open Finding
-For each finding in REVIEW.md:
-- **Fixed?** → Add ✅ prefix to heading, move to "Resolved Findings", note the fix
-- **Still present?** → Keep in place, leave heading unchanged
-- **Partially fixed?** → Update the description
-- **🔇 Dismissed?** → SKIP entirely. Findings prefixed with 🔇 were intentionally dismissed by the reviewer. Do not re-flag, update, or remove them.
+### 1. Reconcile each existing finding
+For every finding already in the Findings Tracker:
+- **Fixed?** → set Status to `resolved`, keep its row for the record.
+- **Still present?** → leave it; keep its current Status (`open`/`held`/`posted`).
+- **🔇 dismissed?** → SKIP entirely. Do not re-flag, edit, or remove. The reviewer dismissed it on purpose.
 
-### 2. Update Finding Status
-For each finding, update the heading to reflect its current status:
-- Fixed: `#### ✅ 1. normalizeString returns untrimmed value`
-- Dismissed (do not touch): `#### 🔇 3. Missing JSDoc on helper`
-- Still open: Leave heading unchanged
-- New findings: Number continuing from the last finding
+### 2. Look for NEW findings — same confidence gate as the initial review
+Review the full current PR diff (not just the new commits). Add a new finding ONLY if you can state all three concretely:
+- **Trigger** (exact input/state), **Expected**, **Actual**.
+If you cannot, drop it. No style, complexity, docs, or "nice to have" — only Correctness, Security, Regression, and provable Performance.
+Number new findings continuing from the last ID. Set their Status to `open`.
 
-### 3. Full Review of Current PR State
-Do a **comprehensive review of the entire PR diff** (not just new commits). This includes:
-- Review new commits for any problems introduced
-- Re-examine the full PR diff for any **Critical or Important** issues that may have been missed in previous reviews
-- Add new findings numbered continuing from the last finding
-- Focus on: bugs, security issues, logic errors, edge cases, performance problems
+### 3. Severity — exactly three
+🔴 Critical (blocks) · 🟠 High (should fix) · 🟡 Perf (provable, non-blocking).
 
-### 4. Update Review History (IMPORTANT!)
-The Review History table MUST have a new row for this version. Find the table that looks like:
+### 4. Update the Review History table
+ADD a new row (never remove existing rows):
 ```markdown
-## Review History
-
-| Version | Date | Commit | Action |
-|---------|------|--------|--------|
-| v1 | 2026-01-27 | e627b8f | Initial review - Approved |
+| v{next_version} | {today} | {new_commit[:8]} | Re-review: X resolved, Y new |
 ```
 
-ADD a new row (do NOT replace existing rows):
-```markdown
-| v{next_version} | {today} | {new_commit[:8]} | Re-review: X fixed, Y new issues |
-```
-
-### 5. Update Verdict
-Re-evaluate based on current state of ALL findings (fixed + remaining + new).
-Only open Critical/Important findings should block approval.
+### 5. Update the Verdict
+Re-evaluate across ALL findings. Only OPEN 🔴/🟠 findings block approval.
 
 ---
 
-**CRITICAL: The Review History table must show ALL versions (v1, v2, etc). Do NOT remove previous rows.**
-**CRITICAL: Do NOT touch 🔇-prefixed findings. They are intentionally dismissed.**
+**Scope gate:** every finding's file must be in the current diff. **Do NOT touch 🔇 findings.** **Do NOT post to GitHub.**
 
-**BEGIN: Read REVIEW.md, check findings against new code, update in-place.**
+**BEGIN: read REVIEW.md, reconcile findings, apply the confidence gate to new ones, update in-place.**
 """
             # Write RE-REVIEW.md to session root
             with open(session_path / 'RE-REVIEW.md', 'w') as f:
@@ -6535,7 +6581,7 @@ Only open Critical/Important findings should block approval.
             log_file = logs_dir / f"terminal-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
             session_name = session_path.name
 
-            prompt = f"STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it for re-review and follow its output — skip everything else. STEP 2 (only if skill unavailable): RE-REVIEW MODE — PR updated with {commit_count} new commit(s). Read RE-REVIEW.md for what changed. Update REVIEW.md in-place: move fixed items to Resolved Findings, add new issues from new commits ONLY. Scope: ONLY files in the PR diff — no findings outside changed files. Add a new row to Review History table. Self-check: verify every finding references a changed file."
+            prompt = f"STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it for re-review and follow its output — skip everything else. STEP 2 (only if skill unavailable): RE-REVIEW MODE — PR updated with {commit_count} new commit(s). Read RE-REVIEW.md and follow it. Update REVIEW.md in-place: reconcile each existing finding (resolved / still-open / 🔇 keep untouched), then add NEW findings only if they pass the Trigger/Expected/Actual confidence gate. Severity is 🔴 Critical / 🟠 High / 🟡 Perf. Scope: ONLY files in the PR diff. Add a new row to Review History. Self-check: verify every finding references a changed file."
 
             # Run claude directly (not via script(1) — script swallows the prompt argument)
             escaped_prompt = prompt.replace("'", "'\\''")
@@ -9847,7 +9893,7 @@ Only open Critical/Important findings should block approval.
         const sessionName = state.newSession.data.sessionName || state.currentSession;
         if (!sessionName) { showToast('No session to start', 'error'); return; }
         try {
-            const reviewPrompt = 'STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it and follow its output — skip everything else. STEP 2 (only if skill unavailable): You are a senior engineer. Review ONLY files listed in Changed Files in CLAUDE.md. ANY finding whose file is not in that list is INVALID — delete it. Follow CLAUDE.md review guidelines. Write REVIEW.md with findings by severity (Critical/High/Medium/Low). For each: file:line, what the code does, the problem, why it matters, and a concrete fix. Self-check: before finishing, verify every finding references a changed file.';
+            const reviewPrompt = 'STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it and follow its output — skip everything else. STEP 2 (only if skill unavailable): You are a senior engineer. Review ONLY files listed in Changed Files in CLAUDE.md. ANY finding whose file is not in that list is INVALID — delete it. Follow CLAUDE.md review guidelines — it defines the confidence gate and the REVIEW.md format. Write ONLY high-confidence findings: each must state Trigger, Expected, and Actual concretely, or be dropped. Severity is exactly 🔴 Critical / 🟠 High / 🟡 Perf. Only Correctness, Security, Regression, and provable Performance — no style, complexity, docs, or suggestions. Self-check: before finishing, verify every finding references a changed file and passes the gate.';
             const endpoint = tool === 'acr+claude' ? API.START_ACR_CLAUDE : API.START_CLAUDE;
             if (tool === 'acr+claude') showToast('Running ACR review, then starting Claude...', 'info');
             const payload = { session: sessionName };
@@ -10828,53 +10874,37 @@ $CHANGES_SINCE
 
 ## Re-Review Instructions
 
-**Update REVIEW.md in-place. Do NOT append sections.**
+**Update REVIEW.md IN PLACE. Same schema as the initial review. Do NOT rewrite from scratch.**
 
-### 1. Check Each Open Finding
-For each finding in REVIEW.md:
-- **Fixed?** → Add ✅ prefix to heading, move to "Resolved Findings", note the fix
-- **Still present?** → Keep in place, leave heading unchanged
-- **Partially fixed?** → Update the description
-- **🔇 Dismissed?** → SKIP entirely. Findings prefixed with 🔇 were intentionally dismissed by the reviewer. Do not re-flag, update, or remove them.
+### 1. Reconcile each existing finding
+For every finding already in the Findings Tracker:
+- **Fixed?** → set Status to \`resolved\`, keep its row for the record.
+- **Still present?** → leave it; keep its current Status (\`open\`/\`held\`/\`posted\`).
+- **🔇 dismissed?** → SKIP entirely. Do not re-flag, edit, or remove. The reviewer dismissed it on purpose.
 
-### 2. Update Finding Status
-For each finding, update the heading to reflect its current status:
-- Fixed: \`#### ✅ 1. normalizeString returns untrimmed value\`
-- Dismissed (do not touch): \`#### 🔇 3. Missing JSDoc on helper\`
-- Still open: Leave heading unchanged
-- New findings: Number continuing from the last finding
+### 2. Look for NEW findings — same confidence gate as the initial review
+Review the full current PR diff (not just the new commits). Add a new finding ONLY if you can state all three concretely:
+- **Trigger** (exact input/state), **Expected**, **Actual**.
+If you cannot, drop it. No style, complexity, docs, or "nice to have" — only Correctness, Security, Regression, and provable Performance.
+Number new findings continuing from the last ID. Set their Status to \`open\`.
 
-### 3. Full Review of Current PR State
-Do a **comprehensive review of the entire PR diff** (not just new commits). This includes:
-- Review new commits for any problems introduced
-- Re-examine the full PR diff for any **Critical or Important** issues that may have been missed in previous reviews
-- Add new findings numbered continuing from the last finding
-- Focus on: bugs, security issues, logic errors, edge cases, performance problems
+### 3. Severity — exactly three
+🔴 Critical (blocks) · 🟠 High (should fix) · 🟡 Perf (provable, non-blocking).
 
-### 4. Update Review History (IMPORTANT!)
-The Review History table MUST have a new row for this version. Find the table that looks like:
+### 4. Update the Review History table
+ADD a new row (never remove existing rows):
 \`\`\`markdown
-## Review History
-
-| Version | Date | Commit | Action |
-|---------|------|--------|--------|
-| v1 | 2026-01-27 | e627b8f | Initial review - Approved |
+| v${next_version} | $(date '+%Y-%m-%d') | ${NEW_COMMIT:0:8} | Re-review: X resolved, Y new |
 \`\`\`
 
-ADD a new row (do NOT replace existing rows):
-\`\`\`markdown
-| v${next_version} | $(date '+%Y-%m-%d') | ${NEW_COMMIT:0:8} | Re-review: X fixed, Y new issues |
-\`\`\`
-
-### 5. Update Verdict
-Re-evaluate based on current state of ALL findings (fixed + remaining + new).
-Only open Critical/Important findings should block approval.
+### 5. Update the Verdict
+Re-evaluate across ALL findings. Only OPEN 🔴/🟠 findings block approval.
 
 ---
 
-**CRITICAL: The Review History table must show ALL versions (v1, v2, etc). Do NOT remove previous rows.**
+**Scope gate:** every finding's file must be in the current diff. **Do NOT touch 🔇 findings.** **Do NOT post to GitHub.**
 
-**BEGIN: Read REVIEW.md, check findings against new code, update in-place.**
+**BEGIN: read REVIEW.md, reconcile findings, apply the confidence gate to new ones, update in-place.**
 REREVIEW_EOF
     rm -f "$SESSION_DIR/repo/RE-REVIEW.md"
     ln -sf "../RE-REVIEW.md" "$SESSION_DIR/repo/RE-REVIEW.md"
@@ -10939,14 +10969,14 @@ NOTICE_EOF
         *"Start Claude"*)
             tput reset 2>/dev/null || clear
             cd "$SESSION_DIR/repo"
-            claude "STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it for re-review and follow its output — skip everything else. STEP 2 (only if skill unavailable): RE-REVIEW MODE — PR updated with $COMMIT_COUNT new commit(s). Read RE-REVIEW.md for what changed. Update REVIEW.md in-place: move fixed items to Resolved Findings, add new issues from new commits ONLY. Scope: ONLY files in the PR diff — no findings outside changed files. Add a new row to Review History table. Self-check: verify every finding references a changed file."
+            claude "STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it for re-review and follow its output — skip everything else. STEP 2 (only if skill unavailable): RE-REVIEW MODE — PR updated with $COMMIT_COUNT new commit(s). Read RE-REVIEW.md and follow it. Update REVIEW.md in-place: reconcile each existing finding (resolved / still-open / 🔇 keep untouched), then add NEW findings only if they pass the Trigger/Expected/Actual confidence gate. Severity is 🔴 Critical / 🟠 High / 🟡 Perf. Scope: ONLY files in the PR diff. Add a new row to Review History. Self-check: verify every finding references a changed file."
             return 2  # Signal that Claude was run
             ;;
         *"ACR"*)
             run_acr_quick "$SESSION_DIR" "$PR_BASE"
             tput reset 2>/dev/null || clear
             cd "$SESSION_DIR/repo"
-            claude "STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it for re-review (ACR_REVIEW.md has context) and follow its output — skip everything else. STEP 2 (only if skill unavailable): RE-REVIEW MODE — PR updated. Read RE-REVIEW.md and ACR_REVIEW.md. Update REVIEW.md in-place: move fixed items to Resolved Findings, add new issues. Scope: ONLY files in the PR diff. Add a new row to Review History table. Self-check: verify every finding references a changed file."
+            claude "STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it for re-review (ACR_REVIEW.md has context) and follow its output — skip everything else. STEP 2 (only if skill unavailable): RE-REVIEW MODE — PR updated. Read RE-REVIEW.md and ACR_REVIEW.md, and follow RE-REVIEW.md. Update REVIEW.md in-place: reconcile each existing finding (resolved / still-open / 🔇 keep untouched), then add NEW findings only if they pass the Trigger/Expected/Actual confidence gate. Severity is 🔴 Critical / 🟠 High / 🟡 Perf. Scope: ONLY files in the PR diff. Add a new row to Review History. Self-check: verify every finding references a changed file."
             return 2  # Signal that Claude was run
             ;;
         *)
@@ -11166,7 +11196,7 @@ pre_session_menu() {
                         dim "Type /exit when done to return here."
                         sleep 1
                         tput reset 2>/dev/null || clear
-                        cd "$SESSION_DIR/repo" && claude --model $MODEL --add-dir "$SESSION_DIR" -- "STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it and follow its output — skip everything else. STEP 2 (only if skill unavailable): You are a senior engineer. Review ONLY files listed in Changed Files in CLAUDE.md. ANY finding whose file is not in that list is INVALID — delete it. Follow CLAUDE.md review guidelines. Write REVIEW.md with findings by severity (Critical/High/Medium/Low). For each: file:line, what the code does, the problem, why it matters, and a concrete fix. Self-check: before finishing, verify every finding references a changed file."
+                        cd "$SESSION_DIR/repo" && claude --model $MODEL --add-dir "$SESSION_DIR" -- "STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it and follow its output — skip everything else. STEP 2 (only if skill unavailable): You are a senior engineer. Review ONLY files listed in Changed Files in CLAUDE.md. ANY finding whose file is not in that list is INVALID — delete it. Follow CLAUDE.md review guidelines — it defines the confidence gate and the REVIEW.md format. Write ONLY high-confidence findings: each must state Trigger, Expected, and Actual concretely, or be dropped. Severity is exactly 🔴 Critical / 🟠 High / 🟡 Perf. Only Correctness, Security, Regression, and provable Performance — no style, complexity, docs, or suggestions. Self-check: before finishing, verify every finding references a changed file and passes the gate."
                         post_session_menu "$SESSION_DIR"
                         return 0
                         ;;
@@ -12679,26 +12709,21 @@ printf '| **Current** | v%s (commit `%s`) |\n' "\$next_version" "\$new_short"
 printf '| **New Commits** | %s |\n\n' "\$commit_count"
 printf '### New Commits\n\`\`\`\n%s\n\`\`\`\n\n' "\${new_commits_text:-(none)}"
 printf '### Files Changed Since Last Review\n\`\`\`\n%s\n\`\`\`\n\n---\n\n' "\${changes_since:-(none)}"
-printf '## Re-Review Instructions\n\n**Update REVIEW.md in-place. Do NOT append sections.**\n\n'
-printf '### 1. Check Each Open Finding\nFor each finding in REVIEW.md:\n'
-printf '- **Fixed?** → Add ✅ prefix to heading, move to "Resolved Findings", note the fix\n'
-printf '- **Still present?** → Keep in place, leave heading unchanged\n'
-printf '- **Partially fixed?** → Update the description\n'
-printf '- **🔇 Dismissed?** → SKIP entirely — do not re-flag, update, or remove.\n\n'
-printf '### 2. Update Finding Status\n'
-printf '- Fixed: `#### ✅ 1. Example finding`\n'
-printf '- Dismissed (do not touch): `#### 🔇 3. Example finding`\n'
-printf '- Still open: leave heading unchanged\n'
-printf '- New findings: number continuing from the last finding\n\n'
-printf '### 3. Full Review of Current PR State\n'
-printf '- Review new commits for any problems introduced\n'
-printf '- Re-examine the full PR diff for any **Critical or Important** issues missed previously\n'
-printf '- Focus on: bugs, security issues, logic errors, edge cases, performance problems\n\n'
-printf '### 4. Update Review History (IMPORTANT!)\nADD a new row — do NOT replace existing rows:\n'
-printf '\`\`\`\n| v%s | %s | %s | Re-review: X fixed, Y new issues |\n\`\`\`\n\n' "\$next_version" "\$today" "\$new_short"
-printf '### 5. Update Verdict\nRe-evaluate based on current state of ALL findings.\nOnly open Critical/Important findings should block approval.\n\n---\n\n'
-printf '**CRITICAL: Keep ALL prior Review History rows. Do NOT touch 🔇-prefixed findings.**\n\n'
-printf '**BEGIN: Read REVIEW.md, check findings against new code, update in-place.**\n'
+printf '## Re-Review Instructions\n\n**Update REVIEW.md IN PLACE. Same schema as the initial review. Do NOT rewrite from scratch.**\n\n'
+printf '### 1. Reconcile each existing finding\nFor every finding in the Findings Tracker:\n'
+printf '- **Fixed?** → set Status to `resolved`, keep its row for the record.\n'
+printf '- **Still present?** → leave it; keep its current Status (`open`/`held`/`posted`).\n'
+printf '- **🔇 dismissed?** → SKIP entirely. Do not re-flag, edit, or remove — the reviewer dismissed it on purpose.\n\n'
+printf '### 2. Look for NEW findings — same confidence gate as the initial review\n'
+printf 'Review the full current PR diff. Add a finding ONLY if you can state all three concretely: **Trigger** (exact input/state), **Expected**, **Actual**. If you cannot, drop it.\n'
+printf 'Only Correctness, Security, Regression, and provable Performance. No style, complexity, docs, or "nice to have".\n'
+printf 'Number new findings continuing from the last ID; set Status to `open`.\n\n'
+printf '### 3. Severity — exactly three\n🔴 Critical (blocks) · 🟠 High (should fix) · 🟡 Perf (provable, non-blocking).\n\n'
+printf '### 4. Update Review History\nADD a new row — never remove existing rows:\n'
+printf '\`\`\`\n| v%s | %s | %s | Re-review: X resolved, Y new |\n\`\`\`\n\n' "\$next_version" "\$today" "\$new_short"
+printf '### 5. Update the Verdict\nRe-evaluate across ALL findings. Only OPEN 🔴/🟠 findings block approval.\n\n---\n\n'
+printf '**Scope gate:** every finding'"'"'s file must be in the current diff. **Do NOT touch 🔇 findings. Do NOT post to GitHub.**\n\n'
+printf '**BEGIN: read REVIEW.md, reconcile findings, apply the confidence gate to new ones, update in-place.**\n'
 } > "$SESSION_DIR/RE-REVIEW.md"
 
 rm -f "$REPO_DIR/RE-REVIEW.md"
@@ -12725,7 +12750,7 @@ fi
 update_session_field "$SESSION_DIR" "reviewed_sha" "\$new_commit"
 
 # --- Step 6: Run headless re-review with skill-aware prompt ---
-prompt="STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it for re-review and follow its output — skip everything else. STEP 2 (only if skill unavailable): RE-REVIEW MODE — PR updated with \${commit_count} new commit(s). Read RE-REVIEW.md for what changed. Update REVIEW.md in-place: move fixed items to Resolved Findings, add new issues from new commits ONLY. Scope: ONLY files in the PR diff — no findings outside changed files. Add a new row to Review History table. Self-check: verify every finding references a changed file. As the very last action, write a single line to the file $SESSION_DIR/rereview_summary. Format: '✅ N/N resolved' if all prior findings are resolved, or '⚠️ K/N resolved, M new' otherwise. Write only that line — no other content."
+prompt="STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it for re-review and follow its output — skip everything else. STEP 2 (only if skill unavailable): RE-REVIEW MODE — PR updated with \${commit_count} new commit(s). Read RE-REVIEW.md and follow it. Update REVIEW.md in-place: reconcile each existing finding (resolved / still-open / 🔇 keep untouched), then add NEW findings only if they pass the Trigger/Expected/Actual confidence gate. Severity is 🔴 Critical / 🟠 High / 🟡 Perf. Scope: ONLY files in the PR diff. Add a new row to Review History. Self-check: verify every finding references a changed file. As the very last action, write a single line to the file $SESSION_DIR/rereview_summary. Format: '✅ N/N resolved' if all prior findings are resolved, or '⚠️ K/N resolved, M new' otherwise. Write only that line — no other content."
 
 cd "$REPO_DIR" && claude -p "\$prompt" --permission-mode acceptEdits --add-dir "$SESSION_DIR" < /dev/null
 rc=\$?
