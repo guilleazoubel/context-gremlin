@@ -18,12 +18,15 @@ Two prompts drive this and both are misaligned:
 
 ## Goals
 
-1. **High signal only** — real bugs (correctness, security, regression) plus *provable* performance issues. Drop style, complexity, and suggestions entirely.
-2. **Confidence gate** — a finding is written only if the model can state its exact Trigger, Expected, and Actual behavior. If it can't, the finding is dropped.
-3. **Fast judgment** — each finding is tight (severity + Expected/Actual + trigger + location + fix snippet), so the reviewer can decide in seconds.
-4. **Guided triage** — the agent presents a summary menu first, then drills into findings on demand, capturing a post/hold/dismiss decision for each.
-5. **Flexible posting** — the reviewer can post a finding mid-conversation or hold it and submit everything at the end.
-6. **Clean layering** — generator writes data, agent renders data + records decisions, bash helpers own GitHub. `REVIEW.md` is the seam.
+1. **Solves the right thing** — the Jira ticket is the source of truth. The review first checks the PR actually satisfies the ticket's intent/acceptance criteria before judging the code.
+2. **High signal only** — real bugs (correctness, security, regression), *provable* performance issues, and *concrete* separation-of-concerns / maintainability violations. Drop cosmetic style, naming, and vague "could be cleaner" suggestions entirely.
+3. **Evidence bar** — a finding is written only if the model can state concrete evidence for it (Trigger/Expected/Actual for bugs; Tangle/Consequence/Direction for maintainability). If it can't, the finding is dropped.
+4. **Fast by default, deep when complex** — a tiered review: cheap intent + core scan on every PR; a deeper fan-out only when the PR is large, risky, or the core scan surfaces something deep.
+5. **Fast judgment** — each finding is tight (severity + evidence + location + fix), so the reviewer can decide in seconds.
+6. **Guided triage** — the agent presents a summary menu first, then drills into findings on demand, capturing a post/hold/dismiss decision for each.
+7. **Flexible posting** — the reviewer can post a finding mid-conversation or hold it and submit everything at the end.
+8. **Clean layering** — generator writes data, agent renders data + records decisions, bash helpers own GitHub. `REVIEW.md` is the seam.
+9. **Owned prompt, not a sealed skill** — the review logic lives in cgremlin's own prompt (borrowing proven pieces from the apfm skill), so intent-gate, depth, posting path, and re-review are all under our control.
 
 ---
 
@@ -38,13 +41,13 @@ Holds findings in a fixed schema. Per finding:
 | Field | Meaning |
 |---|---|
 | `id` | Sequential integer (stable across re-reviews) |
-| `severity` | `🔴 Critical` / `🟠 High` / `🟡 Perf` |
+| `severity` | `🔴 Critical` / `🟠 High` / `🟡 Perf` / `🔧 Maintainability` |
 | `location` | `path/to/file.ts:LN-LN` (must be a changed file) |
-| `trigger` | The exact input/state that exercises the bug |
-| `expected` | What the code is supposed to do |
-| `actual` | What it actually does |
-| `fix` | Suggested fix snippet |
+| `evidence` | For bugs/perf: **Trigger / Expected / Actual**. For maintainability: **Tangle / Consequence / Direction** (see below). |
+| `fix` | Suggested fix snippet or refactor direction |
 | `status` | `open` / `held` / `posted` / `🔇 dismissed` |
+
+An `intent alignment` note also lives at the top of `REVIEW.md` (see Intent Gate) — it is not a numbered finding unless the PR fails to satisfy the ticket, in which case it becomes a 🔴 finding.
 
 Nothing else stores findings. Both prompts and the re-review worker agree on this schema.
 
@@ -61,27 +64,62 @@ Reads `REVIEW.md`, presents findings, captures the reviewer's decision, writes i
 
 ## Severity model
 
-Collapses from 5 levels to 3:
+Four levels:
 
 | Severity | Meaning | Blocks merge? |
 |---|---|---|
-| 🔴 Critical | Correctness or security bug with concrete impact | Yes |
+| 🔴 Critical | Correctness or security bug with concrete impact; OR the PR does not satisfy the Jira ticket | Yes |
 | 🟠 High | Real bug, narrower impact — should fix | Reviewer's call |
 | 🟡 Perf | Provable performance issue (points to the exact N+1 / unbounded loop / repeated work) | No |
+| 🔧 Maintainability | Concrete separation-of-concerns or coupling violation with a real consequence | No |
 
-Removed: 🟡 Medium (generic), 🔵 Suggestions/Nice-to-have, all code-style and complexity categories.
+Removed: 🟡 Medium (generic), 🔵 Suggestions/Nice-to-have, and all *cosmetic* code-style categories (naming, formatting, import order, "consider extracting").
 
 ---
 
-## Confidence gate (the core rule)
+## The evidence bar (the core rule)
 
-Before writing ANY finding, the generator must be able to fill in:
+Before writing ANY finding, the generator must be able to fill in concrete evidence. There are two forms depending on the finding type.
 
+### Bugs & performance — Trigger / Expected / Actual
 - **Trigger:** the exact input or state that exercises it
 - **Expected:** what should happen
 - **Actual:** what happens instead
 
-If any of the three can't be stated concretely, the finding is **dropped, not downgraded**. "This might be slow" / "this could be cleaner" / "consider extracting" never qualify. Performance findings must name the specific hot path, not a hunch.
+Performance findings must name the specific hot path (the exact N+1 / unbounded loop / repeated work), not a hunch.
+
+### Maintainability & separation of concerns — Tangle / Consequence / Direction
+- **Tangle:** the two concerns that are mixed, named concretely — e.g. "business logic (tax calc) lives inside the React render body" or "data fetching is embedded in the UI component"
+- **Consequence:** the concrete cost — what *cannot* be tested in isolation, changed without touching unrelated code, or reused, *as a direct result*. Not "this is harder to read."
+- **Direction:** the separation to apply — e.g. "extract the calc into a pure function / move the fetch into a hook or service."
+
+If a finding can't fill in its form concretely, it is **dropped, not downgraded**. "This might be slow", "this could be cleaner", "consider extracting" (with no named consequence) never qualify. A maintainability finding without a concrete Consequence is a style opinion — drop it.
+
+This is what keeps the maintainability lens from regressing into noise: it must prove a coupling that will actually bite, not express a preference.
+
+---
+
+## Intent gate (Jira as source of truth)
+
+Runs first, on every PR, before any code finding.
+
+1. Resolve the Jira ticket from the branch/PR (cgremlin already auto-detects the key). Fetch it via the Atlassian MCP if available; otherwise fall back to the PR description.
+2. Extract the intent / acceptance criteria.
+3. Judge: **does this PR actually do what the ticket asked?** Write a one-line `Intent alignment:` note at the top of REVIEW.md — ✅ satisfies / ⚠️ partial / ❌ diverges.
+4. If ⚠️ or ❌, that becomes a 🔴 finding (with the ticket criterion as Expected and the PR's behavior as Actual). Solving the wrong thing correctly is still a failure.
+5. If no ticket is resolvable, note "No ticket found — reviewed against PR description" and proceed.
+
+---
+
+## Tiered depth (fast by default, deep when complex)
+
+One owned prompt, three tiers:
+
+- **Tier 0 — Intent (always, cheap):** the Intent Gate above.
+- **Tier 1 — Core scan (always, fast):** a single pass over the diff for correctness / security / regression, plus the maintainability lens, under the evidence bar.
+- **Tier 2 — Deep dive (conditional):** the agent escalates ONLY when a complexity trigger is met — large diff (e.g. > ~400 changed lines or > ~15 files), changes to shared/critical paths (auth, payments, migrations, shared utils), or Tier 1 surfaced something whose blast radius needs cross-file tracing. On escalation it fans out parallel sub-agents (e.g. perf, cross-file data-flow, the extra apfm lenses). On a normal PR, Tier 2 is skipped — keeping it quick.
+
+The prompt states the triggers explicitly so the decision is deterministic, and notes in REVIEW.md whether Tier 2 ran.
 
 ---
 
@@ -109,14 +147,14 @@ The agent updates the `status` field in `REVIEW.md` after every decision, so sta
 
 ## What is removed from the generator prompt
 
-- PHASE 3.4 Code Quality
-- PHASE 3.5 Complexity
-- PHASE 3.8 Best Practices (React/UX style rules)
+- *Cosmetic* code quality — naming, formatting, import order, line length
+- "Complexity/over-engineering" as a *preference* (kept only when it's a concrete separation-of-concerns violation with a named consequence — see the Maintainability lens)
+- Best-practice style rules (React/UX) that are not tied to a bug
 - "🔵 Suggestions (Nice to Have)" output section
 - "Ready-to-Post Review Comments" output section (presentation → moves to triage agent)
 - "Ongoing Collaboration" instructions (UI → moves to triage agent)
 
-Kept: scope gate (changed-files-only), PR-type classification, correctness, security, regression risk, and provable performance.
+Kept: scope gate (changed-files-only), PR-type classification, correctness, security, regression risk, provable performance, and — new — the Jira intent gate and the gated maintainability / separation-of-concerns lens.
 
 ---
 
@@ -126,9 +164,12 @@ Kept: scope gate (changed-files-only), PR-type classification, correctness, secu
 
 | # | Location | Prompt | Change |
 |---|---|---|---|
-| 1 | `# PR REVIEW` section, `CLAUDE_EOF` heredoc (~line 2137) | Generator → `repo/CLAUDE.md` | Confidence gate, 3-severity, new finding schema, remove noise sections |
-| 2 | `create_review_agent_pane()` `AGENT_CONTEXT.md` heredoc (~line 394) | Triage agent | Replace vague text with the triage protocol above |
-| 3 | `rereview_pr()` `claude -p` prompt (~line 12650) + Python server re-review launch (~line 6536 / RE-REVIEW.md ~line 6412) | Re-review worker | Inherit confidence gate + 3-severity + schema; preserve dismissals |
+| 1 | `generate_claude_md()` `REVIEW_TEMPLATE` (the generator the automated flow actually uses) | Generator → session `CLAUDE.md` | Intent gate, tiered depth, evidence bar, 4-severity (+ Maintainability), data-only schema |
+| 2 | `create_review_agent_pane()` `AGENT_CONTEXT.md` heredoc | Triage agent | Summary-menu-first triage protocol (severity-agnostic; handles the new lens automatically) |
+| 3 | `rereview_pr()` RE-REVIEW.md + interactive `refresh_pr_session` + Python server re-review | Re-review worker | Inherit evidence bar + 4-severity; verify each prior finding was *properly* addressed; preserve 🔇 dismissals |
+| 4 | Launch prompts (bash + Python + JS constant) | Review/re-review launch | Align severity enumeration and intent-gate reference |
+
+**Relationship to the apfm skill:** the initial-review prompt borrows apfm's proven ideas (Jira agent, confidence rubric, exclude-filters) but the logic is owned in cgremlin — the sealed skill is not depended on, so the single posting path (REVIEW.md → triage → `--comment-pr`) and the re-review verification stay under our control.
 
 **Sync requirement (CLAUDE.md):** the bash script and the embedded Python server must stay in sync — the re-review changes go into both the bash `rereview_pr()` and the Python dashboard re-review path.
 
@@ -139,6 +180,8 @@ Kept: scope gate (changed-files-only), PR-type classification, correctness, secu
 ## Error handling
 
 - **Generator finds nothing provable** → `REVIEW.md` shows "No high-confidence findings" and verdict ✅ Approve; triage agent opens with an empty menu and offers to approve.
+- **Re-review: prior fix is incomplete/wrong** → the re-review must re-run each prior finding's Trigger against the new code and classify ✅ properly resolved / ⚠️ partially fixed / ❌ still broken / 🔁 fix introduced a new problem, with evidence, before scanning for new issues. A partial/regressed fix stays open (or becomes a new finding), and the `rereview_summary` reflects it accurately.
+- **Intent gate: no Jira access** → note "reviewed against PR description" and continue; never block the review on Jira being unavailable.
 - **Reviewer dismisses everything** → all `🔇 dismissed`; nothing posts; re-reviews skip them.
 - **Post fails (GitHub error)** → bash helper leaves `status` unchanged; agent reports the error; finding stays `held` for retry.
 - **Pane restart mid-triage** → `status` fields in `REVIEW.md` preserve progress; agent re-reads and resumes the menu.

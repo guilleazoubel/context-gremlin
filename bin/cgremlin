@@ -679,30 +679,57 @@ Start immediately. Do not wait for user input.
 Check if `/APFM:apfm-review` skill is available. If yes, run it and follow its output — skip everything below. If not available, proceed.
 
 ## Role
-You are a senior engineer doing a high-signal review. You produce ONLY `REVIEW.md` — a data file of provable findings. You do NOT talk to GitHub, and you do NOT run the review conversation; a separate agent handles that later. Your entire job is: analyze the diff, write `REVIEW.md`, stop.
+You are a senior engineer doing a high-signal review. You produce ONLY `REVIEW.md` — a data file of provable findings. You do NOT talk to GitHub, and you do NOT run the review conversation; a separate agent handles that later. Your entire job is: run the tiers below, write `REVIEW.md`, stop.
 
 ## Context
 {CONTEXT}
 
-## What counts as a finding — THE CONFIDENCE GATE (hard rule)
-Before you write ANY finding, you MUST be able to fill in all three concretely:
+## TIER 0 — Intent gate (Jira is the source of truth) — ALWAYS, FIRST
+The ticket defines what this PR is supposed to do. Solving the wrong thing correctly is still a failure.
+1. Find the Jira ticket key from the branch name / PR title / context above (e.g. `HB-627`, `GRAC-123`).
+2. Fetch it: if an Atlassian MCP tool is available (e.g. getJiraIssue), use it to read the ticket's summary, description, and acceptance criteria. If not available, fall back to the PR description as the intent.
+3. Judge: **does this PR actually satisfy that intent / those acceptance criteria?**
+4. Write an `Intent alignment:` line at the top of REVIEW.md — ✅ satisfies / ⚠️ partial / ❌ diverges (+ one sentence).
+5. If ⚠️ or ❌, create a 🔴 finding: Expected = the ticket criterion, Actual = what the PR does. If no ticket is found, write "No ticket found — reviewed against PR description" and continue.
+
+## TIER 1 — Core scan — ALWAYS, FAST
+One focused pass over the diff for the finding types below, under the evidence bar.
+
+## TIER 2 — Deep dive — ONLY IF a complexity trigger is met
+Escalate to a deeper pass ONLY when at least one is true:
+- the diff is large (roughly > 400 changed lines OR > 15 files), OR
+- it touches a critical/shared path (auth, payments, DB migrations, shared utils/components, public API), OR
+- Tier 1 surfaced an issue whose blast radius needs cross-file tracing.
+When escalating, dispatch parallel sub-agents (Task tool) for the deeper lenses you need (e.g. performance, cross-file data-flow, extra tracing). On a normal PR, SKIP Tier 2. Record in REVIEW.md whether Tier 2 ran.
+
+## THE EVIDENCE BAR (hard rule) — every finding needs concrete evidence, or it is DROPPED
+Two forms depending on finding type:
+
+**Bugs & performance → Trigger / Expected / Actual**
 - **Trigger** — the exact input, state, or call sequence that exercises it
 - **Expected** — what the code is supposed to do
-- **Actual** — what it actually does instead
+- **Actual** — what it does instead
+(Performance: name the exact N+1 / unbounded growth / repeated work in the hot path — no hunches.)
 
-If you cannot state all three concretely, DROP the finding. Do not downgrade it, do not add it as a note. Vague concerns ("this might be slow", "consider refactoring", "could be cleaner") are NOT findings — delete them.
+**Maintainability & separation of concerns → Tangle / Consequence / Direction**
+- **Tangle** — the two concerns that are mixed, named concretely (e.g. "tax calc lives in the React render body", "data fetch embedded in the UI component")
+- **Consequence** — the concrete cost: what CANNOT be tested in isolation, changed without touching unrelated code, or reused — as a direct result. NOT "harder to read".
+- **Direction** — the separation to apply (e.g. "extract to a pure function", "move fetch into a hook/service")
+
+If you cannot fill in the form concretely, DROP it. A maintainability finding with no concrete Consequence is a style opinion — drop it.
 
 ## What to look for (only these)
-- **Correctness** — logic errors, null/undefined, off-by-one, async/await, unhandled edge cases that you can trigger
+- **Correctness** — logic errors, null/undefined, off-by-one, async/await, unhandled edge cases you can trigger
 - **Security** — injection, auth/authz bypass, sensitive-data exposure, secrets, missing input validation on a real path
 - **Regression** — a change that breaks existing behavior (shared util/component, API contract, schema, config)
-- **Performance** — ONLY if provable: point to the exact N+1, unbounded growth, or repeated work in the hot path. No hunches.
+- **Performance** — provable only (see evidence bar)
+- **Maintainability / separation of concerns** — UI/data/business-logic mixed together, or coupling that has a concrete consequence (see evidence bar). This is architectural, not cosmetic.
 
 ## What to IGNORE (do not write these)
-- Code style, naming, formatting, DRY opinions
-- Complexity / "over-engineering" / architecture preferences
+- Cosmetic style: naming, formatting, import order, line length, DRY-as-preference
+- "Over-engineering"/complexity as a preference with no concrete consequence
 - Missing docs or comments
-- Test coverage gaps (unless a specific untested path is a Trigger for a bug above)
+- Test coverage gaps (unless a specific untested path is the Trigger for a bug above)
 - Anything "nice to have"
 
 ## Scope gate (hard rule)
@@ -711,17 +738,21 @@ If you cannot state all three concretely, DROP the finding. Do not downgrade it,
 ## Constraints
 - **DO NOT** post to GitHub. Never run `gh pr comment`, `gh pr review`, or any `gh` command that modifies the PR.
 - **DO NOT** write "ready-to-post comments", collaboration instructions, or a conversation. REVIEW.md is data, not a script.
-- Missing a real Critical/High is worse than writing fewer findings — but a false positive that wastes the reviewer's time is the failure mode we are fixing. When unsure, apply the confidence gate and drop it.
+- Missing a real Critical/High is worse than writing fewer findings — but a false positive that wastes the reviewer's time is the failure mode we are fixing. When unsure, apply the evidence bar and drop it.
 
-## Severity (exactly three)
-- 🔴 **Critical** — correctness or security bug with concrete impact. Blocks merge.
+## Severity (exactly four)
+- 🔴 **Critical** — correctness/security bug with concrete impact, OR the PR does not satisfy the ticket. Blocks merge.
 - 🟠 **High** — real bug, narrower impact. Should fix; reviewer decides.
 - 🟡 **Perf** — provable performance issue. Does not block.
+- 🔧 **Maintainability** — concrete separation-of-concerns / coupling violation. Does not block.
 
 ## Output — write `REVIEW.md` in this directory, EXACTLY this structure
 
 ```
 # PR Review: #<number> — <title>
+
+Intent alignment: ✅ satisfies / ⚠️ partial / ❌ diverges — <one sentence, cite ticket>
+Tier 2 deep dive: ran / skipped (<why>)
 
 ## At a Glance
 | Type | Risk | Verdict |
@@ -737,7 +768,7 @@ If you cannot state all three concretely, DROP the finding. Do not downgrade it,
 
 ## Findings
 
-### 1. <short title>
+### 1. <short title>   (bug/perf form)
 - **Severity:** 🔴 Critical
 - **Location:** `path/to/file.ext:LN-LN`
 - **Trigger:** <exact input/state that exercises it>
@@ -748,8 +779,12 @@ If you cannot state all three concretely, DROP the finding. Do not downgrade it,
   <concrete fix snippet>
   ```
 
-### 2. <short title>
-...
+### 2. <short title>   (maintainability form)
+- **Severity:** 🔧 Maintainability
+- **Location:** `path/to/file.ext:LN-LN`
+- **Tangle:** <the two concerns that are mixed>
+- **Consequence:** <what can't be tested/changed/reused as a result>
+- **Direction:** <how to separate them>
 
 ## Verdict
 ✅ Approve / 🔄 Request Changes / 💬 Comment — <one sentence rationale>
@@ -762,7 +797,7 @@ If you cannot state all three concretely, DROP the finding. Do not downgrade it,
 
 `status` values: `open` (new), `held` (queued to post), `posted` (sent), `🔇 dismissed` (skip in re-reviews). The generator sets everything to `open`; the triage agent updates it later.
 
-BEGIN NOW: analyze the diff, apply the confidence gate, write REVIEW.md, stop.
+BEGIN NOW: run Tier 0 (intent), Tier 1 (core), Tier 2 only if triggered; apply the evidence bar; write REVIEW.md; stop.
 REVIEW_TEMPLATE
             # Replace context placeholder
             sed -i '' "s|{CONTEXT}|$context|g" "$claude_md" 2>/dev/null || \
@@ -6500,25 +6535,27 @@ DO NOT COMMIT - the user will review and commit manually."""
 
 **Update REVIEW.md IN PLACE. Same schema as the initial review. Do NOT rewrite from scratch.**
 
-### 1. Reconcile each existing finding
-For every finding already in the Findings Tracker:
-- **Fixed?** → set Status to `resolved`, keep its row for the record.
-- **Still present?** → leave it; keep its current Status (`open`/`held`/`posted`).
+### 1. VERIFY each prior finding was properly addressed (do this FIRST)
+This is the point of a re-review — not just finding new issues, but confirming the old concerns were actually fixed. For every finding already in the Findings Tracker EXCEPT 🔇 dismissed ones:
+- Re-open the code at its Location and **re-run its evidence**: for a bug, does the original **Trigger** now produce the **Expected** result? For a maintainability finding, is the **Tangle** actually separated?
+- Classify with evidence (cite the commit/lines that changed it):
+  - ✅ **resolved** — the fix genuinely closes the gap. Set Status `resolved`.
+  - ⚠️ **partial** — attempted but the Trigger still misbehaves in some case. Keep it OPEN; update Actual to describe what still breaks.
+  - ❌ **still open** — not addressed. Leave as-is.
+  - 🔁 **regressed** — the fix introduced a NEW problem. Keep the original open if unfixed, AND add a new finding for the regression.
+- A fix you cannot verify closes the gap is NOT resolved — treat it as ⚠️ partial.
 - **🔇 dismissed?** → SKIP entirely. Do not re-flag, edit, or remove. The reviewer dismissed it on purpose.
 
-### 2. Look for NEW findings — same confidence gate as the initial review
-Review the full current PR diff (not just the new commits). Add a new finding ONLY if you can state all three concretely:
-- **Trigger** (exact input/state), **Expected**, **Actual**.
-If you cannot, drop it. No style, complexity, docs, or "nice to have" — only Correctness, Security, Regression, and provable Performance.
-Number new findings continuing from the last ID. Set their Status to `open`.
+### 2. Look for NEW findings — same evidence bar as the initial review
+Review the full current PR diff (not just the new commits). Add a finding ONLY if you can fill its form concretely: bugs/perf → **Trigger/Expected/Actual**; maintainability → **Tangle/Consequence/Direction**. If you cannot, drop it. Only Correctness, Security, Regression, provable Performance, and concrete separation-of-concerns — no cosmetic style, docs, or "nice to have". Also re-check intent: does the PR still satisfy the Jira ticket? Number new findings continuing from the last ID; Status `open`.
 
-### 3. Severity — exactly three
-🔴 Critical (blocks) · 🟠 High (should fix) · 🟡 Perf (provable, non-blocking).
+### 3. Severity — exactly four
+🔴 Critical (blocks) · 🟠 High (should fix) · 🟡 Perf (provable, non-blocking) · 🔧 Maintainability (concrete SoC/coupling, non-blocking).
 
 ### 4. Update the Review History table
 ADD a new row (never remove existing rows):
 ```markdown
-| v{next_version} | {today} | {new_commit[:8]} | Re-review: X resolved, Y new |
+| v{next_version} | {today} | {new_commit[:8]} | Re-review: X resolved, Y partial, Z new |
 ```
 
 ### 5. Update the Verdict
@@ -6581,7 +6618,7 @@ Re-evaluate across ALL findings. Only OPEN 🔴/🟠 findings block approval.
             log_file = logs_dir / f"terminal-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
             session_name = session_path.name
 
-            prompt = f"STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it for re-review and follow its output — skip everything else. STEP 2 (only if skill unavailable): RE-REVIEW MODE — PR updated with {commit_count} new commit(s). Read RE-REVIEW.md and follow it. Update REVIEW.md in-place: reconcile each existing finding (resolved / still-open / 🔇 keep untouched), then add NEW findings only if they pass the Trigger/Expected/Actual confidence gate. Severity is 🔴 Critical / 🟠 High / 🟡 Perf. Scope: ONLY files in the PR diff. Add a new row to Review History. Self-check: verify every finding references a changed file."
+            prompt = f"STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it for re-review and follow its output — skip everything else. STEP 2 (only if skill unavailable): RE-REVIEW MODE — PR updated with {commit_count} new commit(s). Read RE-REVIEW.md and follow it. Update REVIEW.md in-place. FIRST verify each prior finding was properly addressed: re-run its Trigger against the new code and classify ✅ resolved / ⚠️ partial (keep open) / ❌ still open / 🔁 regressed, with evidence — 🔇 dismissed stay untouched. THEN add NEW findings only if they pass the evidence bar (bugs/perf: Trigger/Expected/Actual; maintainability: Tangle/Consequence/Direction), and re-check the PR still satisfies its Jira ticket. Severity is 🔴 Critical / 🟠 High / 🟡 Perf / 🔧 Maintainability. Scope: ONLY files in the PR diff. Add a new row to Review History. Self-check: verify every finding references a changed file."
 
             # Run claude directly (not via script(1) — script swallows the prompt argument)
             escaped_prompt = prompt.replace("'", "'\\''")
@@ -9893,7 +9930,7 @@ Re-evaluate across ALL findings. Only OPEN 🔴/🟠 findings block approval.
         const sessionName = state.newSession.data.sessionName || state.currentSession;
         if (!sessionName) { showToast('No session to start', 'error'); return; }
         try {
-            const reviewPrompt = 'STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it and follow its output — skip everything else. STEP 2 (only if skill unavailable): You are a senior engineer. Review ONLY files listed in Changed Files in CLAUDE.md. ANY finding whose file is not in that list is INVALID — delete it. Follow CLAUDE.md review guidelines — it defines the confidence gate and the REVIEW.md format. Write ONLY high-confidence findings: each must state Trigger, Expected, and Actual concretely, or be dropped. Severity is exactly 🔴 Critical / 🟠 High / 🟡 Perf. Only Correctness, Security, Regression, and provable Performance — no style, complexity, docs, or suggestions. Self-check: before finishing, verify every finding references a changed file and passes the gate.';
+            const reviewPrompt = 'STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it and follow its output — skip everything else. STEP 2 (only if skill unavailable): You are a senior engineer. Review ONLY files listed in Changed Files in CLAUDE.md. ANY finding whose file is not in that list is INVALID — delete it. Follow CLAUDE.md review guidelines — it defines the confidence gate and the REVIEW.md format. First check intent: does the PR satisfy its Jira ticket (source of truth)? If it diverges, that is a 🔴 finding. Then write ONLY high-confidence findings, each passing the evidence bar: bugs/perf state Trigger/Expected/Actual; maintainability states Tangle/Consequence/Direction. Otherwise drop it. Severity is 🔴 Critical / 🟠 High / 🟡 Perf / 🔧 Maintainability. Cover Correctness, Security, Regression, provable Performance, and concrete separation-of-concerns — no cosmetic style, docs, or suggestions. Self-check: before finishing, verify every finding references a changed file and passes the bar.';
             const endpoint = tool === 'acr+claude' ? API.START_ACR_CLAUDE : API.START_CLAUDE;
             if (tool === 'acr+claude') showToast('Running ACR review, then starting Claude...', 'info');
             const payload = { session: sessionName };
@@ -10876,25 +10913,27 @@ $CHANGES_SINCE
 
 **Update REVIEW.md IN PLACE. Same schema as the initial review. Do NOT rewrite from scratch.**
 
-### 1. Reconcile each existing finding
-For every finding already in the Findings Tracker:
-- **Fixed?** → set Status to \`resolved\`, keep its row for the record.
-- **Still present?** → leave it; keep its current Status (\`open\`/\`held\`/\`posted\`).
+### 1. VERIFY each prior finding was properly addressed (do this FIRST)
+This is the point of a re-review — not just finding new issues, but confirming the old concerns were actually fixed. For every finding in the Findings Tracker EXCEPT 🔇 dismissed ones:
+- Re-open the code at its Location and **re-run its evidence**: for a bug, does the original **Trigger** now produce the **Expected** result? For a maintainability finding, is the **Tangle** actually separated?
+- Classify with evidence (cite the commit/lines that changed it):
+  - ✅ **resolved** — the fix genuinely closes the gap. Set Status \`resolved\`.
+  - ⚠️ **partial** — attempted but the Trigger still misbehaves in some case. Keep it OPEN; update Actual to describe what still breaks.
+  - ❌ **still open** — not addressed. Leave as-is.
+  - 🔁 **regressed** — the fix introduced a NEW problem. Keep the original open if unfixed, AND add a new finding for the regression.
+- A fix you cannot verify closes the gap is NOT resolved — treat it as ⚠️ partial.
 - **🔇 dismissed?** → SKIP entirely. Do not re-flag, edit, or remove. The reviewer dismissed it on purpose.
 
-### 2. Look for NEW findings — same confidence gate as the initial review
-Review the full current PR diff (not just the new commits). Add a new finding ONLY if you can state all three concretely:
-- **Trigger** (exact input/state), **Expected**, **Actual**.
-If you cannot, drop it. No style, complexity, docs, or "nice to have" — only Correctness, Security, Regression, and provable Performance.
-Number new findings continuing from the last ID. Set their Status to \`open\`.
+### 2. Look for NEW findings — same evidence bar as the initial review
+Review the full current PR diff. Add a finding ONLY if you can fill its form concretely: bugs/perf → **Trigger/Expected/Actual**; maintainability → **Tangle/Consequence/Direction**. If you cannot, drop it. Only Correctness, Security, Regression, provable Performance, and concrete separation-of-concerns — no cosmetic style, docs, or "nice to have". Also re-check intent: does the PR still satisfy the Jira ticket? Number new findings continuing from the last ID; Status \`open\`.
 
-### 3. Severity — exactly three
-🔴 Critical (blocks) · 🟠 High (should fix) · 🟡 Perf (provable, non-blocking).
+### 3. Severity — exactly four
+🔴 Critical (blocks) · 🟠 High (should fix) · 🟡 Perf (provable, non-blocking) · 🔧 Maintainability (concrete SoC/coupling, non-blocking).
 
 ### 4. Update the Review History table
 ADD a new row (never remove existing rows):
 \`\`\`markdown
-| v${next_version} | $(date '+%Y-%m-%d') | ${NEW_COMMIT:0:8} | Re-review: X resolved, Y new |
+| v${next_version} | $(date '+%Y-%m-%d') | ${NEW_COMMIT:0:8} | Re-review: X resolved, Y partial, Z new |
 \`\`\`
 
 ### 5. Update the Verdict
@@ -10904,7 +10943,7 @@ Re-evaluate across ALL findings. Only OPEN 🔴/🟠 findings block approval.
 
 **Scope gate:** every finding's file must be in the current diff. **Do NOT touch 🔇 findings.** **Do NOT post to GitHub.**
 
-**BEGIN: read REVIEW.md, reconcile findings, apply the confidence gate to new ones, update in-place.**
+**BEGIN: read REVIEW.md, VERIFY each prior finding against the new code, then apply the evidence bar to new ones, update in-place.**
 REREVIEW_EOF
     rm -f "$SESSION_DIR/repo/RE-REVIEW.md"
     ln -sf "../RE-REVIEW.md" "$SESSION_DIR/repo/RE-REVIEW.md"
@@ -10969,14 +11008,14 @@ NOTICE_EOF
         *"Start Claude"*)
             tput reset 2>/dev/null || clear
             cd "$SESSION_DIR/repo"
-            claude "STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it for re-review and follow its output — skip everything else. STEP 2 (only if skill unavailable): RE-REVIEW MODE — PR updated with $COMMIT_COUNT new commit(s). Read RE-REVIEW.md and follow it. Update REVIEW.md in-place: reconcile each existing finding (resolved / still-open / 🔇 keep untouched), then add NEW findings only if they pass the Trigger/Expected/Actual confidence gate. Severity is 🔴 Critical / 🟠 High / 🟡 Perf. Scope: ONLY files in the PR diff. Add a new row to Review History. Self-check: verify every finding references a changed file."
+            claude "STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it for re-review and follow its output — skip everything else. STEP 2 (only if skill unavailable): RE-REVIEW MODE — PR updated with $COMMIT_COUNT new commit(s). Read RE-REVIEW.md and follow it. Update REVIEW.md in-place. FIRST verify each prior finding was properly addressed: re-run its Trigger against the new code and classify ✅ resolved / ⚠️ partial (keep open) / ❌ still open / 🔁 regressed, with evidence — 🔇 dismissed stay untouched. THEN add NEW findings only if they pass the evidence bar (bugs/perf: Trigger/Expected/Actual; maintainability: Tangle/Consequence/Direction), and re-check the PR still satisfies its Jira ticket. Severity is 🔴 Critical / 🟠 High / 🟡 Perf / 🔧 Maintainability. Scope: ONLY files in the PR diff. Add a new row to Review History. Self-check: verify every finding references a changed file."
             return 2  # Signal that Claude was run
             ;;
         *"ACR"*)
             run_acr_quick "$SESSION_DIR" "$PR_BASE"
             tput reset 2>/dev/null || clear
             cd "$SESSION_DIR/repo"
-            claude "STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it for re-review (ACR_REVIEW.md has context) and follow its output — skip everything else. STEP 2 (only if skill unavailable): RE-REVIEW MODE — PR updated. Read RE-REVIEW.md and ACR_REVIEW.md, and follow RE-REVIEW.md. Update REVIEW.md in-place: reconcile each existing finding (resolved / still-open / 🔇 keep untouched), then add NEW findings only if they pass the Trigger/Expected/Actual confidence gate. Severity is 🔴 Critical / 🟠 High / 🟡 Perf. Scope: ONLY files in the PR diff. Add a new row to Review History. Self-check: verify every finding references a changed file."
+            claude "STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it for re-review (ACR_REVIEW.md has context) and follow its output — skip everything else. STEP 2 (only if skill unavailable): RE-REVIEW MODE — PR updated. Read RE-REVIEW.md and ACR_REVIEW.md, and follow RE-REVIEW.md. Update REVIEW.md in-place. FIRST verify each prior finding was properly addressed: re-run its Trigger against the new code and classify ✅ resolved / ⚠️ partial (keep open) / ❌ still open / 🔁 regressed, with evidence — 🔇 dismissed stay untouched. THEN add NEW findings only if they pass the evidence bar (bugs/perf: Trigger/Expected/Actual; maintainability: Tangle/Consequence/Direction), and re-check the PR still satisfies its Jira ticket. Severity is 🔴 Critical / 🟠 High / 🟡 Perf / 🔧 Maintainability. Scope: ONLY files in the PR diff. Add a new row to Review History. Self-check: verify every finding references a changed file."
             return 2  # Signal that Claude was run
             ;;
         *)
@@ -11196,7 +11235,7 @@ pre_session_menu() {
                         dim "Type /exit when done to return here."
                         sleep 1
                         tput reset 2>/dev/null || clear
-                        cd "$SESSION_DIR/repo" && claude --model $MODEL --add-dir "$SESSION_DIR" -- "STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it and follow its output — skip everything else. STEP 2 (only if skill unavailable): You are a senior engineer. Review ONLY files listed in Changed Files in CLAUDE.md. ANY finding whose file is not in that list is INVALID — delete it. Follow CLAUDE.md review guidelines — it defines the confidence gate and the REVIEW.md format. Write ONLY high-confidence findings: each must state Trigger, Expected, and Actual concretely, or be dropped. Severity is exactly 🔴 Critical / 🟠 High / 🟡 Perf. Only Correctness, Security, Regression, and provable Performance — no style, complexity, docs, or suggestions. Self-check: before finishing, verify every finding references a changed file and passes the gate."
+                        cd "$SESSION_DIR/repo" && claude --model $MODEL --add-dir "$SESSION_DIR" -- "STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it and follow its output — skip everything else. STEP 2 (only if skill unavailable): You are a senior engineer. Review ONLY files listed in Changed Files in CLAUDE.md. ANY finding whose file is not in that list is INVALID — delete it. Follow CLAUDE.md review guidelines — it defines the confidence gate and the REVIEW.md format. First check intent: does the PR satisfy its Jira ticket (source of truth)? If it diverges, that is a 🔴 finding. Then write ONLY high-confidence findings, each passing the evidence bar: bugs/perf state Trigger/Expected/Actual; maintainability states Tangle/Consequence/Direction. Otherwise drop it. Severity is 🔴 Critical / 🟠 High / 🟡 Perf / 🔧 Maintainability. Cover Correctness, Security, Regression, provable Performance, and concrete separation-of-concerns — no cosmetic style, docs, or suggestions. Self-check: before finishing, verify every finding references a changed file and passes the bar."
                         post_session_menu "$SESSION_DIR"
                         return 0
                         ;;
@@ -12710,20 +12749,22 @@ printf '| **New Commits** | %s |\n\n' "\$commit_count"
 printf '### New Commits\n\`\`\`\n%s\n\`\`\`\n\n' "\${new_commits_text:-(none)}"
 printf '### Files Changed Since Last Review\n\`\`\`\n%s\n\`\`\`\n\n---\n\n' "\${changes_since:-(none)}"
 printf '## Re-Review Instructions\n\n**Update REVIEW.md IN PLACE. Same schema as the initial review. Do NOT rewrite from scratch.**\n\n'
-printf '### 1. Reconcile each existing finding\nFor every finding in the Findings Tracker:\n'
-printf '- **Fixed?** → set Status to `resolved`, keep its row for the record.\n'
-printf '- **Still present?** → leave it; keep its current Status (`open`/`held`/`posted`).\n'
-printf '- **🔇 dismissed?** → SKIP entirely. Do not re-flag, edit, or remove — the reviewer dismissed it on purpose.\n\n'
-printf '### 2. Look for NEW findings — same confidence gate as the initial review\n'
-printf 'Review the full current PR diff. Add a finding ONLY if you can state all three concretely: **Trigger** (exact input/state), **Expected**, **Actual**. If you cannot, drop it.\n'
-printf 'Only Correctness, Security, Regression, and provable Performance. No style, complexity, docs, or "nice to have".\n'
+printf '### 1. VERIFY each prior finding was properly addressed (do this FIRST)\n'
+printf 'The point of a re-review is confirming old concerns were actually fixed, not just finding new ones. For every finding in the Findings Tracker EXCEPT 🔇 dismissed:\n'
+printf -- '- Re-open the code at its Location and **re-run its evidence**: for a bug, does the original **Trigger** now produce **Expected**? For maintainability, is the **Tangle** actually separated?\n'
+printf -- '- Classify with evidence (cite the changed lines): ✅ **resolved** (set Status `resolved`) · ⚠️ **partial** (keep OPEN, update Actual with what still breaks) · ❌ **still open** (leave as-is) · 🔁 **regressed** (keep original + add a new finding for the regression).\n'
+printf -- '- A fix you cannot verify closes the gap is NOT resolved — treat as ⚠️ partial.\n'
+printf -- '- **🔇 dismissed?** → SKIP entirely. Do not re-flag, edit, or remove.\n\n'
+printf '### 2. Look for NEW findings — same evidence bar as the initial review\n'
+printf 'Review the full current PR diff. Add a finding ONLY if you can fill its form concretely: bugs/perf → **Trigger/Expected/Actual**; maintainability → **Tangle/Consequence/Direction**. If you cannot, drop it.\n'
+printf 'Only Correctness, Security, Regression, provable Performance, and concrete separation-of-concerns. No cosmetic style, docs, or "nice to have". Also re-check intent: does the PR still satisfy the Jira ticket?\n'
 printf 'Number new findings continuing from the last ID; set Status to `open`.\n\n'
-printf '### 3. Severity — exactly three\n🔴 Critical (blocks) · 🟠 High (should fix) · 🟡 Perf (provable, non-blocking).\n\n'
+printf '### 3. Severity — exactly four\n🔴 Critical (blocks) · 🟠 High (should fix) · 🟡 Perf (provable, non-blocking) · 🔧 Maintainability (concrete SoC/coupling, non-blocking).\n\n'
 printf '### 4. Update Review History\nADD a new row — never remove existing rows:\n'
-printf '\`\`\`\n| v%s | %s | %s | Re-review: X resolved, Y new |\n\`\`\`\n\n' "\$next_version" "\$today" "\$new_short"
+printf '\`\`\`\n| v%s | %s | %s | Re-review: X resolved, Y partial, Z new |\n\`\`\`\n\n' "\$next_version" "\$today" "\$new_short"
 printf '### 5. Update the Verdict\nRe-evaluate across ALL findings. Only OPEN 🔴/🟠 findings block approval.\n\n---\n\n'
 printf '**Scope gate:** every finding'"'"'s file must be in the current diff. **Do NOT touch 🔇 findings. Do NOT post to GitHub.**\n\n'
-printf '**BEGIN: read REVIEW.md, reconcile findings, apply the confidence gate to new ones, update in-place.**\n'
+printf '**BEGIN: read REVIEW.md, VERIFY each prior finding against the new code, then apply the evidence bar to new ones, update in-place.**\n'
 } > "$SESSION_DIR/RE-REVIEW.md"
 
 rm -f "$REPO_DIR/RE-REVIEW.md"
@@ -12750,7 +12791,7 @@ fi
 update_session_field "$SESSION_DIR" "reviewed_sha" "\$new_commit"
 
 # --- Step 6: Run headless re-review with skill-aware prompt ---
-prompt="STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it for re-review and follow its output — skip everything else. STEP 2 (only if skill unavailable): RE-REVIEW MODE — PR updated with \${commit_count} new commit(s). Read RE-REVIEW.md and follow it. Update REVIEW.md in-place: reconcile each existing finding (resolved / still-open / 🔇 keep untouched), then add NEW findings only if they pass the Trigger/Expected/Actual confidence gate. Severity is 🔴 Critical / 🟠 High / 🟡 Perf. Scope: ONLY files in the PR diff. Add a new row to Review History. Self-check: verify every finding references a changed file. As the very last action, write a single line to the file $SESSION_DIR/rereview_summary. Format: '✅ N/N resolved' if all prior findings are resolved, or '⚠️ K/N resolved, M new' otherwise. Write only that line — no other content."
+prompt="STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it for re-review and follow its output — skip everything else. STEP 2 (only if skill unavailable): RE-REVIEW MODE — PR updated with \${commit_count} new commit(s). Read RE-REVIEW.md and follow it. Update REVIEW.md in-place. FIRST verify each prior finding was properly addressed: re-run its Trigger against the new code and classify ✅ resolved / ⚠️ partial (keep open) / ❌ still open / 🔁 regressed, with evidence — 🔇 dismissed stay untouched. THEN add NEW findings only if they pass the evidence bar (bugs/perf: Trigger/Expected/Actual; maintainability: Tangle/Consequence/Direction), and re-check the PR still satisfies its Jira ticket. Severity is 🔴 Critical / 🟠 High / 🟡 Perf / 🔧 Maintainability. Scope: ONLY files in the PR diff. Add a new row to Review History. Self-check: verify every finding references a changed file. As the very last action, write a single line to the file $SESSION_DIR/rereview_summary. Format: '✅ N/N resolved' if all prior findings are resolved, or '⚠️ K/N resolved, M new' otherwise. Write only that line — no other content."
 
 cd "$REPO_DIR" && claude -p "\$prompt" --permission-mode acceptEdits --add-dir "$SESSION_DIR" < /dev/null
 rc=\$?
