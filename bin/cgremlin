@@ -237,6 +237,17 @@ clear_rereview_pending() { update_session_field "$1" "rereview_pending" "false";
 # Usage: read_rereview_pending SESSION_DIR (default: false)
 read_rereview_pending()  { local v=$(read_session_field "$1" "rereview_pending" 2>/dev/null); echo "${v:-false}"; }
 
+# A PR session is "mine" when its author matches GITHUB_ME (case-insensitive).
+# Usage: pr_is_mine SESSION_DIR   (exit 0 = mine)
+pr_is_mine() {
+    [ -n "$GITHUB_ME" ] || return 1
+    local a; a=$(read_session_field "$1" "pr.author" 2>/dev/null)
+    [ "$(printf '%s' "$a" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "$GITHUB_ME" | tr '[:upper:]' '[:lower:]')" ]
+}
+# mine_stage: tracking (idle) | triaging (worker running) | ready (COMMENTS.md waiting)
+update_mine_stage() { update_session_field "$1" "mine_stage" "$2"; }
+read_mine_stage()   { local v=$(read_session_field "$1" "mine_stage" 2>/dev/null); echo "${v:-tracking}"; }
+
 # Extract owner/repo from session.json .project (https://github.com/OWNER/REPO)
 # Usage: _pr_repo SESSION_DIR
 _pr_repo() { read_session_field "$1" "project" | sed -E 's#.*github\.com/([^/]+/[^/.]+).*#\1#'; }
@@ -12353,8 +12364,13 @@ watch_daemon_loop() {
                         [ -d "$ex" ] && { already_tracked=true; break; }
                     done
                     [ "$already_tracked" = true ] && continue
-                    echo "auto-pickup PR #${pr_num} @${pr_author} in ${wrepo} $(date)" >> "$LOG"
-                    "$_cg" --review-pr "$pr_url" >> "$LOG" 2>&1 &
+                    if [ -n "$GITHUB_ME" ] && [ "$(printf '%s' "$pr_author" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "$GITHUB_ME" | tr '[:upper:]' '[:lower:]')" ]; then
+                        echo "track my PR #${pr_num} @${pr_author} in ${wrepo} $(date)" >> "$LOG"
+                        "$_cg" --track-my-pr "$pr_url" >> "$LOG" 2>&1 &
+                    else
+                        echo "auto-pickup PR #${pr_num} @${pr_author} in ${wrepo} $(date)" >> "$LOG"
+                        "$_cg" --review-pr "$pr_url" >> "$LOG" 2>&1 &
+                    fi
                 done <<< "$pr_rows"
             done
         fi
@@ -12576,7 +12592,7 @@ if [ "$1" = "--review-list-grouped" ]; then
 fi
 
 # Skip dashboard lifecycle when called as a subprocess (e.g. --create-session, --review-pr, --lib-only)
-if [ "$1" != "--create-session" ] && [ "$1" != "--review-pr" ] && [ "$1" != "--rereview-pr" ] && [ "$1" != "--lib-only" ] && [ "$1" != "--status-pane" ] && [ "$1" != "--open-pr" ] && [ "$1" != "--orchestrator" ] && [ "$1" != "--dismiss-pr" ] && [ "$1" != "--mission-control" ] && [ "$1" != "--review-list-grouped" ] && [ "$1" != "--approve-pr" ] && [ "$1" != "--comment-pr" ] && [ "$1" != "--request-changes-pr" ] && [ "$1" != "--watch-daemon" ]; then
+if [ "$1" != "--create-session" ] && [ "$1" != "--review-pr" ] && [ "$1" != "--rereview-pr" ] && [ "$1" != "--track-my-pr" ] && [ "$1" != "--lib-only" ] && [ "$1" != "--status-pane" ] && [ "$1" != "--open-pr" ] && [ "$1" != "--orchestrator" ] && [ "$1" != "--dismiss-pr" ] && [ "$1" != "--mission-control" ] && [ "$1" != "--review-list-grouped" ] && [ "$1" != "--approve-pr" ] && [ "$1" != "--comment-pr" ] && [ "$1" != "--request-changes-pr" ] && [ "$1" != "--watch-daemon" ]; then
     cleanup_on_exit() {
         stop_dashboard_server 2>/dev/null
     }
@@ -12845,6 +12861,28 @@ review_pr_noninteractive() {
     echo "$session_name"
 }
 
+track_my_pr() {
+    # My own PR: create a tracked session (shallow clone so we can fix later),
+    # but do NOT run a code review. Just mark it mine_stage=tracking.
+    local pr_input="$1"
+    local session_name
+    session_name=$(create_pr_session_noninteractive "$pr_input" "" | tail -1)
+    [ -z "$session_name" ] && { echo "ERROR: session creation failed" >&2; return 1; }
+    local session_dir="$SESSIONS_DIR/$session_name"
+    update_mine_stage "$session_dir" "tracking"
+    # create_pr_session_noninteractive wrote a REVIEW-mode CLAUDE.md (auto-start
+    # review). This is MY PR — replace it so no review agent ever auto-starts;
+    # the triage pane drives everything via AGENT_CONTEXT.md / COMMENTS.md.
+    cat > "$session_dir/CLAUDE.md" <<'MYPR'
+# My Pull Request (tracked, not auto-reviewed)
+
+This is your own PR. It is not code-reviewed by the tool. When reviewers leave
+comments they are triaged into COMMENTS.md, and AGENT_CONTEXT.md drives the
+guided reply/fix flow. Do not start a code review here.
+MYPR
+    echo "$session_name"
+}
+
 rereview_pr() {
     local session_name="$1"
     local SESSION_DIR="$SESSIONS_DIR/$session_name"
@@ -12961,6 +12999,11 @@ WRAPPER_EOF
 if [ "$1" = "--review-pr" ]; then
     review_pr_noninteractive "$2" "$3"
     exit $?
+fi
+
+if [ "$1" = "--track-my-pr" ]; then
+    [ -z "$2" ] && { echo "Usage: cgremlin --track-my-pr <pr-url>" >&2; exit 1; }
+    track_my_pr "$2"; exit $?
 fi
 
 # Handle --rereview-pr argument (incremental re-review of an existing session)
