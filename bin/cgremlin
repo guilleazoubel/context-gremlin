@@ -12328,13 +12328,17 @@ watch_daemon_loop() {
         # --- Manage existing PR sessions ---
         for d in "$SESSIONS_DIR"/pr-*; do
             [ -d "$d/repo" ] || continue
-            local num repo state lc head
+            local num repo state review_decision meta lc head
             num=$(read_session_field "$d" "pr.number"); repo=$(_pr_repo "$d")
             [ -z "$num" ] || [ -z "$repo" ] && continue
-            state=$(timeout 15 gh pr view "$num" --repo "$repo" --json state -q .state 2>/dev/null)
-            if [ "$state" = "MERGED" ] || [ "$state" = "CLOSED" ]; then
+            # Fetch state + review decision together (one API call).
+            meta=$(timeout 15 gh pr view "$num" --repo "$repo" --json state,reviewDecision -q '.state + "\t" + (.reviewDecision // "")' 2>/dev/null)
+            state="${meta%%$'\t'*}"; review_decision="${meta#*$'\t'}"
+            # Merged/closed OR approved → our review job is done; clear the session.
+            if [ "$state" = "MERGED" ] || [ "$state" = "CLOSED" ] || [ "$review_decision" = "APPROVED" ]; then
                 case "$d" in "$SESSIONS_DIR"/pr-*)
-                    echo "delete merged $d $(date)" >> "$LOG"
+                    local _why="merged/closed"; [ "$review_decision" = "APPROVED" ] && [ "$state" != "MERGED" ] && [ "$state" != "CLOSED" ] && _why="approved"
+                    echo "delete ($_why) $d $(date)" >> "$LOG"
                     local _apid; _apid=$(cat "$d/agent_pid" 2>/dev/null)
                     [ -n "$_apid" ] && kill "$_apid" 2>/dev/null || true
                     rm -rf "$d"
