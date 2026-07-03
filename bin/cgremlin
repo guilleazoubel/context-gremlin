@@ -18,11 +18,13 @@ CONFIG_FILE="$CONFIG_DIR/config"
 DEFAULT_MODEL="sonnet"
 DEFAULT_DASHBOARD_AUTO_START="true"
 DEFAULT_PROJECT=""
+DEFAULT_USE_ZELLIJ="false"
 
 # Current configuration (loaded at startup)
 MODEL="${DEFAULT_MODEL}"
 DASHBOARD_AUTO_START="${DEFAULT_DASHBOARD_AUTO_START}"
 DEFAULT_PROJECT="${DEFAULT_PROJECT}"
+USE_ZELLIJ="${DEFAULT_USE_ZELLIJ}"
 
 # Load configuration from file
 load_config() {
@@ -43,6 +45,7 @@ load_config() {
                 MODEL) MODEL="$value" ;;
                 DASHBOARD_AUTO_START) DASHBOARD_AUTO_START="$value" ;;
                 DEFAULT_PROJECT) DEFAULT_PROJECT="$value" ;;
+                USE_ZELLIJ) USE_ZELLIJ="$value" ;;
                 SESSIONS_DIR) [ -z "$CGREMLIN_SESSIONS_DIR" ] && SESSIONS_DIR="$value" ;;
             esac
         done < "$CONFIG_FILE"
@@ -65,6 +68,9 @@ DASHBOARD_AUTO_START="$DASHBOARD_AUTO_START"
 
 # Default project path (last used or set manually)
 DEFAULT_PROJECT="$DEFAULT_PROJECT"
+
+# Open new Claude sessions in Zellij panes instead of iTerm2 tabs (true/false)
+USE_ZELLIJ="$USE_ZELLIJ"
 EOF
     chmod 600 "$CONFIG_FILE"
 }
@@ -180,6 +186,311 @@ update_session_field() {
             jq --arg v "$value" ".$field = \$v" "$session_file" > "$tmp" && mv "$tmp" "$session_file"
         fi
     fi
+}
+
+# Update review_state in session.json
+# Usage: update_review_state SESSION_DIR <queued|reviewing|ready|failed|interrupted>
+update_review_state()  { update_session_field "$1" "review_state" "$2"; }
+
+# Read review_state from session.json (default: none)
+# Usage: read_review_state SESSION_DIR
+read_review_state()    { read_session_field "$1" "review_state" 2>/dev/null || echo "none"; }
+
+# Update triage_state in session.json
+# Usage: update_triage_state SESSION_DIR <open|done>
+update_triage_state()  { update_session_field "$1" "triage_state" "$2"; }
+
+# Read triage_state from session.json (default: open)
+# Usage: read_triage_state SESSION_DIR
+read_triage_state()    { local v=$(read_session_field "$1" "triage_state" 2>/dev/null); echo "${v:-open}"; }
+
+# Update lifecycle in session.json (human's posted decision)
+# Usage: update_lifecycle SESSION_DIR <none|commented|changes-requested|approved>
+update_lifecycle() { update_session_field "$1" "lifecycle" "$2"; }
+# Read lifecycle from session.json (default: none)
+# Usage: read_lifecycle SESSION_DIR
+read_lifecycle()   { local v=$(read_session_field "$1" "lifecycle" 2>/dev/null); echo "${v:-none}"; }
+
+# PR head SHA recorded when the human last posted a review
+# Usage: update_reviewed_sha SESSION_DIR <sha>
+update_reviewed_sha() { update_session_field "$1" "reviewed_sha" "$2"; }
+# Usage: read_reviewed_sha SESSION_DIR
+read_reviewed_sha()   { read_session_field "$1" "reviewed_sha" 2>/dev/null; }
+
+# Author pushed new commits since reviewed_sha (set by the watch daemon)
+# Usage: set_rereview_pending SESSION_DIR
+set_rereview_pending()   { update_session_field "$1" "rereview_pending" "true"; }
+# Usage: clear_rereview_pending SESSION_DIR
+clear_rereview_pending() { update_session_field "$1" "rereview_pending" "false"; }
+# Usage: read_rereview_pending SESSION_DIR (default: false)
+read_rereview_pending()  { local v=$(read_session_field "$1" "rereview_pending" 2>/dev/null); echo "${v:-false}"; }
+
+# Extract owner/repo from session.json .project (https://github.com/OWNER/REPO)
+# Usage: _pr_repo SESSION_DIR
+_pr_repo() { read_session_field "$1" "project" | sed -E 's#.*github\.com/([^/]+/[^/.]+).*#\1#'; }
+
+# Post a GitHub PR review on behalf of the discussion agent.
+# Usage: _post_review SESSION_NAME gh-event-flag success-lifecycle
+_post_review() {   # $1=session_name  $2=gh-event-flag (--approve|--comment|--request-changes)  $3=success-lifecycle
+    local d="$SESSIONS_DIR/$1"; local num repo body
+    num=$(read_session_field "$d" "pr.number"); repo=$(_pr_repo "$d")
+    body="$d/.review_body.md"; [ -f "$body" ] || { echo "ERROR: $body not found (agent must write the review body first)" >&2; return 1; }
+    if gh pr review "$num" --repo "$repo" "$2" --body-file "$body"; then
+        update_lifecycle "$d" "$3"; echo "posted $2 for $1"
+    else
+        echo "ERROR: gh pr review failed for $1 (lifecycle unchanged)" >&2; return 1
+    fi
+}
+approve_pr() {
+    _post_review "$1" "--approve" "approved" || return 1
+    local d="$SESSIONS_DIR/$1"
+    case "$d" in "$SESSIONS_DIR"/pr-*) rm -rf "$d"; echo "approved+deleted $1";; *) echo "refusing to delete $d" >&2; return 1;; esac
+}
+comment_pr()         { _post_review "$1" "--comment" "commented"          && _record_reviewed "$1"; }
+request_changes_pr() { _post_review "$1" "--request-changes" "changes-requested" && _record_reviewed "$1"; }
+
+# After a successful comment/request-changes, snapshot the PR head so the watch daemon
+# can detect NEW commits, and clear any stale rereview flag.
+_record_reviewed() {
+    local d="$SESSIONS_DIR/$1"; local num repo sha
+    num=$(read_session_field "$d" "pr.number"); repo=$(_pr_repo "$d")
+    sha=$(timeout 15 gh pr view "$num" --repo "$repo" --json headRefOid -q .headRefOid 2>/dev/null)
+    [ -n "$sha" ] && update_reviewed_sha "$d" "$sha"
+    clear_rereview_pending "$d"
+}
+
+# If a review is marked "reviewing" but its worker PID is gone, mark it interrupted.
+# Usage: detect_interrupted SESSION_DIR
+detect_interrupted() {
+  local d="$1"
+  local pid; pid=$(read_session_field "$d" "review_worker_pid")
+  if [ "$(read_review_state "$d")" = "reviewing" ] && { [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; }; then
+    update_review_state "$d" "interrupted"
+  fi
+}
+
+# If a PR is merged or closed on GitHub, mark it triage done (best-effort, never blocks).
+# Usage: auto_drop_merged SESSION_DIR
+auto_drop_merged() {
+  local d="$1"
+  local num proj repo state
+  num=$(read_session_field "$d" "pr.number")
+  proj=$(read_session_field "$d" "project")
+  [ -z "$num" ] || [ -z "$proj" ] && return 0
+  repo=$(printf '%s' "$proj" | sed -E 's#.*github\.com/([^/]+/[^/.]+).*#\1#')
+  state=$(gh pr view "$num" --repo "$repo" --json state -q .state 2>/dev/null)
+  if [ "$state" = "MERGED" ] || [ "$state" = "CLOSED" ]; then
+    update_triage_state "$d" "done"
+  fi
+}
+
+# Startup sweep: run once at Mission Control launch to fix stale states.
+# Usage: mc_startup_sweep
+mc_startup_sweep() {
+  for d in "$SESSIONS_DIR"/pr-*; do
+    [ -d "$d" ] || continue
+    [ "$(read_triage_state "$d")" = "done" ] && continue
+    detect_interrupted "$d"
+    auto_drop_merged "$d"
+  done
+  ensure_agent_panes
+}
+
+# Write shared engineering principles file to a session directory.
+# Usage: write_principles SESSION_DIR
+write_principles() {
+  cat > "$1/PRINCIPLES.md" <<'PRIN'
+# Engineering Principles (shared)
+- No hacks or workarounds; prefer correct, maintainable solutions.
+- Optimize for readability and long-term maintainability.
+- Consider scalability and performance implications.
+- Follow existing patterns and conventions in the codebase.
+- YAGNI — do not over-engineer; solve the actual problem.
+PRIN
+}
+
+# Emit one line per open review: "<display>\t<session>\t<group>".
+# Section headers are emitted as display-only rows with empty session+group.
+review_list_grouped() {
+  local review="" rereview="" response=""
+  local d sname num author rs lc rp icon line
+  for d in "$SESSIONS_DIR"/pr-*; do
+    [ -d "$d/repo" ] || continue                       # repo gone (deleted/merged) → skip
+    [ "$(read_triage_state "$d")" = "done" ] && continue
+    sname=$(basename "$d")
+    num=$(read_session_field "$d" "pr.number")
+    author=$(read_session_field "$d" "pr.author")
+    rs=$(read_review_state "$d")
+    lc=$(read_lifecycle "$d")
+    rp=$(read_rereview_pending "$d")
+    case "$rs" in
+      ready) icon="✅ ready";; reviewing) icon="🤔 reviewing";; queued) icon="… queued";;
+      failed) icon="⚠ failed";; interrupted) icon="⏸ interrupted";; *) icon="${rs:-none}";;
+    esac
+    line="$(printf 'PR #%s  @%-14s %s\t%s' "$num" "${author:-?}" "$icon" "$sname")"
+    if [ "$lc" = "none" ]; then
+      review="${review}${line}\treview"$'\n'
+    elif [ "$rp" = "true" ]; then
+      local summary; summary=$(cat "$d/rereview_summary" 2>/dev/null)
+      local reline="$line"
+      [ -n "$summary" ] && reline="${line}  ·  ${summary}"
+      rereview="${rereview}${reline}\trereview"$'\n'
+    else
+      response="${response}$(printf 'PR #%s  @%-14s 💬 awaiting author' "$num" "${author:-?}")\t${sname}\tresponse"$'\n'
+    fi
+  done
+  printf '── Waiting for review ──\t\t\n';        [ -n "$review" ]   && printf '%b' "$review"
+  printf '── Waiting for re-review ──\t\t\n';     [ -n "$rereview" ] && printf '%b' "$rereview"
+  printf '── Waiting for response ──\t\t\n';      [ -n "$response" ] && printf '%b' "$response"
+}
+
+render_status_table() {
+  printf '\033[2J\033[H'   # clear
+  printf 'MISSION CONTROL — reviews\n\n'
+  for d in "$SESSIONS_DIR"/pr-*; do
+    [ -d "$d" ] || continue
+    [ "$(read_triage_state "$d")" = "done" ] && continue
+    local num author rstate astate icon
+    num=$(read_session_field "$d" "pr.number"); author=$(read_session_field "$d" "pr.author")
+    rstate=$(read_review_state "$d"); astate=$(cat "$d/.cg_agent_state" 2>/dev/null)
+    case "$rstate" in
+      ready) icon="✅ ready";; reviewing) icon="🤔 reviewing";;
+      failed) icon="⚠ failed";; interrupted) icon="⏸ interrupted";;
+      queued) icon="… queued";; *) icon="$rstate";;
+    esac
+    [ "$astate" = "waiting" ] && icon="💬 waiting for your input"
+    printf '  PR #%s  @%-12s  %s\n' "$num" "${author:-?}" "$icon"
+  done
+}
+
+# Create a hidden floating Zellij pane running a claude agent for this PR session.
+# Writes the agent PID to SESSION_DIR/agent_pid (exec preserves PID across bash→claude).
+# No-op if called outside a Zellij session.
+# Usage: create_review_agent_pane SESSION_DIR
+create_review_agent_pane() {
+    local SDIR="$1"
+    [ -d "$SDIR/repo" ] || return 1
+    [ -n "$ZELLIJ" ] || return 0
+
+    local num author
+    num=$(read_session_field "$SDIR" "pr.number")
+    author=$(read_session_field "$SDIR" "pr.author")
+    local pane_name="PR #${num} · @${author}"
+
+    # Merge posting-command permissions into settings.local.json (idempotent).
+    local sf="$SDIR/repo/.claude/settings.local.json"; mkdir -p "$SDIR/repo/.claude"
+    local add='["Bash(cgremlin --approve-pr *)","Bash(cgremlin --comment-pr *)","Bash(cgremlin --request-changes-pr *)"]'
+    if [ -f "$sf" ]; then
+        jq --argjson add "$add" '.permissions.allow = ((.permissions.allow // []) + $add | unique)' "$sf" > "$sf.tmp" && mv "$sf.tmp" "$sf"
+    else
+        printf '{"permissions":{"allow":%s}}\n' "$add" > "$sf"
+    fi
+
+    # Write opening context so the agent starts oriented without the user explaining.
+    local pr_title pr_url pr_head
+    pr_title=$(read_session_field "$SDIR" "pr.title")
+    pr_url=$(read_session_field "$SDIR" "pr.url")
+    pr_head=$(read_session_field "$SDIR" "pr.head")
+    cat > "$SDIR/AGENT_CONTEXT.md" <<CTX
+# PR Review Agent — PR #${num}: ${pr_title}
+
+Author: @${author}
+Branch: ${pr_head}
+URL: ${pr_url}
+
+REVIEW.md in this directory contains the full automated pre-review findings.
+Read REVIEW.md first, then help the user understand the analysis, explore the code, and answer questions.
+
+When the user is ready to post:
+1. Confirm the review type explicitly (Approve / Comment / Request-changes).
+2. Write the review body to: ${SDIR}/.review_body.md
+   (the session root — NOT the repo subdirectory)
+3. Run exactly one of:
+   cgremlin --approve-pr $(basename "$SDIR")
+   cgremlin --comment-pr $(basename "$SDIR")
+   cgremlin --request-changes-pr $(basename "$SDIR")
+CTX
+
+    # Wrapper: write own PID then exec-replace with claude.
+    # exec preserves the PID, so agent_pid stays valid after the switch.
+    local wrapper; wrapper=$(mktemp /tmp/cgremlin-agent-XXXXXX)
+    cat > "$wrapper" <<WRAPPER
+#!/bin/bash
+echo \$\$ > "$SDIR/agent_pid"
+cd "$SDIR/repo" && exec claude --model "$MODEL" --add-dir "$SDIR"
+WRAPPER
+    chmod +x "$wrapper"
+
+    zellij action new-pane --floating --name "$pane_name" -- bash "$wrapper" 2>/dev/null || true
+}
+
+# For each session that should have a floating agent pane but doesn't, create one.
+# Should-have conditions: review_state=ready AND (lifecycle=none OR rereview_pending=true).
+# Usage: ensure_agent_panes  (no args; uses SESSIONS_DIR)
+ensure_agent_panes() {
+    [ -n "$ZELLIJ" ] || return 0
+    local d pid pid_file lc rp
+    for d in "$SESSIONS_DIR"/pr-*; do
+        [ -d "$d/repo" ] || continue
+        [ "$(read_triage_state "$d")" = "done" ] && continue
+        [ "$(read_review_state "$d")" = "ready" ] || continue
+        lc=$(read_lifecycle "$d")
+        rp=$(read_rereview_pending "$d")
+        # Skip sessions in "waiting for response" state (no pane needed).
+        if [ "$lc" != "none" ] && [ "$rp" != "true" ]; then
+            continue
+        fi
+        pid_file="$d/agent_pid"
+        pid=$(cat "$pid_file" 2>/dev/null)
+        if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
+            rm -f "$pid_file"
+            create_review_agent_pane "$d"
+        fi
+    done
+}
+
+# Show the floating agent pane for a session. If the pane is not alive, recreate it first.
+# Usage: open_pr_row <session-name>
+open_pr_row() {
+    local session_name="$1"
+    local SDIR="$SESSIONS_DIR/$session_name"
+    [ -d "$SDIR/repo" ] || { echo "ERROR: repo missing for $session_name" >&2; return 1; }
+
+    local pid pid_file="$SDIR/agent_pid"
+    pid=$(cat "$pid_file" 2>/dev/null)
+    if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
+        rm -f "$pid_file"
+        create_review_agent_pane "$SDIR"
+        # new-pane --floating auto-shows the floating layer; no toggle needed
+    else
+        # Pane already exists; floating layer may be hidden — show it
+        zellij action toggle-floating-panes 2>/dev/null || true
+    fi
+}
+
+# Interactive picker: select a ready review and show its floating agent pane.
+status_pane_loop() {
+    mc_startup_sweep
+    # Resolve our own absolute path (follow symlinks) so self-calls never depend on PATH.
+    local _src="${BASH_SOURCE[0]:-$0}" _d
+    while [ -L "$_src" ]; do _d="$(cd -P "$(dirname "$_src")" && pwd)"; _src="$(readlink "$_src")"; [[ "$_src" != /* ]] && _src="$_d/$_src"; done
+    local _cg; _cg="$(cd -P "$(dirname "$_src")" && pwd)/$(basename "$_src")"
+    while true; do
+        local sel sname
+        # Seed the list directly (guaranteed to display), then auto-refresh every ~2s via
+        # load->reload-sync so reviewing→ready and lifecycle moves appear without a keypress
+        # (reload-sync keeps the current list visible during the refresh — no empty flash).
+        sel=$("$_cg" --review-list-grouped | fzf --ansi --reverse --delimiter='\t' --with-nth=1 \
+            --header='Mission Control — Enter: open a ready review / re-review a waiting one' \
+            --bind="load:reload-sync:sleep 2; $_cg --review-list-grouped" \
+            --bind='double-click:accept' 2>/dev/null)
+        local rc=$?
+        [ $rc -ne 0 ] && { sleep 1; continue; }   # Esc/Ctrl-C → loop
+        [ -z "$sel" ] && continue
+        sname=$(printf '%s' "$sel" | cut -f2)
+        [ -z "$sname" ] && continue          # section-header row → no-op
+        "$_cg" --open-pr "$sname"
+    done
 }
 
 # Add history entry to session
@@ -328,6 +639,9 @@ generate_claude_md() {
             cat > "$claude_md" << 'REVIEW_TEMPLATE'
 # PR Review Session
 
+## Project Skill (CHECK FIRST)
+Check if `/APFM:apfm-review` skill is available. If yes, run it and follow its output — skip everything below. If not available, proceed.
+
 ## Context
 {CONTEXT}
 
@@ -340,13 +654,22 @@ You are reviewing this pull request. Focus on:
 - Test coverage
 
 ## Guidelines
-- ONLY review files that are part of this PR's diff — never flag issues in unchanged files
+- ⛔ **SCOPE GATE**: ONLY review files in this PR's diff. Any finding whose file is NOT in the diff is INVALID — delete it before submitting. Self-check every finding.
 - Be constructive and specific
 - Explain the "why" behind suggestions — what breaks, for whom, when
 - Prioritize issues by severity
 - For each finding, explain what the code is trying to do before explaining the issue
 - Format findings so they COULD be posted as PR comments (include file path and line numbers)
 - **DO NOT post comments, reviews, or any content to GitHub.** Do NOT run `gh pr comment`, `gh pr review`, or any `gh` command that modifies the PR. Your job is to write REVIEW.md only — the human will decide what to post.
+- Follow PRINCIPLES.md for engineering standards.
+- This session may be opened as a floating panel for discussion. REVIEW.md holds the findings — help the user understand, refine, and act on them; do not start a new review.
+
+When the user decides to act on this PR:
+1. Confirm the review TYPE with the user explicitly (Approve / Comment / Request-changes). Never post without confirmation.
+2. Write the review body (summary + the specific findings) to .review_body.md in the session root.
+3. Post by running ONE of: `cgremlin --approve-pr <SESSION_NAME>` | `cgremlin --comment-pr <SESSION_NAME>` | `cgremlin --request-changes-pr <SESSION_NAME>` (SESSION_NAME is the session directory's basename — derive it with `basename $(pwd)/..` or `ls -d $HOME/.cgremlin/sessions/pr-*-<PR_NUMBER>-* | tail -1 | xargs basename`).
+4. Mark the Findings-Tracker IDs you posted as `posted` in REVIEW.md so re-review can verify them.
+Approve archives and removes the PR from the panel; comment/request-changes move it to Waiting for re-review.
 
 ## Output
 Write your review to `REVIEW.md` in this directory.
@@ -367,10 +690,16 @@ Each finding in "Key findings" MUST use this exact structure:
 [Description and/or code block]
 
 ### Overall Structure
-1. Summary
-2. Key findings (Critical, Important, Minor) using the format above
-3. File-by-file feedback
-4. Recommended actions
+1. At a Glance: Type, Risk, Scope, Verdict
+2. Findings Tracker table (required):
+   `| ID | Finding | Severity | Status (open/posted/resolved) | Since |`
+3. Open Findings by severity — each with Location, What it does, The issue, Why it matters, Suggested fix (use the Finding Format above)
+4. Resolved Findings
+5. Verdict (rationale)
+6. Review History table (required):
+   `| Version | Date | Commit | Action |`
+
+On re-review: update each prior finding's Status in place (resolved/still-open), add new findings, append a Review History row. Never drop prior findings.
 REVIEW_TEMPLATE
             # Replace context placeholder
             sed -i '' "s|{CONTEXT}|$context|g" "$claude_md" 2>/dev/null || \
@@ -380,6 +709,9 @@ REVIEW_TEMPLATE
         development)
             cat > "$claude_md" << 'DEV_TEMPLATE'
 # Development Session
+
+## Project Skill (CHECK FIRST)
+Check if `/APFM:apfm-review` skill is available. If yes, run it first for project context before developing. Then proceed below.
 
 ## Context
 {CONTEXT}
@@ -432,6 +764,9 @@ DEVLOG
         investigation)
             cat > "$claude_md" << 'INV_TEMPLATE'
 # Investigation Session
+
+## Project Skill (CHECK FIRST)
+Check if `/APFM:apfm-review` skill is available. If yes, run it first for project context before investigating. Then proceed below.
 
 ## Focus Area
 {CONTEXT}
@@ -1088,6 +1423,9 @@ dim() {
 setup_output_files() {
     local SESSION_DIR="$1"
 
+    # Write shared engineering principles file
+    write_principles "$SESSION_DIR"
+
     # Create output files in session root if they don't exist
     [ ! -f "$SESSION_DIR/REVIEW.md" ] && touch "$SESSION_DIR/REVIEW.md"
     [ ! -f "$SESSION_DIR/FINDINGS.md" ] && touch "$SESSION_DIR/FINDINGS.md"
@@ -1111,28 +1449,65 @@ setup_output_files() {
 
         # Configure Claude permissions: allow research tools + session file writes
         mkdir -p "$SESSION_DIR/repo/.claude"
+        local SESSION_NAME=$(basename "$SESSION_DIR")
+        local REPO_DIR="$SESSION_DIR/repo"
+
+        # Detect session type from name (dev-* = development, all others = review/investigation)
+        local IS_DEV_SESSION=0
+        case "$SESSION_NAME" in
+            dev-*|session-*) IS_DEV_SESSION=1 ;;
+        esac
+        # Also check session.json mode for v2 sessions
+        if [ "$IS_DEV_SESSION" -eq 0 ] && [ -f "$SESSION_DIR/session.json" ]; then
+            local _mode
+            _mode=$(python3 -c "import json,sys; d=json.load(open('$SESSION_DIR/session.json')); print(d.get('mode',''))" 2>/dev/null || true)
+            [ "$_mode" = "development" ] && IS_DEV_SESSION=1
+        fi
+
+        # Build the allow list; dev/fix sessions also get repo-dir write access
+        local EXTRA_REPO_PERMS=""
+        if [ "$IS_DEV_SESSION" -eq 1 ]; then
+            EXTRA_REPO_PERMS=',
+      "Write('"$REPO_DIR"'/**)",
+      "Edit('"$REPO_DIR"'/**)"'
+        fi
+
         cat > "$SESSION_DIR/repo/.claude/settings.local.json" << CLAUDE_SETTINGS
 {
   "permissions": {
     "allow": [
+      "Read(*)",
+      "Glob",
+      "Grep",
+      "Skill",
+      "Bash(gh pr view *)",
+      "Bash(gh pr diff *)",
+      "Bash(gh pr checks *)",
+      "Bash(grep *)",
+      "Bash(rg *)",
+      "Bash(cat *)",
+      "Bash(ls *)",
+      "Bash(find *)",
+      "Bash(head *)",
+      "Bash(tail *)",
+      "Bash(wc *)",
       "Bash(git status *)",
-      "Bash(git log *)",
       "Bash(git diff *)",
+      "Bash(git log *)",
       "Bash(git show *)",
       "Bash(git branch *)",
       "Bash(git rev-parse *)",
-      "Bash(ls *)",
-      "Bash(cat *)",
-      "Bash(head *)",
-      "Bash(tail *)",
-      "Bash(find *)",
-      "Bash(wc *)",
-      "Bash(gh pr view *)",
-      "Bash(gh pr diff *)",
       "Write($SESSION_DIR/**)",
-      "Edit($SESSION_DIR/**)"
+      "Edit($SESSION_DIR/**)",
+      "Bash(cgremlin --approve-pr *)",
+      "Bash(cgremlin --comment-pr *)",
+      "Bash(cgremlin --request-changes-pr *)"$EXTRA_REPO_PERMS
     ],
     "deny": []
+  },
+  "hooks": {
+    "Stop": [{"hooks": [{"type": "command", "command": "echo waiting > $SESSION_DIR/.cg_agent_state"}]}],
+    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "echo working > $SESSION_DIR/.cg_agent_state"}]}]
   }
 }
 CLAUDE_SETTINGS
@@ -1805,12 +2180,21 @@ $(generate_jira_guidance "$JIRA_TICKET_TYPE" "pr")")
 
 You are an expert code reviewer helping evaluate this PR. **Begin immediately.**
 
-## CRITICAL RULE: Only Review Changed Files
+## ⛔ SCOPE GATE — Changed Files Only (HARD CONSTRAINT)
 
-**ONLY review files that are part of this PR's diff.** The changed files are listed above in "Changed Files".
-- Do NOT flag issues in files not listed in "Changed Files"
-- Do NOT explore the broader codebase looking for problems unrelated to this PR
-- If a changed file interacts with another file in a problematic way, mention it but keep the finding location in the changed file
+**Your review scope is EXACTLY the files listed in "Changed Files" above. This is not a guideline — it is a hard constraint.**
+
+Before writing ANY finding, verify: is the file in the "Changed Files" list? If NO → do not write it. Delete it. No exceptions.
+
+**These will INVALIDATE your review:**
+- ❌ Flagging issues in files not in the diff
+- ❌ Suggesting improvements to unchanged code
+- ❌ Exploring the codebase for pre-existing problems
+- ❌ "While looking at X, I noticed Y in another file..."
+
+**Only exception:** If a changed file calls a function in another file AND the interaction creates a bug, mention the other file as context — but the finding Location MUST be in the changed file.
+
+**MANDATORY self-check before submitting REVIEW.md:** Re-read every finding. Delete any whose Location file is not in "Changed Files".
 
 ---
 
@@ -1928,8 +2312,11 @@ First, determine what type of PR this is based on the title, description, and ch
 - **Layout stability**: Avoid layout shift (set dimensions on images/videos, use `loading="lazy"`)
 - **Forms**: Validation messages visible and associated with fields; submit buttons disabled during submission
 
-### 3.9 Repo-Specific Review Skills
-Check if \`.agents/skills/\` or \`.claude/skills/\` exists in this repo. If review-relevant skills are found (e.g., \`vercel-react-best-practices\`, \`web-design-guidelines\`, \`grace-design-system\`), invoke them on the changed files and incorporate their findings into your review.
+### 3.9 Project-Specific Skills (CHECK FIRST)
+
+**Before starting your analysis**, check if the \`/APFM:apfm-review\` skill is available. If it is, run it — it knows the project conventions and will produce the review. If it runs successfully, follow its output and skip the standard process. Only continue with Phases 1-4 if the skill is NOT available.
+
+Additionally, check if \`.agents/skills/\` or \`.claude/skills/\` exists in this repo. If review-relevant skills are found, invoke them on the changed files and incorporate their findings.
 
 ---
 
@@ -3014,13 +3401,15 @@ Write to `REVIEW.md` with this structure:
 
 ## Important Guidelines
 
-1. **Be thorough** - Don't just skim. Understand every change.
-2. **Be specific** - Always include `file:line` references
-3. **Explain the "why"** - Don't just say "this is wrong", explain the impact
-4. **Suggest solutions** - Every problem should have a suggested fix
-5. **Acknowledge good work** - Note positive patterns, not just issues
-6. **Think like an attacker** - What could go wrong? What could be exploited?
-7. **Think like a maintainer** - Will this be easy to maintain in 6 months?
+0. **Check for project skill FIRST** - Check if `/APFM:apfm-review` is available. If yes, run it and follow its output — skip everything below. If not available, proceed.
+1. **⛔ SCOPE GATE** - Review ONLY files in this PR's diff. Before writing ANY finding, verify the file is in the changed files list. If not → delete the finding. No exceptions. Self-check before submitting.
+2. **Be thorough** - Don't just skim. Understand every change.
+3. **Be specific** - Always include `file:line` references
+4. **Explain the "why"** - Don't just say "this is wrong", explain the impact
+5. **Suggest solutions** - Every problem should have a suggested fix
+6. **Acknowledge good work** - Note positive patterns, not just issues
+7. **Think like an attacker** - What could go wrong? What could be exploited?
+8. **Think like a maintainer** - Will this be easy to maintain in 6 months?
 
 ## Available Context
 
@@ -3064,6 +3453,10 @@ switch_to_investigation_mode() {
 # Investigation Mode
 
 > **Focus: Explore and document findings in FINDINGS.md**
+
+## Project Skill (CHECK FIRST)
+
+Check if `/APFM:apfm-review` skill is available. If yes, run it first for project context before investigating. Then proceed with the investigation below.
 
 ## Your Task
 
@@ -3151,6 +3544,10 @@ switch_to_development_mode() {
 # Development Mode — Senior Engineer
 
 > You are a senior software engineer. Read and understand the codebase's patterns, conventions, and architecture BEFORE writing any code.
+
+## Project Skill (CHECK FIRST)
+
+Check if `/APFM:apfm-review` skill is available. If yes, run it first for project context before developing. Then proceed with development below.
 
 ## Task Context
 
@@ -3601,6 +3998,23 @@ start_claude_terminal() {
     # Use --add-dir to allow Claude to write to session folder without permission prompts
     local claude_cmd="cd '$REPO_DIR' && claude --model $MODEL --add-dir '$SESSION_DIR'"
 
+    # Try Zellij if configured and available
+    if [ "$USE_ZELLIJ" = "true" ] && command -v zellij &>/dev/null; then
+        local tmp_script=$(mktemp /tmp/cgremlin-XXXXXX)
+        echo "script -q '$log_file' $claude_cmd" > "$tmp_script"
+        chmod +x "$tmp_script"
+        zellij run --name "🧪 $SESSION_NAME" -- bash "$tmp_script"
+        if [ -f "$SESSION_DIR/session.json" ]; then
+            local terminal_info=$(jq -n \
+                --arg log "$log_file" \
+                --arg name "$SESSION_NAME" \
+                '{log_file: $log, tab_name: $name, started: (now | strftime("%Y-%m-%dT%H:%M:%S"))}')
+            update_session_field "$SESSION_DIR" "terminal" "$terminal_info"
+            add_session_history "$SESSION_DIR" "terminal_started" '{"app": "Zellij"}'
+        fi
+        return 0
+    fi
+
     # Try iTerm2 first (macOS)
     if [ -d "/Applications/iTerm.app" ]; then
         # Compute session color for iTerm2 tab
@@ -3674,6 +4088,16 @@ open_terminal_in_repo() {
         error "Repository folder not found: $REPO_DIR"
         sleep 1
         return 1
+    fi
+
+    # Try Zellij if configured and available
+    if [ "$USE_ZELLIJ" = "true" ] && command -v zellij &>/dev/null; then
+        local tmp_script=$(mktemp /tmp/cgremlin-XXXXXX)
+        printf '%s\n' "cd '$REPO_DIR' && clear && pwd && git status && exec bash" > "$tmp_script"
+        chmod +x "$tmp_script"
+        zellij run --name "🧪 $SESSION_NAME" -- bash "$tmp_script"
+        success "Opened new Zellij pane"
+        return 0
     fi
 
     # Try iTerm2 first (macOS)
@@ -4383,6 +4807,23 @@ def get_model():
         pass
     return 'sonnet'
 
+def get_use_zellij():
+    """Read USE_ZELLIJ from ~/.cgremlin/config, defaulting to False."""
+    config_path = Path.home() / '.cgremlin' / 'config'
+    try:
+        if config_path.exists():
+            with open(config_path) as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith('#') or '=' not in line:
+                        continue
+                    key, _, val = line.partition('=')
+                    if key.strip() == 'USE_ZELLIJ':
+                        return val.strip().strip('"\'').lower() == 'true'
+    except Exception:
+        pass
+    return False
+
 def load_logo_b64():
     """Load docs/logo.png relative to the cgremlin script and return base64 string, or None."""
     import base64
@@ -4509,19 +4950,26 @@ def iterm_color_escape(hex_color):
     return f"printf '\\\\033]6;1;bg;red;brightness;{r}\\\\a\\\\033]6;1;bg;green;brightness;{g}\\\\a\\\\033]6;1;bg;blue;brightness;{b}\\\\a'"
 
 def launch_in_terminal_tab(tab_label, claude_cmd, color_cmd=None):
-    """Launch a command in a new iTerm2 tab (or Terminal.app fallback).
+    """Launch a command in a new terminal tab/pane (Zellij, iTerm2, or Terminal.app fallback).
 
-    Writes claude_cmd to a temp file so write-text only sends a short 'bash /tmp/...'
-    string — avoids quoting issues and shell-init timing problems with long commands.
+    Writes claude_cmd to a temp file so the launcher only passes a short path —
+    avoids quoting issues with long commands.
     Returns the completed subprocess result.
     """
-    import subprocess, tempfile
+    import subprocess, tempfile, shutil
 
     tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.sh', prefix='cgremlin-', delete=False)
     tmp.write(claude_cmd + '\n')
     tmp.close()
     os.chmod(tmp.name, 0o755)
     cmd_file = tmp.name
+
+    if get_use_zellij() and shutil.which('zellij'):
+        return subprocess.run(
+            ['zellij', 'run', '--name', tab_label, '--', 'bash', cmd_file],
+            capture_output=True, text=True
+        )
+
     color_line = f'\n            write text "{color_cmd}"' if color_cmd else ''
 
     if Path('/Applications/iTerm.app').exists():
@@ -4938,27 +5386,64 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         claude_dir = repo_path / '.claude'
         claude_dir.mkdir(exist_ok=True)
         session_abs = str(session_path.resolve())
+        repo_abs = str(repo_path.resolve())
+        session_name = session_path.name
+
+        # Detect session type: dev sessions also get write access to repo dir
+        is_dev_session = session_name.startswith('dev-')
+        if not is_dev_session:
+            # Check session.json mode for v2 sessions
+            session_json_path = session_path / 'session.json'
+            if session_json_path.exists():
+                try:
+                    import json as _json2
+                    with open(session_json_path) as _f:
+                        _sdata = _json2.load(_f)
+                    if _sdata.get('mode') == 'development':
+                        is_dev_session = True
+                except Exception:
+                    pass
+
+        allow_list = [
+            "Read(*)",
+            "Glob",
+            "Grep",
+            "Skill",
+            "Bash(gh pr view *)",
+            "Bash(gh pr diff *)",
+            "Bash(gh pr checks *)",
+            "Bash(grep *)",
+            "Bash(rg *)",
+            "Bash(cat *)",
+            "Bash(ls *)",
+            "Bash(find *)",
+            "Bash(head *)",
+            "Bash(tail *)",
+            "Bash(wc *)",
+            "Bash(git status *)",
+            "Bash(git diff *)",
+            "Bash(git log *)",
+            "Bash(git show *)",
+            "Bash(git branch *)",
+            "Bash(git rev-parse *)",
+            f"Write({session_abs}/**)",
+            f"Edit({session_abs}/**)",
+            "Bash(cgremlin --approve-pr *)",
+            "Bash(cgremlin --comment-pr *)",
+            "Bash(cgremlin --request-changes-pr *)",
+        ]
+        if is_dev_session:
+            allow_list.append(f"Write({repo_abs}/**)")
+            allow_list.append(f"Edit({repo_abs}/**)")
+
         settings = {
             "permissions": {
-                "allow": [
-                    "Bash(git status *)",
-                    "Bash(git log *)",
-                    "Bash(git diff *)",
-                    "Bash(git show *)",
-                    "Bash(git branch *)",
-                    "Bash(git rev-parse *)",
-                    "Bash(ls *)",
-                    "Bash(cat *)",
-                    "Bash(head *)",
-                    "Bash(tail *)",
-                    "Bash(find *)",
-                    "Bash(wc *)",
-                    "Bash(gh pr view *)",
-                    "Bash(gh pr diff *)",
-                    f"Write({session_abs}/**)",
-                    f"Edit({session_abs}/**)"
-                ],
+                "allow": allow_list,
                 "deny": []
+            },
+            "hooks": {
+                "Stop": [{"hooks": [{"type": "command", "command": f"echo waiting > {session_abs}/.cg_agent_state"}]}],
+                "UserPromptSubmit": [{"hooks": [{"type": "command", "command": f"echo working > {session_abs}/.cg_agent_state"}]}]
             }
         }
         import json as _json
@@ -5066,7 +5551,7 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
                     pass
 
             # Build command that runs ACR then Claude in the terminal
-            acr_prompt = "ACR has provided initial findings in ACR_REVIEW.md - use this as CONTEXT only. Now perform YOUR OWN comprehensive code review following the CLAUDE.md guidelines. Understand the scope, analyze every change, evaluate through all lenses (correctness, security, complexity, clarity, DRY, proper-fix-vs-hack), and write a thorough REVIEW.md with detailed findings including problem, impact, and suggested fixes."
+            acr_prompt = "STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it (ACR_REVIEW.md has prior automated findings as context) and follow its output — skip everything else. STEP 2 (only if skill unavailable): ACR_REVIEW.md contains automated findings — use as input but verify independently. You are a senior engineer. Review ONLY files listed in Changed Files in CLAUDE.md. ANY finding whose file is not in that list is INVALID — delete it. Follow CLAUDE.md review guidelines. Write REVIEW.md with findings by severity. For each: file:line, what the code does, the problem, why it matters, and a concrete fix. Self-check: before finishing, verify every finding references a changed file."
             escaped_prompt = acr_prompt.replace("'", "'\\''")
             claude_cmd = f"direnv allow '{repo_path}/.envrc' 2>/dev/null; cd '{repo_path}' && echo '=== Running ACR ===' && acr -r 5 -a claude -b {base_branch} -t 10m --local > '{session_path}/ACR_REVIEW.md' 2>&1; echo '=== Starting Claude ===' && claude --model {get_model()} --add-dir '{session_path}' -- '{escaped_prompt}'"
 
@@ -6050,7 +6535,7 @@ Only open Critical/Important findings should block approval.
             log_file = logs_dir / f"terminal-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
             session_name = session_path.name
 
-            prompt = f"RE-REVIEW MODE: PR has been updated with {commit_count} new commit(s). Read RE-REVIEW.md for what changed, then update REVIEW.md in-place."
+            prompt = f"STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it for re-review and follow its output — skip everything else. STEP 2 (only if skill unavailable): RE-REVIEW MODE — PR updated with {commit_count} new commit(s). Read RE-REVIEW.md for what changed. Update REVIEW.md in-place: move fixed items to Resolved Findings, add new issues from new commits ONLY. Scope: ONLY files in the PR diff — no findings outside changed files. Add a new row to Review History table. Self-check: verify every finding references a changed file."
 
             # Run claude directly (not via script(1) — script swallows the prompt argument)
             escaped_prompt = prompt.replace("'", "'\\''")
@@ -6222,7 +6707,7 @@ Only open Critical/Important findings should block approval.
                 env=env,
                 capture_output=True,
                 text=True,
-                timeout=120
+                timeout=300
             )
 
             if result.returncode != 0:
@@ -9362,7 +9847,7 @@ Only open Critical/Important findings should block approval.
         const sessionName = state.newSession.data.sessionName || state.currentSession;
         if (!sessionName) { showToast('No session to start', 'error'); return; }
         try {
-            const reviewPrompt = 'Perform a comprehensive code review following CLAUDE.md. First understand the scope and WHY these changes exist. Then analyze every change through all lenses: correctness, security, complexity, clarity, DRY, and whether this is a proper fix or a hack. Write a thorough REVIEW.md with detailed findings including what is happening, the problem, impact, and suggested fixes.';
+            const reviewPrompt = 'STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it and follow its output — skip everything else. STEP 2 (only if skill unavailable): You are a senior engineer. Review ONLY files listed in Changed Files in CLAUDE.md. ANY finding whose file is not in that list is INVALID — delete it. Follow CLAUDE.md review guidelines. Write REVIEW.md with findings by severity (Critical/High/Medium/Low). For each: file:line, what the code does, the problem, why it matters, and a concrete fix. Self-check: before finishing, verify every finding references a changed file.';
             const endpoint = tool === 'acr+claude' ? API.START_ACR_CLAUDE : API.START_CLAUDE;
             if (tool === 'acr+claude') showToast('Running ACR review, then starting Claude...', 'info');
             const payload = { session: sessionName };
@@ -10454,14 +10939,14 @@ NOTICE_EOF
         *"Start Claude"*)
             tput reset 2>/dev/null || clear
             cd "$SESSION_DIR/repo"
-            claude "RE-REVIEW MODE: PR has been updated with $COMMIT_COUNT new commit(s). Read RE-REVIEW.md for what changed, then update REVIEW.md in-place."
+            claude "STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it for re-review and follow its output — skip everything else. STEP 2 (only if skill unavailable): RE-REVIEW MODE — PR updated with $COMMIT_COUNT new commit(s). Read RE-REVIEW.md for what changed. Update REVIEW.md in-place: move fixed items to Resolved Findings, add new issues from new commits ONLY. Scope: ONLY files in the PR diff — no findings outside changed files. Add a new row to Review History table. Self-check: verify every finding references a changed file."
             return 2  # Signal that Claude was run
             ;;
         *"ACR"*)
             run_acr_quick "$SESSION_DIR" "$PR_BASE"
             tput reset 2>/dev/null || clear
             cd "$SESSION_DIR/repo"
-            claude "RE-REVIEW MODE with ACR: PR has been updated. Read RE-REVIEW.md and ACR_REVIEW.md, then update REVIEW.md in-place."
+            claude "STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it for re-review (ACR_REVIEW.md has context) and follow its output — skip everything else. STEP 2 (only if skill unavailable): RE-REVIEW MODE — PR updated. Read RE-REVIEW.md and ACR_REVIEW.md. Update REVIEW.md in-place: move fixed items to Resolved Findings, add new issues. Scope: ONLY files in the PR diff. Add a new row to Review History table. Self-check: verify every finding references a changed file."
             return 2  # Signal that Claude was run
             ;;
         *)
@@ -10662,7 +11147,7 @@ pre_session_menu() {
                         dim "Type /exit when done to return here."
                         sleep 1
                         tput reset 2>/dev/null || clear
-                        cd "$SESSION_DIR/repo" && claude --model $MODEL --add-dir "$SESSION_DIR" -- "ACR has provided initial findings in ACR_REVIEW.md - use this as CONTEXT only. Now perform YOUR OWN comprehensive code review following the CLAUDE.md guidelines. Understand the scope, analyze every change, evaluate through all lenses (correctness, security, complexity, clarity, DRY, proper-fix-vs-hack), and write a thorough REVIEW.md with detailed findings including problem, impact, and suggested fixes."
+                        cd "$SESSION_DIR/repo" && claude --model $MODEL --add-dir "$SESSION_DIR" -- "STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it (ACR_REVIEW.md has prior automated findings as context) and follow its output — skip everything else. STEP 2 (only if skill unavailable): ACR_REVIEW.md contains automated findings — use as input but verify independently. You are a senior engineer. Review ONLY files listed in Changed Files in CLAUDE.md. ANY finding whose file is not in that list is INVALID — delete it. Follow CLAUDE.md review guidelines. Write REVIEW.md with findings by severity. For each: file:line, what the code does, the problem, why it matters, and a concrete fix. Self-check: before finishing, verify every finding references a changed file."
                         post_session_menu "$SESSION_DIR"
                         return 0
                         ;;
@@ -10681,7 +11166,7 @@ pre_session_menu() {
                         dim "Type /exit when done to return here."
                         sleep 1
                         tput reset 2>/dev/null || clear
-                        cd "$SESSION_DIR/repo" && claude --model $MODEL --add-dir "$SESSION_DIR" -- "Perform a comprehensive code review following CLAUDE.md. First understand the scope and WHY these changes exist. Then analyze every change through all lenses: correctness, security, complexity, clarity, DRY, and whether this is a proper fix or a hack. Write a thorough REVIEW.md with detailed findings including what's happening, the problem, impact, and suggested fixes."
+                        cd "$SESSION_DIR/repo" && claude --model $MODEL --add-dir "$SESSION_DIR" -- "STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it and follow its output — skip everything else. STEP 2 (only if skill unavailable): You are a senior engineer. Review ONLY files listed in Changed Files in CLAUDE.md. ANY finding whose file is not in that list is INVALID — delete it. Follow CLAUDE.md review guidelines. Write REVIEW.md with findings by severity (Critical/High/Medium/Low). For each: file:line, what the code does, the problem, why it matters, and a concrete fix. Self-check: before finishing, verify every finding references a changed file."
                         post_session_menu "$SESSION_DIR"
                         return 0
                         ;;
@@ -10697,7 +11182,7 @@ pre_session_menu() {
                         dim "Type /exit when done to return here."
                         sleep 1
                         tput reset 2>/dev/null || clear
-                        cd "$SESSION_DIR/repo" && claude --model $MODEL --add-dir "$SESSION_DIR" -- "Begin"
+                        cd "$SESSION_DIR/repo" && claude --model $MODEL --add-dir "$SESSION_DIR" -- "STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it for project context before investigating. STEP 2: Follow CLAUDE.md investigation guidelines. Explore the codebase, trace execution paths relevant to the focus area, and document all findings in FINDINGS.md."
                         post_session_menu "$SESSION_DIR"
                         return 0
                         ;;
@@ -10717,7 +11202,7 @@ pre_session_menu() {
                         dim "Type /exit when done to return here."
                         sleep 1
                         tput reset 2>/dev/null || clear
-                        cd "$SESSION_DIR/repo" && claude --model $MODEL --add-dir "$SESSION_DIR" -- "Begin"
+                        cd "$SESSION_DIR/repo" && claude --model $MODEL --add-dir "$SESSION_DIR" -- "STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it for project context before developing. STEP 2: Follow CLAUDE.md development guidelines. Read existing context files (FINDINGS.md, REVIEW.md) before writing any code. Track progress in DEVLOG.md."
                         post_session_menu "$SESSION_DIR"
                         return 0
                         ;;
@@ -11388,12 +11873,14 @@ settings_menu() {
         gum style --foreground 240 "Current configuration:"
         echo "  Model: $(gum style --foreground 82 "$MODEL")"
         echo "  Dashboard auto-start: $(gum style --foreground 82 "$DASHBOARD_AUTO_START")"
+        echo "  Use Zellij: $(gum style --foreground 82 "$USE_ZELLIJ")"
         [ -n "$DEFAULT_PROJECT" ] && echo "  Default project: $(gum style --foreground 82 "$DEFAULT_PROJECT")"
         echo ""
 
         local choice=$(printf '%s\n' \
             "🤖 Switch Claude model ($MODEL)" \
             "🌐 Toggle dashboard auto-start ($DASHBOARD_AUTO_START)" \
+            "🪟 Toggle Zellij panes ($USE_ZELLIJ)" \
             "📁 Set default project" \
             "🔄 Migrate sessions to v2 format" \
             "🗑️  Clear configuration" \
@@ -11441,6 +11928,16 @@ settings_menu() {
                 fi
                 save_config
                 success "Dashboard auto-start: $DASHBOARD_AUTO_START"
+                sleep 1
+                ;;
+            *"Toggle Zellij"*)
+                if [ "$USE_ZELLIJ" = "true" ]; then
+                    USE_ZELLIJ="false"
+                else
+                    USE_ZELLIJ="true"
+                fi
+                save_config
+                success "Use Zellij: $USE_ZELLIJ"
                 sleep 1
                 ;;
             *"Set default project"*)
@@ -11491,6 +11988,7 @@ settings_menu() {
                     MODEL="$DEFAULT_MODEL"
                     DASHBOARD_AUTO_START="$DEFAULT_DASHBOARD_AUTO_START"
                     DEFAULT_PROJECT=""
+                    USE_ZELLIJ="$DEFAULT_USE_ZELLIJ"
                     rm -f "$CONFIG_FILE"
                     success "Configuration cleared"
                     sleep 1
@@ -11574,6 +12072,7 @@ main_menu() {
             "⚙️  Settings    - Configure model, dashboard, etc." \
             "📋 Sessions    - View/manage existing sessions" \
             "🌐 Dashboard   - Open live dashboard" \
+            "🎛️  Mission Control - Zellij orchestrator cockpit" \
             "👋 Quit" | fzf \
             --height=~50% \
             --layout=reverse \
@@ -11608,6 +12107,9 @@ main_menu() {
             *"Dashboard"*)
                 launch_live_dashboard
                 ;;
+            *"Mission Control"*)
+                launch_mission_control
+                ;;
             *"Quit"*)
                 stop_dashboard_server 2>/dev/null
                 clear
@@ -11618,6 +12120,181 @@ main_menu() {
                 ;;
         esac
     done
+}
+
+watch_daemon_loop() {
+    local _src="${BASH_SOURCE[0]:-$0}" _d
+    while [ -L "$_src" ]; do _d="$(cd -P "$(dirname "$_src")" && pwd)"; _src="$(readlink "$_src")"; [[ "$_src" != /* ]] && _src="$_d/$_src"; done
+    local _cg; _cg="$(cd -P "$(dirname "$_src")" && pwd)/$(basename "$_src")"
+    local LOG="$SESSIONS_DIR/.watch-daemon.log"
+    # Give Zellij time to finish creating the mission-control session before
+    # the first cockpit-alive check (the launcher starts this daemon and then
+    # exec's Zellij, so the session doesn't exist yet on the first iteration).
+    sleep 15
+    while true; do
+        # Self-terminate if the cockpit session is gone (no orphans).
+        zellij list-sessions 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | grep -qE '^mission-control[[:space:]]' || { echo "cockpit gone, exiting $(date)" >> "$LOG"; exit 0; }
+
+        # --- Poll for new PRs from watched authors ---
+        local watch_repos watch_authors
+        watch_repos="${WATCH_REPOS:-}"
+        watch_authors="${WATCH_AUTHORS:-}"
+        if [ -n "$watch_repos" ] && [ -n "$watch_authors" ]; then
+            local wrepo
+            for wrepo in $watch_repos; do
+                local pr_json wauthor pr_num pr_url pr_author already_tracked
+                pr_json=$(timeout 20 gh pr list --repo "$wrepo" --state open --limit 50 \
+                    --json number,url,author --jq '.[]' 2>/dev/null)
+                [ -z "$pr_json" ] && continue
+                while IFS= read -r pr_entry; do
+                    [ -z "$pr_entry" ] && continue
+                    pr_num=$(printf '%s' "$pr_entry" | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('number',''))" 2>/dev/null)
+                    pr_url=$(printf '%s' "$pr_entry" | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('url',''))" 2>/dev/null)
+                    pr_author=$(printf '%s' "$pr_entry" | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('author',{}).get('login',''))" 2>/dev/null)
+                    [ -z "$pr_num" ] || [ -z "$pr_url" ] || [ -z "$pr_author" ] && continue
+                    # Check if author is in the watch list (case-insensitive)
+                    local matched=false
+                    for wauthor in $watch_authors; do
+                        [ "$(printf '%s' "$pr_author" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "$wauthor" | tr '[:upper:]' '[:lower:]')" ] && matched=true && break
+                    done
+                    [ "$matched" = false ] && continue
+                    # Skip if a session already exists for this PR number in this repo
+                    local repo_slug; repo_slug=$(printf '%s' "$wrepo" | tr '/' '-' | sed 's/.*-//')
+                    already_tracked=false
+                    local ex
+                    for ex in "$SESSIONS_DIR"/pr-*-"${pr_num}"-*; do
+                        [ -d "$ex" ] && already_tracked=true && break
+                    done
+                    [ "$already_tracked" = true ] && continue
+                    echo "auto-pickup PR #${pr_num} @${pr_author} in ${wrepo} $(date)" >> "$LOG"
+                    "$_cg" --review-pr "$pr_url" >> "$LOG" 2>&1 &
+                done < <(printf '%s\n' "$pr_json" | python3 -c "
+import sys, json
+data = sys.stdin.read().strip()
+# gh --jq '.[]' outputs one JSON object per line
+for line in data.split('\n'):
+    line = line.strip()
+    if line:
+        try: print(json.dumps(json.loads(line)))
+        except: pass
+" 2>/dev/null)
+            done
+        fi
+
+        # --- Manage existing PR sessions ---
+        for d in "$SESSIONS_DIR"/pr-*; do
+            [ -d "$d/repo" ] || continue
+            local num repo state lc head
+            num=$(read_session_field "$d" "pr.number"); repo=$(_pr_repo "$d")
+            [ -z "$num" ] || [ -z "$repo" ] && continue
+            state=$(timeout 15 gh pr view "$num" --repo "$repo" --json state -q .state 2>/dev/null)
+            if [ "$state" = "MERGED" ] || [ "$state" = "CLOSED" ]; then
+                case "$d" in "$SESSIONS_DIR"/pr-*)
+                    echo "delete merged $d $(date)" >> "$LOG"
+                    local _apid; _apid=$(cat "$d/agent_pid" 2>/dev/null)
+                    [ -n "$_apid" ] && kill "$_apid" 2>/dev/null || true
+                    rm -rf "$d"
+                    ;;
+                esac
+                continue
+            fi
+            lc=$(read_lifecycle "$d")
+            if [ "$lc" = "commented" ] || [ "$lc" = "changes-requested" ]; then
+                if [ "$(read_rereview_pending "$d")" != "true" ]; then
+                    head=$(timeout 15 gh pr view "$num" --repo "$repo" --json headRefOid -q .headRefOid 2>/dev/null)
+                    if [ -n "$head" ] && [ "$head" != "$(read_reviewed_sha "$d")" ]; then
+                        echo "new commits on $num → auto re-review $(date)" >> "$LOG"
+                        set_rereview_pending "$d"
+                        "$_cg" --rereview-pr "$(basename "$d")" >> "$LOG" 2>&1
+                    fi
+                fi
+            fi
+        done
+        sleep 60
+    done
+}
+
+launch_mission_control() {
+    # Mission Control is always Zellij, regardless of USE_ZELLIJ flag.
+    command -v zellij >/dev/null 2>&1 || { error "Zellij not installed. Install it at https://zellij.dev"; sleep 2; return 1; }
+
+    # Resolve this script's real directory, following symlinks. cgremlin is not
+    # necessarily on PATH, so the cockpit session adds this dir to PATH below —
+    # that's what lets the layout panes and the orchestrator invoke `cgremlin`.
+    local _src="${BASH_SOURCE[0]:-$0}" _d
+    while [ -L "$_src" ]; do
+        _d="$(cd -P "$(dirname "$_src")" && pwd)"; _src="$(readlink "$_src")"
+        [[ "$_src" != /* ]] && _src="$_d/$_src"
+    done
+    local _cgdir; _cgdir="$(cd -P "$(dirname "$_src")" && pwd)"
+
+    # Generate the layout inline (no dependency on a repo file path). Panes invoke
+    # `cgremlin`, resolved via the PATH the launcher exports.
+    mkdir -p ~/.config/zellij/layouts
+    cat > ~/.config/zellij/layouts/mission-control.kdl <<'KDL'
+layout {
+    default_tab_template {
+        pane size=1 borderless=true {
+            plugin location="zellij:tab-bar"
+        }
+        children
+    }
+    tab name="MISSION CONTROL" focus=true {
+        pane split_direction="vertical" {
+            pane name="orchestrator" {
+                command "cgremlin"
+                args "--orchestrator"
+            }
+            pane name="status" size="45%" {
+                command "cgremlin"
+                args "--status-pane"
+            }
+        }
+    }
+}
+KDL
+
+    # Launcher: runs at exec time so session state is checked fresh.
+    # Attaches to a RUNNING session; deletes dead/EXITED sessions and creates fresh
+    # (attaching to a dead session resurrects old panes with stale layout).
+    local _sessions_dir="$SESSIONS_DIR"
+    local _launcher; _launcher=$(mktemp /tmp/cgremlin-mc-XXXXXX)
+    cat > "$_launcher" <<LAUNCH
+#!/bin/bash
+export PATH="$_cgdir:\$PATH"
+pgrep -f "cgremlin --watch-daemon" >/dev/null 2>&1 || ( "$_cgdir/cgremlin" --watch-daemon >/dev/null 2>&1 & )
+_s=\$(zellij list-sessions 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g')
+if printf '%s' "\$_s" | grep -qE '^mission-control[[:space:]]' && \
+   ! printf '%s' "\$_s" | grep -qiE '^mission-control.*(EXITED|dead)'; then
+    exec zellij attach mission-control
+else
+    zellij delete-session -f mission-control 2>/dev/null || true
+    rm -f "$_sessions_dir/.tab2_open"
+    exec zellij --session mission-control --new-session-with-layout mission-control
+fi
+LAUNCH
+    chmod +x "$_launcher"
+
+    # Open a new iTerm2 tab running the launcher; fall back to running directly.
+    if [ -d "/Applications/iTerm.app" ]; then
+        osascript <<MC_SCRIPT
+tell application "iTerm"
+    activate
+    if (count of windows) = 0 then
+        create window with default profile
+    end if
+    tell current window
+        create tab with default profile
+        tell current session
+            set name to "🎛️ Mission Control"
+            write text "bash '$_launcher'"
+        end tell
+    end tell
+end tell
+MC_SCRIPT
+    else
+        exec "$_launcher"
+    fi
 }
 
 launch_live_dashboard() {
@@ -11688,8 +12365,27 @@ launch_live_dashboard() {
 # ENTRY
 # ============================================================================
 
-# Skip dashboard lifecycle when called as a subprocess (e.g. --create-session)
-if [ "$1" != "--create-session" ]; then
+# Handle --dismiss-pr argument (marks a session's triage_state as done)
+if [ "$1" = "--dismiss-pr" ]; then
+    [ -z "$2" ] && { echo "Usage: cgremlin --dismiss-pr <session-name>" >&2; exit 1; }
+    update_triage_state "$SESSIONS_DIR/$2" "done"
+    echo "dismissed $2"
+    exit 0
+fi
+
+# Handle --approve-pr / --comment-pr / --request-changes-pr (discussion-agent posting helpers)
+if [ "$1" = "--approve-pr" ];          then [ -z "$2" ] && { echo "Usage: cgremlin --approve-pr <session>" >&2; exit 1; }; approve_pr "$2"; exit $?; fi
+if [ "$1" = "--comment-pr" ];          then [ -z "$2" ] && { echo "Usage: cgremlin --comment-pr <session>" >&2; exit 1; }; comment_pr "$2"; exit $?; fi
+if [ "$1" = "--request-changes-pr" ];  then [ -z "$2" ] && { echo "Usage: cgremlin --request-changes-pr <session>" >&2; exit 1; }; request_changes_pr "$2"; exit $?; fi
+
+# Handle --review-list-grouped argument (emit grouped open reviews for picker)
+if [ "$1" = "--review-list-grouped" ]; then
+    review_list_grouped
+    exit 0
+fi
+
+# Skip dashboard lifecycle when called as a subprocess (e.g. --create-session, --review-pr, --lib-only)
+if [ "$1" != "--create-session" ] && [ "$1" != "--review-pr" ] && [ "$1" != "--rereview-pr" ] && [ "$1" != "--lib-only" ] && [ "$1" != "--status-pane" ] && [ "$1" != "--open-pr" ] && [ "$1" != "--orchestrator" ] && [ "$1" != "--dismiss-pr" ] && [ "$1" != "--mission-control" ] && [ "$1" != "--review-list-grouped" ] && [ "$1" != "--approve-pr" ] && [ "$1" != "--comment-pr" ] && [ "$1" != "--request-changes-pr" ] && [ "$1" != "--watch-daemon" ]; then
     cleanup_on_exit() {
         stop_dashboard_server 2>/dev/null
     }
@@ -11726,9 +12422,9 @@ create_pr_session_noninteractive() {
     cd "$SESSION_DIR"
 
     # Clone and checkout PR
-    git clone --depth=50 "$REPO_URL" repo 2>/dev/null
+    git clone --depth=1 --single-branch "$REPO_URL" repo 2>/dev/null
     cd repo
-    git fetch origin "pull/$PR_NUMBER/head:pr-$PR_NUMBER" 2>/dev/null
+    git fetch --depth=1 origin "pull/$PR_NUMBER/head:pr-$PR_NUMBER" 2>/dev/null
     git checkout "pr-$PR_NUMBER" 2>/dev/null
 
     # Get PR metadata
@@ -11825,7 +12521,7 @@ create_investigation_session_noninteractive() {
     cd "$SESSION_DIR"
 
     # Clone repo
-    git clone --depth=50 "$REPO_URL" repo 2>/dev/null
+    git clone --depth=1 --single-branch "$REPO_URL" repo 2>/dev/null
 
     # Create session.json
     local extra_json=$(cat <<EOF
@@ -11858,7 +12554,7 @@ create_development_session_noninteractive() {
     cd "$SESSION_DIR"
 
     # Clone repo and create branch
-    git clone --depth=50 "$REPO_URL" repo 2>/dev/null
+    git clone --depth=1 --single-branch "$REPO_URL" repo 2>/dev/null
     cd repo
     git checkout -b "$BRANCH_NAME" 2>/dev/null
 
@@ -11881,6 +12577,189 @@ EOF
     echo "$SESSION_NAME"
 }
 
+# ============================================================================
+# HEADLESS REVIEW WORKER (for --review-pr)
+# ============================================================================
+
+launch_headless_review() {
+    local SESSION_DIR="$1"
+    local REPO_DIR="$SESSION_DIR/repo"
+    local log_file="$SESSION_DIR/logs/terminal-$(date +%Y%m%d-%H%M%S).log"
+    mkdir -p "$SESSION_DIR/logs"
+
+    # Resolve the cgremlin script path so the wrapper can source it
+    local _p
+    _p="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
+    local _cgremlin_path="${CGREMLIN_SCRIPT_PATH:-$_p}"
+
+    local wrapper
+    wrapper=$(mktemp /tmp/cgremlin-review-XXXXXX)
+    cat > "$wrapper" <<WRAPPER_EOF
+#!/bin/bash
+source "$_cgremlin_path" --lib-only
+update_review_state "$SESSION_DIR" reviewing
+cd "$REPO_DIR" && script -q "$log_file" \
+  claude -p "Run /APFM:apfm-review and write the findings to REVIEW.md following CLAUDE.md. Proceed autonomously; do NOT ask for confirmation or a verdict. If Jira/Atlassian MCP is unavailable, skip Jira context and proceed with the diff alone. Do NOT post to GitHub. Write the output to $SESSION_DIR/REVIEW.md." \
+  --permission-mode acceptEdits --add-dir "$SESSION_DIR" < /dev/null
+rc=\$?
+if [ \$rc -eq 0 ] && [ -s "$SESSION_DIR/REVIEW.md" ]; then
+    update_review_state "$SESSION_DIR" ready
+else
+    update_review_state "$SESSION_DIR" failed
+fi
+# Clear agent-state so the worker's own Stop hook doesn't leave a stale "waiting"
+# flag; .cg_agent_state should only reflect an actually-open discussion agent.
+rm -f "$SESSION_DIR/.cg_agent_state"
+rm -f "$wrapper"
+WRAPPER_EOF
+    chmod +x "$wrapper"
+    nohup bash "$wrapper" >> "$SESSION_DIR/logs/worker.log" 2>&1 &
+    update_session_field "$SESSION_DIR" "review_worker_pid" "$!"
+}
+
+review_pr_noninteractive() {
+    local pr_input="$1"
+    local session_name
+    session_name=$(create_pr_session_noninteractive "$pr_input" "" | tail -1)
+    [ -z "$session_name" ] && { echo "ERROR: session creation failed" >&2; return 1; }
+    local session_dir="$SESSIONS_DIR/$session_name"
+    update_review_state "$session_dir" queued
+    launch_headless_review "$session_dir"
+    echo "$session_name"
+}
+
+rereview_pr() {
+    local session_name="$1"
+    local SESSION_DIR="$SESSIONS_DIR/$session_name"
+    local REPO_DIR="$SESSION_DIR/repo"
+    [ -d "$REPO_DIR" ] || { echo "ERROR: repo missing for $session_name (archived?)" >&2; return 1; }
+    rm -f "$SESSION_DIR/rereview_summary"
+
+    local pr_num; pr_num=$(read_session_field "$SESSION_DIR" "pr.number")
+    update_lifecycle "$SESSION_DIR" "none"
+    update_review_state "$SESSION_DIR" "reviewing"
+
+    mkdir -p "$SESSION_DIR/logs"
+    local _src="${BASH_SOURCE[0]:-$0}" _d
+    while [ -L "$_src" ]; do _d="$(cd -P "$(dirname "$_src")" && pwd)"; _src="$(readlink "$_src")"; [[ "$_src" != /* ]] && _src="$_d/$_src"; done
+    local _cg="$(cd -P "$(dirname "$_src")" && pwd)/$(basename "$_src")"
+
+    local wrapper; wrapper=$(mktemp /tmp/cgremlin-rereview-XXXXXX)
+    # Outer vars ($SESSION_DIR, $REPO_DIR, $pr_num, $_cg) expand now.
+    # Runtime vars use \$ to defer expansion to wrapper execution time.
+    cat > "$wrapper" <<WRAPPER_EOF
+#!/bin/bash
+source "$_cg" --lib-only
+
+# --- Step 1: Fetch latest PR head and compute diff ---
+old_commit=\$(cd "$REPO_DIR" && git rev-parse HEAD 2>/dev/null)
+cd "$REPO_DIR" && git fetch origin "pull/${pr_num}/head" 2>/dev/null || { echo "fetch failed" >&2; update_review_state "$SESSION_DIR" failed; exit 1; }
+new_commit=\$(cd "$REPO_DIR" && git rev-parse FETCH_HEAD 2>/dev/null)
+cd "$REPO_DIR" && git reset --hard FETCH_HEAD 2>/dev/null
+
+new_commits_text=\$(cd "$REPO_DIR" && git log --oneline "\${old_commit}..\${new_commit}" 2>/dev/null)
+commit_count=\$(printf '%s' "\${new_commits_text}" | grep -c . 2>/dev/null || echo 0)
+changes_since=\$(cd "$REPO_DIR" && git diff --stat "\${old_commit}...HEAD" 2>/dev/null)
+old_short="\${old_commit:0:8}"
+new_short="\${new_commit:0:8}"
+
+# --- Step 2: Archive REVIEW.md ---
+version=1
+while [ -f "$SESSION_DIR/REVIEW-v\${version}.md" ]; do version=\$((version+1)); done
+[ -f "$SESSION_DIR/REVIEW.md" ] && [ -s "$SESSION_DIR/REVIEW.md" ] && cp "$SESSION_DIR/REVIEW.md" "$SESSION_DIR/REVIEW-v\${version}.md"
+next_version=\$((version+1))
+today=\$(date +%Y-%m-%d)
+
+# --- Step 3: Write RE-REVIEW.md ---
+{
+printf '# Re-Review: v%s\n\n## What Changed\n\n' "\$next_version"
+printf '| Info | Value |\n|------|-------|\n'
+printf '| **Previous** | v%s (commit `%s`) |\n' "\$version" "\$old_short"
+printf '| **Current** | v%s (commit `%s`) |\n' "\$next_version" "\$new_short"
+printf '| **New Commits** | %s |\n\n' "\$commit_count"
+printf '### New Commits\n\`\`\`\n%s\n\`\`\`\n\n' "\${new_commits_text:-(none)}"
+printf '### Files Changed Since Last Review\n\`\`\`\n%s\n\`\`\`\n\n---\n\n' "\${changes_since:-(none)}"
+printf '## Re-Review Instructions\n\n**Update REVIEW.md in-place. Do NOT append sections.**\n\n'
+printf '### 1. Check Each Open Finding\nFor each finding in REVIEW.md:\n'
+printf '- **Fixed?** → Add ✅ prefix to heading, move to "Resolved Findings", note the fix\n'
+printf '- **Still present?** → Keep in place, leave heading unchanged\n'
+printf '- **Partially fixed?** → Update the description\n'
+printf '- **🔇 Dismissed?** → SKIP entirely — do not re-flag, update, or remove.\n\n'
+printf '### 2. Update Finding Status\n'
+printf '- Fixed: `#### ✅ 1. Example finding`\n'
+printf '- Dismissed (do not touch): `#### 🔇 3. Example finding`\n'
+printf '- Still open: leave heading unchanged\n'
+printf '- New findings: number continuing from the last finding\n\n'
+printf '### 3. Full Review of Current PR State\n'
+printf '- Review new commits for any problems introduced\n'
+printf '- Re-examine the full PR diff for any **Critical or Important** issues missed previously\n'
+printf '- Focus on: bugs, security issues, logic errors, edge cases, performance problems\n\n'
+printf '### 4. Update Review History (IMPORTANT!)\nADD a new row — do NOT replace existing rows:\n'
+printf '\`\`\`\n| v%s | %s | %s | Re-review: X fixed, Y new issues |\n\`\`\`\n\n' "\$next_version" "\$today" "\$new_short"
+printf '### 5. Update Verdict\nRe-evaluate based on current state of ALL findings.\nOnly open Critical/Important findings should block approval.\n\n---\n\n'
+printf '**CRITICAL: Keep ALL prior Review History rows. Do NOT touch 🔇-prefixed findings.**\n\n'
+printf '**BEGIN: Read REVIEW.md, check findings against new code, update in-place.**\n'
+} > "$SESSION_DIR/RE-REVIEW.md"
+
+rm -f "$REPO_DIR/RE-REVIEW.md"
+ln -s "../RE-REVIEW.md" "$REPO_DIR/RE-REVIEW.md"
+
+# --- Step 4: Update CLAUDE.md with re-review notice ---
+if [ -f "$REPO_DIR/CLAUDE.md" ]; then
+    tmpf=\$(mktemp)
+    awk '/^# ⚠️ RE-REVIEW MODE/{skip=1} skip && /^---$/{skip=0; next} !skip' "$REPO_DIR/CLAUDE.md" > "\$tmpf"
+    {
+        printf '# ⚠️ RE-REVIEW MODE (v%s)\n\n' "\$next_version"
+        printf '**PR updated: %s new commit(s) since last review.**\n\n' "\$commit_count"
+        printf '## What to do:\n1. Read \`RE-REVIEW.md\` for what changed\n'
+        printf '2. Update \`REVIEW.md\` **in-place** (do not append sections)\n'
+        printf '3. Move fixed items to "Resolved Findings" section\n'
+        printf '4. Add any new issues found in the new commits\n'
+        printf '5. Add a new row to the Review History table for v%s\n\n---\n\n' "\$next_version"
+        cat "\$tmpf"
+    } > "$REPO_DIR/CLAUDE.md"
+    rm -f "\$tmpf"
+fi
+
+# --- Step 5: Update reviewed_sha ---
+update_session_field "$SESSION_DIR" "reviewed_sha" "\$new_commit"
+
+# --- Step 6: Run headless re-review with skill-aware prompt ---
+prompt="STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it for re-review and follow its output — skip everything else. STEP 2 (only if skill unavailable): RE-REVIEW MODE — PR updated with \${commit_count} new commit(s). Read RE-REVIEW.md for what changed. Update REVIEW.md in-place: move fixed items to Resolved Findings, add new issues from new commits ONLY. Scope: ONLY files in the PR diff — no findings outside changed files. Add a new row to Review History table. Self-check: verify every finding references a changed file. As the very last action, write a single line to the file $SESSION_DIR/rereview_summary. Format: '✅ N/N resolved' if all prior findings are resolved, or '⚠️ K/N resolved, M new' otherwise. Write only that line — no other content."
+
+cd "$REPO_DIR" && claude -p "\$prompt" --permission-mode acceptEdits --add-dir "$SESSION_DIR" < /dev/null
+rc=\$?
+if [ \$rc -eq 0 ] && [ -s "$SESSION_DIR/REVIEW.md" ]; then update_review_state "$SESSION_DIR" ready; else update_review_state "$SESSION_DIR" failed; fi
+rm -f "$SESSION_DIR/.cg_agent_state"
+rm -f "$wrapper"
+WRAPPER_EOF
+    chmod +x "$wrapper"
+    nohup bash "$wrapper" >> "$SESSION_DIR/logs/worker.log" 2>&1 &
+    update_session_field "$SESSION_DIR" "review_worker_pid" "$!"
+    echo "re-reviewing $session_name"
+}
+
+# When sourced with --lib-only: define functions + load config, then stop (no menu/dashboard).
+[ "$1" = "--lib-only" ] && return 0 2>/dev/null
+
+# Handle --review-pr argument (called from orchestrator)
+if [ "$1" = "--review-pr" ]; then
+    review_pr_noninteractive "$2" "$3"
+    exit $?
+fi
+
+# Handle --rereview-pr argument (incremental re-review of an existing session)
+if [ "$1" = "--rereview-pr" ]; then
+    [ -z "$2" ] && { echo "Usage: cgremlin --rereview-pr <session-name>" >&2; exit 1; }
+    rereview_pr "$2"; exit $?
+fi
+
+# Handle --watch-daemon argument (background loop: delete merged sessions, auto-rereview on new commits)
+if [ "$1" = "--watch-daemon" ]; then
+    watch_daemon_loop
+    exit 0
+fi
+
 # Handle --create-session argument (called from web UI)
 if [ "$1" = "--create-session" ]; then
     case "$CGREMLIN_MODE" in
@@ -11899,6 +12778,55 @@ if [ "$1" = "--create-session" ]; then
             ;;
     esac
     exit 0
+fi
+
+# Handle --open-pr argument (shows floating agent pane for a PR session)
+if [ "$1" = "--open-pr" ]; then
+    if [ -z "$2" ]; then
+        echo "Usage: cgremlin --open-pr <session-name>" >&2
+        exit 1
+    fi
+    open_pr_row "$2"
+    exit $?
+fi
+
+# Handle --status-pane argument (runs in Mission Control status pane)
+if [ "$1" = "--status-pane" ]; then
+    status_pane_loop
+    exit 0
+fi
+
+# Handle --orchestrator argument (runs interactive Claude in the Mission Control orchestrator pane)
+launch_orchestrator() {
+  local odir="$SESSIONS_DIR/.orchestrator"; mkdir -p "$odir/.claude"
+  # DEFAULT_PROJECT (e.g. https://github.com/aplaceformom/grace-frontend) lets the orchestrator
+  # expand a bare PR number to a full URL, since --review-pr requires a full PR URL.
+  cat > "$odir/CLAUDE.md" <<MD
+# PR Review Orchestrator
+You coordinate PR reviews. Default repo for bare PR numbers: ${DEFAULT_PROJECT:-(unset — require full URLs)}.
+When the user gives PR numbers or links:
+- Expand a bare number N to "\${DEFAULT_PROJECT}/pull/N" (strip any trailing .git). If DEFAULT_PROJECT is unset, ask for a full URL.
+- For each PR, run: \`cgremlin --review-pr <full-pr-url>\` (creates the session + launches a headless review). Report "#<n> queued".
+- Do NOT run reviews yourself. Do NOT post GitHub comments.
+- Finished reviews appear in the status PICKER; the user clicks one to open a floating agent pane. If the user asks YOU to open PR N: find its session with \`ls "\$HOME/.cgremlin/sessions"/pr-*-N-* | tail -1\` (newest), then run \`cgremlin --open-pr <session-name>\`.
+- When asked about a specific PR, summarize from its REVIEW.md. To dismiss one: \`cgremlin --dismiss-pr <session-name>\`.
+- Follow PRINCIPLES.md.
+MD
+  # pre-approve only the commands it needs
+  cat > "$odir/.claude/settings.local.json" <<JSON
+{ "permissions": { "allow": ["Bash(cgremlin --review-pr *)", "Bash(cgremlin --open-pr *)", "Bash(cgremlin --dismiss-pr *)", "Bash(ls *)", "Read(*)"] } }
+JSON
+  cd "$odir" && claude --model "$MODEL" --add-dir "$SESSIONS_DIR"
+}
+
+if [ "$1" = "--orchestrator" ]; then
+    launch_orchestrator
+    exit $?
+fi
+
+if [ "$1" = "--mission-control" ]; then
+    launch_mission_control
+    exit $?
 fi
 
 main_menu
