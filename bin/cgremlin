@@ -12604,7 +12604,7 @@ if [ "$1" = "--review-list-grouped" ]; then
 fi
 
 # Skip dashboard lifecycle when called as a subprocess (e.g. --create-session, --review-pr, --lib-only)
-if [ "$1" != "--create-session" ] && [ "$1" != "--review-pr" ] && [ "$1" != "--rereview-pr" ] && [ "$1" != "--track-my-pr" ] && [ "$1" != "--lib-only" ] && [ "$1" != "--status-pane" ] && [ "$1" != "--open-pr" ] && [ "$1" != "--orchestrator" ] && [ "$1" != "--dismiss-pr" ] && [ "$1" != "--mission-control" ] && [ "$1" != "--review-list-grouped" ] && [ "$1" != "--approve-pr" ] && [ "$1" != "--comment-pr" ] && [ "$1" != "--request-changes-pr" ] && [ "$1" != "--watch-daemon" ]; then
+if [ "$1" != "--create-session" ] && [ "$1" != "--review-pr" ] && [ "$1" != "--rereview-pr" ] && [ "$1" != "--track-my-pr" ] && [ "$1" != "--lib-only" ] && [ "$1" != "--status-pane" ] && [ "$1" != "--open-pr" ] && [ "$1" != "--orchestrator" ] && [ "$1" != "--dismiss-pr" ] && [ "$1" != "--mission-control" ] && [ "$1" != "--review-list-grouped" ] && [ "$1" != "--approve-pr" ] && [ "$1" != "--comment-pr" ] && [ "$1" != "--request-changes-pr" ] && [ "$1" != "--watch-daemon" ] && [ "$1" != "--triage-comments" ]; then
     cleanup_on_exit() {
         stop_dashboard_server 2>/dev/null
     }
@@ -13004,6 +13004,76 @@ WRAPPER_EOF
     echo "re-reviewing $session_name"
 }
 
+triage_comments() {
+    local session_name="$1"
+    local SESSION_DIR="$SESSIONS_DIR/$session_name"
+    local REPO_DIR="$SESSION_DIR/repo"
+    [ -d "$REPO_DIR" ] || { echo "ERROR: repo missing for $session_name" >&2; return 1; }
+
+    local pr_num repo
+    pr_num=$(read_session_field "$SESSION_DIR" "pr.number")
+    repo=$(_pr_repo "$SESSION_DIR")
+    [ -z "$pr_num" ] || [ -z "$repo" ] && { echo "ERROR: missing pr.number/repo" >&2; return 1; }
+    local owner="${repo%%/*}" name="${repo##*/}"
+
+    update_mine_stage "$SESSION_DIR" "triaging"
+    mkdir -p "$SESSION_DIR/logs"
+    write_review_guard "$REPO_DIR"
+
+    # Snapshot the unresolved review threads from OTHERS (path, line, author,
+    # body, thread id) into a context file the agent classifies. Also stamp
+    # triaged_threads so the daemon won't relaunch for the same threads.
+    local threads_json
+    threads_json=$(timeout 30 gh api graphql -f query='query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){reviewThreads(first:100){nodes{id isResolved comments(first:1){nodes{author{login} path line body}}}}}}}' \
+        -F o="$owner" -F r="$name" -F n="$pr_num" 2>/dev/null \
+        | jq --arg me "$GITHUB_ME" '[.data.repository.pullRequest.reviewThreads.nodes[]
+             | select(.isResolved==false)
+             | {id, author:.comments.nodes[0].author.login, path:.comments.nodes[0].path, line:.comments.nodes[0].line, body:.comments.nodes[0].body}
+             | select((.author|ascii_downcase) != ($me|ascii_downcase))]' 2>/dev/null)
+    [ -z "$threads_json" ] && threads_json="[]"
+    printf '%s\n' "$threads_json" > "$SESSION_DIR/.threads.json"
+    # NOTE: triaged_threads is recorded only on SUCCESS (in the wrapper below),
+    # so a failed triage leaves the threads un-triaged and the daemon retries.
+
+    local _src="${BASH_SOURCE[0]:-$0}" _d
+    while [ -L "$_src" ]; do _d="$(cd -P "$(dirname "$_src")" && pwd)"; _src="$(readlink "$_src")"; [[ "$_src" != /* ]] && _src="$_d/$_src"; done
+    local _cg="$(cd -P "$(dirname "$_src")" && pwd)/$(basename "$_src")"
+
+    local wrapper; wrapper=$(mktemp /tmp/cgremlin-triage-XXXXXX)
+    cat > "$wrapper" <<WRAPPER_EOF
+#!/bin/bash
+source "$_cg" --lib-only
+write_review_guard "$REPO_DIR"
+cd "$REPO_DIR" && claude -p "You are helping the PR AUTHOR triage reviewer comments on their own PR. The unresolved reviewer comments (from others) are in ${SESSION_DIR}/.threads.json as a JSON array (fields: id, author, path, line, body). The PR branch is checked out here. For EACH comment, read the referenced code and decide whether it is ✅ valid (a real issue the author should fix) or 🟡 false-positive (does not apply / already handled / mistaken), with a one- or two-sentence plain-language reason. Write ${SESSION_DIR}/COMMENTS.md with one entry per comment in EXACTLY this format:
+
+### <n>. <short title>
+- **Thread:** <id from .threads.json>
+- **From:** @<author>   **Where:** \\\`<path>:<line>\\\`
+- **Comment:** <quote the reviewer's text>
+- **Verdict:** ✅ valid   (or)   🟡 false-positive
+- **Reasoning:** <plain sentences>
+- **Proposed reply:** <what to reply, for false-positive only>
+- **Proposed fix:** <how to fix, for valid only>
+- **Status:** open
+
+Do NOT reply on GitHub, do NOT edit code, do NOT commit — only write COMMENTS.md. Proceed autonomously; no confirmation." \
+  --permission-mode bypassPermissions --add-dir "$SESSION_DIR" < /dev/null
+rc=\$?
+if [ \$rc -eq 0 ] && [ -s "$SESSION_DIR/COMMENTS.md" ]; then
+    # Success: mark these threads triaged so the daemon won't relaunch for them.
+    update_session_field "$SESSION_DIR" "triaged_threads" "\$(jq '[.[].id]' "$SESSION_DIR/.threads.json")"
+    update_mine_stage "$SESSION_DIR" ready
+else
+    update_mine_stage "$SESSION_DIR" tracking
+fi
+rm -f "$SESSION_DIR/.cg_agent_state" "$wrapper"
+WRAPPER_EOF
+    chmod +x "$wrapper"
+    nohup bash "$wrapper" >> "$SESSION_DIR/logs/worker.log" 2>&1 &
+    update_session_field "$SESSION_DIR" "review_worker_pid" "$!"
+    echo "triaging comments for $session_name"
+}
+
 # When sourced with --lib-only: define functions + load config, then stop (no menu/dashboard).
 [ "$1" = "--lib-only" ] && return 0 2>/dev/null
 
@@ -13022,6 +13092,11 @@ fi
 if [ "$1" = "--rereview-pr" ]; then
     [ -z "$2" ] && { echo "Usage: cgremlin --rereview-pr <session-name>" >&2; exit 1; }
     rereview_pr "$2"; exit $?
+fi
+
+if [ "$1" = "--triage-comments" ]; then
+    [ -z "$2" ] && { echo "Usage: cgremlin --triage-comments <session>" >&2; exit 1; }
+    triage_comments "$2"; exit $?
 fi
 
 # Handle --watch-daemon argument (background loop: delete merged sessions, auto-rereview on new commits)
