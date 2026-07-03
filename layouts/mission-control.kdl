@@ -1,0 +1,20 @@
+layout {
+    tab name="MISSION CONTROL" focus=true {
+        pane split_direction="vertical" {
+            pane name="orchestrator" {
+                command "cgremlin"
+                args "--orchestrator"
+            }
+            pane name="status" size="45%" {
+                command "cgremlin"
+                args "--status-pane"
+            }
+        }
+        // FUTURE daemon panes drop in here as one stanza each (kept commented until built):
+        // pane name="scanner"  size="20%" { command "cgremlin"; args "--scan-daemon" }   // sub-project 2
+        // pane name="cleanup"  size="15%" { command "cgremlin"; args "--cleanup-daemon" } // future
+    }
+    tab name="PRs" {
+        pane name="placeholder" { command "bash"; args "-c" "echo 'PR rows appear here as reviews finish'; exec bash" }
+    }
+}
