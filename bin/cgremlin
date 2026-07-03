@@ -47,6 +47,8 @@ load_config() {
                 DEFAULT_PROJECT) DEFAULT_PROJECT="$value" ;;
                 USE_ZELLIJ) USE_ZELLIJ="$value" ;;
                 SESSIONS_DIR) [ -z "$CGREMLIN_SESSIONS_DIR" ] && SESSIONS_DIR="$value" ;;
+                WATCH_REPOS) WATCH_REPOS="$value" ;;
+                WATCH_AUTHORS) WATCH_AUTHORS="$value" ;;
             esac
         done < "$CONFIG_FILE"
     fi
@@ -71,6 +73,12 @@ DEFAULT_PROJECT="$DEFAULT_PROJECT"
 
 # Open new Claude sessions in Zellij panes instead of iTerm2 tabs (true/false)
 USE_ZELLIJ="$USE_ZELLIJ"
+
+# Repos to watch for new PRs (space-separated, format: owner/repo)
+WATCH_REPOS="$WATCH_REPOS"
+
+# GitHub logins whose open PRs are auto-reviewed (space-separated, case-insensitive)
+WATCH_AUTHORS="$WATCH_AUTHORS"
 EOF
     chmod 600 "$CONFIG_FILE"
 }
@@ -312,7 +320,7 @@ PRIN
 # Emit one line per open review: "<display>\t<session>\t<group>".
 # Section headers are emitted as display-only rows with empty session+group.
 review_list_grouped() {
-  local review="" rereview="" response=""
+  local inflight="" review="" rereview="" response=""
   local d sname num author rs lc rp icon line
   for d in "$SESSIONS_DIR"/pr-*; do
     [ -d "$d/repo" ] || continue                       # repo gone (deleted/merged) → skip
@@ -323,9 +331,21 @@ review_list_grouped() {
     rs=$(read_review_state "$d")
     lc=$(read_lifecycle "$d")
     rp=$(read_rereview_pending "$d")
+    # In-flight reviews (initial OR re-review) surface in their own group at the
+    # top so it's unmistakable that work is happening right now.
+    if [ "$rs" = "queued" ] || [ "$rs" = "reviewing" ]; then
+      local what="review"; [ "$rp" = "true" ] && what="re-review"
+      case "$rs" in
+        queued)    icon="… queued for $what";;
+        reviewing) icon="🔄 reviewing now ($what)";;
+      esac
+      # Empty session column → non-clickable (nothing to open until it's ready).
+      inflight="${inflight}$(printf 'PR #%s  @%-14s %s' "$num" "${author:-?}" "$icon")\t\tinflight"$'\n'
+      continue
+    fi
     case "$rs" in
-      ready) icon="✅ ready";; reviewing) icon="🤔 reviewing";; queued) icon="… queued";;
-      failed) icon="⚠ failed";; interrupted) icon="⏸ interrupted";; *) icon="${rs:-none}";;
+      ready) icon="✅ ready";; failed) icon="⚠ failed";;
+      interrupted) icon="⏸ interrupted";; *) icon="${rs:-none}";;
     esac
     line="$(printf 'PR #%s  @%-14s %s\t%s' "$num" "${author:-?}" "$icon" "$sname")"
     if [ "$lc" = "none" ]; then
@@ -339,6 +359,7 @@ review_list_grouped() {
       response="${response}$(printf 'PR #%s  @%-14s 💬 awaiting author' "$num" "${author:-?}")\t${sname}\tresponse"$'\n'
     fi
   done
+  [ -n "$inflight" ] && { printf '── 🔄 Reviewing now ──\t\t\n'; printf '%b' "$inflight"; }
   printf '── Waiting for review ──\t\t\n';        [ -n "$review" ]   && printf '%b' "$review"
   printf '── Waiting for re-review ──\t\t\n';     [ -n "$rereview" ] && printf '%b' "$rereview"
   printf '── Waiting for response ──\t\t\n';      [ -n "$response" ] && printf '%b' "$response"
@@ -12241,48 +12262,36 @@ watch_daemon_loop() {
         zellij list-sessions 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | grep -qE '^mission-control[[:space:]]' || { echo "cockpit gone, exiting $(date)" >> "$LOG"; exit 0; }
 
         # --- Poll for new PRs from watched authors ---
+        # gh emits one tab-separated row per PR (number, url, author) — robust,
+        # no JSON-per-line parsing. Drafts are skipped (reviewed once marked ready).
         local watch_repos watch_authors
         watch_repos="${WATCH_REPOS:-}"
         watch_authors="${WATCH_AUTHORS:-}"
         if [ -n "$watch_repos" ] && [ -n "$watch_authors" ]; then
             local wrepo
             for wrepo in $watch_repos; do
-                local pr_json wauthor pr_num pr_url pr_author already_tracked
-                pr_json=$(timeout 20 gh pr list --repo "$wrepo" --state open --limit 50 \
-                    --json number,url,author --jq '.[]' 2>/dev/null)
-                [ -z "$pr_json" ] && continue
-                while IFS= read -r pr_entry; do
-                    [ -z "$pr_entry" ] && continue
-                    pr_num=$(printf '%s' "$pr_entry" | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('number',''))" 2>/dev/null)
-                    pr_url=$(printf '%s' "$pr_entry" | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('url',''))" 2>/dev/null)
-                    pr_author=$(printf '%s' "$pr_entry" | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('author',{}).get('login',''))" 2>/dev/null)
+                local pr_rows pr_num pr_url pr_author wauthor matched already_tracked ex
+                pr_rows=$(timeout 20 gh pr list --repo "$wrepo" --state open --limit 50 \
+                    --json number,url,author,isDraft \
+                    --jq '.[] | select(.isDraft==false) | [(.number|tostring), .url, .author.login] | @tsv' 2>/dev/null)
+                [ -z "$pr_rows" ] && continue
+                while IFS=$'\t' read -r pr_num pr_url pr_author; do
                     [ -z "$pr_num" ] || [ -z "$pr_url" ] || [ -z "$pr_author" ] && continue
-                    # Check if author is in the watch list (case-insensitive)
-                    local matched=false
+                    # Author in the watch list? (case-insensitive)
+                    matched=false
                     for wauthor in $watch_authors; do
-                        [ "$(printf '%s' "$pr_author" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "$wauthor" | tr '[:upper:]' '[:lower:]')" ] && matched=true && break
+                        [ "$(printf '%s' "$pr_author" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "$wauthor" | tr '[:upper:]' '[:lower:]')" ] && { matched=true; break; }
                     done
                     [ "$matched" = false ] && continue
-                    # Skip if a session already exists for this PR number in this repo
-                    local repo_slug; repo_slug=$(printf '%s' "$wrepo" | tr '/' '-' | sed 's/.*-//')
+                    # Skip if a session already exists for this PR number
                     already_tracked=false
-                    local ex
                     for ex in "$SESSIONS_DIR"/pr-*-"${pr_num}"-*; do
-                        [ -d "$ex" ] && already_tracked=true && break
+                        [ -d "$ex" ] && { already_tracked=true; break; }
                     done
                     [ "$already_tracked" = true ] && continue
                     echo "auto-pickup PR #${pr_num} @${pr_author} in ${wrepo} $(date)" >> "$LOG"
                     "$_cg" --review-pr "$pr_url" >> "$LOG" 2>&1 &
-                done < <(printf '%s\n' "$pr_json" | python3 -c "
-import sys, json
-data = sys.stdin.read().strip()
-# gh --jq '.[]' outputs one JSON object per line
-for line in data.split('\n'):
-    line = line.strip()
-    if line:
-        try: print(json.dumps(json.loads(line)))
-        except: pass
-" 2>/dev/null)
+                done <<< "$pr_rows"
             done
         fi
 
@@ -12526,13 +12535,9 @@ create_pr_session_noninteractive() {
     mkdir -p "$SESSION_DIR"
     cd "$SESSION_DIR"
 
-    # Clone and checkout PR
-    git clone --depth=1 --single-branch "$REPO_URL" repo 2>/dev/null
-    cd repo
-    git fetch --depth=1 origin "pull/$PR_NUMBER/head:pr-$PR_NUMBER" 2>/dev/null
-    git checkout "pr-$PR_NUMBER" 2>/dev/null
-
-    # Get PR metadata
+    # Get PR metadata FIRST (fast, no clone) so the session row can appear
+    # immediately with the PR number/author and a "queued" state — before the
+    # slow clone. This is what gives instant visibility in the status pane.
     local PR_JSON=$(gh pr view "$PR_NUMBER" --repo "$OWNER/$REPO" --json title,headRefName,baseRefName,author,additions,deletions,changedFiles,url 2>/dev/null)
 
     local PR_TITLE=$(echo "$PR_JSON" | jq -r '.title // "PR #'"$PR_NUMBER"'"')
@@ -12601,6 +12606,18 @@ Repository: $OWNER/$REPO
 $([ -n "$JIRA_TICKET" ] && echo "Jira:       $JIRA_TICKET")
 ================================================================================
 INFO_EOF
+
+    # Mark queued and create an empty repo/ NOW so the status pane shows the row
+    # immediately ("PR #N @author … queued") while the clone runs below.
+    mkdir -p "$SESSION_DIR/repo"
+    update_review_state "$SESSION_DIR" "queued"
+
+    # Clone and checkout the PR (the slow part — the row is already visible).
+    cd "$SESSION_DIR"
+    git clone --depth=1 --single-branch "$REPO_URL" repo 2>/dev/null
+    cd repo
+    git fetch --depth=1 origin "pull/$PR_NUMBER/head:pr-$PR_NUMBER" 2>/dev/null
+    git checkout "pr-$PR_NUMBER" 2>/dev/null
 
     # Create CLAUDE.md for review mode
     generate_claude_md "$SESSION_DIR" "review" "PR #$PR_NUMBER: $PR_TITLE by @$PR_AUTHOR"
