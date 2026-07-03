@@ -49,6 +49,7 @@ load_config() {
                 SESSIONS_DIR) [ -z "$CGREMLIN_SESSIONS_DIR" ] && SESSIONS_DIR="$value" ;;
                 WATCH_REPOS) WATCH_REPOS="$value" ;;
                 WATCH_AUTHORS) WATCH_AUTHORS="$value" ;;
+                GITHUB_ME) GITHUB_ME="$value" ;;
             esac
         done < "$CONFIG_FILE"
     fi
@@ -79,6 +80,9 @@ WATCH_REPOS="$WATCH_REPOS"
 
 # GitHub logins whose open PRs are auto-reviewed (space-separated, case-insensitive)
 WATCH_AUTHORS="$WATCH_AUTHORS"
+
+# Your own GitHub login — your approved PRs are flagged "merge it"
+GITHUB_ME="$GITHUB_ME"
 EOF
     chmod 600 "$CONFIG_FILE"
 }
@@ -250,9 +254,12 @@ _post_review() {   # $1=session_name  $2=gh-event-flag (--approve|--comment|--re
     fi
 }
 approve_pr() {
+    # Posts APPROVE and sets lifecycle=approved (via _post_review). The session
+    # is NOT deleted — it moves to the "✅ Approved" group and stays visible
+    # until the PR merges (then the watch daemon deletes it). The agent_pid is
+    # left in place so open_pr_row cleans the pane when the user navigates away.
     _post_review "$1" "--approve" "approved" || return 1
-    local d="$SESSIONS_DIR/$1"
-    case "$d" in "$SESSIONS_DIR"/pr-*) rm -rf "$d"; echo "approved+deleted $1";; *) echo "refusing to delete $d" >&2; return 1;; esac
+    echo "approved $1 (moved to Approved group)"
 }
 comment_pr()         { _post_review "$1" "--comment" "commented"          && _record_reviewed "$1"; }
 request_changes_pr() { _post_review "$1" "--request-changes" "changes-requested" && _record_reviewed "$1"; }
@@ -323,8 +330,9 @@ PRIN
 # Emit one line per open review: "<display>\t<session>\t<group>".
 # Section headers are emitted as display-only rows with empty session+group.
 review_list_grouped() {
-  local inflight="" review="" rereview="" response=""
+  local mergemine="" ready="" inflight="" rereview="" response="" approved=""
   local d sname num author rs lc rp icon line
+  local me_lc; me_lc=$(printf '%s' "${GITHUB_ME:-}" | tr '[:upper:]' '[:lower:]')
   for d in "$SESSIONS_DIR"/pr-*; do
     [ -d "$d/repo" ] || continue                       # repo gone (deleted/merged) → skip
     [ "$(read_triage_state "$d")" = "done" ] && continue
@@ -334,38 +342,58 @@ review_list_grouped() {
     rs=$(read_review_state "$d")
     lc=$(read_lifecycle "$d")
     rp=$(read_rereview_pending "$d")
-    # In-flight reviews (initial OR re-review) surface in their own group at the
-    # top so it's unmistakable that work is happening right now.
+
+    # Approved → stays until the PR merges. If it's YOUR PR, it's on you to
+    # merge (loud, top group); otherwise it's waiting on the author. Display-only.
+    if [ "$lc" = "approved" ]; then
+      if [ -n "$me_lc" ] && [ "$(printf '%s' "$author" | tr '[:upper:]' '[:lower:]')" = "$me_lc" ]; then
+        mergemine="${mergemine}$(printf 'PR #%s  @%-14s 🚀 APPROVED — merge it!' "$num" "${author:-?}")\t\tmergemine"$'\n'
+      else
+        approved="${approved}$(printf 'PR #%s  @%-14s ✅ approved · author will merge' "$num" "${author:-?}")\t\tapproved"$'\n'
+      fi
+      continue
+    fi
+
+    # Agent is actively reviewing (initial OR re-review) → "👀 Reviewing now".
+    # Display-only (nothing to open until it's ready).
     if [ "$rs" = "queued" ] || [ "$rs" = "reviewing" ]; then
       local what="review"; [ "$rp" = "true" ] && what="re-review"
       case "$rs" in
-        queued)    icon="… queued for $what";;
-        reviewing) icon="🔄 reviewing now ($what)";;
+        queued)    icon="⏳ queued for $what";;
+        reviewing) icon="👀 agent reviewing ($what)";;
       esac
-      # Empty session column → non-clickable (nothing to open until it's ready).
       inflight="${inflight}$(printf 'PR #%s  @%-14s %s' "$num" "${author:-?}" "$icon")\t\tinflight"$'\n'
       continue
     fi
-    case "$rs" in
-      ready) icon="✅ ready";; failed) icon="⚠ failed";;
-      interrupted) icon="⏸ interrupted";; *) icon="${rs:-none}";;
-    esac
+
     line="$(printf 'PR #%s  @%-14s %s\t%s' "$num" "${author:-?}" "$icon" "$sname")"
-    if [ "$lc" = "none" ]; then
-      review="${review}${line}\treview"$'\n'
-    elif [ "$rp" = "true" ]; then
+    if [ "$rp" = "true" ]; then
+      # Re-review finished → needs your attention again; show the resolution summary.
       local summary; summary=$(cat "$d/rereview_summary" 2>/dev/null)
-      local reline="$line"
-      [ -n "$summary" ] && reline="${line}  ·  ${summary}"
-      rereview="${rereview}${reline}\trereview"$'\n'
+      icon="🔁 re-reviewed"; [ "$rs" = "failed" ] && icon="⚠ re-review failed"
+      local reline="$(printf 'PR #%s  @%-14s %s' "$num" "${author:-?}" "$icon")"
+      [ -n "$summary" ] && reline="${reline}  ·  ${summary}"
+      rereview="${rereview}${reline}\t${sname}\trereview"$'\n'
+    elif [ "$lc" = "none" ]; then
+      # Fresh review complete (or failed) → this is what needs YOUR attention.
+      case "$rs" in
+        ready)       icon="🔔 READY — review it";;
+        failed)      icon="⚠ review failed — retry";;
+        interrupted) icon="⏸ interrupted";;
+        *)           icon="${rs:-…}";;
+      esac
+      ready="${ready}$(printf 'PR #%s  @%-14s %s' "$num" "${author:-?}" "$icon")\t${sname}\tready"$'\n'
     else
-      response="${response}$(printf 'PR #%s  @%-14s 💬 awaiting author' "$num" "${author:-?}")\t${sname}\tresponse"$'\n'
+      # We posted comments / requested changes → waiting on the author.
+      response="${response}$(printf 'PR #%s  @%-14s 💬 waiting on author' "$num" "${author:-?}")\t${sname}\tresponse"$'\n'
     fi
   done
-  [ -n "$inflight" ] && { printf '── 🔄 Reviewing now ──\t\t\n'; printf '%b' "$inflight"; }
-  printf '── Waiting for review ──\t\t\n';        [ -n "$review" ]   && printf '%b' "$review"
-  printf '── Waiting for re-review ──\t\t\n';     [ -n "$rereview" ] && printf '%b' "$rereview"
-  printf '── Waiting for response ──\t\t\n';      [ -n "$response" ] && printf '%b' "$response"
+  [ -n "$mergemine" ] && { printf '── 🚀 Approved — MERGE YOURS ──\t\t\n'; printf '%b' "$mergemine"; }
+  printf '── 🔔 Ready for your review ──\t\t\n';    [ -n "$ready" ]    && printf '%b' "$ready"
+  [ -n "$inflight" ] && { printf '── 👀 Agent reviewing ──\t\t\n'; printf '%b' "$inflight"; }
+  printf '── 🔁 Waiting for re-review ──\t\t\n';    [ -n "$rereview" ] && printf '%b' "$rereview"
+  printf '── 💬 Waiting for response ──\t\t\n';     [ -n "$response" ] && printf '%b' "$response"
+  [ -n "$approved" ] && { printf '── ✅ Approved (author will merge) ──\t\t\n'; printf '%b' "$approved"; }
 }
 
 render_status_table() {
@@ -12301,9 +12329,10 @@ watch_daemon_loop() {
             local wrepo
             for wrepo in $watch_repos; do
                 local pr_rows pr_num pr_url pr_author wauthor matched already_tracked ex
+                # Skip drafts and already-approved PRs (no point reviewing those).
                 pr_rows=$(timeout 20 gh pr list --repo "$wrepo" --state open --limit 50 \
-                    --json number,url,author,isDraft \
-                    --jq '.[] | select(.isDraft==false) | [(.number|tostring), .url, .author.login] | @tsv' 2>/dev/null)
+                    --json number,url,author,isDraft,reviewDecision \
+                    --jq '.[] | select(.isDraft==false and .reviewDecision != "APPROVED") | [(.number|tostring), .url, .author.login] | @tsv' 2>/dev/null)
                 [ -z "$pr_rows" ] && continue
                 while IFS=$'\t' read -r pr_num pr_url pr_author; do
                     [ -z "$pr_num" ] || [ -z "$pr_url" ] || [ -z "$pr_author" ] && continue
@@ -12334,16 +12363,25 @@ watch_daemon_loop() {
             # Fetch state + review decision together (one API call).
             meta=$(timeout 15 gh pr view "$num" --repo "$repo" --json state,reviewDecision -q '.state + "\t" + (.reviewDecision // "")' 2>/dev/null)
             state="${meta%%$'\t'*}"; review_decision="${meta#*$'\t'}"
-            # Merged/closed OR approved → our review job is done; clear the session.
-            if [ "$state" = "MERGED" ] || [ "$state" = "CLOSED" ] || [ "$review_decision" = "APPROVED" ]; then
+            # Merged/closed → done; delete the session.
+            if [ "$state" = "MERGED" ] || [ "$state" = "CLOSED" ]; then
                 case "$d" in "$SESSIONS_DIR"/pr-*)
-                    local _why="merged/closed"; [ "$review_decision" = "APPROVED" ] && [ "$state" != "MERGED" ] && [ "$state" != "CLOSED" ] && _why="approved"
-                    echo "delete ($_why) $d $(date)" >> "$LOG"
+                    echo "delete merged/closed $d $(date)" >> "$LOG"
                     local _apid; _apid=$(cat "$d/agent_pid" 2>/dev/null)
                     [ -n "$_apid" ] && kill "$_apid" 2>/dev/null || true
                     rm -rf "$d"
                     ;;
                 esac
+                continue
+            fi
+            # Approved on GitHub (by anyone) → move to the Approved group; the
+            # review job is done, so retire its agent pane but KEEP the session
+            # visible with a ✅ until it merges.
+            if [ "$review_decision" = "APPROVED" ] && [ "$(read_lifecycle "$d")" != "approved" ]; then
+                echo "mark approved $d $(date)" >> "$LOG"
+                local _apid; _apid=$(cat "$d/agent_pid" 2>/dev/null)
+                [ -n "$_apid" ] && kill "$_apid" 2>/dev/null && rm -f "$d/agent_pid"
+                update_lifecycle "$d" "approved"
                 continue
             fi
             lc=$(read_lifecycle "$d")
