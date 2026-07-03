@@ -12703,6 +12703,22 @@ EOF
 # HEADLESS REVIEW WORKER (for --review-pr)
 # ============================================================================
 
+# Write a settings.local.json that lets an autonomous (headless) reviewer run
+# freely EXCEPT for commands that mutate GitHub or the remote. Deny rules take
+# precedence over any permission mode, so even bypassPermissions can't post.
+# Usage: write_review_guard REPO_DIR
+write_review_guard() {
+    local repo_dir="$1"
+    mkdir -p "$repo_dir/.claude"
+    local sf="$repo_dir/.claude/settings.local.json"
+    local deny='["Bash(gh pr review:*)","Bash(gh pr comment:*)","Bash(gh pr merge:*)","Bash(gh pr close:*)","Bash(gh pr edit:*)","Bash(gh pr create:*)","Bash(gh api:*--method*)","Bash(git push:*)","Bash(git commit:*)"]'
+    if [ -f "$sf" ] && jq -e . "$sf" >/dev/null 2>&1; then
+        jq --argjson deny "$deny" '.permissions.deny = ((.permissions.deny // []) + $deny | unique)' "$sf" > "$sf.tmp" && mv "$sf.tmp" "$sf"
+    else
+        printf '{"permissions":{"deny":%s}}\n' "$deny" > "$sf"
+    fi
+}
+
 launch_headless_review() {
     local SESSION_DIR="$1"
     local REPO_DIR="$SESSION_DIR/repo"
@@ -12714,6 +12730,10 @@ launch_headless_review() {
     _p="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
     local _cgremlin_path="${CGREMLIN_SCRIPT_PATH:-$_p}"
 
+    # Let the headless reviewer run read-only gh/git/analysis freely; posting
+    # and pushing are hard-denied by the guard so it can work autonomously.
+    write_review_guard "$REPO_DIR"
+
     local wrapper
     wrapper=$(mktemp /tmp/cgremlin-review-XXXXXX)
     cat > "$wrapper" <<WRAPPER_EOF
@@ -12721,8 +12741,8 @@ launch_headless_review() {
 source "$_cgremlin_path" --lib-only
 update_review_state "$SESSION_DIR" reviewing
 cd "$REPO_DIR" && script -q "$log_file" \
-  claude -p "Run /APFM:apfm-review and write the findings to REVIEW.md following CLAUDE.md. Proceed autonomously; do NOT ask for confirmation or a verdict. If Jira/Atlassian MCP is unavailable, skip Jira context and proceed with the diff alone. Do NOT post to GitHub. Write the output to $SESSION_DIR/REVIEW.md." \
-  --permission-mode acceptEdits --add-dir "$SESSION_DIR" < /dev/null
+  claude -p "Run /APFM:apfm-review and write the findings to REVIEW.md following CLAUDE.md. Proceed autonomously; do NOT ask for confirmation or a verdict. Read the PR with git (the branch is checked out) or gh pr view/diff as needed. If Jira/Atlassian MCP is unavailable, skip Jira context and proceed with the diff alone. Do NOT post to GitHub. Write the output to $SESSION_DIR/REVIEW.md." \
+  --permission-mode bypassPermissions --add-dir "$SESSION_DIR" < /dev/null
 rc=\$?
 if [ \$rc -eq 0 ] && [ -s "$SESSION_DIR/REVIEW.md" ]; then
     update_review_state "$SESSION_DIR" ready
@@ -12772,6 +12792,7 @@ rereview_pr() {
     cat > "$wrapper" <<WRAPPER_EOF
 #!/bin/bash
 source "$_cg" --lib-only
+write_review_guard "$REPO_DIR"
 
 # --- Step 1: Fetch latest PR head and compute diff ---
 old_commit=\$(cd "$REPO_DIR" && git rev-parse HEAD 2>/dev/null)
@@ -12846,7 +12867,7 @@ update_session_field "$SESSION_DIR" "reviewed_sha" "\$new_commit"
 # --- Step 6: Run headless re-review with skill-aware prompt ---
 prompt="STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it for re-review and follow its output — skip everything else. STEP 2 (only if skill unavailable): RE-REVIEW MODE — PR updated with \${commit_count} new commit(s). Read RE-REVIEW.md and follow it. Update REVIEW.md in-place. FIRST verify each prior finding was properly addressed: re-check whether the problem it describes still happens in the new code and classify ✅ resolved / ⚠️ partial (keep open) / ❌ still open / 🔁 regressed, with evidence — 🔇 dismissed stay untouched. THEN add NEW findings only if they pass the evidence bar in CLAUDE.md, written in the file's plain format (What's wrong / Why it matters / Suggested fix), and re-check the PR still satisfies its Jira ticket. Severity is 🔴 Critical / 🟠 High / 🟡 Perf / 🔧 Maintainability. Scope: ONLY files in the PR diff. Add a new row to Review History. Self-check: verify every finding references a changed file. As the very last action, write a single line to the file $SESSION_DIR/rereview_summary. Format: '✅ N/N resolved' if all prior findings are resolved, or '⚠️ K/N resolved, M new' otherwise. Write only that line — no other content."
 
-cd "$REPO_DIR" && claude -p "\$prompt" --permission-mode acceptEdits --add-dir "$SESSION_DIR" < /dev/null
+cd "$REPO_DIR" && claude -p "\$prompt" --permission-mode bypassPermissions --add-dir "$SESSION_DIR" < /dev/null
 rc=\$?
 if [ \$rc -eq 0 ] && [ -s "$SESSION_DIR/REVIEW.md" ]; then update_review_state "$SESSION_DIR" ready; else update_review_state "$SESSION_DIR" failed; fi
 rm -f "$SESSION_DIR/.cg_agent_state"
