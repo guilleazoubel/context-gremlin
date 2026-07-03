@@ -295,6 +295,13 @@ push_fix() {
     local d="$SESSIONS_DIR/$1"
     ( cd "$d/repo" && git push ) && echo "pushed" || { echo "ERROR: push failed" >&2; return 1; }
 }
+# Mark a mine PR's comment triage complete → back to the idle "My pull requests" list.
+triage_done() {
+    local d="$SESSIONS_DIR/$1"
+    [ -d "$d" ] || { echo "ERROR: session $1 not found" >&2; return 1; }
+    update_mine_stage "$d" "tracking"
+    echo "triage done for $1"
+}
 
 # After a successful comment/request-changes, snapshot the PR head so the watch daemon
 # can detect NEW commits, and clear any stale rereview flag.
@@ -487,7 +494,7 @@ create_review_agent_pane() {
     local sf="$SDIR/repo/.claude/settings.local.json"; mkdir -p "$SDIR/repo/.claude"
     local add
     if pr_is_mine "$SDIR" && [ "$(read_mine_stage "$SDIR")" = "ready" ]; then
-        add='["Bash(cgremlin --reply-comment *)","Bash(cgremlin --commit-fix *)","Bash(cgremlin --push-fix *)"]'
+        add='["Bash(cgremlin --reply-comment *)","Bash(cgremlin --commit-fix *)","Bash(cgremlin --push-fix *)","Bash(cgremlin --triage-done *)"]'
     else
         add='["Bash(cgremlin --approve-pr *)","Bash(cgremlin --comment-pr *)","Bash(cgremlin --request-changes-pr *)"]'
     fi
@@ -525,6 +532,7 @@ proposed reply or fix. Then wait for my decision:
 - **"fix"** (for valid): make the code change, then \`cgremlin --commit-fix $(basename "$SDIR") "<message>"\`. Do NOT push yet.
 - **"push"**: when I ask, \`cgremlin --push-fix $(basename "$SDIR")\` to push all committed fixes.
 - **"skip"**: set Status to \`skipped\`.
+- **When every comment is handled** (replied/fixed/skipped): run \`cgremlin --triage-done $(basename "$SDIR")\` to clear this PR from the "comments to address" list.
 
 Update the entry's **Status** in COMMENTS.md after each action, then return to the list.
 
@@ -12484,7 +12492,7 @@ watch_daemon_loop() {
                 seen=$(read_session_field "$d" "triaged_threads" 2>/dev/null); [ -z "$seen" ] && seen="[]"
                 new_ids=$(timeout 30 gh api graphql -f query='query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){reviewThreads(first:100){nodes{id isResolved comments(first:1){nodes{author{login}}}}}}}}' \
                     -F o="$m_owner" -F r="$m_name" -F n="$num" 2>/dev/null \
-                    | jq -c --arg me "$GITHUB_ME" --argjson seen "$seen" '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved==false) | select((.comments.nodes[0].author.login|ascii_downcase) != ($me|ascii_downcase)) | .id] - $seen' 2>/dev/null)
+                    | jq -c --arg me "$GITHUB_ME" --argjson seen "$seen" '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved==false) | select(((.comments.nodes[0].author.login // "")|ascii_downcase) != ($me|ascii_downcase)) | .id] - $seen' 2>/dev/null)
                 if [ -n "$new_ids" ] && [ "$new_ids" != "[]" ]; then
                     echo "new reviewer comments on my PR $num → triage $(date)" >> "$LOG"
                     "$_cg" --triage-comments "$(basename "$d")" >> "$LOG" 2>&1 &
@@ -12673,6 +12681,7 @@ if [ "$1" = "--request-changes-pr" ];  then [ -z "$2" ] && { echo "Usage: cgreml
 if [ "$1" = "--reply-comment" ]; then [ -z "$3" ] && { echo "Usage: cgremlin --reply-comment <session> <thread-id>" >&2; exit 1; }; reply_comment "$2" "$3"; exit $?; fi
 if [ "$1" = "--commit-fix" ];   then [ -z "$2" ] && { echo "Usage: cgremlin --commit-fix <session> [msg]" >&2; exit 1; }; s="$2"; shift 2; commit_fix "$s" "$@"; exit $?; fi
 if [ "$1" = "--push-fix" ];     then [ -z "$2" ] && { echo "Usage: cgremlin --push-fix <session>" >&2; exit 1; }; push_fix "$2"; exit $?; fi
+if [ "$1" = "--triage-done" ]; then [ -z "$2" ] && { echo "Usage: cgremlin --triage-done <session>" >&2; exit 1; }; triage_done "$2"; exit $?; fi
 
 # Handle --review-list-grouped argument (emit grouped open reviews for picker)
 if [ "$1" = "--review-list-grouped" ]; then
@@ -13096,6 +13105,13 @@ triage_comments() {
     update_mine_stage "$SESSION_DIR" "triaging"
     mkdir -p "$SESSION_DIR/logs"
     write_review_guard "$REPO_DIR"
+    # Mine sessions are never apfm-reviewed, so also deny GraphQL here — the
+    # triage worker must post NOTHING. (Replies go through --reply-comment, a
+    # separate cgremlin process not under this guard.)
+    local _gsf="$REPO_DIR/.claude/settings.local.json"
+    if [ -f "$_gsf" ] && jq -e . "$_gsf" >/dev/null 2>&1; then
+        jq '.permissions.deny = ((.permissions.deny // []) + ["Bash(gh api graphql:*)"] | unique)' "$_gsf" > "$_gsf.tmp" && mv "$_gsf.tmp" "$_gsf"
+    fi
 
     # Snapshot the unresolved review threads from OTHERS (path, line, author,
     # body, thread id) into a context file the agent classifies. Also stamp
@@ -13105,7 +13121,7 @@ triage_comments() {
         -F o="$owner" -F r="$name" -F n="$pr_num" 2>/dev/null \
         | jq --arg me "$GITHUB_ME" '[.data.repository.pullRequest.reviewThreads.nodes[]
              | select(.isResolved==false)
-             | {id, author:.comments.nodes[0].author.login, path:.comments.nodes[0].path, line:.comments.nodes[0].line, body:.comments.nodes[0].body}
+             | {id, author:(.comments.nodes[0].author.login // ""), path:.comments.nodes[0].path, line:.comments.nodes[0].line, body:.comments.nodes[0].body}
              | select((.author|ascii_downcase) != ($me|ascii_downcase))]' 2>/dev/null)
     [ -z "$threads_json" ] && threads_json="[]"
     printf '%s\n' "$threads_json" > "$SESSION_DIR/.threads.json"
