@@ -485,7 +485,12 @@ create_review_agent_pane() {
 
     # Merge posting-command permissions into settings.local.json (idempotent).
     local sf="$SDIR/repo/.claude/settings.local.json"; mkdir -p "$SDIR/repo/.claude"
-    local add='["Bash(cgremlin --approve-pr *)","Bash(cgremlin --comment-pr *)","Bash(cgremlin --request-changes-pr *)"]'
+    local add
+    if pr_is_mine "$SDIR" && [ "$(read_mine_stage "$SDIR")" = "ready" ]; then
+        add='["Bash(cgremlin --reply-comment *)","Bash(cgremlin --commit-fix *)","Bash(cgremlin --push-fix *)"]'
+    else
+        add='["Bash(cgremlin --approve-pr *)","Bash(cgremlin --comment-pr *)","Bash(cgremlin --request-changes-pr *)"]'
+    fi
     if [ -f "$sf" ]; then
         jq --argjson add "$add" '.permissions.allow = ((.permissions.allow // []) + $add | unique)' "$sf" > "$sf.tmp" && mv "$sf.tmp" "$sf"
     else
@@ -497,6 +502,38 @@ create_review_agent_pane() {
     pr_title=$(read_session_field "$SDIR" "pr.title")
     pr_url=$(read_session_field "$SDIR" "pr.url")
     pr_head=$(read_session_field "$SDIR" "pr.head")
+    if pr_is_mine "$SDIR" && [ "$(read_mine_stage "$SDIR")" = "ready" ]; then
+      cat > "$SDIR/AGENT_CONTEXT.md" <<MYCTX
+# My PR — reviewer comment triage — PR #${num}: ${pr_title}
+
+Your PR got reviewer comments. \`COMMENTS.md\` in this directory has each comment
+already classified ✅ valid or 🟡 false-positive, with reasoning and a proposed
+reply/fix. Walk me through them so I can decide each one.
+
+## First message — open with the roll-up
+Read \`COMMENTS.md\`, then print one line and a numbered list. Nothing else:
+
+    3 comments — 2 valid, 1 false-positive. Go through them? (number, or "all")
+    1. ✅ valid          api/save.ts:12   missing await
+    2. 🟡 false-positive ui/list.tsx:40   "unused" var is used
+    3. ✅ valid          cart.ts:88       off-by-one
+
+## Per comment
+Show the reviewer's comment, where it is, your verdict + reasoning, and the
+proposed reply or fix. Then wait for my decision:
+- **"reply"** (usually for false-positive): write the explanation to \`${SDIR}/.reply_body.md\`, then run \`cgremlin --reply-comment $(basename "$SDIR") <thread-id>\` (thread id is in the entry). Set that entry's Status to \`replied\`.
+- **"fix"** (for valid): make the code change, then \`cgremlin --commit-fix $(basename "$SDIR") "<message>"\`. Do NOT push yet.
+- **"push"**: when I ask, \`cgremlin --push-fix $(basename "$SDIR")\` to push all committed fixes.
+- **"skip"**: set Status to \`skipped\`.
+
+Update the entry's **Status** in COMMENTS.md after each action, then return to the list.
+
+## Constraints
+- Never reply, commit, or push without my explicit say-so for that item.
+- Only use the \`cgremlin\` helpers above — do not call \`gh\` or \`git push\` directly.
+- Write \`.reply_body.md\` to the session root path shown above.
+MYCTX
+    else
     cat > "$SDIR/AGENT_CONTEXT.md" <<CTX
 # PR Review Triage — PR #${num}: ${pr_title}
 
@@ -550,6 +587,7 @@ After EVERY decision update the finding's Status in BOTH places it appears — t
 - Never run \`gh\` yourself — only the cgremlin helpers above post to GitHub.
 - Write \`.review_body.md\` to the session root path shown above, NOT the repo subdirectory.
 CTX
+    fi
 
     # Wrapper: write own PID then exec-replace with claude.
     # exec preserves the PID, so agent_pid stays valid after the switch.
