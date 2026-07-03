@@ -413,23 +413,23 @@ Read \`REVIEW.md\`, then print a one-line roll-up and a numbered list. Nothing e
 If REVIEW.md has no findings: say so and offer to approve.
 
 ## When the reviewer picks a finding
-Show it tight — do not pad:
-- **Severity** and **location**
-- **Expected:** … **Actual:** … (this is how they judge it fast)
-- **Trigger:** the exact condition
-- **Fix:** the suggested snippet
-Then discuss / answer questions about that finding only.
+Show it tight, in plain language — do not pad. Use exactly what REVIEW.md holds for that finding:
+- **Severity** and **Where** (the location)
+- **What's wrong** (the plain explanation)
+- **Why it matters** (the impact)
+- **Suggested fix**
+Then discuss / answer questions about that finding only. Deeper detail is yours to explain in the conversation — the file stays the overview.
 
 ## Recording the decision (after discussing a finding)
 The reviewer says one of:
 - **"post it"** → post THIS finding now as a review comment:
   1. Write just this finding's body to \`${SDIR}/.review_body.md\`
   2. Run: \`cgremlin --comment-pr $(basename "$SDIR")\`
-  3. Set that finding's Status to \`posted\` in REVIEW.md.
-- **"hold it"** → set Status to \`held\` in REVIEW.md (queued for the final batch). Do not post yet.
-- **"dismiss"** → set Status to \`🔇 dismissed\` in REVIEW.md so re-reviews skip it.
+  3. Set that finding's Status to \`posted\`.
+- **"hold it"** → set Status to \`held\` (queued for the final batch). Do not post yet.
+- **"dismiss"** → set Status to \`🔇 dismissed\` so re-reviews skip it.
 
-Update the Status column in REVIEW.md's Findings Tracker after EVERY decision, then return to the menu.
+After EVERY decision update the finding's Status in BOTH places it appears — the "What I found" table row AND the detail heading — so they stay in sync. Then return to the menu.
 
 ## When the reviewer says "submit" / "done"
 1. Confirm the verdict explicitly: Approve / Comment / Request-changes.
@@ -702,21 +702,21 @@ Escalate to a deeper pass ONLY when at least one is true:
 - Tier 1 surfaced an issue whose blast radius needs cross-file tracing.
 When escalating, dispatch parallel sub-agents (Task tool) for the deeper lenses you need (e.g. performance, cross-file data-flow, extra tracing). On a normal PR, SKIP Tier 2. Record in REVIEW.md whether Tier 2 ran.
 
-## THE EVIDENCE BAR (hard rule) — every finding needs concrete evidence, or it is DROPPED
-Two forms depending on finding type:
+## THE EVIDENCE BAR — your internal test before writing a finding (do NOT print these labels)
+This is how you decide whether something is real enough to write down. Think it through privately; the finding you actually write uses the plain format further below.
 
-**Bugs & performance → Trigger / Expected / Actual**
-- **Trigger** — the exact input, state, or call sequence that exercises it
-- **Expected** — what the code is supposed to do
-- **Actual** — what it does instead
-(Performance: name the exact N+1 / unbounded growth / repeated work in the hot path — no hunches.)
+**For a bug or performance issue, you must be able to answer:**
+- When does it happen? (the exact input, state, or sequence)
+- What does the code do in that case?
+- What should it do instead?
+(Performance: point to the exact repeated work / N+1 / unbounded growth — no hunches.)
 
-**Maintainability & separation of concerns → Tangle / Consequence / Direction**
-- **Tangle** — the two concerns that are mixed, named concretely (e.g. "tax calc lives in the React render body", "data fetch embedded in the UI component")
-- **Consequence** — the concrete cost: what CANNOT be tested in isolation, changed without touching unrelated code, or reused — as a direct result. NOT "harder to read".
-- **Direction** — the separation to apply (e.g. "extract to a pure function", "move fetch into a hook/service")
+**For a maintainability issue, you must be able to answer:**
+- What two things are mixed together that shouldn't be? (e.g. business logic sitting inside a UI component, or data-fetching baked into display code)
+- What does that concretely cost — what can't be tested on its own, changed without touching unrelated code, or reused?
+- How would you separate them?
 
-If you cannot fill in the form concretely, DROP it. A maintainability finding with no concrete Consequence is a style opinion — drop it.
+If you can't answer the questions concretely, DROP it. "Might be slow", "could be cleaner", "consider extracting" (with no concrete cost) never qualify — those are opinions, not findings.
 
 ## What to look for (only these)
 - **Correctness** — logic errors, null/undefined, off-by-one, async/await, unhandled edge cases you can trigger
@@ -746,48 +746,57 @@ If you cannot fill in the form concretely, DROP it. A maintainability finding wi
 - 🟡 **Perf** — provable performance issue. Does not block.
 - 🔧 **Maintainability** — concrete separation-of-concerns / coupling violation. Does not block.
 
+## How to write — plain language, for a smart colleague who doesn't know this code
+- Write like a clear, friendly senior engineer explaining the issue to a teammate. Short sentences. Normal words.
+- No jargon or shorthand. If you must use a technical term, say what it means in a few words.
+- Each finding is SHORT: a couple of sentences on what's wrong and a couple on why it matters. Deeper detail comes from the chat with the reviewer later — the file is the overview, not the transcript.
+- Every finding follows the SAME shape (below). Same shape every time, whether it's a bug or a maintainability issue.
+
 ## Output — write `REVIEW.md` in this directory, EXACTLY this structure
 
 ```
 # PR Review: #<number> — <title>
 
-Intent alignment: ✅ satisfies / ⚠️ partial / ❌ diverges — <one sentence, cite ticket>
-Tier 2 deep dive: ran / skipped (<why>)
+**Does it do what the ticket asked?** ✅ Yes / ⚠️ Mostly / ❌ No — <one plain sentence, name the ticket>
+**How deep did I look?** Quick pass / Deep pass (<one-line why>)
 
-## At a Glance
-| Type | Risk | Verdict |
-|------|------|---------|
-| Feature/Bug Fix/Refactor/Perf/Chore | 🟢 Low / 🟡 Med / 🔴 High | ✅ Approve / 🔄 Request Changes / 💬 Comment |
+## Summary
+<2-3 plain sentences: what this PR changes, and your overall take. A teammate should understand the gist from this alone.>
 
-## Findings Tracker
-| ID | Severity | Location | Finding | Status |
-|----|----------|----------|---------|--------|
-| 1 | 🔴 Critical | file.ts:88 | one-line summary | open |
+## What I found
+| # | Severity | Where | Issue | Status |
+|---|----------|-------|-------|--------|
+| [1](#f1) | 🔴 Critical | `file.ts:88` | one plain-English line | open |
+| [2](#f2) | 🔧 Maintainability | `ui/list.tsx:40` | one plain-English line | open |
 
-(If none: write "No high-confidence findings." and set Verdict ✅ Approve.)
+The `#` links jump to the full detail below. Keep the `Status` column current — it's how the reviewer sees at a glance what's still open.
 
-## Findings
+(If nothing: write "Nothing worth flagging — looks good to me." and set the verdict to Approve.)
 
-### 1. <short title>   (bug/perf form)
-- **Severity:** 🔴 Critical
-- **Location:** `path/to/file.ext:LN-LN`
-- **Trigger:** <exact input/state that exercises it>
-- **Expected:** <what should happen>
-- **Actual:** <what happens instead>
-- **Fix:**
-  ```<lang>
-  <concrete fix snippet>
-  ```
+## Details
 
-### 2. <short title>   (maintainability form)
-- **Severity:** 🔧 Maintainability
-- **Location:** `path/to/file.ext:LN-LN`
-- **Tangle:** <the two concerns that are mixed>
-- **Consequence:** <what can't be tested/changed/reused as a result>
-- **Direction:** <how to separate them>
+<a id="f1"></a>
+### 1. <plain-English title of the problem>
+**Severity:** 🔴 Critical   **Where:** `path/to/file.ext:LN-LN`   **Status:** open
+
+**What's wrong:** <2-4 plain sentences. Describe when it happens, what the code does, and what it should do instead — in normal language, no jargon.>
+
+**Why it matters:** <1-2 sentences on the real-world impact: who is affected and how.>
+
+**Suggested fix:** <plain description; add a short code snippet only if it makes it clearer.>
+
+<a id="f2"></a>
+### 2. <plain-English title>
+**Severity:** 🔧 Maintainability   **Where:** `path/to/file.ext:LN-LN`   **Status:** open
+
+**What's wrong:** <same shape — for a maintainability issue, explain in plain words what's mixed together that shouldn't be.>
+
+**Why it matters:** <the concrete cost: what becomes hard to test, change, or reuse.>
+
+**Suggested fix:** <how to separate the concerns.>
 
 ## Verdict
-✅ Approve / 🔄 Request Changes / 💬 Comment — <one sentence rationale>
+✅ Approve / 🔄 Request Changes / 💬 Comment — <one plain sentence explaining the call>
 
 ## Review History
 | Version | Date | Commit | Action |
@@ -795,9 +804,13 @@ Tier 2 deep dive: ran / skipped (<why>)
 | v1 | <date> | <sha> | Initial review |
 ```
 
-`status` values: `open` (new), `held` (queued to post), `posted` (sent), `🔇 dismissed` (skip in re-reviews). The generator sets everything to `open`; the triage agent updates it later.
+Rules for the file:
+- Follow this structure EXACTLY, every time. Same headings, same order, same finding shape.
+- Every finding has a stable anchor `<a id="fN"></a>` right before its heading, and the table's `#` cell links to it as `[N](#fN)`. Anchor ids never change across re-reviews (finding 1 is always `f1`).
+- `Status` appears in TWO places per finding — the table row and the detail heading — and they must always match. Values: `open` (new), `held` (queued to post), `posted` (sent), `resolved` (fixed, confirmed on re-review), `🔇 dismissed` (skip in re-reviews). Set everything to `open`; the triage and re-review agents change it later.
+- Keep it tight. The reviewer reads this to get the picture in under a minute, then talks through anything unclear with the agent.
 
-BEGIN NOW: run Tier 0 (intent), Tier 1 (core), Tier 2 only if triggered; apply the evidence bar; write REVIEW.md; stop.
+BEGIN NOW: run Tier 0 (intent), Tier 1 (core), Tier 2 only if triggered; apply the evidence bar in your head; write REVIEW.md in plain language; stop.
 REVIEW_TEMPLATE
             # Replace context placeholder
             sed -i '' "s|{CONTEXT}|$context|g" "$claude_md" 2>/dev/null || \
@@ -6536,18 +6549,18 @@ DO NOT COMMIT - the user will review and commit manually."""
 **Update REVIEW.md IN PLACE. Same schema as the initial review. Do NOT rewrite from scratch.**
 
 ### 1. VERIFY each prior finding was properly addressed (do this FIRST)
-This is the point of a re-review — not just finding new issues, but confirming the old concerns were actually fixed. For every finding already in the Findings Tracker EXCEPT 🔇 dismissed ones:
-- Re-open the code at its Location and **re-run its evidence**: for a bug, does the original **Trigger** now produce the **Expected** result? For a maintainability finding, is the **Tangle** actually separated?
-- Classify with evidence (cite the commit/lines that changed it):
-  - ✅ **resolved** — the fix genuinely closes the gap. Set Status `resolved`.
-  - ⚠️ **partial** — attempted but the Trigger still misbehaves in some case. Keep it OPEN; update Actual to describe what still breaks.
+This is the point of a re-review — not just finding new issues, but confirming the old concerns were actually fixed. For every finding in the "What I found" table EXCEPT 🔇 dismissed ones:
+- Re-open the code at its **Where** location and re-check the problem the finding describes: does the situation in its "What's wrong" still happen in the new code? For a maintainability finding, are the mixed concerns actually separated now?
+- Classify with evidence (cite the lines that changed it):
+  - ✅ **resolved** — the fix genuinely closes it. Set Status `resolved`.
+  - ⚠️ **partial** — attempted but it still misbehaves in some case. Keep it OPEN; update "What's wrong" to describe what still breaks.
   - ❌ **still open** — not addressed. Leave as-is.
   - 🔁 **regressed** — the fix introduced a NEW problem. Keep the original open if unfixed, AND add a new finding for the regression.
-- A fix you cannot verify closes the gap is NOT resolved — treat it as ⚠️ partial.
+- A fix you cannot confirm actually closes it is NOT resolved — treat it as ⚠️ partial.
 - **🔇 dismissed?** → SKIP entirely. Do not re-flag, edit, or remove. The reviewer dismissed it on purpose.
 
 ### 2. Look for NEW findings — same evidence bar as the initial review
-Review the full current PR diff (not just the new commits). Add a finding ONLY if you can fill its form concretely: bugs/perf → **Trigger/Expected/Actual**; maintainability → **Tangle/Consequence/Direction**. If you cannot, drop it. Only Correctness, Security, Regression, provable Performance, and concrete separation-of-concerns — no cosmetic style, docs, or "nice to have". Also re-check intent: does the PR still satisfy the Jira ticket? Number new findings continuing from the last ID; Status `open`.
+Review the full current PR diff (not just the new commits). Add a finding ONLY if it passes the evidence bar in your head (a bug: when it happens / what it does / what it should do; a maintainability issue: what's mixed / the concrete cost / how to separate). If you cannot answer concretely, drop it. Only Correctness, Security, Regression, provable Performance, and concrete separation-of-concerns — no cosmetic style, docs, or "nice to have". Also re-check intent: does the PR still satisfy the Jira ticket? Write each new finding in the SAME plain format as the file (What's wrong / Why it matters / Suggested fix), with a `<a id="fN"></a>` anchor and a linked table row. Number continuing from the last ID; Status `open`.
 
 ### 3. Severity — exactly four
 🔴 Critical (blocks) · 🟠 High (should fix) · 🟡 Perf (provable, non-blocking) · 🔧 Maintainability (concrete SoC/coupling, non-blocking).
@@ -6618,7 +6631,7 @@ Re-evaluate across ALL findings. Only OPEN 🔴/🟠 findings block approval.
             log_file = logs_dir / f"terminal-{datetime.datetime.now().strftime('%Y%m%d-%H%M%S')}.log"
             session_name = session_path.name
 
-            prompt = f"STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it for re-review and follow its output — skip everything else. STEP 2 (only if skill unavailable): RE-REVIEW MODE — PR updated with {commit_count} new commit(s). Read RE-REVIEW.md and follow it. Update REVIEW.md in-place. FIRST verify each prior finding was properly addressed: re-run its Trigger against the new code and classify ✅ resolved / ⚠️ partial (keep open) / ❌ still open / 🔁 regressed, with evidence — 🔇 dismissed stay untouched. THEN add NEW findings only if they pass the evidence bar (bugs/perf: Trigger/Expected/Actual; maintainability: Tangle/Consequence/Direction), and re-check the PR still satisfies its Jira ticket. Severity is 🔴 Critical / 🟠 High / 🟡 Perf / 🔧 Maintainability. Scope: ONLY files in the PR diff. Add a new row to Review History. Self-check: verify every finding references a changed file."
+            prompt = f"STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it for re-review and follow its output — skip everything else. STEP 2 (only if skill unavailable): RE-REVIEW MODE — PR updated with {commit_count} new commit(s). Read RE-REVIEW.md and follow it. Update REVIEW.md in-place. FIRST verify each prior finding was properly addressed: re-check whether the problem it describes still happens in the new code and classify ✅ resolved / ⚠️ partial (keep open) / ❌ still open / 🔁 regressed, with evidence — 🔇 dismissed stay untouched. THEN add NEW findings only if they pass the evidence bar in CLAUDE.md, written in the file's plain format (What's wrong / Why it matters / Suggested fix), and re-check the PR still satisfies its Jira ticket. Severity is 🔴 Critical / 🟠 High / 🟡 Perf / 🔧 Maintainability. Scope: ONLY files in the PR diff. Add a new row to Review History. Self-check: verify every finding references a changed file."
 
             # Run claude directly (not via script(1) — script swallows the prompt argument)
             escaped_prompt = prompt.replace("'", "'\\''")
@@ -9254,7 +9267,7 @@ Re-evaluate across ALL findings. Only OPEN 🔴/🟠 findings block approval.
     // ========================================
     function parseFindingsFromMarkdown(rawMarkdown) {
         const findings = [];
-        const findingRegex = /####\\s*(?:[✅🔇]\\s*)?(?:Finding\\s*#?)?([A-Za-z]*-?\\d+)[.:\\s]+([^\\n]+)\\n([\\s\\S]*?)(?=####|###\\s|$)/gi;
+        const findingRegex = /#{3,4}\\s*(?:[✅🔇]\\s*)?(?:Finding\\s*#?)?([A-Za-z]*-?\\d+)[.:\\s]+([^\\n]+)\\n([\\s\\S]*?)(?=\\n#{3,4}\\s|\\n##\\s|$)/gi;
         let match;
 
         // Helper: extract a section from finding body between bold markdown headers.
@@ -9279,7 +9292,7 @@ Re-evaluate across ALL findings. Only OPEN 🔴/🟠 findings block approval.
             const findingBody = match[3];
 
             // Try body first: **File:** `path:line` or 📍 **Location:** `path:line`
-            let locMatch = findingBody.match(/(?:📍\\s*\\*\\*Location:\\*\\*|\\*\\*File:\\*\\*)\\s*`([^`]+)`/);
+            let locMatch = findingBody.match(/(?:📍\\s*\\*\\*Location:\\*\\*|\\*\\*File:\\*\\*|\\*\\*Where:\\*\\*)\\s*`([^`]+)`/);
             let locFromTitle = false;
 
             // Fallback: location in header (e.g., "Title \\u2014 `file.ts:42`")
@@ -9297,8 +9310,8 @@ Re-evaluate across ALL findings. Only OPEN 🔴/🟠 findings block approval.
             const title = locFromTitle ? rawTitle.replace(/\\s*[\\u2014\\u2013-]+\\s*`[^`]+`\\s*$/, '').trim() : rawTitle;
 
             const intent = extractSection(findingBody, ['What the code does']);
-            const problem = extractSection(findingBody, ['The issue', 'Problem']);
-            const impact = extractSection(findingBody, ['Why this matters', 'Impact']);
+            const problem = extractSection(findingBody, ["What's wrong", 'The issue', 'Problem']);
+            const impact = extractSection(findingBody, ['Why it matters', 'Why this matters', 'Impact']);
             const context = extractSection(findingBody, ['Context\\\\s*/\\\\s*Insight', 'Context']);
             const suggestion = extractSection(findingBody, ['Suggest[^*:]*', 'Fix', 'Recommendation']);
             const suggestedCode = extractCodeAfterLabel(findingBody, 'Suggest');
@@ -9310,12 +9323,13 @@ Re-evaluate across ALL findings. Only OPEN 🔴/🟠 findings block approval.
                 endLine: fileLineMatch[3] ? parseInt(fileLineMatch[3]) : null,
                 intent: intent, problem: problem, impact: impact,
                 context: context, suggestion: suggestion,
-                suggestedCode: suggestedCode, currentCode: currentCode
+                suggestedCode: suggestedCode, currentCode: currentCode,
+                body: findingBody
             });
         }
 
         // Fallback: simpler pattern for findings that don't match the structured format
-        const simpleRegex = /####\\s*(?:Finding\\s*#?\\d+[:\\s]*)?([\\s\\S]*?)\\n[\\s\\S]*?(?:📍|\\*\\*(?:Location|File):\\*\\*)\\s*`?([^`\\n]+\\.[a-z]+:\\d+[^`\\n]*)`?/gi;
+        const simpleRegex = /#{3,4}\\s*(?:Finding\\s*#?\\d+[:\\s]*)?([\\s\\S]*?)\\n[\\s\\S]*?(?:📍|\\*\\*(?:Location|File|Where):\\*\\*)\\s*`?([^`\\n]+\\.[a-z]+:\\d+[^`\\n]*)`?/gi;
         while ((match = simpleRegex.exec(rawMarkdown)) !== null) {
             const location = match[2].trim();
             const locMatch = location.match(/^([^:]+):(\\d+)(?:[,-](\\d+))?/);
@@ -9400,6 +9414,16 @@ Re-evaluate across ALL findings. Only OPEN 🔴/🟠 findings block approval.
 
         function getSeverity(f, rawMarkdown) {
             const num = f.number || '';
+            // New format: **Severity:** <emoji> in the finding body
+            if (f.body) {
+                const sm = f.body.match(/\\*\\*Severity:\\*\\*\\s*([🔴🟠🟡🔧])/);
+                if (sm) {
+                    if (sm[1] === '🔴') return { label: 'Critical', cls: 'sev-critical' };
+                    if (sm[1] === '🟠') return { label: 'High', cls: 'sev-important' };
+                    if (sm[1] === '🟡') return { label: 'Perf', cls: 'sev-minor' };
+                    if (sm[1] === '🔧') return { label: 'Maintainability', cls: 'sev-info' };
+                }
+            }
             if (num.startsWith('C') || num.startsWith('c')) return { label: 'Critical', cls: 'sev-critical' };
             if (num.startsWith('I') || num.startsWith('i')) return { label: 'Important', cls: 'sev-important' };
             if (num.startsWith('M') || num.startsWith('m')) return { label: 'Minor', cls: 'sev-minor' };
@@ -9422,6 +9446,18 @@ Re-evaluate across ALL findings. Only OPEN 🔴/🟠 findings block approval.
 
         function getStatus(f, rawMarkdown) {
             const num = f.number || '';
+            // New format: **Status:** <value> in the finding body
+            if (f.body) {
+                const stm = f.body.match(/\\*\\*Status:\\*\\*\\s*(🔇\\s*dismissed|dismissed|resolved|posted|held|open)/i);
+                if (stm) {
+                    const v = stm[1].toLowerCase();
+                    if (v.indexOf('dismiss') > -1) return { label: 'Dismissed', cls: 'status-dismissed' };
+                    if (v === 'resolved') return { label: 'Fixed', cls: 'status-fixed' };
+                    if (v === 'posted') return { label: 'Posted', cls: 'status-posted' };
+                    if (v === 'held') return { label: 'Held', cls: 'status-held' };
+                    return { label: 'Open', cls: 'status-open' };
+                }
+            }
             const escaped = num.replace(/[.*+?^${}()|[\\\\]\\\\]/g, '\\\\$&');
             // Look for ✅ prefix in h4 heading: #### ✅ 1. title
             const fixedPatterns = [
@@ -9930,7 +9966,7 @@ Re-evaluate across ALL findings. Only OPEN 🔴/🟠 findings block approval.
         const sessionName = state.newSession.data.sessionName || state.currentSession;
         if (!sessionName) { showToast('No session to start', 'error'); return; }
         try {
-            const reviewPrompt = 'STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it and follow its output — skip everything else. STEP 2 (only if skill unavailable): You are a senior engineer. Review ONLY files listed in Changed Files in CLAUDE.md. ANY finding whose file is not in that list is INVALID — delete it. Follow CLAUDE.md review guidelines — it defines the confidence gate and the REVIEW.md format. First check intent: does the PR satisfy its Jira ticket (source of truth)? If it diverges, that is a 🔴 finding. Then write ONLY high-confidence findings, each passing the evidence bar: bugs/perf state Trigger/Expected/Actual; maintainability states Tangle/Consequence/Direction. Otherwise drop it. Severity is 🔴 Critical / 🟠 High / 🟡 Perf / 🔧 Maintainability. Cover Correctness, Security, Regression, provable Performance, and concrete separation-of-concerns — no cosmetic style, docs, or suggestions. Self-check: before finishing, verify every finding references a changed file and passes the bar.';
+            const reviewPrompt = 'STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it and follow its output — skip everything else. STEP 2 (only if skill unavailable): You are a senior engineer. Review ONLY files listed in Changed Files in CLAUDE.md. ANY finding whose file is not in that list is INVALID — delete it. Follow CLAUDE.md review guidelines — it defines the confidence gate and the REVIEW.md format. First check intent: does the PR satisfy its Jira ticket (source of truth)? If it diverges, that is a 🔴 finding. Then write ONLY high-confidence findings that pass the evidence bar in CLAUDE.md (a bug: when it happens / what it does / what it should do; maintainability: what's mixed / the concrete cost / how to separate), otherwise drop it. Write findings in CLAUDE.md's plain format (What's wrong / Why it matters / Suggested fix) — clear language, no jargon. Severity is 🔴 Critical / 🟠 High / 🟡 Perf / 🔧 Maintainability. Cover Correctness, Security, Regression, provable Performance, and concrete separation-of-concerns — no cosmetic style, docs, or suggestions. Self-check: before finishing, verify every finding references a changed file and passes the bar.';
             const endpoint = tool === 'acr+claude' ? API.START_ACR_CLAUDE : API.START_CLAUDE;
             if (tool === 'acr+claude') showToast('Running ACR review, then starting Claude...', 'info');
             const payload = { session: sessionName };
@@ -10914,18 +10950,18 @@ $CHANGES_SINCE
 **Update REVIEW.md IN PLACE. Same schema as the initial review. Do NOT rewrite from scratch.**
 
 ### 1. VERIFY each prior finding was properly addressed (do this FIRST)
-This is the point of a re-review — not just finding new issues, but confirming the old concerns were actually fixed. For every finding in the Findings Tracker EXCEPT 🔇 dismissed ones:
-- Re-open the code at its Location and **re-run its evidence**: for a bug, does the original **Trigger** now produce the **Expected** result? For a maintainability finding, is the **Tangle** actually separated?
-- Classify with evidence (cite the commit/lines that changed it):
-  - ✅ **resolved** — the fix genuinely closes the gap. Set Status \`resolved\`.
-  - ⚠️ **partial** — attempted but the Trigger still misbehaves in some case. Keep it OPEN; update Actual to describe what still breaks.
+This is the point of a re-review — not just finding new issues, but confirming the old concerns were actually fixed. For every finding in the "What I found" table EXCEPT 🔇 dismissed ones:
+- Re-open the code at its **Where** location and re-check the problem the finding describes: does the situation in its "What's wrong" still happen in the new code? For a maintainability finding, are the mixed concerns actually separated now?
+- Classify with evidence (cite the lines that changed it):
+  - ✅ **resolved** — the fix genuinely closes it. Set Status \`resolved\`.
+  - ⚠️ **partial** — attempted but it still misbehaves in some case. Keep it OPEN; update "What's wrong" to describe what still breaks.
   - ❌ **still open** — not addressed. Leave as-is.
   - 🔁 **regressed** — the fix introduced a NEW problem. Keep the original open if unfixed, AND add a new finding for the regression.
-- A fix you cannot verify closes the gap is NOT resolved — treat it as ⚠️ partial.
+- A fix you cannot confirm actually closes it is NOT resolved — treat it as ⚠️ partial.
 - **🔇 dismissed?** → SKIP entirely. Do not re-flag, edit, or remove. The reviewer dismissed it on purpose.
 
 ### 2. Look for NEW findings — same evidence bar as the initial review
-Review the full current PR diff. Add a finding ONLY if you can fill its form concretely: bugs/perf → **Trigger/Expected/Actual**; maintainability → **Tangle/Consequence/Direction**. If you cannot, drop it. Only Correctness, Security, Regression, provable Performance, and concrete separation-of-concerns — no cosmetic style, docs, or "nice to have". Also re-check intent: does the PR still satisfy the Jira ticket? Number new findings continuing from the last ID; Status \`open\`.
+Review the full current PR diff. Add a finding ONLY if it passes the evidence bar in your head (a bug: when it happens / what it does / what it should do; a maintainability issue: what's mixed / the concrete cost / how to separate). If you cannot answer concretely, drop it. Only Correctness, Security, Regression, provable Performance, and concrete separation-of-concerns — no cosmetic style, docs, or "nice to have". Also re-check intent: does the PR still satisfy the Jira ticket? Write each new finding in the SAME plain format as the file (What's wrong / Why it matters / Suggested fix), with a \`<a id="fN"></a>\` anchor and a linked table row. Number continuing from the last ID; Status \`open\`.
 
 ### 3. Severity — exactly four
 🔴 Critical (blocks) · 🟠 High (should fix) · 🟡 Perf (provable, non-blocking) · 🔧 Maintainability (concrete SoC/coupling, non-blocking).
@@ -11008,14 +11044,14 @@ NOTICE_EOF
         *"Start Claude"*)
             tput reset 2>/dev/null || clear
             cd "$SESSION_DIR/repo"
-            claude "STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it for re-review and follow its output — skip everything else. STEP 2 (only if skill unavailable): RE-REVIEW MODE — PR updated with $COMMIT_COUNT new commit(s). Read RE-REVIEW.md and follow it. Update REVIEW.md in-place. FIRST verify each prior finding was properly addressed: re-run its Trigger against the new code and classify ✅ resolved / ⚠️ partial (keep open) / ❌ still open / 🔁 regressed, with evidence — 🔇 dismissed stay untouched. THEN add NEW findings only if they pass the evidence bar (bugs/perf: Trigger/Expected/Actual; maintainability: Tangle/Consequence/Direction), and re-check the PR still satisfies its Jira ticket. Severity is 🔴 Critical / 🟠 High / 🟡 Perf / 🔧 Maintainability. Scope: ONLY files in the PR diff. Add a new row to Review History. Self-check: verify every finding references a changed file."
+            claude "STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it for re-review and follow its output — skip everything else. STEP 2 (only if skill unavailable): RE-REVIEW MODE — PR updated with $COMMIT_COUNT new commit(s). Read RE-REVIEW.md and follow it. Update REVIEW.md in-place. FIRST verify each prior finding was properly addressed: re-check whether the problem it describes still happens in the new code and classify ✅ resolved / ⚠️ partial (keep open) / ❌ still open / 🔁 regressed, with evidence — 🔇 dismissed stay untouched. THEN add NEW findings only if they pass the evidence bar in CLAUDE.md, written in the file's plain format (What's wrong / Why it matters / Suggested fix), and re-check the PR still satisfies its Jira ticket. Severity is 🔴 Critical / 🟠 High / 🟡 Perf / 🔧 Maintainability. Scope: ONLY files in the PR diff. Add a new row to Review History. Self-check: verify every finding references a changed file."
             return 2  # Signal that Claude was run
             ;;
         *"ACR"*)
             run_acr_quick "$SESSION_DIR" "$PR_BASE"
             tput reset 2>/dev/null || clear
             cd "$SESSION_DIR/repo"
-            claude "STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it for re-review (ACR_REVIEW.md has context) and follow its output — skip everything else. STEP 2 (only if skill unavailable): RE-REVIEW MODE — PR updated. Read RE-REVIEW.md and ACR_REVIEW.md, and follow RE-REVIEW.md. Update REVIEW.md in-place. FIRST verify each prior finding was properly addressed: re-run its Trigger against the new code and classify ✅ resolved / ⚠️ partial (keep open) / ❌ still open / 🔁 regressed, with evidence — 🔇 dismissed stay untouched. THEN add NEW findings only if they pass the evidence bar (bugs/perf: Trigger/Expected/Actual; maintainability: Tangle/Consequence/Direction), and re-check the PR still satisfies its Jira ticket. Severity is 🔴 Critical / 🟠 High / 🟡 Perf / 🔧 Maintainability. Scope: ONLY files in the PR diff. Add a new row to Review History. Self-check: verify every finding references a changed file."
+            claude "STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it for re-review (ACR_REVIEW.md has context) and follow its output — skip everything else. STEP 2 (only if skill unavailable): RE-REVIEW MODE — PR updated. Read RE-REVIEW.md and ACR_REVIEW.md, and follow RE-REVIEW.md. Update REVIEW.md in-place. FIRST verify each prior finding was properly addressed: re-check whether the problem it describes still happens in the new code and classify ✅ resolved / ⚠️ partial (keep open) / ❌ still open / 🔁 regressed, with evidence — 🔇 dismissed stay untouched. THEN add NEW findings only if they pass the evidence bar in CLAUDE.md, written in the file's plain format (What's wrong / Why it matters / Suggested fix), and re-check the PR still satisfies its Jira ticket. Severity is 🔴 Critical / 🟠 High / 🟡 Perf / 🔧 Maintainability. Scope: ONLY files in the PR diff. Add a new row to Review History. Self-check: verify every finding references a changed file."
             return 2  # Signal that Claude was run
             ;;
         *)
@@ -11235,7 +11271,7 @@ pre_session_menu() {
                         dim "Type /exit when done to return here."
                         sleep 1
                         tput reset 2>/dev/null || clear
-                        cd "$SESSION_DIR/repo" && claude --model $MODEL --add-dir "$SESSION_DIR" -- "STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it and follow its output — skip everything else. STEP 2 (only if skill unavailable): You are a senior engineer. Review ONLY files listed in Changed Files in CLAUDE.md. ANY finding whose file is not in that list is INVALID — delete it. Follow CLAUDE.md review guidelines — it defines the confidence gate and the REVIEW.md format. First check intent: does the PR satisfy its Jira ticket (source of truth)? If it diverges, that is a 🔴 finding. Then write ONLY high-confidence findings, each passing the evidence bar: bugs/perf state Trigger/Expected/Actual; maintainability states Tangle/Consequence/Direction. Otherwise drop it. Severity is 🔴 Critical / 🟠 High / 🟡 Perf / 🔧 Maintainability. Cover Correctness, Security, Regression, provable Performance, and concrete separation-of-concerns — no cosmetic style, docs, or suggestions. Self-check: before finishing, verify every finding references a changed file and passes the bar."
+                        cd "$SESSION_DIR/repo" && claude --model $MODEL --add-dir "$SESSION_DIR" -- "STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it and follow its output — skip everything else. STEP 2 (only if skill unavailable): You are a senior engineer. Review ONLY files listed in Changed Files in CLAUDE.md. ANY finding whose file is not in that list is INVALID — delete it. Follow CLAUDE.md review guidelines — it defines the confidence gate and the REVIEW.md format. First check intent: does the PR satisfy its Jira ticket (source of truth)? If it diverges, that is a 🔴 finding. Then write ONLY high-confidence findings that pass the evidence bar in CLAUDE.md (a bug: when it happens / what it does / what it should do; maintainability: what's mixed / the concrete cost / how to separate), otherwise drop it. Write findings in CLAUDE.md's plain format (What's wrong / Why it matters / Suggested fix) — clear language, no jargon. Severity is 🔴 Critical / 🟠 High / 🟡 Perf / 🔧 Maintainability. Cover Correctness, Security, Regression, provable Performance, and concrete separation-of-concerns — no cosmetic style, docs, or suggestions. Self-check: before finishing, verify every finding references a changed file and passes the bar."
                         post_session_menu "$SESSION_DIR"
                         return 0
                         ;;
@@ -12750,15 +12786,15 @@ printf '### New Commits\n\`\`\`\n%s\n\`\`\`\n\n' "\${new_commits_text:-(none)}"
 printf '### Files Changed Since Last Review\n\`\`\`\n%s\n\`\`\`\n\n---\n\n' "\${changes_since:-(none)}"
 printf '## Re-Review Instructions\n\n**Update REVIEW.md IN PLACE. Same schema as the initial review. Do NOT rewrite from scratch.**\n\n'
 printf '### 1. VERIFY each prior finding was properly addressed (do this FIRST)\n'
-printf 'The point of a re-review is confirming old concerns were actually fixed, not just finding new ones. For every finding in the Findings Tracker EXCEPT 🔇 dismissed:\n'
-printf -- '- Re-open the code at its Location and **re-run its evidence**: for a bug, does the original **Trigger** now produce **Expected**? For maintainability, is the **Tangle** actually separated?\n'
-printf -- '- Classify with evidence (cite the changed lines): ✅ **resolved** (set Status `resolved`) · ⚠️ **partial** (keep OPEN, update Actual with what still breaks) · ❌ **still open** (leave as-is) · 🔁 **regressed** (keep original + add a new finding for the regression).\n'
-printf -- '- A fix you cannot verify closes the gap is NOT resolved — treat as ⚠️ partial.\n'
+printf 'The point of a re-review is confirming old concerns were actually fixed, not just finding new ones. For every finding in the "What I found" table EXCEPT 🔇 dismissed:\n'
+printf -- '- Re-open the code at its **Where** location and re-check the problem it describes: does the situation in its "What'"'"'s wrong" still happen? For maintainability, are the mixed concerns actually separated now?\n'
+printf -- '- Classify with evidence (cite the changed lines): ✅ **resolved** (set Status `resolved`) · ⚠️ **partial** (keep OPEN, update "What'"'"'s wrong" with what still breaks) · ❌ **still open** (leave as-is) · 🔁 **regressed** (keep original + add a new finding for the regression).\n'
+printf -- '- A fix you cannot confirm actually closes it is NOT resolved — treat as ⚠️ partial.\n'
 printf -- '- **🔇 dismissed?** → SKIP entirely. Do not re-flag, edit, or remove.\n\n'
 printf '### 2. Look for NEW findings — same evidence bar as the initial review\n'
-printf 'Review the full current PR diff. Add a finding ONLY if you can fill its form concretely: bugs/perf → **Trigger/Expected/Actual**; maintainability → **Tangle/Consequence/Direction**. If you cannot, drop it.\n'
+printf 'Review the full current PR diff. Add a finding ONLY if it passes the evidence bar in your head (a bug: when it happens / what it does / what it should do; maintainability: what'"'"'s mixed / the concrete cost / how to separate). If you cannot answer concretely, drop it.\n'
 printf 'Only Correctness, Security, Regression, provable Performance, and concrete separation-of-concerns. No cosmetic style, docs, or "nice to have". Also re-check intent: does the PR still satisfy the Jira ticket?\n'
-printf 'Number new findings continuing from the last ID; set Status to `open`.\n\n'
+printf 'Write each new finding in the SAME plain format as the file (What'"'"'s wrong / Why it matters / Suggested fix), with a `<a id="fN"></a>` anchor and a linked table row. Number continuing from the last ID; set Status to `open`.\n\n'
 printf '### 3. Severity — exactly four\n🔴 Critical (blocks) · 🟠 High (should fix) · 🟡 Perf (provable, non-blocking) · 🔧 Maintainability (concrete SoC/coupling, non-blocking).\n\n'
 printf '### 4. Update Review History\nADD a new row — never remove existing rows:\n'
 printf '\`\`\`\n| v%s | %s | %s | Re-review: X resolved, Y partial, Z new |\n\`\`\`\n\n' "\$next_version" "\$today" "\$new_short"
@@ -12791,7 +12827,7 @@ fi
 update_session_field "$SESSION_DIR" "reviewed_sha" "\$new_commit"
 
 # --- Step 6: Run headless re-review with skill-aware prompt ---
-prompt="STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it for re-review and follow its output — skip everything else. STEP 2 (only if skill unavailable): RE-REVIEW MODE — PR updated with \${commit_count} new commit(s). Read RE-REVIEW.md and follow it. Update REVIEW.md in-place. FIRST verify each prior finding was properly addressed: re-run its Trigger against the new code and classify ✅ resolved / ⚠️ partial (keep open) / ❌ still open / 🔁 regressed, with evidence — 🔇 dismissed stay untouched. THEN add NEW findings only if they pass the evidence bar (bugs/perf: Trigger/Expected/Actual; maintainability: Tangle/Consequence/Direction), and re-check the PR still satisfies its Jira ticket. Severity is 🔴 Critical / 🟠 High / 🟡 Perf / 🔧 Maintainability. Scope: ONLY files in the PR diff. Add a new row to Review History. Self-check: verify every finding references a changed file. As the very last action, write a single line to the file $SESSION_DIR/rereview_summary. Format: '✅ N/N resolved' if all prior findings are resolved, or '⚠️ K/N resolved, M new' otherwise. Write only that line — no other content."
+prompt="STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it for re-review and follow its output — skip everything else. STEP 2 (only if skill unavailable): RE-REVIEW MODE — PR updated with \${commit_count} new commit(s). Read RE-REVIEW.md and follow it. Update REVIEW.md in-place. FIRST verify each prior finding was properly addressed: re-check whether the problem it describes still happens in the new code and classify ✅ resolved / ⚠️ partial (keep open) / ❌ still open / 🔁 regressed, with evidence — 🔇 dismissed stay untouched. THEN add NEW findings only if they pass the evidence bar in CLAUDE.md, written in the file's plain format (What's wrong / Why it matters / Suggested fix), and re-check the PR still satisfies its Jira ticket. Severity is 🔴 Critical / 🟠 High / 🟡 Perf / 🔧 Maintainability. Scope: ONLY files in the PR diff. Add a new row to Review History. Self-check: verify every finding references a changed file. As the very last action, write a single line to the file $SESSION_DIR/rereview_summary. Format: '✅ N/N resolved' if all prior findings are resolved, or '⚠️ K/N resolved, M new' otherwise. Write only that line — no other content."
 
 cd "$REPO_DIR" && claude -p "\$prompt" --permission-mode acceptEdits --add-dir "$SESSION_DIR" < /dev/null
 rc=\$?
