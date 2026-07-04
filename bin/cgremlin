@@ -393,7 +393,9 @@ review_list_grouped() {
       elif [ "$ms" = "triaging" ]; then
         inflight="${inflight}$(printf 'PR #%s  @%-14s 👀 triaging reviewer comments' "$num" "${author:-?}")\t\tinflight"$'\n'
       else
-        mytracking="${mytracking}$(printf 'PR #%s  @%-14s 📋 open · awaiting review' "$num" "${author:-?}")\t\tmyprs"$'\n'
+        local mt_icon="📋 open · awaiting review"
+        [ "$(read_session_field "$d" "is_draft" 2>/dev/null)" = "true" ] && mt_icon="📝 draft · in progress"
+        mytracking="${mytracking}$(printf 'PR #%s  @%-14s %s' "$num" "${author:-?}" "$mt_icon")\t\tmyprs"$'\n'
       fi
       continue
     fi
@@ -12423,13 +12425,14 @@ watch_daemon_loop() {
         if [ -n "$watch_repos" ] && [ -n "$watch_authors" ]; then
             local wrepo
             for wrepo in $watch_repos; do
-                local pr_rows pr_num pr_url pr_author wauthor matched already_tracked ex
-                # Skip drafts and already-approved PRs (no point reviewing those).
+                local pr_rows pr_num pr_url pr_author pr_isdraft wauthor matched already_tracked ex me_l
+                # Include drafts (the isDraft column decides below); skip approved.
                 pr_rows=$(timeout 20 gh pr list --repo "$wrepo" --state open --limit 50 \
                     --json number,url,author,isDraft,reviewDecision \
-                    --jq '.[] | select(.isDraft==false and .reviewDecision != "APPROVED") | [(.number|tostring), .url, .author.login] | @tsv' 2>/dev/null)
+                    --jq '.[] | select(.reviewDecision != "APPROVED") | [(.number|tostring), .url, .author.login, (.isDraft|tostring)] | @tsv' 2>/dev/null)
                 [ -z "$pr_rows" ] && continue
-                while IFS=$'\t' read -r pr_num pr_url pr_author; do
+                me_l=$(printf '%s' "${GITHUB_ME:-}" | tr '[:upper:]' '[:lower:]')
+                while IFS=$'\t' read -r pr_num pr_url pr_author pr_isdraft; do
                     [ -z "$pr_num" ] || [ -z "$pr_url" ] || [ -z "$pr_author" ] && continue
                     # Author in the watch list? (case-insensitive)
                     matched=false
@@ -12437,14 +12440,18 @@ watch_daemon_loop() {
                         [ "$(printf '%s' "$pr_author" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "$wauthor" | tr '[:upper:]' '[:lower:]')" ] && { matched=true; break; }
                     done
                     [ "$matched" = false ] && continue
+                    local is_me=false
+                    [ -n "$me_l" ] && [ "$(printf '%s' "$pr_author" | tr '[:upper:]' '[:lower:]')" = "$me_l" ] && is_me=true
+                    # Others' drafts aren't ready to review → skip. My drafts ARE tracked (for reference).
+                    [ "$pr_isdraft" = "true" ] && [ "$is_me" = false ] && continue
                     # Skip if a session already exists for this PR number
                     already_tracked=false
                     for ex in "$SESSIONS_DIR"/pr-*-"${pr_num}"-*; do
                         [ -d "$ex" ] && { already_tracked=true; break; }
                     done
                     [ "$already_tracked" = true ] && continue
-                    if [ -n "$GITHUB_ME" ] && [ "$(printf '%s' "$pr_author" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "$GITHUB_ME" | tr '[:upper:]' '[:lower:]')" ]; then
-                        echo "track my PR #${pr_num} @${pr_author} in ${wrepo} $(date)" >> "$LOG"
+                    if [ "$is_me" = true ]; then
+                        echo "track my PR #${pr_num} @${pr_author} (draft=$pr_isdraft) in ${wrepo} $(date)" >> "$LOG"
                         "$_cg" --track-my-pr "$pr_url" >> "$LOG" 2>&1 &
                     else
                         echo "auto-pickup PR #${pr_num} @${pr_author} in ${wrepo} $(date)" >> "$LOG"
@@ -12460,9 +12467,11 @@ watch_daemon_loop() {
             local num repo state review_decision meta lc head
             num=$(read_session_field "$d" "pr.number"); repo=$(_pr_repo "$d")
             [ -z "$num" ] || [ -z "$repo" ] && continue
-            # Fetch state + review decision together (one API call).
-            meta=$(timeout 15 gh pr view "$num" --repo "$repo" --json state,reviewDecision -q '.state + "\t" + (.reviewDecision // "")' 2>/dev/null)
-            state="${meta%%$'\t'*}"; review_decision="${meta#*$'\t'}"
+            # Fetch state + review decision + draft flag together (one API call).
+            local meta_rest pr_isdraft
+            meta=$(timeout 15 gh pr view "$num" --repo "$repo" --json state,reviewDecision,isDraft -q '.state + "\t" + (.reviewDecision // "") + "\t" + (.isDraft|tostring)' 2>/dev/null)
+            state="${meta%%$'\t'*}"; meta_rest="${meta#*$'\t'}"
+            review_decision="${meta_rest%%$'\t'*}"; pr_isdraft="${meta_rest##*$'\t'}"
             # Merged/closed → done; delete the session.
             if [ "$state" = "MERGED" ] || [ "$state" = "CLOSED" ]; then
                 case "$d" in "$SESSIONS_DIR"/pr-*)
@@ -12486,6 +12495,9 @@ watch_daemon_loop() {
             fi
             # My own PRs: no rereview. Detect NEW reviewer comments → triage.
             if pr_is_mine "$d"; then
+                # Keep the draft flag fresh so the status pane label flips when
+                # the PR moves between draft and ready-for-review.
+                [ -n "$pr_isdraft" ] && update_session_field "$d" "is_draft" "$pr_isdraft"
                 [ "$(read_lifecycle "$d")" = "approved" ] && continue
                 [ "$(read_mine_stage "$d")" = "triaging" ] && continue
                 local m_owner="${repo%%/*}" m_name="${repo##*/}" seen new_ids
