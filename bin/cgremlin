@@ -388,8 +388,20 @@ review_list_grouped() {
       if [ "$lc" = "approved" ]; then
         mergemine="${mergemine}$(printf 'PR #%s  @%-14s 🚀 APPROVED — merge it!' "$num" "${author:-?}")\t\tmergemine"$'\n'
       elif [ "$ms" = "ready" ]; then
-        local nc; nc=$(grep -c '^### ' "$d/COMMENTS.md" 2>/dev/null || echo 0)
-        mycomments="${mycomments}$(printf 'PR #%s  @%-14s 💬 %s comment(s) to address' "$num" "${author:-?}" "$nc")\t${sname}\tmycomments"$'\n'
+        # Break the count down by verdict so the effort is obvious at a glance:
+        # valid = needs a fix; false-positive = just a reply.
+        local cf="$d/COMMENTS.md" nvalid nfp mc_label
+        # grep -c prints "0" AND exits 1 on no match; capture count only, drop rc.
+        nvalid=$(grep -c '^- \*\*Verdict:\*\* ✅' "$cf" 2>/dev/null); nvalid=${nvalid:-0}
+        nfp=$(grep -c '^- \*\*Verdict:\*\* 🟡' "$cf" 2>/dev/null); nfp=${nfp:-0}
+        if [ "$nvalid" -gt 0 ]; then
+          mc_label="$(printf '🔧 %s to fix' "$nvalid")"; [ "$nfp" -gt 0 ] && mc_label="${mc_label}, ${nfp} false-pos"
+        elif [ "$nfp" -gt 0 ]; then
+          mc_label="$(printf '💬 %s false-pos · just reply' "$nfp")"
+        else
+          mc_label="💬 comments to address"
+        fi
+        mycomments="${mycomments}$(printf 'PR #%s  @%-14s %s' "$num" "${author:-?}" "$mc_label")\t${sname}\tmycomments"$'\n'
       elif [ "$ms" = "triaging" ]; then
         inflight="${inflight}$(printf 'PR #%s  @%-14s 👀 triaging reviewer comments' "$num" "${author:-?}")\t\tinflight"$'\n'
       else
