@@ -531,8 +531,15 @@ Your PR got reviewer comments. \`COMMENTS.md\` in this directory has each commen
 already classified ✅ valid or 🟡 false-positive, with reasoning and a proposed
 reply/fix. Walk me through them so I can decide each one.
 
+**\`COMMENTS.md\` is your ONLY source of truth for this session.** Ignore any
+other file (there is no code review here — if a \`REVIEW.md\` exists it is stale;
+do not read it). Every entry in COMMENTS.md is a comment to address, regardless
+of its verdict: a 🟡 false-positive still needs a reply, a ✅ valid one needs a
+fix. Never tell me "nothing to address" if COMMENTS.md has entries.
+
 ## First message — open with the roll-up
-Read \`COMMENTS.md\`, then print one line and a numbered list. Nothing else:
+Read \`COMMENTS.md\` (count its \`### \` entries), then print one line and a
+numbered list. Nothing else:
 
     3 comments — 2 valid, 1 false-positive. Go through them? (number, or "all")
     1. ✅ valid          api/save.ts:12   missing await
@@ -13128,6 +13135,10 @@ triage_comments() {
 
     update_mine_stage "$SESSION_DIR" "triaging"
     mkdir -p "$SESSION_DIR/logs"
+    # A mine PR is never code-reviewed. Remove any stale REVIEW.md (from a
+    # legacy review session that got reclassified as mine) so the triage pane
+    # can't be misled by an old "nothing to flag" verdict — COMMENTS.md rules.
+    rm -f "$SESSION_DIR/REVIEW.md" "$SESSION_DIR/repo/REVIEW.md"
     write_review_guard "$REPO_DIR"
     # Mine sessions are never apfm-reviewed, so also deny GraphQL here — the
     # triage worker must post NOTHING. (Replies go through --reply-comment, a
