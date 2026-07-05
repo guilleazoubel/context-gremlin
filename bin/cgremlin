@@ -605,7 +605,7 @@ CTX
     cat > "$wrapper" <<WRAPPER
 #!/bin/bash
 echo \$\$ > "$SDIR/agent_pid"
-cd "$SDIR/repo" && exec claude --model "$MODEL" --add-dir "$SDIR"
+cd "$SDIR/repo" && exec claude --model "$MODEL" --add-dir "$SDIR" "First read the file $SDIR/AGENT_CONTEXT.md and follow it exactly. Begin right now with the opening message it specifies — do not wait for further input, and do not start a code review."
 WRAPPER
     chmod +x "$wrapper"
 
