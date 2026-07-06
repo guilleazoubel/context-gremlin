@@ -553,12 +553,9 @@ render_status_table() {
 # The leading emoji lets the reviewer eyeball the tab bar and cycle to what needs attention.
 # Usage: _agent_tab_name SESSION_DIR
 _agent_tab_name() {
-    local SDIR="$1" num author title short emoji lc ms rs rp
+    local SDIR="$1" num author emoji lc ms rs rp
     num=$(read_session_field "$SDIR" "pr.number")
     author=$(read_session_field "$SDIR" "pr.author")
-    title=$(read_session_field "$SDIR" "pr.title")
-    short=$(printf '%s' "$title" | sed -E 's/^[a-z]+(\([^)]*\))?!?:[[:space:]]*//')
-    [ ${#short} -gt 30 ] && short="${short:0:29}…"
     lc=$(read_lifecycle "$SDIR"); rs=$(read_review_state "$SDIR"); rp=$(read_rereview_pending "$SDIR")
     if pr_is_mine "$SDIR"; then
         ms=$(read_mine_stage "$SDIR")
@@ -574,7 +571,9 @@ _agent_tab_name() {
         elif [ "$rs" = "ready" ]; then emoji="🔔"
         else emoji="👀"; fi
     fi
-    printf '%s #%s @%s · %s' "$emoji" "$num" "${author:-?}" "$short"
+    # Short, uncluttered tab: status emoji + PR number + author. Full title/details
+    # live in the Mission Control status pane.
+    printf '%s #%s @%s' "$emoji" "$num" "${author:-?}"
 }
 
 create_review_agent_pane() {
