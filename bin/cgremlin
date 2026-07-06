@@ -743,6 +743,9 @@ WRAPPER
     local lay; lay=$(mktemp /tmp/cgremlin-tablayout-XXXXXX)
     cat > "$lay" <<KDL
 layout {
+    pane size=1 borderless=true {
+        plugin location="zellij:tab-bar"
+    }
     pane close_on_exit=true command="bash" {
         args "$wrapper"
     }
