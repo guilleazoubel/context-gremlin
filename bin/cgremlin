@@ -139,7 +139,9 @@ create_session_json() {
     local session_dir="$1"
     local mode="$2"
     local project="$3"
-    local extra_fields="${4:-{}}"
+    # NB: do NOT write this as ${4:-{}} — bash parses that as default "{" plus a
+    # literal "}", appending a stray "}" to a set $4 and corrupting the JSON.
+    local extra_fields="$4"; [ -z "$extra_fields" ] && extra_fields="{}"
 
     local session_id=$(basename "$session_dir")
     local created=$(date -Iseconds)
