@@ -549,23 +549,48 @@ render_status_table() {
 # Writes the agent PID to SESSION_DIR/agent_pid (exec preserves PID across bash→claude).
 # No-op if called outside a Zellij session.
 # Usage: create_review_agent_pane SESSION_DIR
+# Compute the Zellij tab name for a PR agent: "<status-emoji> #<num> @<author> · <short title>".
+# The leading emoji lets the reviewer eyeball the tab bar and cycle to what needs attention.
+# Usage: _agent_tab_name SESSION_DIR
+_agent_tab_name() {
+    local SDIR="$1" num author title short emoji lc ms rs rp
+    num=$(read_session_field "$SDIR" "pr.number")
+    author=$(read_session_field "$SDIR" "pr.author")
+    title=$(read_session_field "$SDIR" "pr.title")
+    short=$(printf '%s' "$title" | sed -E 's/^[a-z]+(\([^)]*\))?!?:[[:space:]]*//')
+    [ ${#short} -gt 30 ] && short="${short:0:29}…"
+    lc=$(read_lifecycle "$SDIR"); rs=$(read_review_state "$SDIR"); rp=$(read_rereview_pending "$SDIR")
+    if pr_is_mine "$SDIR"; then
+        ms=$(read_mine_stage "$SDIR")
+        if   [ "$lc" = "approved" ]; then emoji="🚀"
+        elif [ "$ms" = "ready" ]; then emoji="🔧"
+        elif [ "$ms" = "triaging" ]; then emoji="👀"
+        elif [ "$(read_session_field "$SDIR" "is_draft" 2>/dev/null)" = "true" ]; then emoji="📝"
+        else emoji="📋"; fi
+    else
+        if   [ "$lc" = "approved" ]; then emoji="✅"
+        elif [ "$lc" = "commented" ] || [ "$lc" = "changes-requested" ]; then emoji="💬"
+        elif [ "$rp" = "true" ]; then emoji="🔁"
+        elif [ "$rs" = "ready" ]; then emoji="🔔"
+        else emoji="👀"; fi
+    fi
+    printf '%s #%s @%s · %s' "$emoji" "$num" "${author:-?}" "$short"
+}
+
 create_review_agent_pane() {
     local SDIR="$1"
     [ -d "$SDIR/repo" ] || return 1
     [ -n "$ZELLIJ" ] || return 0
 
-    local num author pr_title_raw short_title
+    local num author pr_title
     num=$(read_session_field "$SDIR" "pr.number")
     author=$(read_session_field "$SDIR" "pr.author")
-    pr_title_raw=$(read_session_field "$SDIR" "pr.title")
-    # Strip a leading conventional-commit prefix (feat(x): / fix: …) for a cleaner title,
-    # then truncate to keep the pane tab readable.
-    short_title=$(printf '%s' "$pr_title_raw" | sed -E 's/^[a-z]+(\([^)]*\))?!?:[[:space:]]*//')
-    [ ${#short_title} -gt 38 ] && short_title="${short_title:0:37}…"
-    local pane_name="@${author} · PR #${num} — ${short_title}"
+    pr_title=$(read_session_field "$SDIR" "pr.title")
+    local tab_name; tab_name=$(_agent_tab_name "$SDIR")
 
-    # Merge posting-command permissions into settings.local.json (idempotent).
-    local sf="$SDIR/repo/.claude/settings.local.json"; mkdir -p "$SDIR/repo/.claude"
+    # Posting-command permissions go in the AGENT's cwd settings ($SDIR/.claude),
+    # because the interactive agent runs with cwd=$SDIR (see wrapper below).
+    local sf="$SDIR/.claude/settings.local.json"; mkdir -p "$SDIR/.claude"
     local add
     if pr_is_mine "$SDIR" && [ "$(read_mine_stage "$SDIR")" = "ready" ]; then
         add='["Bash(cgremlin --reply-comment *)","Bash(cgremlin --commit-fix *)","Bash(cgremlin --push-fix *)","Bash(cgremlin --triage-done *)"]'
@@ -578,13 +603,15 @@ create_review_agent_pane() {
         printf '{"permissions":{"allow":%s}}\n' "$add" > "$sf"
     fi
 
-    # Write opening context so the agent starts oriented without the user explaining.
-    local pr_title pr_url pr_head
-    pr_title=$(read_session_field "$SDIR" "pr.title")
+    # Write the triage protocol as the agent's cwd CLAUDE.md ($SDIR/CLAUDE.md).
+    # The agent runs with cwd=$SDIR (NOT a git repo), so Claude auto-loads THIS
+    # file as its project instructions and never descends into repo/CLAUDE.md
+    # (the review-generation prompt) — which is what made the agent open "blank".
+    local pr_url pr_head
     pr_url=$(read_session_field "$SDIR" "pr.url")
     pr_head=$(read_session_field "$SDIR" "pr.head")
     if pr_is_mine "$SDIR" && [ "$(read_mine_stage "$SDIR")" = "ready" ]; then
-      cat > "$SDIR/AGENT_CONTEXT.md" <<MYCTX
+      cat > "$SDIR/CLAUDE.md" <<MYCTX
 # My PR — reviewer comment triage — PR #${num}: ${pr_title}
 
 Your PR got reviewer comments. \`COMMENTS.md\` in this directory has each comment
@@ -623,8 +650,13 @@ Update the entry's **Status** in COMMENTS.md after each action, then return to t
 - Write \`.reply_body.md\` to the session root path shown above.
 MYCTX
     else
-    cat > "$SDIR/AGENT_CONTEXT.md" <<CTX
+    cat > "$SDIR/CLAUDE.md" <<CTX
 # PR Review Triage — PR #${num}: ${pr_title}
+
+> You are running in the session directory. \`REVIEW.md\` and \`.review_body.md\`
+> are HERE (cwd); the PR's code is in \`./repo/\`. This file is your instructions
+> — begin immediately with the opening message below; do NOT run a code review
+> and do NOT wait for input.
 
 Author: @${author}
 Branch: ${pr_head}
@@ -690,32 +722,35 @@ Never pass \`--force\` on your own initiative.
 CTX
     fi
 
-    # Wrapper: write own PID then exec-replace with claude.
-    # exec preserves the PID, so agent_pid stays valid after the switch.
-    #
-    # Resume model: the pane is single-visible (open_pr_row hides/kills others),
-    # but reopening a PR must CONTINUE where you left off, not start fresh. The
-    # first open seeds a new conversation from AGENT_CONTEXT.md and drops a
-    # .pane_opened marker; every reopen uses `claude --continue` to resume that
-    # conversation. The marker is cleared when new data arrives (re-review /
-    # new comment triage) so a fresh round opens fresh. Merge closes the pane.
+    # Wrapper runs the agent with cwd=$SDIR so Claude auto-loads $SDIR/CLAUDE.md
+    # (the triage protocol) — never blank. --add-dir gives it the PR code in
+    # ./repo/. Runs in a named TAB (below) that stays alive in the background;
+    # switching tabs never interrupts it. exec preserves agent_pid = claude pid.
     local wrapper; wrapper=$(mktemp /tmp/cgremlin-agent-XXXXXX)
     cat > "$wrapper" <<WRAPPER
 #!/bin/bash
 echo \$\$ > "$SDIR/agent_pid"
-cd "$SDIR/repo" || exit 1
-if [ -f "$SDIR/.pane_opened" ]; then
-    exec claude --model "$MODEL" --add-dir "$SDIR" --continue
-else
-    : > "$SDIR/.pane_opened"
-    exec claude --model "$MODEL" --add-dir "$SDIR" "First read the file $SDIR/AGENT_CONTEXT.md and follow it exactly — it GOVERNS this session and OVERRIDES any conflicting guidance in CLAUDE.md. In particular, CLAUDE.md's 'do not post to GitHub — a separate agent handles that later' applied ONLY to the earlier automated review step; YOU are that separate agent, and posting on my explicit approval (via the cgremlin helpers in AGENT_CONTEXT.md) is your job. Begin right now with the opening message AGENT_CONTEXT.md specifies — do not wait for further input, and do not start a code review."
-fi
+cd "$SDIR" || exit 1
+exec claude --model "$MODEL" --add-dir "$SDIR/repo" "Begin now: follow this project's CLAUDE.md (the PR triage protocol) and open with the summary/menu it specifies. Do not wait for input; do not run a code review."
 WRAPPER
     chmod +x "$wrapper"
 
-    # Large centered modal so the conversation is comfortable to read/work in.
-    zellij action new-pane --floating --name "$pane_name" \
-        --x 6% --y 6% --width 88% --height 88% -- bash "$wrapper" 2>/dev/null || true
+    # Run the agent in its own named Zellij TAB (not a floating pane). The tab
+    # stays alive in the background — you switch away and back without killing
+    # it (go-to-tab-name). close_on_exit makes the tab vanish when the agent
+    # process is killed (e.g. the watch daemon on merge). Tab name carries the
+    # PR/author/status so you can eyeball the tab bar and cycle.
+    local lay; lay=$(mktemp /tmp/cgremlin-tablayout-XXXXXX)
+    cat > "$lay" <<KDL
+layout {
+    pane close_on_exit=true command="bash" {
+        args "$wrapper"
+    }
+}
+KDL
+    zellij action new-tab --name "$tab_name" --layout "$lay" 2>/dev/null || true
+    update_session_field "$SDIR" "tab_name" "$tab_name"
+    rm -f "$lay"
 }
 
 # For each session that should have a floating agent pane but doesn't, create one.
@@ -743,42 +778,35 @@ ensure_agent_panes() {
     done
 }
 
-# Show the floating agent pane for ONE session, and ONLY that one.
-#
-# Zellij's floating layer is all-or-nothing: toggling it reveals every floating
-# pane at once. So to show just the clicked PR we first close every OTHER PR's
-# agent pane (killing its claude process closes its pane), leaving a single
-# floating pane. Each PR's triage state lives in REVIEW.md, so closing a pane
-# loses only the live chat scrollback, not the decisions.
-#
-# The status pane is a tiled pane; the user can only click it while the floating
-# layer is hidden — so for an already-alive target, a single toggle reliably
-# SHOWS it.
+# Jump to a PR's agent tab (or create it). Each PR agent runs in its own named
+# Zellij tab that stays alive in the background — switching between PRs never
+# interrupts a running agent. Zellij can jump to a tab by name (go-to-tab-name)
+# but NOT to a floating pane by name, which is why we use tabs.
 # Usage: open_pr_row <session-name>
 open_pr_row() {
     local session_name="$1"
     local SDIR="$SESSIONS_DIR/$session_name"
     [ -d "$SDIR/repo" ] || { echo "ERROR: repo missing for $session_name" >&2; return 1; }
+    [ -n "$ZELLIJ" ] || return 0
 
-    # Close every OTHER PR's agent pane so only this one remains in the layer.
-    local d opid
-    for d in "$SESSIONS_DIR"/pr-*; do
-        [ "$d" = "$SDIR" ] && continue
-        opid=$(cat "$d/agent_pid" 2>/dev/null)
-        if [ -n "$opid" ] && kill -0 "$opid" 2>/dev/null; then
-            kill "$opid" 2>/dev/null || true
-            rm -f "$d/agent_pid"
+    # PR agents live in named tabs that stay alive in the background. If the
+    # tab already exists, JUMP to it (agent still running, right where you left
+    # it — never killed). Otherwise create it. Tabs are identified by name; the
+    # exact current name is stored in session.json (status emoji can change).
+    local stored newname layout
+    stored=$(read_session_field "$SDIR" "tab_name")
+    newname=$(_agent_tab_name "$SDIR")
+    layout=$(zellij action dump-layout 2>/dev/null)
+
+    if [ -n "$stored" ] && printf '%s' "$layout" | grep -qF "name=\"$stored\""; then
+        zellij action go-to-tab-name "$stored" 2>/dev/null || true
+        # Refresh the status emoji in the tab name if the state changed.
+        if [ "$stored" != "$newname" ]; then
+            zellij action rename-tab "$newname" 2>/dev/null && update_session_field "$SDIR" "tab_name" "$newname"
         fi
-    done
-
-    local pid pid_file="$SDIR/agent_pid"
-    pid=$(cat "$pid_file" 2>/dev/null)
-    if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
-        rm -f "$pid_file"
-        create_review_agent_pane "$SDIR"   # new-pane --floating auto-shows the layer
     else
-        # Pane alive and layer hidden (status pane was clickable) — show it.
-        zellij action toggle-floating-panes 2>/dev/null || true
+        # No live tab → create one running the agent (focuses the new tab).
+        create_review_agent_pane "$SDIR"
     fi
 }
 
@@ -13109,9 +13137,11 @@ rereview_pr() {
     local REPO_DIR="$SESSION_DIR/repo"
     [ -d "$REPO_DIR" ] || { echo "ERROR: repo missing for $session_name (archived?)" >&2; return 1; }
     rm -f "$SESSION_DIR/rereview_summary"
-    # New round of findings coming → next pane open should read them fresh, not
-    # --continue the pre-rereview conversation.
-    rm -f "$SESSION_DIR/.pane_opened"
+    # New round of findings coming → retire any stale agent tab so the next open
+    # starts fresh on the updated REVIEW.md. Killing the agent closes its tab
+    # (close_on_exit) with no focus-steal.
+    local _apid; _apid=$(cat "$SESSION_DIR/agent_pid" 2>/dev/null)
+    [ -n "$_apid" ] && kill "$_apid" 2>/dev/null; rm -f "$SESSION_DIR/agent_pid"
 
     local pr_num; pr_num=$(read_session_field "$SESSION_DIR" "pr.number")
     update_lifecycle "$SESSION_DIR" "none"
@@ -13284,8 +13314,9 @@ rc=\$?
 if [ \$rc -eq 0 ] && [ -s "$SESSION_DIR/COMMENTS.md" ]; then
     # Success: mark these threads triaged so the daemon won't relaunch for them.
     update_session_field "$SESSION_DIR" "triaged_threads" "\$(jq -c '[.[].id]' "$SESSION_DIR/.threads.json")"
-    # Fresh COMMENTS.md → next pane open reads it fresh, not --continue the old chat.
-    rm -f "$SESSION_DIR/.pane_opened"
+    # Fresh COMMENTS.md → retire any stale agent tab so the next open reads it
+    # fresh (killing the agent closes its tab via close_on_exit, no focus-steal).
+    _apid=\$(cat "$SESSION_DIR/agent_pid" 2>/dev/null); [ -n "\$_apid" ] && kill "\$_apid" 2>/dev/null; rm -f "$SESSION_DIR/agent_pid"
     update_mine_stage "$SESSION_DIR" ready
 else
     update_mine_stage "$SESSION_DIR" tracking
