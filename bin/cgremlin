@@ -600,7 +600,8 @@ Show it tight, in plain language — do not pad. Use exactly what REVIEW.md hold
 - **What's wrong** (the plain explanation)
 - **Why it matters** (the impact)
 - **Suggested fix**
-Then discuss / answer questions about that finding only. Deeper detail is yours to explain in the conversation — the file stays the overview.
+- **Link** — show the finding's GitHub permalink from REVIEW.md so the reviewer can open the exact line and post the comment themselves if they prefer.
+Then discuss / answer questions about that finding only. Deeper detail is yours to explain in the conversation — the file stays the overview. The reviewer can either say "post it" (you post via the helper) or open the Link and post it by hand.
 
 ## Recording the decision (after discussing a finding)
 The reviewer says one of:
@@ -956,6 +957,7 @@ If you can't answer the questions concretely, DROP it. "Might be slow", "could b
 - No jargon or shorthand. If you must use a technical term, say what it means in a few words.
 - Each finding is SHORT: a couple of sentences on what's wrong and a couple on why it matters. Deeper detail comes from the chat with the reviewer later — the file is the overview, not the transcript.
 - Every finding follows the SAME shape (below). Same shape every time, whether it's a bug or a maintainability issue.
+- Every finding includes a **Link:** — a clickable GitHub permalink to the exact line, so the reviewer can open it and post a comment there manually. Build it ONCE up front: run \`git config --get remote.origin.url\` to get owner/repo (strip \`https://github.com/\`, \`git@github.com:\`, and \`.git\`) and \`git rev-parse HEAD\` for the full commit SHA (the PR branch is checked out here). The link is: \`https://github.com/<owner>/<repo>/blob/<full-sha>/<path>#L<startLine>\` (or \`#L<start>-L<end>\` for a range). Use the FULL 40-char SHA (a permalink), not \`HEAD\`.
 
 ## Output — write `REVIEW.md` in this directory, EXACTLY this structure
 
@@ -983,6 +985,7 @@ The `#` links jump to the full detail below. Keep the `Status` column current �
 <a id="f1"></a>
 ### 1. <plain-English title of the problem>
 **Severity:** 🔴 Critical   **Where:** `path/to/file.ext:LN-LN`   **Status:** open
+**Link:** https://github.com/<owner>/<repo>/blob/<full-sha>/path/to/file.ext#L<start>-L<end>
 
 **What's wrong:** <2-4 plain sentences. Describe when it happens, what the code does, and what it should do instead — in normal language, no jargon.>
 
@@ -993,6 +996,7 @@ The `#` links jump to the full detail below. Keep the `Status` column current �
 <a id="f2"></a>
 ### 2. <plain-English title>
 **Severity:** 🔧 Maintainability   **Where:** `path/to/file.ext:LN-LN`   **Status:** open
+**Link:** https://github.com/<owner>/<repo>/blob/<full-sha>/ui/list.tsx#L40
 
 **What's wrong:** <same shape — for a maintainability issue, explain in plain words what's mixed together that shouldn't be.>
 
