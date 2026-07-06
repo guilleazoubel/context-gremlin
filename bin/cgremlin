@@ -631,11 +631,24 @@ CTX
 
     # Wrapper: write own PID then exec-replace with claude.
     # exec preserves the PID, so agent_pid stays valid after the switch.
+    #
+    # Resume model: the pane is single-visible (open_pr_row hides/kills others),
+    # but reopening a PR must CONTINUE where you left off, not start fresh. The
+    # first open seeds a new conversation from AGENT_CONTEXT.md and drops a
+    # .pane_opened marker; every reopen uses `claude --continue` to resume that
+    # conversation. The marker is cleared when new data arrives (re-review /
+    # new comment triage) so a fresh round opens fresh. Merge closes the pane.
     local wrapper; wrapper=$(mktemp /tmp/cgremlin-agent-XXXXXX)
     cat > "$wrapper" <<WRAPPER
 #!/bin/bash
 echo \$\$ > "$SDIR/agent_pid"
-cd "$SDIR/repo" && exec claude --model "$MODEL" --add-dir "$SDIR" "First read the file $SDIR/AGENT_CONTEXT.md and follow it exactly — it GOVERNS this session and OVERRIDES any conflicting guidance in CLAUDE.md. In particular, CLAUDE.md's 'do not post to GitHub — a separate agent handles that later' applied ONLY to the earlier automated review step; YOU are that separate agent, and posting on my explicit approval (via the cgremlin helpers in AGENT_CONTEXT.md) is your job. Begin right now with the opening message AGENT_CONTEXT.md specifies — do not wait for further input, and do not start a code review."
+cd "$SDIR/repo" || exit 1
+if [ -f "$SDIR/.pane_opened" ]; then
+    exec claude --model "$MODEL" --add-dir "$SDIR" --continue
+else
+    : > "$SDIR/.pane_opened"
+    exec claude --model "$MODEL" --add-dir "$SDIR" "First read the file $SDIR/AGENT_CONTEXT.md and follow it exactly — it GOVERNS this session and OVERRIDES any conflicting guidance in CLAUDE.md. In particular, CLAUDE.md's 'do not post to GitHub — a separate agent handles that later' applied ONLY to the earlier automated review step; YOU are that separate agent, and posting on my explicit approval (via the cgremlin helpers in AGENT_CONTEXT.md) is your job. Begin right now with the opening message AGENT_CONTEXT.md specifies — do not wait for further input, and do not start a code review."
+fi
 WRAPPER
     chmod +x "$wrapper"
 
@@ -13035,6 +13048,9 @@ rereview_pr() {
     local REPO_DIR="$SESSION_DIR/repo"
     [ -d "$REPO_DIR" ] || { echo "ERROR: repo missing for $session_name (archived?)" >&2; return 1; }
     rm -f "$SESSION_DIR/rereview_summary"
+    # New round of findings coming → next pane open should read them fresh, not
+    # --continue the pre-rereview conversation.
+    rm -f "$SESSION_DIR/.pane_opened"
 
     local pr_num; pr_num=$(read_session_field "$SESSION_DIR" "pr.number")
     update_lifecycle "$SESSION_DIR" "none"
@@ -13207,6 +13223,8 @@ rc=\$?
 if [ \$rc -eq 0 ] && [ -s "$SESSION_DIR/COMMENTS.md" ]; then
     # Success: mark these threads triaged so the daemon won't relaunch for them.
     update_session_field "$SESSION_DIR" "triaged_threads" "\$(jq -c '[.[].id]' "$SESSION_DIR/.threads.json")"
+    # Fresh COMMENTS.md → next pane open reads it fresh, not --continue the old chat.
+    rm -f "$SESSION_DIR/.pane_opened"
     update_mine_stage "$SESSION_DIR" ready
 else
     update_mine_stage "$SESSION_DIR" tracking
