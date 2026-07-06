@@ -401,10 +401,10 @@ mc_startup_sweep() {
     detect_interrupted "$d"
     auto_drop_merged "$d"
   done
-  # NOTE: we intentionally do NOT pre-create floating panes here. Zellij's
-  # floating layer shows all panes at once, so pre-warming one per PR made
-  # clicking a single PR reveal every pane. Panes are now created on demand,
-  # one at a time, by open_pr_row.
+  # Pre-warm agent tabs for reviewed PRs waiting on you, so a click just
+  # switches to an already-running agent (tabs can be targeted by name, unlike
+  # floating panes, so pre-warming no longer causes the "opens all" problem).
+  ensure_agent_tabs
 }
 
 # Write shared engineering principles file to a session directory.
@@ -756,29 +756,35 @@ KDL
     rm -f "$lay"
 }
 
-# For each session that should have a floating agent pane but doesn't, create one.
-# Should-have conditions: review_state=ready AND (lifecycle=none OR rereview_pending=true).
-# Usage: ensure_agent_panes  (no args; uses SESSIONS_DIR)
-ensure_agent_panes() {
+# Pre-warm agent TABS for every PR that's reviewed and waiting on you, so a
+# click just switches to an already-running agent (never spawns on click).
+# Actionable-via-agent = non-mine (ready & not yet acted on / re-reviewed) OR
+# mine with comments to triage. Creates a tab only if one doesn't already exist
+# (matched by the stable "#<num> @<author>" identity). Returns focus to the
+# MISSION CONTROL tab at the end so pre-warming doesn't leave you on a PR tab.
+# Usage: ensure_agent_tabs  (no args; uses SESSIONS_DIR)
+ensure_agent_tabs() {
     [ -n "$ZELLIJ" ] || return 0
-    local d pid pid_file lc rp
+    local d num author lc rp rs ms layout want stable created=0
+    layout=$(zellij action dump-layout 2>/dev/null)
     for d in "$SESSIONS_DIR"/pr-*; do
         [ -d "$d/repo" ] || continue
         [ "$(read_triage_state "$d")" = "done" ] && continue
-        [ "$(read_review_state "$d")" = "ready" ] || continue
-        lc=$(read_lifecycle "$d")
-        rp=$(read_rereview_pending "$d")
-        # Skip sessions in "waiting for response" state (no pane needed).
-        if [ "$lc" != "none" ] && [ "$rp" != "true" ]; then
-            continue
+        lc=$(read_lifecycle "$d"); rp=$(read_rereview_pending "$d"); rs=$(read_review_state "$d")
+        want=no
+        if pr_is_mine "$d"; then
+            [ "$(read_mine_stage "$d")" = "ready" ] && want=yes
+        else
+            [ "$rs" = "ready" ] && { [ "$lc" = "none" ] || [ "$rp" = "true" ]; } && want=yes
         fi
-        pid_file="$d/agent_pid"
-        pid=$(cat "$pid_file" 2>/dev/null)
-        if [ -z "$pid" ] || ! kill -0 "$pid" 2>/dev/null; then
-            rm -f "$pid_file"
-            create_review_agent_pane "$d"
-        fi
+        [ "$want" = "yes" ] || continue
+        num=$(read_session_field "$d" "pr.number"); author=$(read_session_field "$d" "pr.author")
+        stable="#${num} @${author}"
+        printf '%s' "$layout" | grep 'tab name=' | grep -qF "$stable" && continue  # tab already exists
+        create_review_agent_pane "$d" && created=1
     done
+    # Pre-warming focuses each new tab; return the user to Mission Control.
+    [ "$created" = "1" ] && zellij action go-to-tab-name "MISSION CONTROL" 2>/dev/null || true
 }
 
 # Jump to a PR's agent tab (or create it). Each PR agent runs in its own named
@@ -792,23 +798,25 @@ open_pr_row() {
     [ -d "$SDIR/repo" ] || { echo "ERROR: repo missing for $session_name" >&2; return 1; }
     [ -n "$ZELLIJ" ] || return 0
 
-    # PR agents live in named tabs that stay alive in the background. If the
-    # tab already exists, JUMP to it (agent still running, right where you left
-    # it — never killed). Otherwise create it. Tabs are identified by name; the
-    # exact current name is stored in session.json (status emoji can change).
-    local stored newname layout
-    stored=$(read_session_field "$SDIR" "tab_name")
-    newname=$(_agent_tab_name "$SDIR")
+    # PR agents live in named tabs that stay alive in the background. If a tab
+    # for THIS PR already exists, JUMP to it (agent still running, right where
+    # you left it — never killed, never re-spawned). Otherwise create it.
+    #
+    # Match by the STABLE identity "#<num> @<author>" (present in every tab name
+    # regardless of the status emoji), then read that tab's exact current name
+    # from the layout and jump to it. This never spawns a duplicate even if the
+    # stored name is stale.
+    local num author stable layout current
+    num=$(read_session_field "$SDIR" "pr.number")
+    author=$(read_session_field "$SDIR" "pr.author")
+    stable="#${num} @${author}"
     layout=$(zellij action dump-layout 2>/dev/null)
+    current=$(printf '%s' "$layout" | grep 'tab name=' | grep -F "$stable" | head -1 | sed -E 's/.*tab name="([^"]*)".*/\1/')
 
-    if [ -n "$stored" ] && printf '%s' "$layout" | grep -qF "name=\"$stored\""; then
-        zellij action go-to-tab-name "$stored" 2>/dev/null || true
-        # Refresh the status emoji in the tab name if the state changed.
-        if [ "$stored" != "$newname" ]; then
-            zellij action rename-tab "$newname" 2>/dev/null && update_session_field "$SDIR" "tab_name" "$newname"
-        fi
+    if [ -n "$current" ]; then
+        zellij action go-to-tab-name "$current" 2>/dev/null || true
     else
-        # No live tab → create one running the agent (focuses the new tab).
+        # No live tab for this PR → create one running the agent (focuses it).
         create_review_agent_pane "$SDIR"
     fi
 }
