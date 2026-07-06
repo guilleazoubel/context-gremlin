@@ -266,13 +266,65 @@ _post_review() {   # $1=session_name  $2=gh-event-flag (--approve|--comment|--re
         echo "ERROR: gh pr review failed for $1 (lifecycle unchanged)" >&2; return 1
     fi
 }
+# Report real approval blockers: failing CI checks + unresolved review threads.
+# Prints a human-readable summary to stdout; exit 1 if any blocker, 0 if clean
+# (or if it genuinely can't check — never block on our own inability to query).
+# Usage: _pr_safety_check SESSION_NAME
+_pr_safety_check() {
+    local d="$SESSIONS_DIR/$1" num repo owner name failing threads had=0
+    num=$(read_session_field "$d" "pr.number"); repo=$(_pr_repo "$d")
+    [ -z "$num" ] || [ -z "$repo" ] && return 0
+    owner="${repo%%/*}"; name="${repo##*/}"
+
+    # Failing CI checks (ignore SKIPPED / SUCCESS / PENDING / neutral).
+    failing=$(timeout 20 gh pr view "$num" --repo "$repo" --json statusCheckRollup \
+        --jq '.statusCheckRollup[]? | ((.name // .context) + "\t" + (.conclusion // .state // ""))
+              | select(test("\t(FAILURE|ERROR|TIMED_OUT|CANCELLED|ACTION_REQUIRED|STARTUP_FAILURE)$"))
+              | split("\t")[0]' 2>/dev/null)
+    if [ -n "$failing" ]; then
+        had=1
+        echo "⚠️  Failing CI checks:"
+        while IFS= read -r c; do [ -n "$c" ] && echo "      ✗ $c"; done <<< "$failing"
+    fi
+
+    # Unresolved review threads (from anyone), with location + author.
+    threads=$(timeout 20 gh api graphql -f query='query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){reviewThreads(first:100){nodes{isResolved comments(first:1){nodes{author{login} path line}}}}}}}' \
+        -F o="$owner" -F r="$name" -F n="$num" \
+        --jq '.data.repository.pullRequest.reviewThreads.nodes[]? | select(.isResolved==false)
+              | "@" + (.comments.nodes[0].author.login // "?") + "  " + (.comments.nodes[0].path // "?") + ":" + ((.comments.nodes[0].line // 0)|tostring)' 2>/dev/null)
+    if [ -n "$threads" ]; then
+        had=1
+        echo "⚠️  Unresolved review comments:"
+        while IFS= read -r t; do [ -n "$t" ] && echo "      • $t"; done <<< "$threads"
+    fi
+
+    return $had
+}
+
 approve_pr() {
     # Posts APPROVE and sets lifecycle=approved (via _post_review). The session
     # is NOT deleted — it moves to the "✅ Approved" group and stays visible
     # until the PR merges (then the watch daemon deletes it). The agent_pid is
     # left in place so open_pr_row cleans the pane when the user navigates away.
-    _post_review "$1" "--approve" "approved" || return 1
-    echo "approved $1 (moved to Approved group)"
+    #
+    # Safety gate: refuse to approve when CI is failing or review comments are
+    # unresolved — surface exactly what's wrong so the reviewer knows the real
+    # situation. Pass --force (as $2) to approve anyway.
+    local session="$1" force="$2"
+    if [ "$force" != "--force" ]; then
+        local report; report=$(_pr_safety_check "$session")
+        if [ -n "$report" ]; then
+            echo "🛑 Holding approval — this PR has open blockers:"
+            echo ""
+            echo "$report"
+            echo ""
+            echo "Nothing was posted. If you've weighed these and still want to approve,"
+            echo "re-run:  cgremlin --approve-pr $session --force"
+            return 2
+        fi
+    fi
+    _post_review "$session" "--approve" "approved" || return 1
+    echo "approved $session (moved to Approved group)"
 }
 comment_pr()         { _post_review "$1" "--comment" "commented"          && _record_reviewed "$1"; }
 request_changes_pr() { _post_review "$1" "--request-changes" "changes-requested" && _record_reviewed "$1"; }
@@ -621,6 +673,15 @@ After EVERY decision update the finding's Status in BOTH places it appears — t
    \`cgremlin --approve-pr $(basename "$SDIR")\`  (archives + closes the session)
    \`cgremlin --comment-pr $(basename "$SDIR")\`
    \`cgremlin --request-changes-pr $(basename "$SDIR")\`
+
+## Approval safety gate (IMPORTANT)
+\`cgremlin --approve-pr\` will REFUSE and print blockers if CI is failing or
+review comments are unresolved. If it does:
+1. Show me its output verbatim — the failing checks and open comments.
+2. Explain what they mean and whether they should block.
+3. Do NOT approve unless I explicitly say to override after seeing them. Only
+   then run \`cgremlin --approve-pr $(basename "$SDIR") --force\`.
+Never pass \`--force\` on your own initiative.
 
 ## Constraints
 - Never post without an explicit decision from the reviewer.
@@ -12736,7 +12797,7 @@ if [ "$1" = "--dismiss-pr" ]; then
 fi
 
 # Handle --approve-pr / --comment-pr / --request-changes-pr (discussion-agent posting helpers)
-if [ "$1" = "--approve-pr" ];          then [ -z "$2" ] && { echo "Usage: cgremlin --approve-pr <session>" >&2; exit 1; }; approve_pr "$2"; exit $?; fi
+if [ "$1" = "--approve-pr" ];          then [ -z "$2" ] && { echo "Usage: cgremlin --approve-pr <session> [--force]" >&2; exit 1; }; approve_pr "$2" "$3"; exit $?; fi
 if [ "$1" = "--comment-pr" ];          then [ -z "$2" ] && { echo "Usage: cgremlin --comment-pr <session>" >&2; exit 1; }; comment_pr "$2"; exit $?; fi
 if [ "$1" = "--request-changes-pr" ];  then [ -z "$2" ] && { echo "Usage: cgremlin --request-changes-pr <session>" >&2; exit 1; }; request_changes_pr "$2"; exit $?; fi
 if [ "$1" = "--reply-comment" ]; then [ -z "$3" ] && { echo "Usage: cgremlin --reply-comment <session> <thread-id>" >&2; exit 1; }; reply_comment "$2" "$3"; exit $?; fi
