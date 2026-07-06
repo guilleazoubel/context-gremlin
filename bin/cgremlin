@@ -388,18 +388,24 @@ review_list_grouped() {
       if [ "$lc" = "approved" ]; then
         mergemine="${mergemine}$(printf 'PR #%s  @%-14s 🚀 APPROVED — merge it!' "$num" "${author:-?}")\t\tmergemine"$'\n'
       elif [ "$ms" = "ready" ]; then
-        # Break the count down by verdict so the effort is obvious at a glance:
-        # valid = needs a fix; false-positive = just a reply.
-        local cf="$d/COMMENTS.md" nvalid nfp mc_label
-        # grep -c prints "0" AND exits 1 on no match; capture count only, drop rc.
-        nvalid=$(grep -c '^- \*\*Verdict:\*\* ✅' "$cf" 2>/dev/null); nvalid=${nvalid:-0}
-        nfp=$(grep -c '^- \*\*Verdict:\*\* 🟡' "$cf" 2>/dev/null); nfp=${nfp:-0}
+        # Count only UNHANDLED entries (Status: open), split by verdict, so the
+        # label decrements as the user replies/fixes/dismisses — always in sync
+        # with COMMENTS.md. valid+open = needs a fix; false-pos+open = just reply.
+        local cf="$d/COMMENTS.md" counts nvalid nfp mc_label
+        counts=$(awk '
+          /^### / { if (v!=""&&st=="open"){ if(v=="valid")nv++; else nf++ } v=""; st="" }
+          /^- \*\*Verdict:\*\* ✅/ { v="valid" }
+          /^- \*\*Verdict:\*\* 🟡/ { v="fp" }
+          /^- \*\*Status:\*\* / { st=$0; sub(/^- \*\*Status:\*\* /,"",st); sub(/[[:space:]]+$/,"",st) }
+          END { if (v!=""&&st=="open"){ if(v=="valid")nv++; else nf++ } print (nv+0)" "(nf+0) }
+        ' "$cf" 2>/dev/null)
+        nvalid=${counts%% *}; nfp=${counts##* }; nvalid=${nvalid:-0}; nfp=${nfp:-0}
         if [ "$nvalid" -gt 0 ]; then
-          mc_label="$(printf '🔧 %s to fix' "$nvalid")"; [ "$nfp" -gt 0 ] && mc_label="${mc_label}, ${nfp} false-pos"
+          mc_label="$(printf '🔧 %s to fix' "$nvalid")"; [ "$nfp" -gt 0 ] && mc_label="${mc_label}, ${nfp} to reply"
         elif [ "$nfp" -gt 0 ]; then
           mc_label="$(printf '💬 %s false-pos · just reply' "$nfp")"
         else
-          mc_label="💬 comments to address"
+          mc_label="✅ all addressed · close it"
         fi
         mycomments="${mycomments}$(printf 'PR #%s  @%-14s %s' "$num" "${author:-?}" "$mc_label")\t${sname}\tmycomments"$'\n'
       elif [ "$ms" = "triaging" ]; then
@@ -12520,7 +12526,10 @@ watch_daemon_loop() {
                 [ "$(read_lifecycle "$d")" = "approved" ] && continue
                 [ "$(read_mine_stage "$d")" = "triaging" ] && continue
                 local m_owner="${repo%%/*}" m_name="${repo##*/}" seen new_ids
-                seen=$(read_session_field "$d" "triaged_threads" 2>/dev/null); [ -z "$seen" ] && seen="[]"
+                # Normalize to compact JSON — read_session_field pretty-prints
+                # arrays (multi-line), which breaks --argjson below. Fall back to
+                # [] on empty/invalid so the set-difference never crashes.
+                seen=$(read_session_field "$d" "triaged_threads" 2>/dev/null | jq -c . 2>/dev/null); [ -z "$seen" ] && seen="[]"
                 new_ids=$(timeout 30 gh api graphql -f query='query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){reviewThreads(first:100){nodes{id isResolved comments(first:1){nodes{author{login}}}}}}}}' \
                     -F o="$m_owner" -F r="$m_name" -F n="$num" 2>/dev/null \
                     | jq -c --arg me "$GITHUB_ME" --argjson seen "$seen" '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved==false) | select(((.comments.nodes[0].author.login // "")|ascii_downcase) != ($me|ascii_downcase)) | .id] - $seen' 2>/dev/null)
@@ -13189,7 +13198,7 @@ Do NOT reply on GitHub, do NOT edit code, do NOT commit — only write COMMENTS.
 rc=\$?
 if [ \$rc -eq 0 ] && [ -s "$SESSION_DIR/COMMENTS.md" ]; then
     # Success: mark these threads triaged so the daemon won't relaunch for them.
-    update_session_field "$SESSION_DIR" "triaged_threads" "\$(jq '[.[].id]' "$SESSION_DIR/.threads.json")"
+    update_session_field "$SESSION_DIR" "triaged_threads" "\$(jq -c '[.[].id]' "$SESSION_DIR/.threads.json")"
     update_mine_stage "$SESSION_DIR" ready
 else
     update_mine_stage "$SESSION_DIR" tracking
