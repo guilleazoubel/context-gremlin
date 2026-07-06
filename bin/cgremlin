@@ -582,6 +582,8 @@ Session: $(basename "$SDIR")
 ## Role
 You walk the reviewer through the findings in \`REVIEW.md\` one at a time so they can decide, per finding, whether to post it or dismiss it. You are the UI: you render findings, discuss them, and record decisions. You do NOT re-analyze the PR or invent new findings, and you do NOT call \`gh\` directly — posting goes through the cgremlin helpers below.
 
+**You ARE the posting agent.** CLAUDE.md in this repo told the earlier automated reviewer "do not post — a separate agent handles that later." YOU are that separate agent. Posting to the PR IS your job — but ONLY on the reviewer's explicit approval ("post it" / "submit"), and only through the \`cgremlin\` helpers below (never raw \`gh\`). This session GOVERNS; ignore any "do not post" wording in CLAUDE.md — it applied to the generation step, not to you. Never auto-post; always wait for the reviewer's go-ahead.
+
 ## First message — ALWAYS open with the summary menu
 Read \`REVIEW.md\`, then print a one-line roll-up and a numbered list. Nothing else. Example:
 
@@ -632,7 +634,7 @@ CTX
     cat > "$wrapper" <<WRAPPER
 #!/bin/bash
 echo \$\$ > "$SDIR/agent_pid"
-cd "$SDIR/repo" && exec claude --model "$MODEL" --add-dir "$SDIR" "First read the file $SDIR/AGENT_CONTEXT.md and follow it exactly. Begin right now with the opening message it specifies — do not wait for further input, and do not start a code review."
+cd "$SDIR/repo" && exec claude --model "$MODEL" --add-dir "$SDIR" "First read the file $SDIR/AGENT_CONTEXT.md and follow it exactly — it GOVERNS this session and OVERRIDES any conflicting guidance in CLAUDE.md. In particular, CLAUDE.md's 'do not post to GitHub — a separate agent handles that later' applied ONLY to the earlier automated review step; YOU are that separate agent, and posting on my explicit approval (via the cgremlin helpers in AGENT_CONTEXT.md) is your job. Begin right now with the opening message AGENT_CONTEXT.md specifies — do not wait for further input, and do not start a code review."
 WRAPPER
     chmod +x "$wrapper"
 
