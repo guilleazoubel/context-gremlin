@@ -730,7 +730,7 @@ CTX
 #!/bin/bash
 echo \$\$ > "$SDIR/agent_pid"
 cd "$SDIR" || exit 1
-exec claude --model "$MODEL" --add-dir "$SDIR/repo" "Begin now: follow this project's CLAUDE.md (the PR triage protocol) and open with the summary/menu it specifies. Do not wait for input; do not run a code review."
+exec claude --model "$MODEL" "Your very first action: read CLAUDE.md in this directory (the PR triage protocol) and produce the opening summary/menu it specifies — the findings list with an offer to go through them one by one. Do that NOW as your first message; do not wait for my input, do not run a code review, do not read any other CLAUDE.md."
 WRAPPER
     chmod +x "$wrapper"
 
