@@ -7186,6 +7186,24 @@ Re-evaluate across ALL findings. Only OPEN 🔴/🟠 findings block approval.
             if not Path(cgremlin_path).exists():
                 cgremlin_path = Path(__file__).parent / 'cgremlin'
 
+            if mode == 'investigation':
+                # Launch the investigation agent into Mission Control's WORK tab (same path as
+                # the orchestrator's "I'm on HB-XXXX"). Requires mission-control to be running.
+                subprocess.Popen(
+                    [str(cgremlin_path), '--investigate', url, jira or ''],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
+                self.send_response(200)
+                self.send_header('Content-type', 'application/json')
+                self.send_header('Access-Control-Allow-Origin', '*')
+                self.end_headers()
+                self.wfile.write(json.dumps({
+                    'status': 'started',
+                    'message': 'Investigation launched in Mission Control WORK tab',
+                    'mode': mode
+                }).encode())
+                return
+
             result = subprocess.run(
                 [str(cgremlin_path), '--create-session'],
                 env=env,
