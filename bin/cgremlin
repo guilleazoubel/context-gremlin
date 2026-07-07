@@ -342,7 +342,14 @@ reply_comment() {
 pr_ready() {
     local d="$SESSIONS_DIR/$1" num repo
     num=$(read_session_field "$d" "pr.number"); repo=$(_pr_repo "$d")
-    [ -z "$num" ] || [ -z "$repo" ] && { echo "ERROR: missing pr.number/repo" >&2; return 1; }
+    # The develop agent opens the draft PR with `gh pr create` and may not have
+    # recorded pr.number; discover it from the checked-out branch as a fallback.
+    if [ -z "$num" ] && [ -d "$d/repo" ]; then
+        num=$(cd "$d/repo" && gh pr view --json number -q .number 2>/dev/null)
+        [ -n "$num" ] && update_session_field "$d" "pr.number" "$num"
+    fi
+    [ -z "$num" ] && { echo "ERROR: no PR found for $1 (branch has no PR yet?)" >&2; return 1; }
+    [ -z "$repo" ] && { echo "ERROR: missing repo" >&2; return 1; }
     gh pr ready "$num" --repo "$repo" && echo "marked PR #$num ready" || { echo "ERROR: gh pr ready failed" >&2; return 1; }
 }
 # Resolve a review thread (after replying, e.g. a confirmed false positive).
@@ -609,7 +616,9 @@ work_agent_tab_name() {
 create_work_agent_pane() {
     local SDIR="$1"
     [ -d "$SDIR/repo" ] || return 1
-    [ -n "$ZELLIJ" ] || return 0
+    # Work regardless of the caller's context (orchestrator is inside MC; the web
+    # server is not) — target the mission-control session explicitly below.
+    zellij list-sessions 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | grep -qE '^mission-control[[:space:]]' || return 0
     local title; title=$(work_agent_tab_name "$SDIR")
 
     local wrapper; wrapper=$(mktemp /tmp/cgremlin-work-XXXXXX)
@@ -623,9 +632,9 @@ WRAPPER
 
     # Ensure the WORK tab exists (create with tab-bar + this pane), else add a
     # tiled pane to it. Detect existence via dump-layout (tab names appear there).
-    if zellij action dump-layout 2>/dev/null | grep -qF 'tab name="🔨 WORK"'; then
-        zellij action go-to-tab-name "🔨 WORK" 2>/dev/null || true
-        zellij action new-pane --name "$title" -- bash "$wrapper" 2>/dev/null || true
+    if zellij --session mission-control action dump-layout 2>/dev/null | grep -qF 'tab name="🔨 WORK"'; then
+        zellij --session mission-control action go-to-tab-name "🔨 WORK" 2>/dev/null || true
+        zellij --session mission-control action new-pane -c --name "$title" -- bash "$wrapper" 2>/dev/null || true
     else
         local lay; lay=$(mktemp /tmp/cgremlin-worklayout-XXXXXX)
         cat > "$lay" <<KDL
@@ -633,12 +642,12 @@ layout {
     pane size=1 borderless=true {
         plugin location="zellij:tab-bar"
     }
-    pane name="$title" command="bash" {
+    pane close_on_exit=true name="$title" command="bash" {
         args "$wrapper"
     }
 }
 KDL
-        zellij action new-tab --name "🔨 WORK" --layout "$lay" 2>/dev/null || true
+        zellij --session mission-control action new-tab --name "🔨 WORK" --layout "$lay" 2>/dev/null || true
         rm -f "$lay"
     fi
 }
