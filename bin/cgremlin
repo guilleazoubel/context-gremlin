@@ -13627,10 +13627,17 @@ When the user gives PR numbers or links:
 - Finished reviews appear in the status PICKER; the user clicks one to open a floating agent pane. If the user asks YOU to open PR N: find its session with \`ls "\$HOME/.cgremlin/sessions"/pr-*-N-* | tail -1\` (newest), then run \`cgremlin --open-pr <session-name>\`.
 - When asked about a specific PR, summarize from its REVIEW.md. To dismiss one: \`cgremlin --dismiss-pr <session-name>\`.
 - Follow PRINCIPLES.md.
+
+## Starting work on a ticket
+When I tell you I'm picking up a ticket (e.g. "I'm on HB-1051", or paste a Jira key/URL),
+run:  cgremlin --investigate <REPO_URL> <JIRA-KEY>
+where <REPO_URL> is the DEFAULT_PROJECT repo (expand a bare key against it, same as you
+do for PR numbers). That opens an investigation agent in the 🔨 WORK tab. Tell me it started.
+Do not investigate yourself — the WORK-tab agent does the work.
 MD
   # pre-approve only the commands it needs
   cat > "$odir/.claude/settings.local.json" <<JSON
-{ "permissions": { "allow": ["Bash(cgremlin --review-pr *)", "Bash(cgremlin --open-pr *)", "Bash(cgremlin --dismiss-pr *)", "Bash(ls *)", "Read(*)"] } }
+{ "permissions": { "allow": ["Bash(cgremlin --review-pr *)", "Bash(cgremlin --open-pr *)", "Bash(cgremlin --dismiss-pr *)", "Bash(cgremlin --investigate *)", "Bash(ls *)", "Read(*)"] } }
 JSON
   cd "$odir" && claude --model "$MODEL" --add-dir "$SESSIONS_DIR"
 }
