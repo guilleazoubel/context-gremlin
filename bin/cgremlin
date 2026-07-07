@@ -338,6 +338,20 @@ reply_comment() {
     gh api graphql -f query='mutation($t:ID!,$b:String!){addPullRequestReviewThreadReply(input:{pullRequestReviewThreadId:$t, body:$b}){comment{id}}}' \
         -F t="$tid" -F b="$text" >/dev/null && echo "replied to $tid" || { echo "ERROR: reply failed" >&2; return 1; }
 }
+# Mark the session's PR ready for review (undraft). Only invoked on explicit user go-ahead.
+pr_ready() {
+    local d="$SESSIONS_DIR/$1" num repo
+    num=$(read_session_field "$d" "pr.number"); repo=$(_pr_repo "$d")
+    [ -z "$num" ] || [ -z "$repo" ] && { echo "ERROR: missing pr.number/repo" >&2; return 1; }
+    gh pr ready "$num" --repo "$repo" && echo "marked PR #$num ready" || { echo "ERROR: gh pr ready failed" >&2; return 1; }
+}
+# Resolve a review thread (after replying, e.g. a confirmed false positive).
+resolve_comment() {
+    local tid="$2"
+    [ -n "$tid" ] || { echo "ERROR: thread id required" >&2; return 1; }
+    gh api graphql -f query='mutation($t:ID!){resolveReviewThread(input:{threadId:$t}){thread{isResolved}}}' \
+        -F t="$tid" >/dev/null && echo "resolved $tid" || { echo "ERROR: resolve failed" >&2; return 1; }
+}
 # Commit staged+unstaged changes in the session repo.
 commit_fix() {
     local d="$SESSIONS_DIR/$1"; shift
@@ -12895,6 +12909,8 @@ if [ "$1" = "--approve-pr" ];          then [ -z "$2" ] && { echo "Usage: cgreml
 if [ "$1" = "--comment-pr" ];          then [ -z "$2" ] && { echo "Usage: cgremlin --comment-pr <session>" >&2; exit 1; }; comment_pr "$2"; exit $?; fi
 if [ "$1" = "--request-changes-pr" ];  then [ -z "$2" ] && { echo "Usage: cgremlin --request-changes-pr <session>" >&2; exit 1; }; request_changes_pr "$2"; exit $?; fi
 if [ "$1" = "--reply-comment" ]; then [ -z "$3" ] && { echo "Usage: cgremlin --reply-comment <session> <thread-id>" >&2; exit 1; }; reply_comment "$2" "$3"; exit $?; fi
+if [ "$1" = "--pr-ready" ];        then [ -z "$2" ] && { echo "Usage: cgremlin --pr-ready <session>" >&2; exit 1; }; pr_ready "$2"; exit $?; fi
+if [ "$1" = "--resolve-comment" ]; then [ -z "$3" ] && { echo "Usage: cgremlin --resolve-comment <session> <thread-id>" >&2; exit 1; }; resolve_comment "$2" "$3"; exit $?; fi
 if [ "$1" = "--commit-fix" ];   then [ -z "$2" ] && { echo "Usage: cgremlin --commit-fix <session> [msg]" >&2; exit 1; }; s="$2"; shift 2; commit_fix "$s" "$@"; exit $?; fi
 if [ "$1" = "--push-fix" ];     then [ -z "$2" ] && { echo "Usage: cgremlin --push-fix <session>" >&2; exit 1; }; push_fix "$2"; exit $?; fi
 if [ "$1" = "--triage-done" ]; then [ -z "$2" ] && { echo "Usage: cgremlin --triage-done <session>" >&2; exit 1; }; triage_done "$2"; exit $?; fi
@@ -12906,7 +12922,7 @@ if [ "$1" = "--review-list-grouped" ]; then
 fi
 
 # Skip dashboard lifecycle when called as a subprocess (e.g. --create-session, --review-pr, --lib-only)
-if [ "$1" != "--create-session" ] && [ "$1" != "--review-pr" ] && [ "$1" != "--rereview-pr" ] && [ "$1" != "--track-my-pr" ] && [ "$1" != "--lib-only" ] && [ "$1" != "--status-pane" ] && [ "$1" != "--open-pr" ] && [ "$1" != "--orchestrator" ] && [ "$1" != "--dismiss-pr" ] && [ "$1" != "--mission-control" ] && [ "$1" != "--review-list-grouped" ] && [ "$1" != "--approve-pr" ] && [ "$1" != "--comment-pr" ] && [ "$1" != "--request-changes-pr" ] && [ "$1" != "--watch-daemon" ] && [ "$1" != "--triage-comments" ] && [ "$1" != "--investigate" ]; then
+if [ "$1" != "--create-session" ] && [ "$1" != "--review-pr" ] && [ "$1" != "--rereview-pr" ] && [ "$1" != "--track-my-pr" ] && [ "$1" != "--lib-only" ] && [ "$1" != "--status-pane" ] && [ "$1" != "--open-pr" ] && [ "$1" != "--orchestrator" ] && [ "$1" != "--dismiss-pr" ] && [ "$1" != "--mission-control" ] && [ "$1" != "--review-list-grouped" ] && [ "$1" != "--approve-pr" ] && [ "$1" != "--comment-pr" ] && [ "$1" != "--request-changes-pr" ] && [ "$1" != "--watch-daemon" ] && [ "$1" != "--triage-comments" ] && [ "$1" != "--investigate" ] && [ "$1" != "--pr-ready" ] && [ "$1" != "--resolve-comment" ]; then
     cleanup_on_exit() {
         stop_dashboard_server 2>/dev/null
     }
