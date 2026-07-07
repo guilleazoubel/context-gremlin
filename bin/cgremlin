@@ -12676,6 +12676,7 @@ watch_daemon_loop() {
 }
 
 launch_mission_control() {
+    local _fresh="$1"   # non-empty → force a brand-new session (delete existing first)
     # Mission Control is always Zellij, regardless of USE_ZELLIJ flag.
     command -v zellij >/dev/null 2>&1 || { error "Zellij not installed. Install it at https://zellij.dev"; sleep 2; return 1; }
 
@@ -12725,10 +12726,12 @@ KDL
 export PATH="$_cgdir:\$PATH"
 pgrep -f "cgremlin --watch-daemon" >/dev/null 2>&1 || ( "$_cgdir/cgremlin" --watch-daemon >/dev/null 2>&1 & )
 _s=\$(zellij list-sessions 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g')
-if printf '%s' "\$_s" | grep -qE '^mission-control[[:space:]]' && \
+if [ -z "$_fresh" ] && printf '%s' "\$_s" | grep -qE '^mission-control[[:space:]]' && \
    ! printf '%s' "\$_s" | grep -qiE '^mission-control.*(EXITED|dead)'; then
     exec zellij attach mission-control
 else
+    # --fresh, or a dead/EXITED session: delete and create clean (attaching a
+    # dead session resurrects stale panes/layout from an older cgremlin).
     zellij delete-session -f mission-control 2>/dev/null || true
     rm -f "$_sessions_dir/.tab2_open"
     exec zellij --session mission-control --new-session-with-layout mission-control
@@ -13435,7 +13438,10 @@ if [ "$1" = "--orchestrator" ]; then
 fi
 
 if [ "$1" = "--mission-control" ]; then
-    launch_mission_control
+    # --fresh forces a brand-new session (delete any existing one first) so
+    # code/layout changes take effect without manually deleting the session.
+    _mc_fresh=""; [ "$2" = "--fresh" ] && _mc_fresh="1"
+    launch_mission_control "$_mc_fresh"
     exit $?
 fi
 
