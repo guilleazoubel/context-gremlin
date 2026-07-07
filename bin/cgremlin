@@ -12922,7 +12922,7 @@ if [ "$1" = "--review-list-grouped" ]; then
 fi
 
 # Skip dashboard lifecycle when called as a subprocess (e.g. --create-session, --review-pr, --lib-only)
-if [ "$1" != "--create-session" ] && [ "$1" != "--review-pr" ] && [ "$1" != "--rereview-pr" ] && [ "$1" != "--track-my-pr" ] && [ "$1" != "--lib-only" ] && [ "$1" != "--status-pane" ] && [ "$1" != "--open-pr" ] && [ "$1" != "--orchestrator" ] && [ "$1" != "--dismiss-pr" ] && [ "$1" != "--mission-control" ] && [ "$1" != "--review-list-grouped" ] && [ "$1" != "--approve-pr" ] && [ "$1" != "--comment-pr" ] && [ "$1" != "--request-changes-pr" ] && [ "$1" != "--watch-daemon" ] && [ "$1" != "--triage-comments" ] && [ "$1" != "--investigate" ] && [ "$1" != "--pr-ready" ] && [ "$1" != "--resolve-comment" ]; then
+if [ "$1" != "--create-session" ] && [ "$1" != "--review-pr" ] && [ "$1" != "--rereview-pr" ] && [ "$1" != "--track-my-pr" ] && [ "$1" != "--lib-only" ] && [ "$1" != "--status-pane" ] && [ "$1" != "--open-pr" ] && [ "$1" != "--orchestrator" ] && [ "$1" != "--dismiss-pr" ] && [ "$1" != "--mission-control" ] && [ "$1" != "--review-list-grouped" ] && [ "$1" != "--approve-pr" ] && [ "$1" != "--comment-pr" ] && [ "$1" != "--request-changes-pr" ] && [ "$1" != "--watch-daemon" ] && [ "$1" != "--triage-comments" ] && [ "$1" != "--investigate" ] && [ "$1" != "--pr-ready" ] && [ "$1" != "--resolve-comment" ] && [ "$1" != "--develop" ]; then
     cleanup_on_exit() {
         stop_dashboard_server 2>/dev/null
     }
@@ -13176,6 +13176,72 @@ EOF
     generate_claude_md "$SESSION_DIR" "development" "Jira: $JIRA_TICKET"
 
     echo "$SESSION_NAME"
+}
+
+# Write the develop-mode autonomous brief as the agent's cwd CLAUDE.md.
+# Usage: write_develop_brief SESSION_DIR
+write_develop_brief() {
+    local SDIR="$1" key sn; key=$(read_session_field "$SDIR" "jira.ticket"); sn=$(basename "$SDIR")
+    cat > "$SDIR/CLAUDE.md" <<DEV
+# DEVELOP — ${key:-(no ticket)}
+
+You are running in the session directory. The code is in \`./repo/\`. \`FINDINGS.md\`
+here is your seeded investigation (root cause + direction). The Jira ticket
+${key:+(${key}) — fetch via Atlassian MCP getJiraIssue} is the source of truth.
+Cover ONLY what the ticket asks.
+
+## Flow (autonomous except at the gates below)
+1. **Read FINDINGS.md + the ticket.** Refine into a concrete implementation plan (root cause is already known).
+2. **PLAN GATE — pause.** Present the plan to me, explain it, and adjust it with me. Do NOT implement until I explicitly say to proceed.
+3. **Implement with TDD.** For each unit: write the failing test, run it (confirm it fails), write minimal code, run to green, commit. Stay strictly in ticket scope.
+4. **Open a draft PR** on the pushed branch: \`gh pr create --draft\`, body summarizing the change and linking ${key:-the ticket}.
+5. **Verify on preview.** Find the draft PR's Vercel preview URL (from \`gh pr view <n> --json statusCheckRollup\` — the grace-frontend-dev deployment). Run a FOCUSED live web test set against it with Playwright: prove the ticket's issue is fixed, plus a smoke pass of the feature and its likely splash-zone regressions. NOT the full e2e suite. Iterate to green.
+6. **Assess bot comments.** For each gitStream/bot (and any) unresolved comment on the PR:
+   - false positive → reply "false positive: <reason>" then resolve it:
+       cgremlin --reply-comment $sn <thread-id>   (write the reply to ${SDIR}/.reply_body.md first)
+       cgremlin --resolve-comment $sn <thread-id>
+   - clearly valid → fix it (TDD for code changes).
+   - unsure → STOP and show it to me to discuss.
+7. **Notify me** it's tested and comment-clean so I can watch it run against preview and ask questions.
+8. **READY GATE.** Only when I say I'm satisfied, mark the PR ready:
+       cgremlin --pr-ready $sn
+
+## Scope + tech debt
+Out-of-scope-but-needed work → propose a tech-debt Jira (Atlassian createJiraIssue) and create it ONLY with my explicit OK. Never expand scope silently.
+
+## Hard rules
+- Never mark the PR ready (\`--pr-ready\`) or create a Jira without my explicit go-ahead.
+- Never skip the PLAN GATE.
+- Post to GitHub only via the cgremlin helpers above (never raw gh for review/comment mutations); \`gh pr create --draft\`, \`gh pr view\`, git push are fine.
+
+BEGIN NOW: read FINDINGS.md + the ticket and prepare the plan for the PLAN GATE.
+DEV
+    mkdir -p "$SDIR/.claude"
+    printf '{"permissions":{"allow":["Bash(cgremlin --reply-comment *)","Bash(cgremlin --resolve-comment *)","Bash(cgremlin --pr-ready *)","Bash(cgremlin --commit-fix *)","Bash(cgremlin --push-fix *)"]}}\n' > "$SDIR/.claude/settings.local.json"
+}
+
+# Promote an investigation into a fresh develop session (seeded with FINDINGS.md),
+# launch it in the WORK tab, and close the investigation pane.
+# Usage: develop_start <investigation-session-name>
+develop_start() {
+    local inv="$1" INV_DIR="$SESSIONS_DIR/$inv"
+    [ -d "$INV_DIR/repo" ] || { echo "ERROR: investigation session $inv not found" >&2; return 1; }
+    local jira repo_url
+    jira=$(read_session_field "$INV_DIR" "jira.ticket")
+    repo_url=$(read_session_field "$INV_DIR" "project"); [ -z "$repo_url" ] && repo_url="https://github.com/$(_pr_repo "$INV_DIR")"
+    local session_name
+    session_name=$(create_development_session_noninteractive "$repo_url" "$jira" | tail -1)
+    [ -z "$session_name" ] && { echo "ERROR: develop session creation failed" >&2; return 1; }
+    local SDIR="$SESSIONS_DIR/$session_name"
+    [ -n "$jira" ] && update_session_field "$SDIR" "jira.ticket" "$jira"
+    # Seed the findings (self-contained handoff).
+    [ -f "$INV_DIR/FINDINGS.md" ] && cp "$INV_DIR/FINDINGS.md" "$SDIR/FINDINGS.md"
+    write_develop_brief "$SDIR"
+    create_work_agent_pane "$SDIR"
+    # The investigation agent's job is done — close its pane.
+    local ipid; ipid=$(cat "$INV_DIR/agent_pid" 2>/dev/null)
+    [ -n "$ipid" ] && kill "$ipid" 2>/dev/null; rm -f "$INV_DIR/agent_pid"
+    echo "$session_name"
 }
 
 # ============================================================================
@@ -13481,6 +13547,11 @@ fi
 if [ "$1" = "--investigate" ]; then
     [ -z "$2" ] && { echo "Usage: cgremlin --investigate <repo-url> <jira-key>" >&2; exit 1; }
     investigate_start "$2" "$3"; exit $?
+fi
+
+if [ "$1" = "--develop" ]; then
+    [ -z "$2" ] && { echo "Usage: cgremlin --develop <investigation-session>" >&2; exit 1; }
+    develop_start "$2"; exit $?
 fi
 
 if [ "$1" = "--track-my-pr" ]; then
