@@ -576,6 +576,59 @@ _agent_tab_name() {
     printf '%s #%s @%s' "$emoji" "$num" "${author:-?}"
 }
 
+# Title for a WORK-tab agent pane: 🔍 <key> (investigate) or 🔨 <key> (develop).
+# <key> = session's jira.ticket, else the session dir basename.
+# Usage: work_agent_tab_name SESSION_DIR
+work_agent_tab_name() {
+    local SDIR="$1" mode key emoji
+    mode=$(read_session_field "$SDIR" "mode")
+    key=$(read_session_field "$SDIR" "jira.ticket"); [ -z "$key" ] && key=$(basename "$SDIR")
+    case "$mode" in development) emoji="🔨";; *) emoji="🔍";; esac
+    printf '%s %s' "$emoji" "$key"
+}
+
+# Launch the session's agent as a tiled pane in the single "🔨 WORK" tab, so all
+# active investigate/dev work is visible at once. Agent runs with cwd=SESSION_DIR
+# (auto-loads SESSION_DIR/CLAUDE.md — the mode's autonomous instructions). No
+# --add-dir (repo/ is a subdir of cwd; adding it would load repo/CLAUDE.md).
+# Usage: create_work_agent_pane SESSION_DIR
+create_work_agent_pane() {
+    local SDIR="$1"
+    [ -d "$SDIR/repo" ] || return 1
+    [ -n "$ZELLIJ" ] || return 0
+    local title; title=$(work_agent_tab_name "$SDIR")
+
+    local wrapper; wrapper=$(mktemp /tmp/cgremlin-work-XXXXXX)
+    cat > "$wrapper" <<WRAPPER
+#!/bin/bash
+echo \$\$ > "$SDIR/agent_pid"
+cd "$SDIR" || exit 1
+exec claude --model "$MODEL" "Your very first action: read CLAUDE.md in this directory and follow it exactly — it is your autonomous working brief. Begin now; do not wait for my input; do not read any other CLAUDE.md."
+WRAPPER
+    chmod +x "$wrapper"
+
+    # Ensure the WORK tab exists (create with tab-bar + this pane), else add a
+    # tiled pane to it. Detect existence via dump-layout (tab names appear there).
+    if zellij action dump-layout 2>/dev/null | grep -qF 'tab name="🔨 WORK"'; then
+        zellij action go-to-tab-name "🔨 WORK" 2>/dev/null || true
+        zellij action new-pane --name "$title" -- bash "$wrapper" 2>/dev/null || true
+    else
+        local lay; lay=$(mktemp /tmp/cgremlin-worklayout-XXXXXX)
+        cat > "$lay" <<KDL
+layout {
+    pane size=1 borderless=true {
+        plugin location="zellij:tab-bar"
+    }
+    pane name="$title" command="bash" {
+        args "$wrapper"
+    }
+}
+KDL
+        zellij action new-tab --name "🔨 WORK" --layout "$lay" 2>/dev/null || true
+        rm -f "$lay"
+    fi
+}
+
 create_review_agent_pane() {
     local SDIR="$1"
     [ -d "$SDIR/repo" ] || return 1
