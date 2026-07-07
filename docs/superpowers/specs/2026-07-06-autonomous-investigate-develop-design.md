@@ -10,7 +10,7 @@
 
 Starting an investigation or development session from the web UI is broken: it creates a session that shows "broken session," then the user must click "Start Claude" and paste instructions by hand. The user wants a smooth, autonomous flow: click start → an agent spins up in Mission Control with the right instructions, grabs the input/Jira, and works the problem largely on its own — pausing only for genuine judgment calls — with the user reviewing at defined checkpoints.
 
-**Every task begins as an investigation.** The investigation produces `FINDINGS.md` (understanding + root cause + scoped plan). Sometimes that's the end. When the user decides to proceed, they promote it to a **fresh develop session** that starts clean but is seeded with the investigation's `FINDINGS.md` + the Jira — everything it needs to build a great fix. So develop never starts cold; it always stands on a reviewed investigation.
+**Every task begins as an investigation.** The investigation produces `FINDINGS.md` (understanding + root cause + scoped plan/direction). Sometimes that's the end. When the user decides to proceed, they promote it to a **fresh develop session** seeded with the investigation's `FINDINGS.md` + the Jira. **`FINDINGS.md` is the handoff** — it must be complete and self-contained enough that the develop agent knows exactly what to do without the investigation agent. On promotion, the investigation agent has done its job: its pane **closes**, and develop stands entirely on the findings + Jira.
 
 Investigation and development share a launch and workspace model but differ in deliverable: investigate produces the findings + plan; develop implements it (TDD), verifies on the preview environment, triages bot comments, and hands over a tested draft PR.
 
@@ -37,7 +37,11 @@ Investigation and development share a launch and workspace model but differ in d
 
 ### Launch (fixes the broken flow)
 
-Entry point stays the web UI. There is **one** starting action — **Start Investigation** (every task begins here). From an investigation that has produced `FINDINGS.md`, a **Develop this** action (in the web UI and/or the investigation pane) spawns a fresh develop session seeded with that `FINDINGS.md` + the Jira. Both launches follow the same steps below (differing only in mode and seed input):
+**Start = conversational, via the orchestrator** (like reviews). You tell the Mission Control orchestrator pane "I'm picking up HB-1051" (Jira key/URL/description); it runs `cgremlin --investigate <jira>`, creating the investigation session and a `🔍 <JIRA>` pane in the WORK tab that starts investigating. (The web-UI "Start Investigation" button remains as a secondary entry, fixed to the same path.)
+
+**Promote = from the investigation agent.** When `FINDINGS.md` is ready and reviewed, you tell that agent "build it"; it runs `cgremlin --develop <session>`, which copies `FINDINGS.md` into a fresh develop session (`🔨 <JIRA>` pane) and then **closes the investigation pane**. Develop proceeds from `FINDINGS.md` + Jira alone.
+
+Both launches follow the same steps below (differing only in mode and seed input):
 
 1. The dashboard server creates the session **completely before any launch**: clone the repo, write a valid `session.json` (with mode, project, and — if a Jira key is derivable from input/branch — the ticket), fetch Jira context, and write the mode-specific autonomous `CLAUDE.md` (see below). (Root-cause note: the current "broken session" comes from launching the terminal before the session is fully written / from the `${4:-{}}` class of JSON bugs already fixed — this flow will write session state first, then launch.)
 2. Launch the agent as a **pane in the `🔨 WORK` tab** of Mission Control:
@@ -67,15 +71,15 @@ Deliverable: a plan, no code changes.
 
 1. Read the Jira ticket + user input.
 2. Investigate the codebase: trace the relevant paths, reproduce/understand the issue, find the root cause.
-3. Write `FINDINGS.md`: what's happening, the root cause, and a **scoped plan** to fix the Jira (steps, files, risks).
+3. Write `FINDINGS.md` as a **complete, self-contained handoff**: what's happening, the root cause, the affected files/paths, risks, and a **clear scoped direction/plan** to fix the Jira — enough that a fresh develop agent can execute from it alone.
 4. Work autonomously; pause only for genuine approach/design questions.
-5. Stop at the plan — the user reviews it. This is the deliverable. If the user wants it built, they promote it via **Develop this**, which spawns a **fresh** develop session seeded with this `FINDINGS.md` + the Jira (a clean context that stands on the reviewed investigation).
+5. Stop at the plan — the user reviews it. This is the deliverable. If the user wants it built, they promote it via **Develop this** (or by telling the investigation agent "build it"): the agent copies `FINDINGS.md` into a **fresh** develop session (seeded with it + the Jira), then the investigation pane **closes** — its job is done.
 
 ---
 
 ## Develop mode
 
-Deliverable: a tested draft PR, gated to "ready" by the user. **Seeded** with the promoting investigation's `FINDINGS.md` + the Jira (fresh session, but not starting cold).
+Deliverable: a tested draft PR, gated to "ready" by the user. **Seeded** with a copy of the promoting investigation's `FINDINGS.md` + the Jira (fresh, independent session — the investigation agent is gone; `FINDINGS.md` is the only handoff).
 
 1. **Read the seed** (`FINDINGS.md` + Jira), then refine into an implementation plan (root-cause is already established; build on it).
 2. **Plan gate (mandatory pause):** present the plan in the pane, explain it, discuss and adjust with the user. Wait for explicit go-ahead. This is the "real ideas" checkpoint.
@@ -120,6 +124,6 @@ Autonomous through: investigation, TDD implementation (after plan approval), dra
 
 ## Resolved decisions
 
-1. **Every task starts as an investigation.** Develop is a separate, **fresh** session promoted from an investigation via **Develop this**, seeded with that investigation's `FINDINGS.md` + the Jira. Develop never starts cold.
+1. **Every task starts as an investigation** (started conversationally via the orchestrator). Develop is a separate **fresh** session, promoted from within the investigation agent ("build it"), seeded with a **copy** of `FINDINGS.md` + the Jira. On promotion the **investigation pane closes** — `FINDINGS.md` is the sole handoff; develop never depends on the investigation agent.
 2. **Preview verification = focused set, not full e2e.** Prove the Jira issue is fixed, plus a complete smoke pass of the feature and its likely splash-zone regressions. Playwright against the preview URL.
 3. **WORK tab crowding:** tiled panes shrink with many concurrent sessions — accepted for now (the user wants all visible at once); revisit only if it becomes unusable.
