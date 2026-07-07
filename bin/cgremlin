@@ -12906,7 +12906,7 @@ if [ "$1" = "--review-list-grouped" ]; then
 fi
 
 # Skip dashboard lifecycle when called as a subprocess (e.g. --create-session, --review-pr, --lib-only)
-if [ "$1" != "--create-session" ] && [ "$1" != "--review-pr" ] && [ "$1" != "--rereview-pr" ] && [ "$1" != "--track-my-pr" ] && [ "$1" != "--lib-only" ] && [ "$1" != "--status-pane" ] && [ "$1" != "--open-pr" ] && [ "$1" != "--orchestrator" ] && [ "$1" != "--dismiss-pr" ] && [ "$1" != "--mission-control" ] && [ "$1" != "--review-list-grouped" ] && [ "$1" != "--approve-pr" ] && [ "$1" != "--comment-pr" ] && [ "$1" != "--request-changes-pr" ] && [ "$1" != "--watch-daemon" ] && [ "$1" != "--triage-comments" ]; then
+if [ "$1" != "--create-session" ] && [ "$1" != "--review-pr" ] && [ "$1" != "--rereview-pr" ] && [ "$1" != "--track-my-pr" ] && [ "$1" != "--lib-only" ] && [ "$1" != "--status-pane" ] && [ "$1" != "--open-pr" ] && [ "$1" != "--orchestrator" ] && [ "$1" != "--dismiss-pr" ] && [ "$1" != "--mission-control" ] && [ "$1" != "--review-list-grouped" ] && [ "$1" != "--approve-pr" ] && [ "$1" != "--comment-pr" ] && [ "$1" != "--request-changes-pr" ] && [ "$1" != "--watch-daemon" ] && [ "$1" != "--triage-comments" ] && [ "$1" != "--investigate" ]; then
     cleanup_on_exit() {
         stop_dashboard_server 2>/dev/null
     }
@@ -13065,6 +13065,64 @@ EOF
     generate_claude_md "$SESSION_DIR" "investigation" "$FOCUS"
 
     echo "$SESSION_NAME"
+}
+
+# Write the investigate-mode autonomous brief as the agent's cwd CLAUDE.md.
+# Usage: write_investigate_brief SESSION_DIR
+write_investigate_brief() {
+    local SDIR="$1" key
+    key=$(read_session_field "$SDIR" "jira.ticket")
+    cat > "$SDIR/CLAUDE.md" <<INV
+# INVESTIGATION — ${key:-(no ticket)}
+
+You are running in the session directory. The PR/repo code is in \`./repo/\`.
+Work autonomously. Your deliverable is a complete, self-contained \`FINDINGS.md\`
+in this directory — no code changes.
+
+## Source of truth: the Jira ticket
+${key:+The ticket is ${key}. Fetch it now via the Atlassian MCP (getJiraIssue) to read the summary, description, and acceptance criteria.} If the ticket is unavailable or absent, use whatever task description you were given. The ticket defines scope — investigate ONLY what it asks about.
+
+## What to do (autonomously — do not ask me for routine steps)
+1. Understand the request from the ticket.
+2. Explore \`./repo/\`: trace the relevant code paths, reproduce/understand the issue, find the ROOT CAUSE.
+3. Write \`FINDINGS.md\` as a COMPLETE HANDOFF a fresh developer could execute from alone:
+   - **What's happening** (the observed problem/behavior)
+   - **Root cause** (the specific code and why)
+   - **Affected files/paths**
+   - **Risks / splash zone** (what a fix could plausibly affect)
+   - **Direction / plan** to fix the ticket (concrete steps, scoped to the ticket)
+4. Do NOT change code. Investigation produces understanding + plan only.
+
+## Scope discipline
+Cover ONLY what the ticket asks. If you find necessary out-of-scope work, note it under a "Tech debt (proposed)" section in FINDINGS.md and TELL ME — do not act on it. I decide whether to open a tech-debt Jira.
+
+## When to pause
+Proceed on your own for all routine investigation. Pause and ask ME only when there's a genuine approach/design decision with real trade-offs to discuss.
+
+## Handing off to development
+When FINDINGS.md is ready, present a short summary and offer to build it. If I say to build it (e.g. "build it" / "let's develop this"), run:
+  cgremlin --develop $(basename "$SDIR")
+That opens a fresh develop session seeded with FINDINGS.md + the ticket, and closes this pane.
+
+BEGIN NOW: fetch the ticket, investigate, and write FINDINGS.md.
+INV
+    mkdir -p "$SDIR/.claude"
+    printf '{"permissions":{"allow":["Bash(cgremlin --develop *)"]}}\n' > "$SDIR/.claude/settings.local.json"
+}
+
+# Create an investigation session and launch its agent in the WORK tab.
+# Usage: investigate_start <repo-git-url> <jira-key>
+investigate_start() {
+    local repo_url="$1" jira="$2"
+    local session_name
+    session_name=$(create_investigation_session_noninteractive "$repo_url" "" "$jira" | tail -1)
+    [ -z "$session_name" ] && { echo "ERROR: investigation session creation failed" >&2; return 1; }
+    local SDIR="$SESSIONS_DIR/$session_name"
+    # Ensure the ticket is recorded even if the creator didn't set it.
+    [ -n "$jira" ] && update_session_field "$SDIR" "jira.ticket" "$jira"
+    write_investigate_brief "$SDIR"     # overwrite the generic investigation CLAUDE.md with the autonomous brief
+    create_work_agent_pane "$SDIR"
+    echo "$session_name"
 }
 
 create_development_session_noninteractive() {
@@ -13402,6 +13460,11 @@ WRAPPER_EOF
 if [ "$1" = "--review-pr" ]; then
     review_pr_noninteractive "$2" "$3"
     exit $?
+fi
+
+if [ "$1" = "--investigate" ]; then
+    [ -z "$2" ] && { echo "Usage: cgremlin --investigate <repo-url> <jira-key>" >&2; exit 1; }
+    investigate_start "$2" "$3"; exit $?
 fi
 
 if [ "$1" = "--track-my-pr" ]; then
