@@ -120,6 +120,32 @@ These keep the command from being hardcoded to one repo layout while defaulting 
 
 ---
 
+## Building this (execution note)
+
+The implementation plan's **live smoke test** of `--run-local` (which briefly takes over port 8080 and may stop the user's own `~/Projects` dev server) is **gated behind the user's explicit go-ahead by default**. Exception: if the user tells the implementer it is "the main implementer right now" (autonomous), it may run the run → verify → fix loop on its own.
+
+---
+
+## Downstream (separate spec, motivates this one): develop's autonomous run-verify-fix loop
+
+Once `--run-local` exists, the **develop** agent's verification phase — when the user has authorized autonomous operation — runs this loop instead of a single pass:
+
+1. **Run locally** — `cgremlin --run-local <session>`.
+2. **PM agent** — drives the running app and checks UI + functionality against the Jira **acceptance criteria**; returns structured feedback (what's missing/wrong vs the ACs).
+3. **Designer agent** — checks the running app against the **designs/Figma** in detail: colors, sizes, images, spacing, layout — everything; returns structured feedback.
+4. **Fullstack engineer agent** — takes the PM + Designer feedback and plans + applies proper fixes: **no hacks, correct patterns, no over-engineering — done as it should be**.
+5. **Repeat** from step 1 until it all works as designed and both agents pass.
+
+Guardrails: the engineer agent fixes root causes, not symptoms; it does not over-build; a final check confirms no hacks/workarounds slipped in. This is its own spec (it depends on this one + Figma/design access + chrome-devtools).
+
+---
+
+## Related (separate spec): review-side headless UI check (non-fixing)
+
+On the **review** side, after findings are posted for the user, an agent runs a headless live-UI check against the **preview** environment (or the **Storybook** preview) — same PM + Designer lenses, but **read-only, no fixing**: it just finds UI/AC/design mistakes, **adds them to the review findings**, and **captures screenshots** of each issue attached to the finding (reusable later in the actual PR to illustrate what was found). Its own spec.
+
+---
+
 ## Files changed
 
 `bin/cgremlin` only:
