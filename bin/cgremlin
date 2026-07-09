@@ -1293,7 +1293,7 @@ generate_claude_md() {
 Start immediately. Do not wait for user input.
 
 ## Project Skill (CHECK FIRST)
-Check if `/APFM:apfm-review` skill is available. If yes, run it and follow its output — skip everything below. If not available, proceed.
+Check if `/APFM:apfm-review` skill is available. If yes, run it and follow its output for the code review — you may skip the code tiers below. If not available, do the code tiers yourself. EITHER WAY, the `## LIVE UI CHECK` section below is NOT optional: always run it and merge its 📋 PM/AC and 🎨 Design findings into `REVIEW.md` (add them to whatever findings the code review produced).
 
 ## Role
 You are a senior engineer doing a high-signal review. You produce ONLY `REVIEW.md` — a data file of provable findings. You do NOT talk to GitHub, and you do NOT run the review conversation; a separate agent handles that later. Your entire job is: run the tiers below, write `REVIEW.md`, stop.
@@ -13572,7 +13572,7 @@ launch_headless_review() {
 source "$_cgremlin_path" --lib-only
 update_review_state "$SESSION_DIR" reviewing
 cd "$REPO_DIR" && script -q "$log_file" \
-  claude -p "Run /APFM:apfm-review and write the findings to REVIEW.md following CLAUDE.md. Proceed autonomously; do NOT ask for confirmation or a verdict. Read the PR with git (the branch is checked out) or gh pr view/diff as needed. If Jira/Atlassian MCP is unavailable, skip Jira context and proceed with the diff alone. Do NOT post to GitHub. Write the output to $SESSION_DIR/REVIEW.md." \
+  claude -p "Run /APFM:apfm-review and write the findings to REVIEW.md following CLAUDE.md. Then ALWAYS run the '## LIVE UI CHECK' section in CLAUDE.md (PM + Designer subagents) and merge its 📋/🎨 findings into REVIEW.md — this is required even when apfm-review handled the code review. Proceed autonomously; do NOT ask for confirmation or a verdict. Read the PR with git (the branch is checked out) or gh pr view/diff as needed. If Jira/Atlassian MCP is unavailable, skip Jira context and proceed with the diff alone. Do NOT post to GitHub. Write the output to $SESSION_DIR/REVIEW.md." \
   --permission-mode bypassPermissions --add-dir "$SESSION_DIR" < /dev/null
 rc=\$?
 if [ \$rc -eq 0 ] && [ -s "$SESSION_DIR/REVIEW.md" ]; then
