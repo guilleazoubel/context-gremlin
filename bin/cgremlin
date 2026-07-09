@@ -13478,6 +13478,7 @@ Cover ONLY what the ticket asks.
 5. **Verify (local during dev; preview after the PR).** During development, run \`cgremlin --run-local $sn\` and drive chrome-devtools against https://local.findcare.dev.aplaceformom.com/ . Once the draft PR (step 4) is open, ALSO verify against its Vercel preview URL. Run a FOCUSED functional smoke (prove the ticket's issue is fixed, plus a smoke pass of the feature and its likely splash-zone regressions — NOT the full e2e suite) AND the PM + Designer UI check below. Watch logs/dev-server.log; iterate to green; \`cgremlin --stop-local $sn\` when done.
 
 $(ui_check_protocol fix "the LOCAL url https://local.findcare.dev.aplaceformom.com/ during development, and the draft PR's Vercel preview URL once the PR is open")
+
 6. **Assess bot comments.** Get the LIVE thread list with \`cgremlin --pr-threads $sn\`
    (READ-ONLY: threadId, resolved, author, path:line, last replier, snippet). Re-run it
    whenever I say I changed something. For each UNRESOLVED thread (skip ones already
