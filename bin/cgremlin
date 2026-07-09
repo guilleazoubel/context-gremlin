@@ -415,9 +415,9 @@ set_agent_state() {
 # Usage: set_agent_note SESSION TEXT...
 set_agent_note() {
     local d="$SESSIONS_DIR/$1"; shift
-    [ -d "$d" ] || { echo "ERROR: unknown session" >&2; return 1; }
+    [ -d "$d" ] || { echo "ERROR: unknown session '$1'" >&2; return 1; }
     local text="$*"
-    text="${text//$'\n'/ }"
+    text="${text//$'\n'/ }"; text="${text//$'\t'/ }"
     printf '%.100s' "$text" > "$d/.cg_note"
     echo "agent-note set"
 }
@@ -764,8 +764,8 @@ review_list_grouped() {
       wsummary=$(read_session_field "${wd%/}" "jira.summary")
       wnote=$(cat "${wd%/}/.cg_note" 2>/dev/null)
       wicon=$(attention_icon "${wd%/}" ""); [ -z "$wicon" ] && wicon="💤 idle"
-      wtitle="${wsummary:-$(read_session_field "${wd%/}" "focus")}"
-      work="${work}$(printf '%s %s  %s' "$wemoji" "$wkey" "$wicon")\t${wsn}\twork"$'\n'
+      wtitle="$wkey"; [ -n "$wsummary" ] && wtitle="$wkey — $wsummary"
+      work="${work}$(printf '%s %s  %s' "$wemoji" "$wtitle" "$wicon")\t${wsn}\twork"$'\n'
       [ -n "$wnote" ] && work="${work}$(printf '   %s' "$wnote")\t${wsn}\twork"$'\n'
   done
   [ -n "$work" ] && { printf '── 🔨 Your work ──\t\t\n'; printf '%b' "$work"; }
