@@ -50,9 +50,22 @@ load_config() {
                 WATCH_REPOS) WATCH_REPOS="$value" ;;
                 WATCH_AUTHORS) WATCH_AUTHORS="$value" ;;
                 GITHUB_ME) GITHUB_ME="$value" ;;
+                LOCAL_URL) LOCAL_URL="$value" ;;
+                LOCAL_PORT) LOCAL_PORT="$value" ;;
+                LOCAL_DEV_CMD) LOCAL_DEV_CMD="$value" ;;
+                VERCEL_SCOPE) VERCEL_SCOPE="$value" ;;
+                VERCEL_PROJECT) VERCEL_PROJECT="$value" ;;
+                LOCAL_NODE_VERSION) LOCAL_NODE_VERSION="$value" ;;
             esac
         done < "$CONFIG_FILE"
     fi
+
+    : "${LOCAL_URL:=https://local.findcare.dev.aplaceformom.com}"
+    : "${LOCAL_PORT:=8080}"
+    : "${LOCAL_DEV_CMD:=pnpm dev}"
+    : "${VERCEL_SCOPE:=grace-0118bc61}"
+    : "${VERCEL_PROJECT:=grace-frontend-dev}"
+    : "${LOCAL_NODE_VERSION:=24}"
 }
 
 # Save configuration to file
@@ -83,6 +96,14 @@ WATCH_AUTHORS="$WATCH_AUTHORS"
 
 # Your own GitHub login — your approved PRs are flagged "merge it"
 GITHUB_ME="$GITHUB_ME"
+
+# Local-run: app URL, port, dev command, Vercel scope/project, Node version
+LOCAL_URL="$LOCAL_URL"
+LOCAL_PORT="$LOCAL_PORT"
+LOCAL_DEV_CMD="$LOCAL_DEV_CMD"
+VERCEL_SCOPE="$VERCEL_SCOPE"
+VERCEL_PROJECT="$VERCEL_PROJECT"
+LOCAL_NODE_VERSION="$LOCAL_NODE_VERSION"
 EOF
     chmod 600 "$CONFIG_FILE"
 }
