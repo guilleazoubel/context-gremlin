@@ -399,6 +399,47 @@ pr_threads() {
                   ("@" + (.comments.nodes[-1].author.login // "?")),
                   (($f.body // "")|gsub("[\n\t]";" ")|.[0:80]) ] | @tsv' 2>/dev/null
 }
+# Path to the single-owner local-run state file.
+_local_run_file() { echo "$SESSIONS_DIR/.local_run"; }
+# The session currently running locally (empty if none).
+_local_run_owner() { jq -r '.session // empty' "$(_local_run_file)" 2>/dev/null; }
+
+# Verify machine prerequisites for local run. Actionable message + return 1 on
+# any failure; never modifies the machine (esp. never runs sudo/setup:local).
+# Usage: _local_prereqs
+_local_prereqs() {
+    grep -q 'local.findcare.dev.aplaceformom.com' /etc/hosts 2>/dev/null \
+        || { echo "PREREQ: /etc/hosts is missing the dev domain. Run 'pnpm setup:local' in the repo, with you present (needs sudo)." >&2; return 1; }
+    [ -f /Library/LaunchDaemons/com.grace.portforward.plist ] \
+        || { echo "PREREQ: the 443→8080 port-forward daemon is missing. Run 'pnpm setup:local' in the repo, with you present (needs sudo)." >&2; return 1; }
+    [ -n "$NODE_AUTH_TOKEN" ] \
+        || { echo "PREREQ: NODE_AUTH_TOKEN is not set (needed for @aplaceformom/* packages). Export a GitHub PAT with read:packages (the gh oauth token lacks that scope)." >&2; return 1; }
+    [ -s "$HOME/.nvm/nvm.sh" ] \
+        || { echo "PREREQ: nvm not found at ~/.nvm/nvm.sh (needed for Node $LOCAL_NODE_VERSION)." >&2; return 1; }
+    ( export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh"; nvm which "$LOCAL_NODE_VERSION" >/dev/null 2>&1 ) \
+        || echo "NOTE: Node $LOCAL_NODE_VERSION not installed under nvm; run_local will 'nvm install $LOCAL_NODE_VERSION' (this changes nvm's default alias)." >&2
+    ( vercel whoami >/dev/null 2>&1 ) \
+        || { echo "PREREQ: not logged into Vercel. Run 'vercel login'." >&2; return 1; }
+    return 0
+}
+
+# Stop the tracked local dev server and clear state.
+# Usage: stop_local [SESSION]   (SESSION optional; if given, only stops when it is the current owner)
+stop_local() {
+    local want="$1" f owner pid
+    f=$(_local_run_file); owner=$(_local_run_owner)
+    [ -z "$owner" ] && { echo "no session is running locally"; return 0; }
+    if [ -n "$want" ] && [ "$want" != "$owner" ]; then
+        echo "local run is owned by '$owner', not '$want' — nothing stopped"; return 0
+    fi
+    pid=$(jq -r '.pid // empty' "$f" 2>/dev/null)
+    [ -n "$pid" ] && kill "$pid" 2>/dev/null
+    # pnpm dev spawns children (next). Also free the port if anything lingers.
+    local lport; lport=$(lsof -t -nP -iTCP:"$LOCAL_PORT" -sTCP:LISTEN 2>/dev/null)
+    [ -n "$lport" ] && kill "$lport" 2>/dev/null || true
+    rm -f "$f"
+    echo "stopped local run for '$owner' (pid ${pid:-?})"
+}
 # Commit staged+unstaged changes in the session repo.
 commit_fix() {
     local d="$SESSIONS_DIR/$1"; shift
@@ -12990,6 +13031,7 @@ if [ "$1" = "--reply-comment" ]; then [ -z "$3" ] && { echo "Usage: cgremlin --r
 if [ "$1" = "--pr-ready" ];        then [ -z "$2" ] && { echo "Usage: cgremlin --pr-ready <session>" >&2; exit 1; }; pr_ready "$2"; exit $?; fi
 if [ "$1" = "--resolve-comment" ]; then [ -z "$3" ] && { echo "Usage: cgremlin --resolve-comment <session> <thread-id>" >&2; exit 1; }; resolve_comment "$2" "$3"; exit $?; fi
 if [ "$1" = "--pr-threads" ];      then [ -z "$2" ] && { echo "Usage: cgremlin --pr-threads <session>" >&2; exit 1; }; pr_threads "$2"; exit $?; fi
+if [ "$1" = "--stop-local" ]; then stop_local "$2"; exit $?; fi
 if [ "$1" = "--commit-fix" ];   then [ -z "$2" ] && { echo "Usage: cgremlin --commit-fix <session> [msg]" >&2; exit 1; }; s="$2"; shift 2; commit_fix "$s" "$@"; exit $?; fi
 if [ "$1" = "--push-fix" ];     then [ -z "$2" ] && { echo "Usage: cgremlin --push-fix <session>" >&2; exit 1; }; push_fix "$2"; exit $?; fi
 if [ "$1" = "--triage-done" ]; then [ -z "$2" ] && { echo "Usage: cgremlin --triage-done <session>" >&2; exit 1; }; triage_done "$2"; exit $?; fi
@@ -13001,7 +13043,7 @@ if [ "$1" = "--review-list-grouped" ]; then
 fi
 
 # Skip dashboard lifecycle when called as a subprocess (e.g. --create-session, --review-pr, --lib-only)
-if [ "$1" != "--create-session" ] && [ "$1" != "--review-pr" ] && [ "$1" != "--rereview-pr" ] && [ "$1" != "--track-my-pr" ] && [ "$1" != "--lib-only" ] && [ "$1" != "--status-pane" ] && [ "$1" != "--open-pr" ] && [ "$1" != "--orchestrator" ] && [ "$1" != "--dismiss-pr" ] && [ "$1" != "--mission-control" ] && [ "$1" != "--review-list-grouped" ] && [ "$1" != "--approve-pr" ] && [ "$1" != "--comment-pr" ] && [ "$1" != "--request-changes-pr" ] && [ "$1" != "--watch-daemon" ] && [ "$1" != "--triage-comments" ] && [ "$1" != "--investigate" ] && [ "$1" != "--pr-ready" ] && [ "$1" != "--resolve-comment" ] && [ "$1" != "--develop" ] && [ "$1" != "--pr-threads" ]; then
+if [ "$1" != "--create-session" ] && [ "$1" != "--review-pr" ] && [ "$1" != "--rereview-pr" ] && [ "$1" != "--track-my-pr" ] && [ "$1" != "--lib-only" ] && [ "$1" != "--status-pane" ] && [ "$1" != "--open-pr" ] && [ "$1" != "--orchestrator" ] && [ "$1" != "--dismiss-pr" ] && [ "$1" != "--mission-control" ] && [ "$1" != "--review-list-grouped" ] && [ "$1" != "--approve-pr" ] && [ "$1" != "--comment-pr" ] && [ "$1" != "--request-changes-pr" ] && [ "$1" != "--watch-daemon" ] && [ "$1" != "--triage-comments" ] && [ "$1" != "--investigate" ] && [ "$1" != "--pr-ready" ] && [ "$1" != "--resolve-comment" ] && [ "$1" != "--develop" ] && [ "$1" != "--pr-threads" ] && [ "$1" != "--stop-local" ]; then
     cleanup_on_exit() {
         stop_dashboard_server 2>/dev/null
     }
