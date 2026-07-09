@@ -1225,6 +1225,57 @@ get_session_mode() {
     fi
 }
 
+# Emits the shared PM/Designer live-UI-check protocol (markdown) for a brief.
+# $1 = mode: observe (review — report only) | fix (develop — drive fixes)
+# $2 = target: one sentence telling the agent where to point the browser
+# Quoted heredocs keep the body literal; only $target is interpolated (via printf).
+ui_check_protocol() {
+    local mode="$1" target="$2"
+    cat <<'PROTO_HEAD'
+## LIVE UI CHECK — PM + Designer lenses (dedicated subagents)
+
+After the code tiers, dispatch TWO focused subagents IN PARALLEL (Task tool). They inherit your MCP servers (atlassian, figma, chrome-devtools). Do NOT do their work inline.
+PROTO_HEAD
+    printf '\n**Target:** %s\n' "$target"
+    cat <<'PROTO_BODY'
+
+**PM subagent (product manager verifying the ticket):**
+1. Read the Jira ticket (getJiraIssue; fall back to the PR description if Atlassian MCP is unavailable) and extract the acceptance criteria / intended behavior.
+2. Open the target in chrome-devtools and navigate to the changed feature.
+3. For each acceptance criterion, exercise it and record holds / broken / missing, with a one-line observation and a screenshot for anything not holding.
+4. Return findings only (schema below); make NO code changes.
+
+**Designer subagent (designer checking pixel fidelity):**
+1. Find a Figma link in the Jira ticket (scan the getJiraIssue description + remote links for a figma.com URL; capture any node-id).
+2. IF a link exists: read the design via Figma MCP — get_variable_defs (color/spacing/typography tokens), get_design_context, and get_screenshot of the relevant node. In chrome-devtools, read the rendered values with evaluate_script (getComputedStyle: font-family, font-size, font-weight, color, background-color, padding, margin, width, height, border-radius). Compare against the design and flag each mismatch as design-value vs rendered-value.
+3. IF no link exists: do a general visual sanity pass — alignment, spacing consistency, responsive breakpoints (resize via chrome-devtools), obvious visual bugs — and note "no Figma link found in Jira."
+4. Produce SIDE-BY-SIDE evidence for each visual discrepancy (below).
+5. Return findings only; make NO code changes.
+
+**Side-by-side evidence (per visual discrepancy)** — create a ui-findings/ directory alongside REVIEW.md and write:
+- finding-N-figma.png — Figma reference crop (figma get_screenshot); omit on the no-link sanity path.
+- finding-N-rendered.png — the screenshot of the same component from the target (chrome-devtools take_screenshot).
+- finding-N.html — a self-contained page showing the two images side by side, captioned with the exact mismatch (example: "Figma #1A73E8 / rendered #1B74E9; font-size Figma 16px / rendered 14px").
+- finding-N.png — load finding-N.html in chrome-devtools and screenshot it to get one composed image to paste into the PR.
+(No image compositor is installed; the HTML page + chrome-devtools screenshot IS the composition mechanism.)
+
+**Findings each subagent returns (merge these into REVIEW.md):** lens (pm | designer), title, severity (Critical / High / Minor), criterion (the AC or design property checked), expected (design/AC value), actual (rendered value), location (URL/route + component/selector), evidence (relative path to ui-findings/finding-N.html plus .png — designer only).
+
+**Degradation:** if a needed MCP tool is unavailable, or no target/preview is ready, NOTE it plainly in REVIEW.md and continue — never fail over unavailable tooling.
+PROTO_BODY
+    if [ "$mode" = "fix" ]; then
+        cat <<'PROTO_FIX'
+
+**Mode — FIX:** feed every confirmed PM/Designer finding into your fix loop — fix the root cause (correct patterns, no hacks, no over-engineering), then re-run this check until both lenses pass.
+PROTO_FIX
+    else
+        cat <<'PROTO_OBS'
+
+**Mode — OBSERVE:** make NO code changes. Merge PM findings as 📋 PM/AC and Designer findings as 🎨 Design into REVIEW.md (same table + detail shape, adding Expected/Actual lines and an Evidence link for design findings). These are additive — they inform the reviewer and do NOT block approval.
+PROTO_OBS
+    fi
+}
+
 # CLAUDE.md templates for each mode
 generate_claude_md() {
     local session_dir="$1"
