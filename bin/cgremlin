@@ -440,6 +440,74 @@ stop_local() {
     rm -f "$f"
     echo "stopped local run for '$owner' (pid ${pid:-?})"
 }
+# Bring a session's grace-frontend app up on the fixed local URL, single-instance,
+# and verify the RIGHT server answers. Idempotent. Prints the URL on success.
+# Usage: run_local SESSION [--fresh]
+run_local() {
+    local sn="$1" fresh="$2"
+    local SDIR="$SESSIONS_DIR/$sn" REPO="$SESSIONS_DIR/$sn/repo"
+    [ -d "$REPO" ] || { echo "ERROR: repo missing for session '$sn'" >&2; return 1; }
+    grep -q '"'"$LOCAL_DEV_CMD"'"\|"dev"' "$REPO/package.json" 2>/dev/null \
+        || { echo "ERROR: $REPO is not a runnable checkout (no dev script)" >&2; return 1; }
+    mkdir -p "$SDIR/logs"
+    local log="$SDIR/logs/dev-server.log"
+
+    # 1) Machine prereqs (actionable STOP if missing).
+    _local_prereqs || return 1
+
+    # 2) Load nvm + Node (never the ambient node).
+    export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh" 2>/dev/null
+    nvm which "$LOCAL_NODE_VERSION" >/dev/null 2>&1 || nvm install "$LOCAL_NODE_VERSION" >/dev/null 2>&1
+    nvm use "$LOCAL_NODE_VERSION" >/dev/null 2>&1 || { echo "ERROR: could not select Node $LOCAL_NODE_VERSION via nvm" >&2; return 1; }
+
+    # 3) Per-checkout setup (env BEFORE install). Fast path if already set up.
+    if [ "$fresh" = "--fresh" ] || [ ! -f "$REPO/.env.local" ] || [ ! -d "$REPO/node_modules" ] || ! ls "$REPO"/packages/grace-api/src/generated/* >/dev/null 2>&1; then
+        ( cd "$REPO" && vercel link --yes --scope "$VERCEL_SCOPE" --project "$VERCEL_PROJECT" >/dev/null 2>&1 ) \
+            || { echo "ERROR: vercel link failed (scope $VERCEL_SCOPE / project $VERCEL_PROJECT)" >&2; return 1; }
+        ( cd "$REPO" && vercel env pull .env.local >/dev/null 2>&1 ) \
+            || { echo "ERROR: vercel env pull failed" >&2; return 1; }
+        local nvars; nvars=$(grep -c '=' "$REPO/.env.local" 2>/dev/null || echo 0)
+        [ "$nvars" -gt 0 ] || { echo "ERROR: .env.local came back empty" >&2; return 1; }
+        echo "pulled .env.local ($nvars vars); installing…"
+        ( cd "$REPO" && pnpm install > "$log.install" 2>&1 ) || { echo "ERROR: pnpm install failed — see $log.install" >&2; return 1; }
+        if grep -qi 'Could not generate API types\|Warning: Could not generate' "$log.install" 2>/dev/null; then
+            echo "ERROR: dev backend unreachable — API types not generated; the app won't run correctly. See $log.install" >&2; return 1
+        fi
+    fi
+
+    # 4) Single-instance: free the port.
+    local listener owner_cwd
+    listener=$(lsof -t -nP -iTCP:"$LOCAL_PORT" -sTCP:LISTEN 2>/dev/null | head -1)
+    if [ -n "$listener" ]; then
+        owner_cwd=$(lsof -p "$listener" 2>/dev/null | awk '$4=="cwd"{print $NF}' | head -1)
+        if [ "$owner_cwd" = "$REPO" ] && curl -sk -o /dev/null -w '%{http_code}' "$LOCAL_URL/" 2>/dev/null | grep -q '^2'; then
+            echo "already running for '$sn' at $LOCAL_URL"; return 0
+        fi
+        echo "port $LOCAL_PORT was held by: ${owner_cwd:-unknown} — stopping it."
+        case "$owner_cwd" in "$HOME/Projects/"*) echo "  (that looks like YOUR own dev server — restart it when you're done here.)";; esac
+        kill "$listener" 2>/dev/null; sleep 2
+    fi
+
+    # 5) Launch in the background.
+    ( cd "$REPO" && export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh" 2>/dev/null; nvm use "$LOCAL_NODE_VERSION" >/dev/null 2>&1; nohup $LOCAL_DEV_CMD > "$log" 2>&1 & echo $! > "$SDIR/.dev_pid" )
+    local pid; pid=$(cat "$SDIR/.dev_pid" 2>/dev/null); rm -f "$SDIR/.dev_pid"
+    printf '{"session":"%s","pid":%s,"started":"%s"}\n' "$sn" "${pid:-0}" "$(date -Iseconds)" > "$(_local_run_file)"
+
+    # 6) Wait + verify the RIGHT server answers (cwd == this repo AND 200).
+    local i code vcwd vpid
+    for i in $(seq 1 45); do
+        code=$(curl -sk -o /dev/null -w '%{http_code}' "$LOCAL_URL/" 2>/dev/null)
+        if [ "$code" = "200" ]; then
+            vpid=$(lsof -t -nP -iTCP:"$LOCAL_PORT" -sTCP:LISTEN 2>/dev/null | head -1)
+            vcwd=$(lsof -p "$vpid" 2>/dev/null | awk '$4=="cwd"{print $NF}' | head -1)
+            [ "$vcwd" = "$REPO" ] && { echo "✅ running for '$sn' at $LOCAL_URL (log: $log)"; return 0; }
+        fi
+        sleep 2
+    done
+    echo "ERROR: $LOCAL_URL did not come up as '$sn' within ~90s. Last log lines:" >&2
+    tail -20 "$log" >&2
+    return 1
+}
 # Commit staged+unstaged changes in the session repo.
 commit_fix() {
     local d="$SESSIONS_DIR/$1"; shift
@@ -13032,6 +13100,7 @@ if [ "$1" = "--pr-ready" ];        then [ -z "$2" ] && { echo "Usage: cgremlin -
 if [ "$1" = "--resolve-comment" ]; then [ -z "$3" ] && { echo "Usage: cgremlin --resolve-comment <session> <thread-id>" >&2; exit 1; }; resolve_comment "$2" "$3"; exit $?; fi
 if [ "$1" = "--pr-threads" ];      then [ -z "$2" ] && { echo "Usage: cgremlin --pr-threads <session>" >&2; exit 1; }; pr_threads "$2"; exit $?; fi
 if [ "$1" = "--stop-local" ]; then stop_local "$2"; exit $?; fi
+if [ "$1" = "--run-local" ]; then [ -z "$2" ] && { echo "Usage: cgremlin --run-local <session> [--fresh]" >&2; exit 1; }; run_local "$2" "$3"; exit $?; fi
 if [ "$1" = "--commit-fix" ];   then [ -z "$2" ] && { echo "Usage: cgremlin --commit-fix <session> [msg]" >&2; exit 1; }; s="$2"; shift 2; commit_fix "$s" "$@"; exit $?; fi
 if [ "$1" = "--push-fix" ];     then [ -z "$2" ] && { echo "Usage: cgremlin --push-fix <session>" >&2; exit 1; }; push_fix "$2"; exit $?; fi
 if [ "$1" = "--triage-done" ]; then [ -z "$2" ] && { echo "Usage: cgremlin --triage-done <session>" >&2; exit 1; }; triage_done "$2"; exit $?; fi
@@ -13043,7 +13112,7 @@ if [ "$1" = "--review-list-grouped" ]; then
 fi
 
 # Skip dashboard lifecycle when called as a subprocess (e.g. --create-session, --review-pr, --lib-only)
-if [ "$1" != "--create-session" ] && [ "$1" != "--review-pr" ] && [ "$1" != "--rereview-pr" ] && [ "$1" != "--track-my-pr" ] && [ "$1" != "--lib-only" ] && [ "$1" != "--status-pane" ] && [ "$1" != "--open-pr" ] && [ "$1" != "--orchestrator" ] && [ "$1" != "--dismiss-pr" ] && [ "$1" != "--mission-control" ] && [ "$1" != "--review-list-grouped" ] && [ "$1" != "--approve-pr" ] && [ "$1" != "--comment-pr" ] && [ "$1" != "--request-changes-pr" ] && [ "$1" != "--watch-daemon" ] && [ "$1" != "--triage-comments" ] && [ "$1" != "--investigate" ] && [ "$1" != "--pr-ready" ] && [ "$1" != "--resolve-comment" ] && [ "$1" != "--develop" ] && [ "$1" != "--pr-threads" ] && [ "$1" != "--stop-local" ]; then
+if [ "$1" != "--create-session" ] && [ "$1" != "--review-pr" ] && [ "$1" != "--rereview-pr" ] && [ "$1" != "--track-my-pr" ] && [ "$1" != "--lib-only" ] && [ "$1" != "--status-pane" ] && [ "$1" != "--open-pr" ] && [ "$1" != "--orchestrator" ] && [ "$1" != "--dismiss-pr" ] && [ "$1" != "--mission-control" ] && [ "$1" != "--review-list-grouped" ] && [ "$1" != "--approve-pr" ] && [ "$1" != "--comment-pr" ] && [ "$1" != "--request-changes-pr" ] && [ "$1" != "--watch-daemon" ] && [ "$1" != "--triage-comments" ] && [ "$1" != "--investigate" ] && [ "$1" != "--pr-ready" ] && [ "$1" != "--resolve-comment" ] && [ "$1" != "--develop" ] && [ "$1" != "--pr-threads" ] && [ "$1" != "--stop-local" ] && [ "$1" != "--run-local" ]; then
     cleanup_on_exit() {
         stop_dashboard_server 2>/dev/null
     }
