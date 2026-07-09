@@ -435,8 +435,9 @@ stop_local() {
     pid=$(jq -r '.pid // empty' "$f" 2>/dev/null)
     [ -n "$pid" ] && kill "$pid" 2>/dev/null
     # pnpm dev spawns children (next). Also free the port if anything lingers.
+    # lsof -t may return multiple newline-separated PIDs — leave $lport unquoted so kill gets them as separate args.
     local lport; lport=$(lsof -t -nP -iTCP:"$LOCAL_PORT" -sTCP:LISTEN 2>/dev/null)
-    [ -n "$lport" ] && kill "$lport" 2>/dev/null || true
+    [ -n "$lport" ] && kill $lport 2>/dev/null || true
     rm -f "$f"
     echo "stopped local run for '$owner' (pid ${pid:-?})"
 }
@@ -500,7 +501,12 @@ run_local() {
         if [ "$code" = "200" ]; then
             vpid=$(lsof -t -nP -iTCP:"$LOCAL_PORT" -sTCP:LISTEN 2>/dev/null | head -1)
             vcwd=$(lsof -p "$vpid" 2>/dev/null | awk '$4=="cwd"{print $NF}' | head -1)
-            [ "$vcwd" = "$REPO" ] && { echo "✅ running for '$sn' at $LOCAL_URL (log: $log)"; return 0; }
+            if [ "$vcwd" = "$REPO" ]; then
+                # The launched `pnpm` wrapper often exits after forking `next`, so the PID captured at
+                # launch is unreliable. Record the actual listener PID so --stop-local can target it.
+                printf '{"session":"%s","pid":%s,"started":"%s"}\n' "$sn" "${vpid:-0}" "$(date -Iseconds)" > "$(_local_run_file)"
+                echo "✅ running for '$sn' at $LOCAL_URL (log: $log)"; return 0
+            fi
         fi
         sleep 2
     done
