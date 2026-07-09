@@ -399,6 +399,29 @@ pr_threads() {
                   ("@" + (.comments.nodes[-1].author.login // "?")),
                   (($f.body // "")|gsub("[\n\t]";" ")|.[0:80]) ] | @tsv' 2>/dev/null
 }
+
+# Agent-declared attention state for the status pane. STATE ∈ needs-input|ready|blocked.
+# Usage: set_agent_state SESSION STATE
+set_agent_state() {
+    local d="$SESSIONS_DIR/$1" state="$2"
+    [ -d "$d" ] || { echo "ERROR: unknown session '$1'" >&2; return 1; }
+    case "$state" in
+        needs-input|ready|blocked) printf '%s' "$state" > "$d/.cg_attention"; echo "agent-state: $1 -> $state";;
+        *) echo "ERROR: state must be needs-input|ready|blocked (got '$state')" >&2; return 1;;
+    esac
+}
+
+# Agent's live one-line description for the status pane.
+# Usage: set_agent_note SESSION TEXT...
+set_agent_note() {
+    local d="$SESSIONS_DIR/$1"; shift
+    [ -d "$d" ] || { echo "ERROR: unknown session" >&2; return 1; }
+    local text="$*"
+    text="${text//$'\n'/ }"
+    printf '%.100s' "$text" > "$d/.cg_note"
+    echo "agent-note set"
+}
+
 # Path to the single-owner local-run state file.
 _local_run_file() { echo "$SESSIONS_DIR/.local_run"; }
 # The session currently running locally (empty if none).
@@ -13193,6 +13216,8 @@ if [ "$1" = "--reply-comment" ]; then [ -z "$3" ] && { echo "Usage: cgremlin --r
 if [ "$1" = "--pr-ready" ];        then [ -z "$2" ] && { echo "Usage: cgremlin --pr-ready <session>" >&2; exit 1; }; pr_ready "$2"; exit $?; fi
 if [ "$1" = "--resolve-comment" ]; then [ -z "$3" ] && { echo "Usage: cgremlin --resolve-comment <session> <thread-id>" >&2; exit 1; }; resolve_comment "$2" "$3"; exit $?; fi
 if [ "$1" = "--pr-threads" ];      then [ -z "$2" ] && { echo "Usage: cgremlin --pr-threads <session>" >&2; exit 1; }; pr_threads "$2"; exit $?; fi
+if [ "$1" = "--agent-state" ]; then [ -z "$3" ] && { echo "Usage: cgremlin --agent-state <session> <needs-input|ready|blocked>" >&2; exit 1; }; set_agent_state "$2" "$3"; exit $?; fi
+if [ "$1" = "--agent-note" ];  then [ -z "$3" ] && { echo "Usage: cgremlin --agent-note <session> <text>" >&2; exit 1; }; sess="$2"; shift 2; set_agent_note "$sess" "$@"; exit $?; fi
 if [ "$1" = "--stop-local" ]; then stop_local "$2"; exit $?; fi
 if [ "$1" = "--run-local" ]; then [ -z "$2" ] && { echo "Usage: cgremlin --run-local <session> [--fresh]" >&2; exit 1; }; run_local "$2" "$3"; exit $?; fi
 if [ "$1" = "--commit-fix" ];   then [ -z "$2" ] && { echo "Usage: cgremlin --commit-fix <session> [msg]" >&2; exit 1; }; s="$2"; shift 2; commit_fix "$s" "$@"; exit $?; fi
@@ -13206,7 +13231,7 @@ if [ "$1" = "--review-list-grouped" ]; then
 fi
 
 # Skip dashboard lifecycle when called as a subprocess (e.g. --create-session, --review-pr, --lib-only)
-if [ "$1" != "--create-session" ] && [ "$1" != "--review-pr" ] && [ "$1" != "--rereview-pr" ] && [ "$1" != "--track-my-pr" ] && [ "$1" != "--lib-only" ] && [ "$1" != "--status-pane" ] && [ "$1" != "--open-pr" ] && [ "$1" != "--orchestrator" ] && [ "$1" != "--dismiss-pr" ] && [ "$1" != "--mission-control" ] && [ "$1" != "--review-list-grouped" ] && [ "$1" != "--approve-pr" ] && [ "$1" != "--comment-pr" ] && [ "$1" != "--request-changes-pr" ] && [ "$1" != "--watch-daemon" ] && [ "$1" != "--triage-comments" ] && [ "$1" != "--investigate" ] && [ "$1" != "--pr-ready" ] && [ "$1" != "--resolve-comment" ] && [ "$1" != "--develop" ] && [ "$1" != "--pr-threads" ] && [ "$1" != "--stop-local" ] && [ "$1" != "--run-local" ]; then
+if [ "$1" != "--create-session" ] && [ "$1" != "--review-pr" ] && [ "$1" != "--rereview-pr" ] && [ "$1" != "--track-my-pr" ] && [ "$1" != "--lib-only" ] && [ "$1" != "--status-pane" ] && [ "$1" != "--open-pr" ] && [ "$1" != "--orchestrator" ] && [ "$1" != "--dismiss-pr" ] && [ "$1" != "--mission-control" ] && [ "$1" != "--review-list-grouped" ] && [ "$1" != "--approve-pr" ] && [ "$1" != "--comment-pr" ] && [ "$1" != "--request-changes-pr" ] && [ "$1" != "--watch-daemon" ] && [ "$1" != "--triage-comments" ] && [ "$1" != "--investigate" ] && [ "$1" != "--pr-ready" ] && [ "$1" != "--resolve-comment" ] && [ "$1" != "--develop" ] && [ "$1" != "--pr-threads" ] && [ "$1" != "--stop-local" ] && [ "$1" != "--run-local" ] && [ "$1" != "--agent-state" ] && [ "$1" != "--agent-note" ]; then
     cleanup_on_exit() {
         stop_dashboard_server 2>/dev/null
     }
