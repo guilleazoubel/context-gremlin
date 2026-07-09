@@ -832,10 +832,10 @@ work_agent_tab_name() {
     printf '%s %s' "$emoji" "$key"
 }
 
-# Launch the session's agent as a tiled pane in the single "🔨 WORK" tab, so all
-# active investigate/dev work is visible at once. Agent runs with cwd=SESSION_DIR
-# (auto-loads SESSION_DIR/CLAUDE.md — the mode's autonomous instructions). No
-# --add-dir (repo/ is a subdir of cwd; adding it would load repo/CLAUDE.md).
+# Launch the session's agent in its own named tab (like PR-review tabs), so it's
+# individually targetable. Agent runs with cwd=SESSION_DIR (auto-loads
+# SESSION_DIR/CLAUDE.md — the mode's autonomous instructions). No --add-dir
+# (repo/ is a subdir of cwd; adding it would load repo/CLAUDE.md).
 # Usage: create_work_agent_pane SESSION_DIR
 create_work_agent_pane() {
     local SDIR="$1"
@@ -854,11 +854,11 @@ exec claude --model "$MODEL" "Your very first action: read CLAUDE.md in this dir
 WRAPPER
     chmod +x "$wrapper"
 
-    # Ensure the WORK tab exists (create with tab-bar + this pane), else add a
-    # tiled pane to it. Detect existence via dump-layout (tab names appear there).
-    if zellij --session mission-control action dump-layout 2>/dev/null | grep -qF 'tab name="🔨 WORK"'; then
-        zellij --session mission-control action go-to-tab-name "🔨 WORK" 2>/dev/null || true
-        zellij --session mission-control action new-pane -c --name "$title" -- bash "$wrapper" 2>/dev/null || true
+    # One named tab per WORK session (like PR-review tabs), so it's individually
+    # targetable. Jump to it if it already exists; else create it with a tab-bar.
+    local stable; stable="$title"   # e.g. "🔍 HB-1071" — the key is the stable identity
+    if zellij --session mission-control action dump-layout 2>/dev/null | grep -qF "tab name=\"$stable\""; then
+        zellij --session mission-control action go-to-tab-name "$stable" 2>/dev/null || true
     else
         local lay; lay=$(mktemp /tmp/cgremlin-worklayout-XXXXXX)
         cat > "$lay" <<KDL
@@ -871,7 +871,7 @@ layout {
     }
 }
 KDL
-        zellij --session mission-control action new-tab --name "🔨 WORK" --layout "$lay" 2>/dev/null || true
+        zellij --session mission-control action new-tab --name "$stable" --layout "$lay" 2>/dev/null || true
         rm -f "$lay"
     fi
 }
@@ -1109,6 +1109,22 @@ open_pr_row() {
     local SDIR="$SESSIONS_DIR/$session_name"
     [ -d "$SDIR/repo" ] || { echo "ERROR: repo missing for $session_name" >&2; return 1; }
     [ -n "$ZELLIJ" ] || return 0
+
+    # WORK sessions (investigate/development) each live in their own named tab.
+    # Jump to the tab if it exists; otherwise create it.
+    local _mode; _mode=$(read_session_field "$SDIR" "mode")
+    if [ "$_mode" = "investigation" ] || [ "$_mode" = "development" ]; then
+        local wtab; wtab=$(work_agent_tab_name "$SDIR")
+        local wlayout wcur
+        wlayout=$(zellij action dump-layout 2>/dev/null)
+        wcur=$(printf '%s' "$wlayout" | grep 'tab name=' | grep -F "$wtab" | head -1 | sed -E 's/.*tab name="([^"]*)".*/\1/')
+        if [ -n "$wcur" ]; then
+            zellij action go-to-tab-name "$wcur" 2>/dev/null || true
+        else
+            create_work_agent_pane "$SDIR"
+        fi
+        return 0
+    fi
 
     # PR agents live in named tabs that stay alive in the background. If a tab
     # for THIS PR already exists, JUMP to it (agent still running, right where
@@ -13596,9 +13612,12 @@ develop_start() {
     [ -f "$INV_DIR/FINDINGS.md" ] && cp "$INV_DIR/FINDINGS.md" "$SDIR/FINDINGS.md"
     write_develop_brief "$SDIR"
     create_work_agent_pane "$SDIR"
-    # The investigation agent's job is done — close its pane.
+    # The investigation agent's job is done — close its tab.
     local ipid; ipid=$(cat "$INV_DIR/agent_pid" 2>/dev/null)
     [ -n "$ipid" ] && kill "$ipid" 2>/dev/null; rm -f "$INV_DIR/agent_pid"
+    local _itab; _itab=$(work_agent_tab_name "$INV_DIR")   # INV_DIR = the investigation session dir
+    zellij --session mission-control action go-to-tab-name "$_itab" 2>/dev/null && \
+      zellij --session mission-control action close-tab 2>/dev/null || true
     echo "$session_name"
 }
 
