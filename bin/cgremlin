@@ -471,8 +471,12 @@ run_local() {
         [ "$nvars" -gt 0 ] || { echo "ERROR: .env.local came back empty" >&2; return 1; }
         echo "pulled .env.local ($nvars vars); installing…"
         ( cd "$REPO" && pnpm install > "$log.install" 2>&1 ) || { echo "ERROR: pnpm install failed — see $log.install" >&2; return 1; }
-        if grep -qi 'Could not generate API types\|Warning: Could not generate' "$log.install" 2>/dev/null; then
-            echo "ERROR: dev backend unreachable — API types not generated; the app won't run correctly. See $log.install" >&2; return 1
+        # The postinstall runs `pnpm generate:types` (types come from the dev backend). Verify the
+        # generated types actually landed on disk — NOT by grepping the log for "Could not generate
+        # API types", because that phrase is baked into the echoed postinstall command and matches on
+        # every run. An empty generated dir means the backend was unreachable and the app won't compile.
+        if ! ls "$REPO"/packages/grace-api/src/generated/* >/dev/null 2>&1; then
+            echo "ERROR: dev backend unreachable — API types not generated (packages/grace-api/src/generated is empty); the app won't run correctly. See $log.install" >&2; return 1
         fi
     fi
 
