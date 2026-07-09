@@ -13475,7 +13475,9 @@ Cover ONLY what the ticket asks.
 2. **PLAN GATE — pause.** Present the plan to me, explain it, and adjust it with me. Do NOT implement until I explicitly say to proceed.
 3. **Implement with TDD.** For each unit: write the failing test, run it (confirm it fails), write minimal code, run to green, commit. Stay strictly in ticket scope.
 4. **Open a draft PR** on the pushed branch: \`gh pr create --draft\`, body summarizing the change and linking ${key:-the ticket}.
-5. **Verify locally.** Run \`cgremlin --run-local $sn\`, wait for the URL, then drive the browser (chrome-devtools MCP) against https://local.findcare.dev.aplaceformom.com/ . Run a FOCUSED live web test set: prove the ticket's issue is fixed, plus a smoke pass of the feature and its likely splash-zone regressions — NOT the full e2e suite. Watch logs/dev-server.log and tell me if it fails; iterate to green. When done, \`cgremlin --stop-local $sn\`.
+5. **Verify (local during dev; preview after the PR).** During development, run \`cgremlin --run-local $sn\` and drive chrome-devtools against https://local.findcare.dev.aplaceformom.com/ . Once the draft PR (step 4) is open, ALSO verify against its Vercel preview URL. Run a FOCUSED functional smoke (prove the ticket's issue is fixed, plus a smoke pass of the feature and its likely splash-zone regressions — NOT the full e2e suite) AND the PM + Designer UI check below. Watch logs/dev-server.log; iterate to green; \`cgremlin --stop-local $sn\` when done.
+
+$(ui_check_protocol fix "the LOCAL url https://local.findcare.dev.aplaceformom.com/ during development, and the draft PR's Vercel preview URL once the PR is open")
 6. **Assess bot comments.** Get the LIVE thread list with \`cgremlin --pr-threads $sn\`
    (READ-ONLY: threadId, resolved, author, path:line, last replier, snippet). Re-run it
    whenever I say I changed something. For each UNRESOLVED thread (skip ones already
