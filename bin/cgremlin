@@ -893,9 +893,9 @@ create_review_agent_pane() {
     local sf="$SDIR/.claude/settings.local.json"; mkdir -p "$SDIR/.claude"
     local add
     if pr_is_mine "$SDIR" && [ "$(read_mine_stage "$SDIR")" = "ready" ]; then
-        add='["Bash(cgremlin --reply-comment *)","Bash(cgremlin --resolve-comment *)","Bash(cgremlin --commit-fix *)","Bash(cgremlin --push-fix *)","Bash(cgremlin --triage-done *)","Bash(cgremlin --pr-threads *)","Bash(cgremlin --run-local *)","Bash(cgremlin --stop-local *)"]'
+        add='["Bash(cgremlin --reply-comment *)","Bash(cgremlin --resolve-comment *)","Bash(cgremlin --commit-fix *)","Bash(cgremlin --push-fix *)","Bash(cgremlin --triage-done *)","Bash(cgremlin --pr-threads *)","Bash(cgremlin --run-local *)","Bash(cgremlin --stop-local *)","Bash(cgremlin --agent-state *)","Bash(cgremlin --agent-note *)"]'
     else
-        add='["Bash(cgremlin --approve-pr *)","Bash(cgremlin --comment-pr *)","Bash(cgremlin --request-changes-pr *)","Bash(cgremlin --pr-threads *)","Bash(cgremlin --run-local *)","Bash(cgremlin --stop-local *)"]'
+        add='["Bash(cgremlin --approve-pr *)","Bash(cgremlin --comment-pr *)","Bash(cgremlin --request-changes-pr *)","Bash(cgremlin --pr-threads *)","Bash(cgremlin --run-local *)","Bash(cgremlin --stop-local *)","Bash(cgremlin --agent-state *)","Bash(cgremlin --agent-note *)"]'
     fi
     if [ -f "$sf" ]; then
         jq --argjson add "$add" '.permissions.allow = ((.permissions.allow // []) + $add | unique)' "$sf" > "$sf.tmp" && mv "$sf.tmp" "$sf"
@@ -2345,7 +2345,7 @@ setup_output_files() {
       "Edit($SESSION_DIR/**)",
       "Bash(cgremlin --approve-pr *)",
       "Bash(cgremlin --comment-pr *)",
-      "Bash(cgremlin --request-changes-pr *)"$EXTRA_REPO_PERMS
+      "Bash(cgremlin --request-changes-pr *)","Bash(cgremlin --agent-state *)","Bash(cgremlin --agent-note *)"$EXTRA_REPO_PERMS
     ],
     "deny": []
   },
@@ -6275,6 +6275,8 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             "Bash(cgremlin --approve-pr *)",
             "Bash(cgremlin --comment-pr *)",
             "Bash(cgremlin --request-changes-pr *)",
+            "Bash(cgremlin --agent-state *)",
+            "Bash(cgremlin --agent-note *)",
         ]
         if is_dev_session:
             allow_list.append(f"Write({repo_abs}/**)")
@@ -13468,6 +13470,7 @@ ${key:+The ticket is ${key}. Fetch it now via the Atlassian MCP (getJiraIssue) t
 
 ## What to do (autonomously — do not ask me for routine steps)
 1. Understand the request from the ticket.
+   As your first action also record a one-line status: \`cgremlin --agent-note $(basename "$SDIR") "<ticket key>: <one-line goal>"\`. Update it at milestones (e.g. "tracing checkout path", "root cause found").
 2. Explore \`./repo/\`: trace the relevant code paths, reproduce/understand the issue, find the ROOT CAUSE.
    For live web evals, run \`cgremlin --run-local $(basename "$SDIR")\` and wait for the URL, then drive the browser (chrome-devtools MCP) against https://local.findcare.dev.aplaceformom.com/ . Watch logs/dev-server.log and tell me if it fails. When done, \`cgremlin --stop-local $(basename "$SDIR")\`.
 3. Write \`FINDINGS.md\` as a COMPLETE HANDOFF a fresh developer could execute from alone:
@@ -13482,17 +13485,18 @@ ${key:+The ticket is ${key}. Fetch it now via the Atlassian MCP (getJiraIssue) t
 Cover ONLY what the ticket asks. If you find necessary out-of-scope work, note it under a "Tech debt (proposed)" section in FINDINGS.md and TELL ME — do not act on it. I decide whether to open a tech-debt Jira.
 
 ## When to pause
-Proceed on your own for all routine investigation. Pause and ask ME only when there's a genuine approach/design decision with real trade-offs to discuss.
+Proceed on your own for all routine investigation. Pause and ask ME only when there's a genuine approach/design decision with real trade-offs to discuss. When you pause for such a decision, first run \`cgremlin --agent-state $(basename "$SDIR") needs-input\` so the dashboard shows I'm needed.
 
 ## Handing off to development
-When FINDINGS.md is ready, present a short summary and offer to build it. If I say to build it (e.g. "build it" / "let's develop this"), run:
+When FINDINGS.md is ready, present a short summary and offer to build it.
+ The moment FINDINGS.md is complete, run \`cgremlin --agent-state $(basename "$SDIR") ready\` and \`cgremlin --agent-note $(basename "$SDIR") "FINDINGS.md ready — review it"\`. If I say to build it (e.g. "build it" / "let's develop this"), run:
   cgremlin --develop $(basename "$SDIR")
 That opens a fresh develop session seeded with FINDINGS.md + the ticket, and closes this pane.
 
 BEGIN NOW: fetch the ticket, investigate, and write FINDINGS.md.
 INV
     mkdir -p "$SDIR/.claude"
-    printf '{"permissions":{"allow":["Bash(cgremlin --develop *)","Bash(cgremlin --run-local *)","Bash(cgremlin --stop-local *)"]}}\n' > "$SDIR/.claude/settings.local.json"
+    printf '{"permissions":{"allow":["Bash(cgremlin --develop *)","Bash(cgremlin --run-local *)","Bash(cgremlin --stop-local *)","Bash(cgremlin --agent-state *)","Bash(cgremlin --agent-note *)"]}}\n' > "$SDIR/.claude/settings.local.json"
 }
 
 # Create an investigation session and launch its agent in the WORK tab.
@@ -13561,7 +13565,8 @@ Cover ONLY what the ticket asks.
 
 ## Flow (autonomous except at the gates below)
 1. **Read FINDINGS.md + the ticket.** Refine into a concrete implementation plan (root cause is already known).
-2. **PLAN GATE — pause.** Present the plan to me, explain it, and adjust it with me. Do NOT implement until I explicitly say to proceed.
+   As your first action also record status: \`cgremlin --agent-note $sn "<ticket key>: <one-line goal>"\`; update it at each milestone (e.g. "implementing 3/5 — TDD", "tests green").
+2. **PLAN GATE — pause.** Present the plan to me, explain it, and adjust it with me. Do NOT implement until I explicitly say to proceed. Before pausing, run \`cgremlin --agent-state $sn needs-input\`.
 3. **Implement with TDD.** For each unit: write the failing test, run it (confirm it fails), write minimal code, run to green, commit. Stay strictly in ticket scope.
 4. **Open a draft PR** on the pushed branch: \`gh pr create --draft\`, body summarizing the change and linking ${key:-the ticket}.
 5. **Verify (local during dev; preview after the PR).** During development, run \`cgremlin --run-local $sn\` and drive chrome-devtools against https://local.findcare.dev.aplaceformom.com/ . Once the draft PR (step 4) is open, ALSO verify against its Vercel preview URL. Run a FOCUSED functional smoke (prove the ticket's issue is fixed, plus a smoke pass of the feature and its likely splash-zone regressions — NOT the full e2e suite) AND the PM + Designer UI check below. Watch logs/dev-server.log; iterate to green; \`cgremlin --stop-local $sn\` when done.
@@ -13576,9 +13581,9 @@ $(ui_check_protocol fix "the LOCAL url https://local.findcare.dev.aplaceformom.c
        cgremlin --reply-comment $sn <thread-id>   (write the reply to ${SDIR}/.reply_body.md first)
        cgremlin --resolve-comment $sn <thread-id>
    - clearly valid → fix it (TDD for code changes).
-   - unsure → STOP and show it to me to discuss.
-7. **Notify me** it's tested and comment-clean so I can watch it run against preview and ask questions.
-8. **READY GATE.** Only when I say I'm satisfied, mark the PR ready:
+   - unsure → STOP and show it to me to discuss. (run \`cgremlin --agent-state $sn needs-input\` first)
+7. **Notify me** it's tested and comment-clean so I can watch it run against preview and ask questions. When it's tested and comment-clean, run \`cgremlin --agent-state $sn ready\` and \`cgremlin --agent-note $sn "tested & comment-clean — take a look"\`.
+8. **READY GATE.** Only when I say I'm satisfied, mark the PR ready: Before waiting for my go-ahead here, run \`cgremlin --agent-state $sn needs-input\`.
        cgremlin --pr-ready $sn
 
 ## Scope + tech debt
@@ -13588,11 +13593,12 @@ Out-of-scope-but-needed work → propose a tech-debt Jira (Atlassian createJiraI
 - Never mark the PR ready (\`--pr-ready\`) or create a Jira without my explicit go-ahead.
 - Never skip the PLAN GATE.
 - Post to GitHub only via the cgremlin helpers above (never raw gh for review/comment mutations); \`gh pr create --draft\`, \`gh pr view\`, git push are fine.
+- If you hit something you cannot pass (preview never deploys, environment broken), run \`cgremlin --agent-state $sn blocked\` and tell me.
 
 BEGIN NOW: read FINDINGS.md + the ticket and prepare the plan for the PLAN GATE.
 DEV
     mkdir -p "$SDIR/.claude"
-    printf '{"permissions":{"allow":["Bash(cgremlin --reply-comment *)","Bash(cgremlin --resolve-comment *)","Bash(cgremlin --pr-ready *)","Bash(cgremlin --commit-fix *)","Bash(cgremlin --push-fix *)","Bash(cgremlin --pr-threads *)","Bash(cgremlin --run-local *)","Bash(cgremlin --stop-local *)"]}}\n' > "$SDIR/.claude/settings.local.json"
+    printf '{"permissions":{"allow":["Bash(cgremlin --reply-comment *)","Bash(cgremlin --resolve-comment *)","Bash(cgremlin --pr-ready *)","Bash(cgremlin --commit-fix *)","Bash(cgremlin --push-fix *)","Bash(cgremlin --pr-threads *)","Bash(cgremlin --run-local *)","Bash(cgremlin --stop-local *)","Bash(cgremlin --agent-state *)","Bash(cgremlin --agent-note *)"]}}\n' > "$SDIR/.claude/settings.local.json"
 }
 
 # Promote an investigation into a fresh develop session (seeded with FINDINGS.md),
