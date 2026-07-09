@@ -2269,7 +2269,7 @@ setup_output_files() {
   },
   "hooks": {
     "Stop": [{"hooks": [{"type": "command", "command": "echo waiting > $SESSION_DIR/.cg_agent_state"}]}],
-    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "echo working > $SESSION_DIR/.cg_agent_state"}]}]
+    "UserPromptSubmit": [{"hooks": [{"type": "command", "command": "echo working > $SESSION_DIR/.cg_agent_state; rm -f $SESSION_DIR/.cg_attention"}]}]
   }
 }
 CLAUDE_SETTINGS
@@ -6205,7 +6205,7 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             },
             "hooks": {
                 "Stop": [{"hooks": [{"type": "command", "command": f"echo waiting > {session_abs}/.cg_agent_state"}]}],
-                "UserPromptSubmit": [{"hooks": [{"type": "command", "command": f"echo working > {session_abs}/.cg_agent_state"}]}]
+                "UserPromptSubmit": [{"hooks": [{"type": "command", "command": f"echo working > {session_abs}/.cg_agent_state; rm -f {session_abs}/.cg_attention"}]}]
             }
         }
         import json as _json
