@@ -965,7 +965,7 @@ Never pass \`--force\` on your own initiative.
 - Never run \`gh\` yourself — only the cgremlin helpers above post to GitHub.
 - Write \`.review_body.md\` to the session root path shown above, NOT the repo subdirectory.
 
-For live web evals, run \`cgremlin --run-local $(basename "$SDIR")\` and wait for the URL, then drive the browser (chrome-devtools MCP) against https://local.findcare.dev.aplaceformom.com/ . Watch logs/dev-server.log and tell me if it fails. When done, \`cgremlin --stop-local $(basename "$SDIR")\`.
+For live UI/web checks, use the PR's PREVIEW — do NOT run the app locally. Find the Vercel preview URL or the Storybook preview link in the PR (\`gh pr view <n> --json statusCheckRollup,comments\` — the grace-frontend-dev deployment, or a Storybook link in the checks/comments) and drive the browser (chrome-devtools MCP) against that preview URL. ONLY run locally if I explicitly ask you to test locally — then \`cgremlin --run-local $(basename "$SDIR")\`, use https://local.findcare.dev.aplaceformom.com/ , watch logs/dev-server.log, and \`cgremlin --stop-local $(basename "$SDIR")\` when done.
 CTX
     fi
 
@@ -13398,8 +13398,7 @@ Cover ONLY what the ticket asks.
 2. **PLAN GATE — pause.** Present the plan to me, explain it, and adjust it with me. Do NOT implement until I explicitly say to proceed.
 3. **Implement with TDD.** For each unit: write the failing test, run it (confirm it fails), write minimal code, run to green, commit. Stay strictly in ticket scope.
 4. **Open a draft PR** on the pushed branch: \`gh pr create --draft\`, body summarizing the change and linking ${key:-the ticket}.
-5. **Verify on preview.** Find the draft PR's Vercel preview URL (from \`gh pr view <n> --json statusCheckRollup\` — the grace-frontend-dev deployment). Run a FOCUSED live web test set against it with Playwright: prove the ticket's issue is fixed, plus a smoke pass of the feature and its likely splash-zone regressions. NOT the full e2e suite. Iterate to green.
-   For live web evals, run \`cgremlin --run-local $sn\` and wait for the URL, then drive the browser (chrome-devtools MCP) against https://local.findcare.dev.aplaceformom.com/ . Watch logs/dev-server.log and tell me if it fails. When done, \`cgremlin --stop-local $sn\`.
+5. **Verify locally.** Run \`cgremlin --run-local $sn\`, wait for the URL, then drive the browser (chrome-devtools MCP) against https://local.findcare.dev.aplaceformom.com/ . Run a FOCUSED live web test set: prove the ticket's issue is fixed, plus a smoke pass of the feature and its likely splash-zone regressions — NOT the full e2e suite. Watch logs/dev-server.log and tell me if it fails; iterate to green. When done, \`cgremlin --stop-local $sn\`.
 6. **Assess bot comments.** Get the LIVE thread list with \`cgremlin --pr-threads $sn\`
    (READ-ONLY: threadId, resolved, author, path:line, last replier, snippet). Re-run it
    whenever I say I changed something. For each UNRESOLVED thread (skip ones already
