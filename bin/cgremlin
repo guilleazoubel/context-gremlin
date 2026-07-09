@@ -817,9 +817,9 @@ create_review_agent_pane() {
     local sf="$SDIR/.claude/settings.local.json"; mkdir -p "$SDIR/.claude"
     local add
     if pr_is_mine "$SDIR" && [ "$(read_mine_stage "$SDIR")" = "ready" ]; then
-        add='["Bash(cgremlin --reply-comment *)","Bash(cgremlin --resolve-comment *)","Bash(cgremlin --commit-fix *)","Bash(cgremlin --push-fix *)","Bash(cgremlin --triage-done *)","Bash(cgremlin --pr-threads *)"]'
+        add='["Bash(cgremlin --reply-comment *)","Bash(cgremlin --resolve-comment *)","Bash(cgremlin --commit-fix *)","Bash(cgremlin --push-fix *)","Bash(cgremlin --triage-done *)","Bash(cgremlin --pr-threads *)","Bash(cgremlin --run-local *)","Bash(cgremlin --stop-local *)"]'
     else
-        add='["Bash(cgremlin --approve-pr *)","Bash(cgremlin --comment-pr *)","Bash(cgremlin --request-changes-pr *)","Bash(cgremlin --pr-threads *)"]'
+        add='["Bash(cgremlin --approve-pr *)","Bash(cgremlin --comment-pr *)","Bash(cgremlin --request-changes-pr *)","Bash(cgremlin --pr-threads *)","Bash(cgremlin --run-local *)","Bash(cgremlin --stop-local *)"]'
     fi
     if [ -f "$sf" ]; then
         jq --argjson add "$add" '.permissions.allow = ((.permissions.allow // []) + $add | unique)' "$sf" > "$sf.tmp" && mv "$sf.tmp" "$sf"
@@ -954,6 +954,8 @@ Never pass \`--force\` on your own initiative.
 - Never post without an explicit decision from the reviewer.
 - Never run \`gh\` yourself — only the cgremlin helpers above post to GitHub.
 - Write \`.review_body.md\` to the session root path shown above, NOT the repo subdirectory.
+
+For live web evals, run \`cgremlin --run-local $(basename "$SDIR")\` and wait for the URL, then drive the browser (chrome-devtools MCP) against https://local.findcare.dev.aplaceformom.com/ . Watch logs/dev-server.log and tell me if it fails. When done, \`cgremlin --stop-local $(basename "$SDIR")\`.
 CTX
     fi
 
@@ -13291,6 +13293,7 @@ ${key:+The ticket is ${key}. Fetch it now via the Atlassian MCP (getJiraIssue) t
 ## What to do (autonomously — do not ask me for routine steps)
 1. Understand the request from the ticket.
 2. Explore \`./repo/\`: trace the relevant code paths, reproduce/understand the issue, find the ROOT CAUSE.
+   For live web evals, run \`cgremlin --run-local $(basename "$SDIR")\` and wait for the URL, then drive the browser (chrome-devtools MCP) against https://local.findcare.dev.aplaceformom.com/ . Watch logs/dev-server.log and tell me if it fails. When done, \`cgremlin --stop-local $(basename "$SDIR")\`.
 3. Write \`FINDINGS.md\` as a COMPLETE HANDOFF a fresh developer could execute from alone:
    - **What's happening** (the observed problem/behavior)
    - **Root cause** (the specific code and why)
@@ -13313,7 +13316,7 @@ That opens a fresh develop session seeded with FINDINGS.md + the ticket, and clo
 BEGIN NOW: fetch the ticket, investigate, and write FINDINGS.md.
 INV
     mkdir -p "$SDIR/.claude"
-    printf '{"permissions":{"allow":["Bash(cgremlin --develop *)"]}}\n' > "$SDIR/.claude/settings.local.json"
+    printf '{"permissions":{"allow":["Bash(cgremlin --develop *)","Bash(cgremlin --run-local *)","Bash(cgremlin --stop-local *)"]}}\n' > "$SDIR/.claude/settings.local.json"
 }
 
 # Create an investigation session and launch its agent in the WORK tab.
@@ -13386,6 +13389,7 @@ Cover ONLY what the ticket asks.
 3. **Implement with TDD.** For each unit: write the failing test, run it (confirm it fails), write minimal code, run to green, commit. Stay strictly in ticket scope.
 4. **Open a draft PR** on the pushed branch: \`gh pr create --draft\`, body summarizing the change and linking ${key:-the ticket}.
 5. **Verify on preview.** Find the draft PR's Vercel preview URL (from \`gh pr view <n> --json statusCheckRollup\` — the grace-frontend-dev deployment). Run a FOCUSED live web test set against it with Playwright: prove the ticket's issue is fixed, plus a smoke pass of the feature and its likely splash-zone regressions. NOT the full e2e suite. Iterate to green.
+   For live web evals, run \`cgremlin --run-local $sn\` and wait for the URL, then drive the browser (chrome-devtools MCP) against https://local.findcare.dev.aplaceformom.com/ . Watch logs/dev-server.log and tell me if it fails. When done, \`cgremlin --stop-local $sn\`.
 6. **Assess bot comments.** Get the LIVE thread list with \`cgremlin --pr-threads $sn\`
    (READ-ONLY: threadId, resolved, author, path:line, last replier, snippet). Re-run it
    whenever I say I changed something. For each UNRESOLVED thread (skip ones already
@@ -13410,7 +13414,7 @@ Out-of-scope-but-needed work → propose a tech-debt Jira (Atlassian createJiraI
 BEGIN NOW: read FINDINGS.md + the ticket and prepare the plan for the PLAN GATE.
 DEV
     mkdir -p "$SDIR/.claude"
-    printf '{"permissions":{"allow":["Bash(cgremlin --reply-comment *)","Bash(cgremlin --resolve-comment *)","Bash(cgremlin --pr-ready *)","Bash(cgremlin --commit-fix *)","Bash(cgremlin --push-fix *)","Bash(cgremlin --pr-threads *)"]}}\n' > "$SDIR/.claude/settings.local.json"
+    printf '{"permissions":{"allow":["Bash(cgremlin --reply-comment *)","Bash(cgremlin --resolve-comment *)","Bash(cgremlin --pr-ready *)","Bash(cgremlin --commit-fix *)","Bash(cgremlin --push-fix *)","Bash(cgremlin --pr-threads *)","Bash(cgremlin --run-local *)","Bash(cgremlin --stop-local *)"]}}\n' > "$SDIR/.claude/settings.local.json"
 }
 
 # Promote an investigation into a fresh develop session (seeded with FINDINGS.md),
