@@ -859,6 +859,7 @@ WRAPPER
     local stable; stable="$title"   # e.g. "🔍 HB-1071" — the key is the stable identity
     if zellij --session mission-control action dump-layout 2>/dev/null | grep -qF "tab name=\"$stable\""; then
         zellij --session mission-control action go-to-tab-name "$stable" 2>/dev/null || true
+        rm -f "$wrapper"
     else
         local lay; lay=$(mktemp /tmp/cgremlin-worklayout-XXXXXX)
         cat > "$lay" <<KDL
