@@ -1239,6 +1239,11 @@ PROTO_HEAD
     printf '\n**Target:** %s\n' "$target"
     cat <<'PROTO_BODY'
 
+**Reaching the target (both subagents):**
+- **Vercel preview behind a login wall:** do NOT attempt an interactive Vercel login. Bypass deployment protection with the automation secret — read `VERCEL_AUTOMATION_BYPASS_SECRET` from `repo/.env.local` and append `?x-vercel-protection-bypass=<secret>&x-vercel-set-bypass-cookie=true` to the preview URL on first navigation (or send it as the `x-vercel-protection-bypass` request header).
+- **Page behind Clerk auth (dev):** sign in with a Clerk test user — use an email of the form `<test-specific-name>+clerk_test@example.com` (the `+clerk_test` suffix is what makes it a test account; pick a name specific to this check, e.g. `uicheck-<ticket>`) and the email verification code `424242`.
+- chrome-devtools runs with an isolated (fresh) profile, so there is no saved session — do the bypass/login on every run.
+
 **PM subagent (product manager verifying the ticket):**
 1. Read the Jira ticket (getJiraIssue; fall back to the PR description if Atlassian MCP is unavailable) and extract the acceptance criteria / intended behavior.
 2. Open the target in chrome-devtools and navigate to the changed feature.
