@@ -1370,6 +1370,8 @@ If you can't answer the questions concretely, DROP it. "Might be slow", "could b
 - Every finding follows the SAME shape (below). Same shape every time, whether it's a bug or a maintainability issue.
 - Every finding includes a **Link:** — a clickable GitHub permalink to the exact line, so the reviewer can open it and post a comment there manually. Build it ONCE up front: run \`git config --get remote.origin.url\` to get owner/repo (strip \`https://github.com/\`, \`git@github.com:\`, and \`.git\`) and \`git rev-parse HEAD\` for the full commit SHA (the PR branch is checked out here). The link is: \`https://github.com/<owner>/<repo>/blob/<full-sha>/<path>#L<startLine>\` (or \`#L<start>-L<end>\` for a range). Use the FULL 40-char SHA (a permalink), not \`HEAD\`.
 
+{UI_CHECK}
+
 ## Output — write `REVIEW.md` in this directory, EXACTLY this structure
 
 ```
@@ -1386,6 +1388,10 @@ If you can't answer the questions concretely, DROP it. "Might be slow", "could b
 |---|----------|-------|-------|--------|
 | [1](#f1) | 🔴 Critical | `file.ts:88` | one plain-English line | open |
 | [2](#f2) | 🔧 Maintainability | `ui/list.tsx:40` | one plain-English line | open |
+| [3](#f3) | 📋 PM/AC | `/search` behavior | acceptance criterion not met — <one line> | open |
+| [4](#f4) | 🎨 Design | `PrimaryButton` on `/search` | colour/size differ from Figma — <one line> | open |
+
+📋 PM/AC findings come from the acceptance-criteria check; 🎨 Design findings come from the Figma-fidelity check. Design findings additionally carry Expected vs Actual and an Evidence link (see the detail shape below).
 
 The `#` links jump to the full detail below. Keep the `Status` column current — it's how the reviewer sees at a glance what's still open.
 
@@ -1415,6 +1421,19 @@ The `#` links jump to the full detail below. Keep the `Status` column current �
 
 **Suggested fix:** <how to separate the concerns.>
 
+<a id="f4"></a>
+### 4. Button colour and size don't match the Figma design
+**Severity:** 🎨 Design   **Where:** `/search` — `PrimaryButton`   **Status:** open
+**Expected (design):** background `#1A73E8`, font-size `16px`
+**Actual (rendered):** background `#1B74E9`, font-size `14px`
+**Evidence:** ui-findings/finding-4.html (composed image: ui-findings/finding-4.png)
+
+**What's wrong:** <plain sentence: which property differs, on which element/route.>
+
+**Why it matters:** <impact on brand consistency / usability.>
+
+**Suggested fix:** <the design token or style to apply.>
+
 ## Verdict
 ✅ Approve / 🔄 Request Changes / 💬 Comment — <one plain sentence explaining the call>
 
@@ -1430,11 +1449,18 @@ Rules for the file:
 - `Status` appears in TWO places per finding — the table row and the detail heading — and they must always match. Values: `open` (new), `held` (queued to post), `posted` (sent), `resolved` (fixed, confirmed on re-review), `🔇 dismissed` (skip in re-reviews). Set everything to `open`; the triage and re-review agents change it later.
 - Keep it tight. The reviewer reads this to get the picture in under a minute, then talks through anything unclear with the agent.
 
-BEGIN NOW: run Tier 0 (intent), Tier 1 (core), Tier 2 only if triggered; apply the evidence bar in your head; write REVIEW.md in plain language; stop.
+BEGIN NOW: run Tier 0 (intent), Tier 1 (core), Tier 2 only if triggered; then run the LIVE UI CHECK (PM + Designer subagents); apply the evidence bar in your head; write REVIEW.md in plain language; stop.
 REVIEW_TEMPLATE
             # Replace context placeholder
             sed -i '' "s|{CONTEXT}|$context|g" "$claude_md" 2>/dev/null || \
             sed -i "s|{CONTEXT}|$context|g" "$claude_md"
+            # Inject the shared UI-check protocol (observe mode). Multiline-safe via env var
+            # (sed can't handle the multiline replacement); backticks in the target are escaped
+            # so they stay literal markdown rather than triggering command substitution.
+            UI_CHECK_TEXT="$(ui_check_protocol observe "the PR's Vercel preview URL — find it via \`gh pr view <number> --json statusCheckRollup,comments\` (the grace-frontend-dev deployment), or a Storybook preview link in the checks/comments. Point the browser there; run against the LOCAL url only if the reviewer explicitly asked.")" \
+            python3 -c 'import os,sys
+p=sys.argv[1]; s=open(p).read()
+open(p,"w").write(s.replace("{UI_CHECK}", os.environ["UI_CHECK_TEXT"]))' "$claude_md"
             ;;
 
         development)
