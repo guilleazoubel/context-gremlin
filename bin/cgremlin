@@ -422,6 +422,26 @@ set_agent_note() {
     echo "agent-note set"
 }
 
+# Map an agent's activity + declared attention into a status glyph.
+# $1 = SESSION_DIR   $2 = "1" if this is a PR discussion/triage agent (waiting = your turn), else ""
+# Echoes the glyph, or empty string if no agent has ever run for this session.
+attention_icon() {
+    local d="$1" disc="$2" act att
+    act=$(cat "$d/.cg_agent_state" 2>/dev/null)
+    att=$(cat "$d/.cg_attention" 2>/dev/null)
+    if [ "$act" = "working" ]; then echo "🔄 working"; return; fi
+    case "$att" in
+        blocked)     echo "🛑 blocked"; return;;
+        ready)       echo "✅ ready for review"; return;;
+        needs-input) echo "⏸️ needs your input"; return;;
+    esac
+    # stopped with nothing declared
+    if [ -n "$act" ]; then
+        [ "$disc" = "1" ] && echo "⏸️ needs your input" || echo "💤 idle"
+    fi
+    # no .cg_agent_state at all → echo nothing
+}
+
 # Path to the single-owner local-run state file.
 _local_run_file() { echo "$SESSIONS_DIR/.local_run"; }
 # The session currently running locally (empty if none).
@@ -664,7 +684,8 @@ review_list_grouped() {
         else
           mc_label="✅ all addressed · close it"
         fi
-        mycomments="${mycomments}$(printf 'PR #%s  @%-14s %s' "$num" "${author:-?}" "$mc_label")\t${sname}\tmycomments"$'\n'
+        local aicon; aicon=$(attention_icon "$d" 1); [ -n "$aicon" ] && aicon="  $aicon"
+        mycomments="${mycomments}$(printf 'PR #%s  @%-14s %s%s' "$num" "${author:-?}" "$mc_label" "$aicon")\t${sname}\tmycomments"$'\n'
       elif [ "$ms" = "triaging" ]; then
         inflight="${inflight}$(printf 'PR #%s  @%-14s 👀 triaging reviewer comments' "$num" "${author:-?}")\t\tinflight"$'\n'
       else
@@ -700,7 +721,8 @@ review_list_grouped() {
       # delta since last review, with a resolution summary.
       local summary; summary=$(cat "$d/rereview_summary" 2>/dev/null)
       icon="🔁 re-review · quick"; [ "$rs" = "failed" ] && icon="⚠ re-review failed — retry"
-      local reline="$(printf 'PR #%s  @%-14s %s' "$num" "${author:-?}" "$icon")"
+      local aicon; aicon=$(attention_icon "$d" 1); [ -n "$aicon" ] && aicon="  $aicon"
+      local reline="$(printf 'PR #%s  @%-14s %s%s' "$num" "${author:-?}" "$icon" "$aicon")"
       [ -n "$summary" ] && reline="${reline}  ·  ${summary}"
       rereview="${rereview}${reline}\t${sname}\trereview"$'\n'
     elif [ "$lc" = "none" ]; then
@@ -711,10 +733,12 @@ review_list_grouped() {
         interrupted) icon="⏸ interrupted";;
         *)           icon="${rs:-…}";;
       esac
-      ready="${ready}$(printf 'PR #%s  @%-14s %s' "$num" "${author:-?}" "$icon")\t${sname}\tready"$'\n'
+      local aicon; aicon=$(attention_icon "$d" 1); [ -n "$aicon" ] && aicon="  $aicon"
+      ready="${ready}$(printf 'PR #%s  @%-14s %s%s' "$num" "${author:-?}" "$icon" "$aicon")\t${sname}\tready"$'\n'
     else
       # We posted comments / requested changes → waiting on the author.
-      response="${response}$(printf 'PR #%s  @%-14s 💬 waiting on author' "$num" "${author:-?}")\t${sname}\tresponse"$'\n'
+      local aicon; aicon=$(attention_icon "$d" 1); [ -n "$aicon" ] && aicon="  $aicon"
+      response="${response}$(printf 'PR #%s  @%-14s 💬 waiting on author%s' "$num" "${author:-?}" "$aicon")\t${sname}\tresponse"$'\n'
     fi
   done
   # Action zone (needs YOU) first, then passive/informational, then my open PRs.
@@ -727,6 +751,24 @@ review_list_grouped() {
   printf '── 💬 Waiting for response ──\t\t\n';         [ -n "$response" ] && printf '%b' "$response"
   [ -n "$approved" ]   && { printf '── ✅ Approved (author will merge) ──\t\t\n'; printf '%b' "$approved"; }
   [ -n "$mytracking" ] && { printf '── 📋 My pull requests ──\t\t\n';            printf '%b' "$mytracking"; }
+  # ── WORK sessions (investigate/develop): one row each, clickable to their tab ──
+  local work=""
+  for wd in "$SESSIONS_DIR"/*/; do
+      [ -f "$wd/session.json" ] || continue
+      local wmode wsn wkey wemoji wsummary wnote wicon wtitle
+      wmode=$(read_session_field "${wd%/}" "mode")
+      case "$wmode" in investigation|development) : ;; *) continue;; esac
+      wsn=$(basename "${wd%/}")
+      wkey=$(read_session_field "${wd%/}" "jira.ticket"); [ -z "$wkey" ] && wkey="$wsn"
+      case "$wmode" in development) wemoji="🔨";; *) wemoji="🔍";; esac
+      wsummary=$(read_session_field "${wd%/}" "jira.summary")
+      wnote=$(cat "${wd%/}/.cg_note" 2>/dev/null)
+      wicon=$(attention_icon "${wd%/}" ""); [ -z "$wicon" ] && wicon="💤 idle"
+      wtitle="${wsummary:-$(read_session_field "${wd%/}" "focus")}"
+      work="${work}$(printf '%s %s  %s' "$wemoji" "$wkey" "$wicon")\t${wsn}\twork"$'\n'
+      [ -n "$wnote" ] && work="${work}$(printf '   %s' "$wnote")\t${wsn}\twork"$'\n'
+  done
+  [ -n "$work" ] && { printf '── 🔨 Your work ──\t\t\n'; printf '%b' "$work"; }
 }
 
 render_status_table() {
