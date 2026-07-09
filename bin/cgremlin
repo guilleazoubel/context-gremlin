@@ -359,6 +359,25 @@ resolve_comment() {
     gh api graphql -f query='mutation($t:ID!){resolveReviewThread(input:{threadId:$t}){thread{isResolved}}}' \
         -F t="$tid" >/dev/null && echo "resolved $tid" || { echo "ERROR: resolve failed" >&2; return 1; }
 }
+# Print LIVE review-thread status for the session's PR (READ-ONLY) so a triage
+# agent can reconcile its COMMENTS.md/REVIEW.md against what's actually on the PR
+# right now — replies made manually or by another agent, resolved threads, and
+# new comments. One TSV row per thread:
+#   threadId <tab> resolved(true|false) <tab> @firstAuthor <tab> path:line <tab> @lastAuthor <tab> firstComment(80 chars)
+pr_threads() {
+    local d="$SESSIONS_DIR/$1" num repo owner name
+    num=$(read_session_field "$d" "pr.number"); repo=$(_pr_repo "$d")
+    { [ -z "$num" ] || [ -z "$repo" ]; } && { echo "ERROR: missing pr.number/repo" >&2; return 1; }
+    owner="${repo%%/*}"; name="${repo##*/}"
+    gh api graphql -f query='query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){reviewThreads(first:100){nodes{id isResolved comments(first:30){nodes{author{login} path line body}}}}}}}' \
+        -F o="$owner" -F r="$name" -F n="$num" \
+        --jq '.data.repository.pullRequest.reviewThreads.nodes[]?
+              | (.comments.nodes[0]) as $f
+              | [ .id, (.isResolved|tostring), ("@" + ($f.author.login // "?")),
+                  (($f.path // "?") + ":" + (($f.line // 0)|tostring)),
+                  ("@" + (.comments.nodes[-1].author.login // "?")),
+                  (($f.body // "")|gsub("[\n\t]";" ")|.[0:80]) ] | @tsv' 2>/dev/null
+}
 # Commit staged+unstaged changes in the session repo.
 commit_fix() {
     local d="$SESSIONS_DIR/$1"; shift
@@ -668,9 +687,9 @@ create_review_agent_pane() {
     local sf="$SDIR/.claude/settings.local.json"; mkdir -p "$SDIR/.claude"
     local add
     if pr_is_mine "$SDIR" && [ "$(read_mine_stage "$SDIR")" = "ready" ]; then
-        add='["Bash(cgremlin --reply-comment *)","Bash(cgremlin --commit-fix *)","Bash(cgremlin --push-fix *)","Bash(cgremlin --triage-done *)"]'
+        add='["Bash(cgremlin --reply-comment *)","Bash(cgremlin --resolve-comment *)","Bash(cgremlin --commit-fix *)","Bash(cgremlin --push-fix *)","Bash(cgremlin --triage-done *)","Bash(cgremlin --pr-threads *)"]'
     else
-        add='["Bash(cgremlin --approve-pr *)","Bash(cgremlin --comment-pr *)","Bash(cgremlin --request-changes-pr *)"]'
+        add='["Bash(cgremlin --approve-pr *)","Bash(cgremlin --comment-pr *)","Bash(cgremlin --request-changes-pr *)","Bash(cgremlin --pr-threads *)"]'
     fi
     if [ -f "$sf" ]; then
         jq --argjson add "$add" '.permissions.allow = ((.permissions.allow // []) + $add | unique)' "$sf" > "$sf.tmp" && mv "$sf.tmp" "$sf"
@@ -693,20 +712,28 @@ Your PR got reviewer comments. \`COMMENTS.md\` in this directory has each commen
 already classified ✅ valid or 🟡 false-positive, with reasoning and a proposed
 reply/fix. Walk me through them so I can decide each one.
 
-**\`COMMENTS.md\` is your ONLY source of truth for this session.** Ignore any
-other file (there is no code review here — if a \`REVIEW.md\` exists it is stale;
-do not read it). Every entry in COMMENTS.md is a comment to address, regardless
-of its verdict: a 🟡 false-positive still needs a reply, a ✅ valid one needs a
-fix. Never tell me "nothing to address" if COMMENTS.md has entries.
+\`COMMENTS.md\` is your working list (each comment pre-classified ✅ valid or
+🟡 false-positive, with reasoning + a proposed reply/fix). It is a SNAPSHOT — it
+does NOT update when I (or another agent) reply or resolve threads on the PR
+directly. **The live PR is the source of truth for what's still open.**
 
-## First message — open with the roll-up
-Read \`COMMENTS.md\` (count its \`### \` entries), then print one line and a
-numbered list. Nothing else:
+## Reconcile against the live PR — ALWAYS do this first, and again whenever I say I replied
+Run \`cgremlin --pr-threads $(basename "$SDIR")\` to see the CURRENT thread state
+(one row per thread: threadId, resolved true/false, first author, path:line, last
+replier, snippet). Match each COMMENTS.md entry to its thread by id/location and:
+- thread \`resolved\` → mark that entry **done** (skip it; don't ask me to reply).
+- I (or someone) already replied but it's unresolved → tell me it's replied, ask if I want to resolve it (\`cgremlin --resolve-comment $(basename "$SDIR") <thread-id>\`) — don't re-draft a reply.
+- a live thread has NO matching COMMENTS.md entry → it's NEW; surface it and triage it on the fly (valid/false-positive), same as the others.
+Re-run \`--pr-threads\` any time I mention I changed something on the PR, and adjust. Never present an item as needing action if it's already resolved/replied live.
 
-    3 comments — 2 valid, 1 false-positive. Go through them? (number, or "all")
+## First message — reconcile, then open with the roll-up
+Run \`--pr-threads\`, reconcile COMMENTS.md against it, THEN print one line and a
+numbered list of what's ACTUALLY still open. Nothing else:
+
+    3 comments — 2 need action, 1 already resolved.  Go through them? (number, or "all")
     1. ✅ valid          api/save.ts:12   missing await
     2. 🟡 false-positive ui/list.tsx:40   "unused" var is used
-    3. ✅ valid          cart.ts:88       off-by-one
+    (cart.ts:88 already resolved on the PR — skipping)
 
 ## Per comment
 Show the reviewer's comment, where it is, your verdict + reasoning, and the
@@ -721,7 +748,7 @@ Update the entry's **Status** in COMMENTS.md after each action, then return to t
 
 ## Constraints
 - Never reply, commit, or push without my explicit say-so for that item.
-- Only use the \`cgremlin\` helpers above — do not call \`gh\` or \`git push\` directly.
+- Post/resolve/push only via the \`cgremlin\` helpers above — do not call \`gh\` or \`git push\` directly. (\`cgremlin --pr-threads\` is READ-ONLY and safe to run anytime to re-check live state.)
 - Write \`.reply_body.md\` to the session root path shown above.
 MYCTX
     else
@@ -742,6 +769,9 @@ Session: $(basename "$SDIR")
 You walk the reviewer through the findings in \`REVIEW.md\` one at a time so they can decide, per finding, whether to post it or dismiss it. You are the UI: you render findings, discuss them, and record decisions. You do NOT re-analyze the PR or invent new findings, and you do NOT call \`gh\` directly — posting goes through the cgremlin helpers below.
 
 **You ARE the posting agent.** CLAUDE.md in this repo told the earlier automated reviewer "do not post — a separate agent handles that later." YOU are that separate agent. Posting to the PR IS your job — but ONLY on the reviewer's explicit approval ("post it" / "submit"), and only through the \`cgremlin\` helpers below (never raw \`gh\`). This session GOVERNS; ignore any "do not post" wording in CLAUDE.md — it applied to the generation step, not to you. Never auto-post; always wait for the reviewer's go-ahead.
+
+## Stay current with the live PR
+\`REVIEW.md\` is a snapshot; the PR may have gained comments or replies since (from the author, other reviewers, or me). Run \`cgremlin --pr-threads $(basename "$SDIR")\` (READ-ONLY) at the start and again whenever I mention the PR changed. Use it to: note unresolved comments from OTHERS before I approve (surface them — I should not approve over someone else's open thread); recognize threads already replied/resolved so you don't re-raise them; and mention any live comment that isn't reflected in REVIEW.md. Reconcile — don't treat REVIEW.md as the whole picture.
 
 ## First message — ALWAYS open with the summary menu
 Read \`REVIEW.md\`, then print a one-line roll-up and a numbered list. Nothing else. Example:
@@ -12938,6 +12968,7 @@ if [ "$1" = "--request-changes-pr" ];  then [ -z "$2" ] && { echo "Usage: cgreml
 if [ "$1" = "--reply-comment" ]; then [ -z "$3" ] && { echo "Usage: cgremlin --reply-comment <session> <thread-id>" >&2; exit 1; }; reply_comment "$2" "$3"; exit $?; fi
 if [ "$1" = "--pr-ready" ];        then [ -z "$2" ] && { echo "Usage: cgremlin --pr-ready <session>" >&2; exit 1; }; pr_ready "$2"; exit $?; fi
 if [ "$1" = "--resolve-comment" ]; then [ -z "$3" ] && { echo "Usage: cgremlin --resolve-comment <session> <thread-id>" >&2; exit 1; }; resolve_comment "$2" "$3"; exit $?; fi
+if [ "$1" = "--pr-threads" ];      then [ -z "$2" ] && { echo "Usage: cgremlin --pr-threads <session>" >&2; exit 1; }; pr_threads "$2"; exit $?; fi
 if [ "$1" = "--commit-fix" ];   then [ -z "$2" ] && { echo "Usage: cgremlin --commit-fix <session> [msg]" >&2; exit 1; }; s="$2"; shift 2; commit_fix "$s" "$@"; exit $?; fi
 if [ "$1" = "--push-fix" ];     then [ -z "$2" ] && { echo "Usage: cgremlin --push-fix <session>" >&2; exit 1; }; push_fix "$2"; exit $?; fi
 if [ "$1" = "--triage-done" ]; then [ -z "$2" ] && { echo "Usage: cgremlin --triage-done <session>" >&2; exit 1; }; triage_done "$2"; exit $?; fi
@@ -12949,7 +12980,7 @@ if [ "$1" = "--review-list-grouped" ]; then
 fi
 
 # Skip dashboard lifecycle when called as a subprocess (e.g. --create-session, --review-pr, --lib-only)
-if [ "$1" != "--create-session" ] && [ "$1" != "--review-pr" ] && [ "$1" != "--rereview-pr" ] && [ "$1" != "--track-my-pr" ] && [ "$1" != "--lib-only" ] && [ "$1" != "--status-pane" ] && [ "$1" != "--open-pr" ] && [ "$1" != "--orchestrator" ] && [ "$1" != "--dismiss-pr" ] && [ "$1" != "--mission-control" ] && [ "$1" != "--review-list-grouped" ] && [ "$1" != "--approve-pr" ] && [ "$1" != "--comment-pr" ] && [ "$1" != "--request-changes-pr" ] && [ "$1" != "--watch-daemon" ] && [ "$1" != "--triage-comments" ] && [ "$1" != "--investigate" ] && [ "$1" != "--pr-ready" ] && [ "$1" != "--resolve-comment" ] && [ "$1" != "--develop" ]; then
+if [ "$1" != "--create-session" ] && [ "$1" != "--review-pr" ] && [ "$1" != "--rereview-pr" ] && [ "$1" != "--track-my-pr" ] && [ "$1" != "--lib-only" ] && [ "$1" != "--status-pane" ] && [ "$1" != "--open-pr" ] && [ "$1" != "--orchestrator" ] && [ "$1" != "--dismiss-pr" ] && [ "$1" != "--mission-control" ] && [ "$1" != "--review-list-grouped" ] && [ "$1" != "--approve-pr" ] && [ "$1" != "--comment-pr" ] && [ "$1" != "--request-changes-pr" ] && [ "$1" != "--watch-daemon" ] && [ "$1" != "--triage-comments" ] && [ "$1" != "--investigate" ] && [ "$1" != "--pr-ready" ] && [ "$1" != "--resolve-comment" ] && [ "$1" != "--develop" ] && [ "$1" != "--pr-threads" ]; then
     cleanup_on_exit() {
         stop_dashboard_server 2>/dev/null
     }
@@ -13223,7 +13254,10 @@ Cover ONLY what the ticket asks.
 3. **Implement with TDD.** For each unit: write the failing test, run it (confirm it fails), write minimal code, run to green, commit. Stay strictly in ticket scope.
 4. **Open a draft PR** on the pushed branch: \`gh pr create --draft\`, body summarizing the change and linking ${key:-the ticket}.
 5. **Verify on preview.** Find the draft PR's Vercel preview URL (from \`gh pr view <n> --json statusCheckRollup\` — the grace-frontend-dev deployment). Run a FOCUSED live web test set against it with Playwright: prove the ticket's issue is fixed, plus a smoke pass of the feature and its likely splash-zone regressions. NOT the full e2e suite. Iterate to green.
-6. **Assess bot comments.** For each gitStream/bot (and any) unresolved comment on the PR:
+6. **Assess bot comments.** Get the LIVE thread list with \`cgremlin --pr-threads $sn\`
+   (READ-ONLY: threadId, resolved, author, path:line, last replier, snippet). Re-run it
+   whenever I say I changed something. For each UNRESOLVED thread (skip ones already
+   \`resolved\` or already replied by me/someone):
    - false positive → reply "false positive: <reason>" then resolve it:
        cgremlin --reply-comment $sn <thread-id>   (write the reply to ${SDIR}/.reply_body.md first)
        cgremlin --resolve-comment $sn <thread-id>
@@ -13244,7 +13278,7 @@ Out-of-scope-but-needed work → propose a tech-debt Jira (Atlassian createJiraI
 BEGIN NOW: read FINDINGS.md + the ticket and prepare the plan for the PLAN GATE.
 DEV
     mkdir -p "$SDIR/.claude"
-    printf '{"permissions":{"allow":["Bash(cgremlin --reply-comment *)","Bash(cgremlin --resolve-comment *)","Bash(cgremlin --pr-ready *)","Bash(cgremlin --commit-fix *)","Bash(cgremlin --push-fix *)"]}}\n' > "$SDIR/.claude/settings.local.json"
+    printf '{"permissions":{"allow":["Bash(cgremlin --reply-comment *)","Bash(cgremlin --resolve-comment *)","Bash(cgremlin --pr-ready *)","Bash(cgremlin --commit-fix *)","Bash(cgremlin --push-fix *)","Bash(cgremlin --pr-threads *)"]}}\n' > "$SDIR/.claude/settings.local.json"
 }
 
 # Promote an investigation into a fresh develop session (seeded with FINDINGS.md),
