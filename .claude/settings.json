@@ -6,6 +6,8 @@
       "Read(//Users/guilherme.azoubel/.cgremlin/**)",
       "Edit(//Users/guilherme.azoubel/context-gremlin/**)",
       "Write(//Users/guilherme.azoubel/context-gremlin/**)",
+      "Read(//private/tmp/claude-502/**)",
+      "Write(//private/tmp/claude-502/**)",
       "Grep",
       "Glob",
       "Bash(git status)",
@@ -28,12 +30,16 @@
       "Bash(wc *)",
       "Bash(mkdir -p /private/tmp/claude-502/**)",
       "mcp__chrome-devtools__*",
+      "mcp__plugin_chrome-devtools-mcp_chrome-devtools__*",
       "mcp__plugin_playwright_playwright__*"
     ],
     "deny": [
-      "Bash(git push *)",
-      "Bash(gh pr create *)",
-      "Bash(gh pr merge *)",
+      "Bash(git push:*)",
+      "Bash(git push)",
+      "Bash(gh pr create:*)",
+      "Bash(gh pr create)",
+      "Bash(gh pr merge:*)",
+      "Bash(gh pr merge)",
       "Bash(rm -rf *)"
     ]
   },

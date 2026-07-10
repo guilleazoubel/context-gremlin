@@ -111,3 +111,8 @@ In `.claude/settings.json` (project-level, applies to main session and all subag
 - Changing the main session's model automatically (not possible via hooks; session model is user-controlled).
 - Auto-classification inside the hook itself.
 - Rollout to other projects (manual copy is the mechanism, later).
+
+## Known limitations (from final review)
+
+- **The deny list signals intent; it is not a hard boundary.** Allowed entries like `Bash(python3 *)` and `Bash(bin/cgremlin *)` can invoke `git push`, deletes, or PR creation via subprocess, bypassing the deny patterns. Acceptable for a single-user dev tool; do not rely on deny as enforcement.
+- **"Read-only tiers can never edit code" is instruction-enforced, not tool-enforced, for agents with Bash.** Claude Code has no read-only Bash scope, so `reader`/`chore` could technically write via shell. The tools list still blocks the Edit/Write tools themselves.
