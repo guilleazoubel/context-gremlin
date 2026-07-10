@@ -1,0 +1,52 @@
+{
+  "permissions": {
+    "defaultMode": "acceptEdits",
+    "allow": [
+      "Read(//Users/guilherme.azoubel/context-gremlin/**)",
+      "Read(//Users/guilherme.azoubel/.cgremlin/**)",
+      "Edit(//Users/guilherme.azoubel/context-gremlin/**)",
+      "Write(//Users/guilherme.azoubel/context-gremlin/**)",
+      "Grep",
+      "Glob",
+      "Bash(git status)",
+      "Bash(git log *)",
+      "Bash(git diff *)",
+      "Bash(git show *)",
+      "Bash(git add *)",
+      "Bash(git commit *)",
+      "Bash(git branch *)",
+      "Bash(git checkout *)",
+      "Bash(gh pr view *)",
+      "Bash(gh pr diff *)",
+      "Bash(gh pr list *)",
+      "Bash(bash -n bin/cgremlin)",
+      "Bash(bash -n /Users/guilherme.azoubel/context-gremlin/bin/cgremlin)",
+      "Bash(bin/cgremlin *)",
+      "Bash(python3 *)",
+      "Bash(zellij *)",
+      "Bash(ls *)",
+      "Bash(wc *)",
+      "Bash(mkdir -p /private/tmp/claude-502/**)",
+      "mcp__chrome-devtools__*",
+      "mcp__plugin_playwright_playwright__*"
+    ],
+    "deny": [
+      "Bash(git push *)",
+      "Bash(gh pr create *)",
+      "Bash(gh pr merge *)",
+      "Bash(rm -rf *)"
+    ]
+  },
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo 'Routing active: consult the ## Task Routing table in CLAUDE.md — delegate substantive work to the pinned agent types; do not do it in the main session.'"
+          }
+        ]
+      }
+    ]
+  }
+}
