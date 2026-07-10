@@ -13559,12 +13559,14 @@ write_develop_brief() {
 # DEVELOP — ${key:-(no ticket)}
 
 You are running in the session directory. The code is in \`./repo/\`. \`FINDINGS.md\`
-here is your seeded investigation (root cause + direction). The Jira ticket
+here is your investigation (root cause + direction) — your PRIMARY seed. If a
+\`REVIEW.md\` is present, read it too. Keep a running plan/progress log in
+\`DEVELOPMENT.md\`. The Jira ticket
 ${key:+(${key}) — fetch via Atlassian MCP getJiraIssue} is the source of truth.
 Cover ONLY what the ticket asks.
 
 ## Flow (autonomous except at the gates below)
-1. **Read FINDINGS.md + the ticket.** Refine into a concrete implementation plan (root cause is already known).
+1. **Read FINDINGS.md (and REVIEW.md if present) + the ticket.** Refine into a concrete implementation plan (root cause is already known); capture it in DEVELOPMENT.md.
    As your first action also record status: \`cgremlin --agent-note $sn "<ticket key>: <one-line goal>"\`; update it at each milestone (e.g. "implementing 3/5 — TDD", "tests green").
 2. **PLAN GATE — pause.** Present the plan to me, explain it, and adjust it with me. Do NOT implement until I explicitly say to proceed. Before pausing, run \`cgremlin --agent-state $sn needs-input\`.
 3. **Implement with TDD.** For each unit: write the failing test, run it (confirm it fails), write minimal code, run to green, commit. Stay strictly in ticket scope.
@@ -13595,38 +13597,38 @@ Out-of-scope-but-needed work → propose a tech-debt Jira (Atlassian createJiraI
 - Post to GitHub only via the cgremlin helpers above (never raw gh for review/comment mutations); \`gh pr create --draft\`, \`gh pr view\`, git push are fine.
 - If you hit something you cannot pass (preview never deploys, environment broken), run \`cgremlin --agent-state $sn blocked\` and tell me.
 
-BEGIN NOW: read FINDINGS.md + the ticket and prepare the plan for the PLAN GATE.
+BEGIN NOW: read FINDINGS.md (and REVIEW.md if present) + the ticket, write your plan into DEVELOPMENT.md, and prepare it for the PLAN GATE.
 DEV
     mkdir -p "$SDIR/.claude"
     printf '{"permissions":{"allow":["Bash(cgremlin --reply-comment *)","Bash(cgremlin --resolve-comment *)","Bash(cgremlin --pr-ready *)","Bash(cgremlin --commit-fix *)","Bash(cgremlin --push-fix *)","Bash(cgremlin --pr-threads *)","Bash(cgremlin --run-local *)","Bash(cgremlin --stop-local *)","Bash(cgremlin --agent-state *)","Bash(cgremlin --agent-note *)"]}}\n' > "$SDIR/.claude/settings.local.json"
 }
 
-# Promote an investigation into a fresh develop session (seeded with FINDINGS.md),
-# launch it in the WORK tab, and close the investigation pane.
+# Promote an investigation INTO DEVELOPMENT in the same session (in place).
 # Usage: develop_start <investigation-session-name>
 develop_start() {
-    local inv="$1"
-    local INV_DIR="$SESSIONS_DIR/$inv"
-    [ -d "$INV_DIR/repo" ] || { echo "ERROR: investigation session $inv not found" >&2; return 1; }
-    local jira repo_url
-    jira=$(read_session_field "$INV_DIR" "jira.ticket")
-    repo_url=$(read_session_field "$INV_DIR" "project"); [ -z "$repo_url" ] && repo_url="https://github.com/$(_pr_repo "$INV_DIR")"
-    local session_name
-    session_name=$(create_development_session_noninteractive "$repo_url" "$jira" | tail -1)
-    [ -z "$session_name" ] && { echo "ERROR: develop session creation failed" >&2; return 1; }
-    local SDIR="$SESSIONS_DIR/$session_name"
-    [ -n "$jira" ] && update_session_field "$SDIR" "jira.ticket" "$jira"
-    # Seed the findings (self-contained handoff).
-    [ -f "$INV_DIR/FINDINGS.md" ] && cp "$INV_DIR/FINDINGS.md" "$SDIR/FINDINGS.md"
+    local sess="$1"                       # investigation session to promote IN PLACE
+    local SDIR="$SESSIONS_DIR/$sess"
+    [ -d "$SDIR/repo" ] || { echo "ERROR: session $sess not found" >&2; return 1; }
+    local jira; jira=$(read_session_field "$SDIR" "jira.ticket")
+    # Compute the OLD tab name (🔍 …) BEFORE flipping mode, so we can close it.
+    local old_tab; old_tab=$(work_agent_tab_name "$SDIR")
+    # Retire the investigation agent and close its 🔍 tab.
+    local ipid; ipid=$(cat "$SDIR/agent_pid" 2>/dev/null)
+    [ -n "$ipid" ] && kill "$ipid" 2>/dev/null; rm -f "$SDIR/agent_pid"
+    zellij --session mission-control action go-to-tab-name "$old_tab" 2>/dev/null && \
+      zellij --session mission-control action close-tab 2>/dev/null || true
+    # Transition the SAME session to development. mode is the source of truth;
+    # the dir keeps its inv-* name (all live type-detection reads the mode field).
+    update_session_field "$SDIR" "mode" "development"
+    local branch="feature/${jira:-work}"
+    ( cd "$SDIR/repo" && { git checkout -b "$branch" 2>/dev/null || git checkout "$branch" 2>/dev/null || true; } )
+    update_session_field "$SDIR" "branch" "$branch"
+    # Docs: FINDINGS.md stays (the investigation handoff); start DEVELOPMENT.md.
+    [ -f "$SDIR/DEVELOPMENT.md" ] || printf '# Development log — %s\n\nPlan and progress, maintained by the develop agent.\n' "${jira:-work}" > "$SDIR/DEVELOPMENT.md"
+    # Swap the brief and open the develop agent in the SAME session (creates the 🔨 tab).
     write_develop_brief "$SDIR"
     create_work_agent_pane "$SDIR"
-    # The investigation agent's job is done — close its tab.
-    local ipid; ipid=$(cat "$INV_DIR/agent_pid" 2>/dev/null)
-    [ -n "$ipid" ] && kill "$ipid" 2>/dev/null; rm -f "$INV_DIR/agent_pid"
-    local _itab; _itab=$(work_agent_tab_name "$INV_DIR")   # INV_DIR = the investigation session dir
-    zellij --session mission-control action go-to-tab-name "$_itab" 2>/dev/null && \
-      zellij --session mission-control action close-tab 2>/dev/null || true
-    echo "$session_name"
+    echo "$sess"
 }
 
 # ============================================================================
