@@ -13605,7 +13605,8 @@ DEV
 # launch it in the WORK tab, and close the investigation pane.
 # Usage: develop_start <investigation-session-name>
 develop_start() {
-    local inv="$1" INV_DIR="$SESSIONS_DIR/$inv"
+    local inv="$1"
+    local INV_DIR="$SESSIONS_DIR/$inv"
     [ -d "$INV_DIR/repo" ] || { echo "ERROR: investigation session $inv not found" >&2; return 1; }
     local jira repo_url
     jira=$(read_session_field "$INV_DIR" "jira.ticket")
@@ -13690,6 +13691,22 @@ WRAPPER_EOF
 
 review_pr_noninteractive() {
     local pr_input="$1"
+    # Dedupe by PR number: reuse an existing session rather than create a duplicate.
+    if [[ "$pr_input" =~ github\.com/([^/]+)/([^/]+)/pull/([0-9]+) ]]; then
+        local o="${BASH_REMATCH[1]}" r="${BASH_REMATCH[2]}" n="${BASH_REMATCH[3]}"
+        local existing; existing=$(ls -dt "$SESSIONS_DIR"/pr-*-"${n}"-* 2>/dev/null | head -1)
+        if [ -n "$existing" ] && [ -d "$existing/repo" ]; then
+            local esn; esn=$(basename "$existing")
+            local head; head=$(timeout 15 gh pr view "$n" --repo "$o/$r" --json headRefOid -q .headRefOid 2>/dev/null)
+            if [ -z "$head" ] || [ "$head" != "$(read_reviewed_sha "$existing")" ]; then
+                echo "PR #$n already tracked ($esn) — re-reviewing in place" >&2
+                rereview_pr "$esn"; echo "$esn"; return 0
+            fi
+            echo "PR #$n already tracked ($esn), no new commits — opening it" >&2
+            open_pr_row "$esn" 2>/dev/null || true; echo "$esn"; return 0
+        fi
+    fi
+    # No existing session (or unparseable URL) → create + review (original behavior).
     local session_name
     session_name=$(create_pr_session_noninteractive "$pr_input" "" | tail -1)
     [ -z "$session_name" ] && { echo "ERROR: session creation failed" >&2; return 1; }
