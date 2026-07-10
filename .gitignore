@@ -19,3 +19,4 @@ dev-*/
 # IDE / tool
 .playwright-mcp/
 .claude/
+!.claude/agents/
