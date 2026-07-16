@@ -13793,22 +13793,6 @@ if [ "$1" = "--commit-fix" ];   then [ -z "$2" ] && { echo "Usage: cgremlin --co
 if [ "$1" = "--push-fix" ];     then [ -z "$2" ] && { echo "Usage: cgremlin --push-fix <session>" >&2; exit 1; }; push_fix "$2"; exit $?; fi
 if [ "$1" = "--triage-done" ]; then [ -z "$2" ] && { echo "Usage: cgremlin --triage-done <session>" >&2; exit 1; }; triage_done "$2"; exit $?; fi
 
-# Handle plan-review lifecycle (--plan-start / --plan-ready / --approve-plan)
-if [ "$1" = "--plan-start" ]; then
-    [ -z "$2" ] && { echo "Usage: cgremlin --plan-start <session>" >&2; exit 1; }
-    plan_start "$2"; exit $?
-fi
-
-if [ "$1" = "--plan-ready" ]; then
-    [ -z "$2" ] && { echo "Usage: cgremlin --plan-ready <session>" >&2; exit 1; }
-    plan_ready "$2"; exit $?
-fi
-
-if [ "$1" = "--approve-plan" ]; then
-    [ -z "$2" ] && { echo "Usage: cgremlin --approve-plan <session>" >&2; exit 1; }
-    approve_plan "$2"; exit $?
-fi
-
 # Stop the always-on background watch-daemon (the only clean way to shut it down,
 # since it now runs independently of any UI session). Uses the same pgrep pattern
 # that guards its single-instance start. The pattern "cgremlin --watch-daemon" does
@@ -13829,7 +13813,7 @@ if [ "$1" = "--review-list-grouped" ]; then
 fi
 
 # Skip dashboard lifecycle when called as a subprocess (e.g. --create-session, --review-pr, --lib-only)
-if [ "$1" != "--create-session" ] && [ "$1" != "--review-pr" ] && [ "$1" != "--rereview-pr" ] && [ "$1" != "--track-my-pr" ] && [ "$1" != "--lib-only" ] && [ "$1" != "--status-pane" ] && [ "$1" != "--open-pr" ] && [ "$1" != "--orchestrator" ] && [ "$1" != "--dismiss-pr" ] && [ "$1" != "--mission-control" ] && [ "$1" != "--review-list-grouped" ] && [ "$1" != "--approve-pr" ] && [ "$1" != "--comment-pr" ] && [ "$1" != "--request-changes-pr" ] && [ "$1" != "--watch-daemon" ] && [ "$1" != "--reconcile-sessions" ] && [ "$1" != "--triage-comments" ] && [ "$1" != "--investigate" ] && [ "$1" != "--pr-ready" ] && [ "$1" != "--resolve-comment" ] && [ "$1" != "--develop" ] && [ "$1" != "--pr-threads" ] && [ "$1" != "--stop-local" ] && [ "$1" != "--run-local" ] && [ "$1" != "--agent-state" ] && [ "$1" != "--agent-note" ]; then
+if [ "$1" != "--create-session" ] && [ "$1" != "--review-pr" ] && [ "$1" != "--rereview-pr" ] && [ "$1" != "--track-my-pr" ] && [ "$1" != "--lib-only" ] && [ "$1" != "--status-pane" ] && [ "$1" != "--open-pr" ] && [ "$1" != "--orchestrator" ] && [ "$1" != "--dismiss-pr" ] && [ "$1" != "--mission-control" ] && [ "$1" != "--review-list-grouped" ] && [ "$1" != "--approve-pr" ] && [ "$1" != "--comment-pr" ] && [ "$1" != "--request-changes-pr" ] && [ "$1" != "--watch-daemon" ] && [ "$1" != "--reconcile-sessions" ] && [ "$1" != "--triage-comments" ] && [ "$1" != "--investigate" ] && [ "$1" != "--pr-ready" ] && [ "$1" != "--resolve-comment" ] && [ "$1" != "--develop" ] && [ "$1" != "--plan-start" ] && [ "$1" != "--plan-ready" ] && [ "$1" != "--approve-plan" ] && [ "$1" != "--pr-threads" ] && [ "$1" != "--stop-local" ] && [ "$1" != "--run-local" ] && [ "$1" != "--agent-state" ] && [ "$1" != "--agent-note" ]; then
     cleanup_on_exit() {
         stop_dashboard_server 2>/dev/null
     }
@@ -14830,6 +14814,25 @@ fi
 if [ "$1" = "--develop" ]; then
     [ -z "$2" ] && { echo "Usage: cgremlin --develop <investigation-session> [--force]" >&2; exit 1; }
     develop_start "$2" "$3"; exit $?
+fi
+
+# Handle plan-review lifecycle (--plan-start / --plan-ready / --approve-plan).
+# Placed AFTER plan_start()/plan_ready()/approve_plan() are defined (~14393) so the
+# functions exist when these dispatch blocks run — bash executes top-level statements
+# sequentially, so a dispatch placed before the definitions fails with exit 127.
+if [ "$1" = "--plan-start" ]; then
+    [ -z "$2" ] && { echo "Usage: cgremlin --plan-start <session>" >&2; exit 1; }
+    plan_start "$2"; exit $?
+fi
+
+if [ "$1" = "--plan-ready" ]; then
+    [ -z "$2" ] && { echo "Usage: cgremlin --plan-ready <session>" >&2; exit 1; }
+    plan_ready "$2"; exit $?
+fi
+
+if [ "$1" = "--approve-plan" ]; then
+    [ -z "$2" ] && { echo "Usage: cgremlin --approve-plan <session>" >&2; exit 1; }
+    approve_plan "$2"; exit $?
 fi
 
 if [ "$1" = "--track-my-pr" ]; then
