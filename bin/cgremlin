@@ -14065,6 +14065,8 @@ create_investigation_session_noninteractive() {
     local REPO_URL="$1"
     local FOCUS="$2"
     local JIRA_TICKET="$3"
+    local INTENT="${4:-investigate_only}"
+    local DRIVE_TO_COMPLETION="${5:-false}"
 
     # Parse repo URL
     local REPO_NAME=$(basename "$REPO_URL" .git)
@@ -14080,7 +14082,9 @@ create_investigation_session_noninteractive() {
     # Create session.json
     local extra_json=$(cat <<EOF
 {
-    "focus": "$FOCUS"
+    "focus": "$FOCUS",
+    "intent": "$INTENT",
+    "plan_review": {"drive_to_completion": $DRIVE_TO_COMPLETION}
 }
 EOF
 )
@@ -14143,9 +14147,9 @@ INV
 # Create an investigation session and launch its agent in the WORK tab.
 # Usage: investigate_start <repo-git-url> <jira-key>
 investigate_start() {
-    local repo_url="$1" jira="$2"
+    local repo_url="$1" jira="$2" intent="${3:-investigate_only}" drive="${4:-false}"
     local session_name
-    session_name=$(create_investigation_session_noninteractive "$repo_url" "" "$jira" | tail -1)
+    session_name=$(create_investigation_session_noninteractive "$repo_url" "" "$jira" "$intent" "$drive" | tail -1)
     [ -z "$session_name" ] && { echo "ERROR: investigation session creation failed" >&2; return 1; }
     local SDIR="$SESSIONS_DIR/$session_name"
     # Ensure the ticket is recorded even if the creator didn't set it.
@@ -14624,8 +14628,16 @@ if [ "$1" = "--review-pr" ]; then
 fi
 
 if [ "$1" = "--investigate" ]; then
-    [ -z "$2" ] && { echo "Usage: cgremlin --investigate <repo-url> <jira-key>" >&2; exit 1; }
-    investigate_start "$2" "$3"; exit $?
+    [ -z "$2" ] && { echo "Usage: cgremlin --investigate <repo-url> <jira-key> [--for-development] [--drive-to-completion]" >&2; exit 1; }
+    _repo="$2"; _jira="$3"; _intent="investigate_only"; _drive="false"
+    shift 3 2>/dev/null || shift $#
+    for _arg in "$@"; do
+        case "$_arg" in
+            --for-development) _intent="development" ;;
+            --drive-to-completion) _drive="true" ;;
+        esac
+    done
+    investigate_start "$_repo" "$_jira" "$_intent" "$_drive"; exit $?
 fi
 
 if [ "$1" = "--develop" ]; then
