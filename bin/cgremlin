@@ -6058,6 +6058,8 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
 
         if parsed.path == '/api/archive':
             self.archive_session(session_path)
+        elif parsed.path == '/api/approve-plan':
+            self.approve_plan_session(session_path)
         elif parsed.path == '/api/delete':
             self.delete_session(session_path)
         elif parsed.path == '/api/switch-mode':
@@ -6116,6 +6118,27 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             self.send_header('Content-type', 'application/json')
             self.end_headers()
             self.wfile.write(json.dumps({'status': 'archived'}).encode())
+        except Exception as e:
+            self.send_error(500, str(e))
+
+    def approve_plan_session(self, session_path):
+        import subprocess
+        session_name = session_path.name
+        try:
+            result = subprocess.run(
+                ['cgremlin', '--approve-plan', session_name],
+                capture_output=True, text=True, timeout=10
+            )
+            if result.returncode != 0:
+                self.send_response(400)
+                self.send_header('Content-type', 'application/json')
+                self.end_headers()
+                self.wfile.write(json.dumps({'error': result.stderr.strip() or result.stdout.strip()}).encode())
+                return
+            self.send_response(200)
+            self.send_header('Content-type', 'application/json')
+            self.end_headers()
+            self.wfile.write(json.dumps({'status': 'approved'}).encode())
         except Exception as e:
             self.send_error(500, str(e))
 
@@ -7878,6 +7901,7 @@ Re-evaluate across ALL findings. Only OPEN 🔴/🟠 findings block approval.
                 info['has_review'] = has_file('REVIEW.md')
                 info['has_findings'] = has_file('FINDINGS.md')
                 info['has_devlog'] = has_file('DEVLOG.md')
+                info['has_plan'] = (entry / 'PLAN.md').exists()
                 info['archived'] = not (entry / 'repo').exists()
 
                 # Check for archived review versions (REVIEW-v1.md, REVIEW-v2.md, etc.)
@@ -8200,6 +8224,7 @@ Re-evaluate across ALL findings. Only OPEN 🔴/🟠 findings block approval.
             info['pipeline_id'] = lineage.get('pipeline_id', '') or ''
             info['parent_session_id'] = lineage.get('parent_session_id')
             info['stage_status'] = data.get('stage_status') or self._default_stage_status(mode, data)
+            info['plan_review'] = data.get('plan_review') or {}
             # A development session that began life as an investigation and was promoted
             # in place (develop_start) — via the recorded history action, or, for old
             # sessions with no history, the inv- dir prefix with mode=development.
@@ -8404,6 +8429,8 @@ Re-evaluate across ALL findings. Only OPEN 🔴/🟠 findings block approval.
             filename = 'REVIEW.md'
         elif file_type == 'findings':
             filename = 'FINDINGS.md'
+        elif file_type == 'plan':
+            filename = 'PLAN.md'
         elif file_type == 'devlog':
             filename = 'DEVLOG.md'
         else:
