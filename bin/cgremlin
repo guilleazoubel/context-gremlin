@@ -14101,13 +14101,16 @@ EOF
 # Write the investigate-mode autonomous brief as the agent's cwd CLAUDE.md.
 # Usage: write_investigate_brief SESSION_DIR
 write_investigate_brief() {
-    local SDIR="$1" key
+    local SDIR="$1" key intent drive
     key=$(read_session_field "$SDIR" "jira.ticket")
+    intent=$(read_session_field "$SDIR" "intent")
+    drive=$(read_session_field "$SDIR" "plan_review.drive_to_completion")
+    local sname; sname=$(basename "$SDIR")
     cat > "$SDIR/CLAUDE.md" <<INV
 # INVESTIGATION — ${key:-(no ticket)}
 
 You are running in the session directory. The PR/repo code is in \`./repo/\`.
-Work autonomously. Your deliverable is a complete, self-contained \`FINDINGS.md\`
+Work autonomously. Your first deliverable is a complete, self-contained \`FINDINGS.md\`
 in this directory — no code changes.
 
 ## Source of truth: the Jira ticket
@@ -14115,33 +14118,96 @@ ${key:+The ticket is ${key}. Fetch it now via the Atlassian MCP (getJiraIssue) t
 
 ## What to do (autonomously — do not ask me for routine steps)
 1. Understand the request from the ticket.
-   As your first action also record a one-line status: \`cgremlin --agent-note $(basename "$SDIR") "<ticket key>: <one-line goal>"\`. Update it at milestones (e.g. "tracing checkout path", "root cause found").
+   As your first action also record a one-line status: \`cgremlin --agent-note ${sname} "<ticket key>: <one-line goal>"\`. Update it at milestones (e.g. "tracing checkout path", "root cause found").
 2. Explore \`./repo/\`: trace the relevant code paths, reproduce/understand the issue, find the ROOT CAUSE.
-   For live web evals, run \`cgremlin --run-local $(basename "$SDIR")\` and wait for the URL, then drive the browser (chrome-devtools MCP) against https://local.findcare.dev.aplaceformom.com/ . Watch logs/dev-server.log and tell me if it fails. When done, \`cgremlin --stop-local $(basename "$SDIR")\`.
+   For live web evals, run \`cgremlin --run-local ${sname}\` and wait for the URL, then drive the browser (chrome-devtools MCP) against https://local.findcare.dev.aplaceformom.com/ . Watch logs/dev-server.log and tell me if it fails. When done, \`cgremlin --stop-local ${sname}\`.
 3. Write \`FINDINGS.md\` as a COMPLETE HANDOFF a fresh developer could execute from alone:
    - **What's happening** (the observed problem/behavior)
    - **Root cause** (the specific code and why)
    - **Affected files/paths**
    - **Risks / splash zone** (what a fix could plausibly affect)
    - **Direction / plan** to fix the ticket (concrete steps, scoped to the ticket)
-4. Do NOT change code. Investigation produces understanding + plan only.
+4. Do NOT change code in this step. Investigation produces understanding only.
 
 ## Scope discipline
 Cover ONLY what the ticket asks. If you find necessary out-of-scope work, note it under a "Tech debt (proposed)" section in FINDINGS.md and TELL ME — do not act on it. I decide whether to open a tech-debt Jira.
 
-## When to pause
-Proceed on your own for all routine investigation. Pause and ask ME only when there's a genuine approach/design decision with real trade-offs to discuss. When you pause for such a decision, first run \`cgremlin --agent-state $(basename "$SDIR") needs-input\` so the dashboard shows I'm needed.
+## After FINDINGS.md is complete
+$(if [ "$intent" = "development" ]; then cat <<AUTO
+This investigation is development-bound. Do NOT stop and wait for me here — immediately
+continue into planning (below). Run \`cgremlin --agent-note ${sname} "findings complete — drafting plan"\`
+so I see the transition, then proceed. Do not ask my permission to start planning.
+AUTO
+else cat <<MANUAL
+Run \`cgremlin --agent-state ${sname} ready\` and \`cgremlin --agent-note ${sname} "FINDINGS.md ready — review it"\`,
+then present a short summary and STOP. This investigation was NOT started as development-bound —
+do not draft a plan unless I explicitly ask you to (e.g. "turn this into development" / "let's plan
+this out"). If I do ask, follow the "Drafting the plan" section below from that point on.
+MANUAL
+fi)
 
-## Handing off to development
-When FINDINGS.md is ready, present a short summary and offer to build it.
- The moment FINDINGS.md is complete, run \`cgremlin --agent-state $(basename "$SDIR") ready\` and \`cgremlin --agent-note $(basename "$SDIR") "FINDINGS.md ready — review it"\`. If I say to build it (e.g. "build it" / "let's develop this"), run:
-  cgremlin --develop $(basename "$SDIR")
-That opens a fresh develop session seeded with FINDINGS.md + the ticket, and closes this pane.
+## Drafting the plan (PLAN.md)
+Once planning starts (per the branch above), first run \`cgremlin --plan-start ${sname}\` to record
+that planning has begun, then write \`PLAN.md\` in this directory, derived from
+FINDINGS.md's root cause and direction. It must be bulletproof enough that a fresh developer
+could implement it without asking you anything. Include:
+- **What will be modified** — exact files/functions, not vague areas.
+- **How it will work** — the actual mechanism/approach, not just the goal.
+- **How it will be tested** — concrete test cases, not "add tests."
+- **Scope boundary** — what this plan explicitly does NOT do, to prevent scope creep later.
+
+## Reviewing the plan (PM + Principal Engineer)
+Once a PLAN.md draft exists, run \`cgremlin --agent-note ${sname} "plan drafted — under review"\`, then
+dispatch TWO subagents in PARALLEL (Task tool) — do NOT do their work inline:
+
+**PM subagent:** reads PLAN.md and FINDINGS.md, checks ONLY: does this plan solve exactly the
+ticket's stated problem, and nothing more? Flag any scope creep beyond the ticket. Return a
+verdict: APPROVED, or CHANGES_REQUESTED with specific, actionable reasons.
+
+**Principal Engineer subagent:** reads PLAN.md, FINDINGS.md, and the actual code in \`./repo/\`,
+checks: are all the pieces internally consistent — is every modified file/function named
+correctly, does the described mechanism actually work given the real code, is the test plan
+concrete and sufficient? Return a verdict: APPROVED, or CHANGES_REQUESTED with specific,
+actionable reasons.
+
+If either returns CHANGES_REQUESTED: revise PLAN.md based on their reasoning, then re-dispatch
+BOTH subagents again (a partial re-review is not enough — a revision can affect either lens).
+Repeat up to 3 total rounds. If both have not approved after 3 rounds, STOP: write a
+"## Unresolved Review Disagreement" section at the top of PLAN.md quoting each unresolved
+objection verbatim, run \`cgremlin --agent-state ${sname} needs-input\` and
+\`cgremlin --agent-note ${sname} "plan review stuck — needs your input"\`, and wait for me —
+do not keep iterating on your own past the cap.
+
+Once both approve, write a "## Review Status" section at the TOP of PLAN.md (the dashboard
+renders this file directly, so this section must be self-explanatory on its own):
+\`\`\`
+## Review Status
+- PM: ✅ Approved — <one-line reasoning>
+- Principal Engineer: ✅ Approved — <one-line reasoning>
+\`\`\`
+Then run: \`cgremlin --plan-ready ${sname}\`
+
+$(if [ "$drive" = "true" ]; then cat <<DRIVE
+## Proceeding automatically (drive-to-completion was requested)
+I asked upfront not to be stopped for approval. The moment \`cgremlin --plan-ready ${sname}\`
+succeeds (both reviewers approved), immediately run \`cgremlin --develop ${sname}\` yourself —
+do not wait for me to approve. Tell me you're proceeding into development, but do not ask.
+DRIVE
+else cat <<PAUSE
+## Waiting for my approval
+After \`cgremlin --plan-ready ${sname}\`, present the plan to me in plain language — explain
+what it does and how it works, not just "plan is ready." Wait for my explicit approval
+("approved" / "go ahead" / similar). When I approve, run:
+  cgremlin --approve-plan ${sname}
+  cgremlin --develop ${sname}
+Do not run either of these before I've explicitly approved.
+PAUSE
+fi)
 
 BEGIN NOW: fetch the ticket, investigate, and write FINDINGS.md.
 INV
     mkdir -p "$SDIR/.claude"
-    printf '{"permissions":{"allow":["Bash(cgremlin --develop *)","Bash(cgremlin --run-local *)","Bash(cgremlin --stop-local *)","Bash(cgremlin --agent-state *)","Bash(cgremlin --agent-note *)"]}}\n' > "$SDIR/.claude/settings.local.json"
+    printf '{"permissions":{"allow":["Bash(cgremlin --develop *)","Bash(cgremlin --approve-plan *)","Bash(cgremlin --plan-start *)","Bash(cgremlin --plan-ready *)","Bash(cgremlin --run-local *)","Bash(cgremlin --stop-local *)","Bash(cgremlin --agent-state *)","Bash(cgremlin --agent-note *)"]}}\n' > "$SDIR/.claude/settings.local.json"
 }
 
 # Create an investigation session and launch its agent in the WORK tab.
