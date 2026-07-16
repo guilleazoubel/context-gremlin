@@ -867,6 +867,11 @@ review_list_grouped() {
       # wstage was read above for the terminal-hide check.
       local wbadge=""
       case "$wstage" in pr_opened) wbadge=" [PR open]";; superseded) wbadge=" [in review]";; merged) wbadge=" [✅ merged]";; abandoned) wbadge=" [✗ abandoned]";; esac
+      local wplan_phase; wplan_phase=$(read_session_field "${wd%/}" "plan_review.phase")
+      case "$wplan_phase" in
+          planning) wbadge="$wbadge [📝 planning]" ;;
+          plan_ready) wbadge="$wbadge [📋 plan ready for approval]" ;;
+      esac
       wtitle="$wkey"; [ -n "$wsummary" ] && wtitle="$wkey — $wsummary"
       work="${work}$(printf '%s %s%s  %s' "$wemoji" "$wtitle" "$wbadge" "$wicon")\t${wsn}\twork"$'\n'
       [ -n "$wnote" ] && work="${work}$(printf '   %s' "$wnote")\t${wsn}\twork"$'\n'
