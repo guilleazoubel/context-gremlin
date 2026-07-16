@@ -16,12 +16,14 @@ CONFIG_FILE="$CONFIG_DIR/config"
 
 # Default configuration values
 DEFAULT_MODEL="sonnet"
+DEFAULT_REVIEW_MODEL="opus"
 DEFAULT_DASHBOARD_AUTO_START="true"
 DEFAULT_PROJECT=""
 DEFAULT_USE_ZELLIJ="false"
 
 # Current configuration (loaded at startup)
 MODEL="${DEFAULT_MODEL}"
+REVIEW_MODEL="${DEFAULT_REVIEW_MODEL}"
 DASHBOARD_AUTO_START="${DEFAULT_DASHBOARD_AUTO_START}"
 DEFAULT_PROJECT="${DEFAULT_PROJECT}"
 USE_ZELLIJ="${DEFAULT_USE_ZELLIJ}"
@@ -43,6 +45,7 @@ load_config() {
 
             case "$key" in
                 MODEL) MODEL="$value" ;;
+                REVIEW_MODEL) REVIEW_MODEL="$value" ;;
                 DASHBOARD_AUTO_START) DASHBOARD_AUTO_START="$value" ;;
                 DEFAULT_PROJECT) DEFAULT_PROJECT="$value" ;;
                 USE_ZELLIJ) USE_ZELLIJ="$value" ;;
@@ -55,6 +58,7 @@ load_config() {
                 LOCAL_DEV_CMD) LOCAL_DEV_CMD="$value" ;;
                 VERCEL_SCOPE) VERCEL_SCOPE="$value" ;;
                 VERCEL_PROJECT) VERCEL_PROJECT="$value" ;;
+                VERCEL_AUTOMATION_BYPASS_SECRET) VERCEL_AUTOMATION_BYPASS_SECRET="$value" ;;
                 LOCAL_NODE_VERSION) LOCAL_NODE_VERSION="$value" ;;
             esac
         done < "$CONFIG_FILE"
@@ -78,6 +82,9 @@ save_config() {
 
 # Claude model to use (sonnet/opus/haiku)
 MODEL="$MODEL"
+
+# Claude model for PR review / re-review sessions (sonnet/opus/haiku, defaults to opus)
+REVIEW_MODEL="$REVIEW_MODEL"
 
 # Auto-start dashboard when cgremlin launches (true/false)
 DASHBOARD_AUTO_START="$DASHBOARD_AUTO_START"
@@ -166,16 +173,31 @@ create_session_json() {
 
     local session_id=$(basename "$session_dir")
     local created=$(date -Iseconds)
+    local pl_ts=$(date +%Y%m%d-%H%M%S)
 
-    # Merge extra fields into base JSON
+    # Higher-level lifecycle layer (stage_status) default by mode. This is layered
+    # ALONGSIDE (never replaces) status/review_state/lifecycle/mine_stage. See
+    # docs/session-lineage.md §5.
+    local default_stage
+    case "$mode" in
+        review) default_stage="queued";;
+        *)      default_stage="active";;   # investigation, development
+    esac
+
+    # Merge extra fields into base JSON, then backfill lineage/stage_status
+    # defaults for anything the caller did not supply in $extra. Additive +
+    # backward-compatible: old readers ignore the new fields; new readers use
+    # jq `//` / .get() defaults for sessions that predate this schema.
     local json=$(jq -n \
         --arg id "$session_id" \
         --arg mode "$mode" \
         --arg project "$project" \
         --arg created "$created" \
         --arg status "active" \
+        --arg default_stage "$default_stage" \
+        --arg pl_ts "$pl_ts" \
         --argjson extra "$extra_fields" \
-        '{
+        '({
             id: $id,
             mode: $mode,
             project: $project,
@@ -187,7 +209,22 @@ create_session_json() {
                 log_file: null
             },
             history: []
-        } + $extra')
+        } + $extra)
+        # Normalize/backfill the lineage object (caller may have supplied part of it).
+        | .lineage = ((.lineage // {}) | {
+              pipeline_id: (.pipeline_id // ""),
+              parent_session_id: (.parent_session_id // null),
+              ticket: (.ticket // null)
+          })
+        # Denormalize the jira key for cheap fallback matching when not set.
+        | .lineage.ticket = (.lineage.ticket // (.jira.ticket // null))
+        # Mint a pipeline_id when none was inherited/supplied:
+        #   pl-<TICKET>-<ts>  if a ticket is known, else pl-<session-id> (pipeline of one).
+        | .lineage.pipeline_id = (
+              if ((.lineage.pipeline_id // "") | length) > 0 then .lineage.pipeline_id
+              elif ((.lineage.ticket // "") | length) > 0 then "pl-" + (.lineage.ticket) + "-" + $pl_ts
+              else "pl-" + $id end)
+        | .stage_status = (.stage_status // $default_stage)')
 
     echo "$json" > "$session_dir/session.json"
 }
@@ -270,6 +307,25 @@ pr_is_mine() {
 # mine_stage: tracking (idle) | triaging (worker running) | ready (COMMENTS.md waiting)
 update_mine_stage() { update_session_field "$1" "mine_stage" "$2"; }
 read_mine_stage()   { local v=$(read_session_field "$1" "mine_stage" 2>/dev/null); echo "${v:-tracking}"; }
+
+# --- Session lineage (pipeline grouping across inv→dev→pr). See docs/session-lineage.md ---
+# lineage.{pipeline_id, parent_session_id, ticket}; stage_status is a per-kind
+# higher-level lifecycle layer. All reads default safely so pre-lineage sessions work.
+# Usage: update_lineage_field SESSION_DIR <pipeline_id|parent_session_id|ticket> value
+update_lineage_field() { update_session_field "$1" "lineage.$2" "$3"; }
+# Usage: read_lineage_field SESSION_DIR <pipeline_id|parent_session_id|ticket>
+read_lineage_field()   { read_session_field "$1" "lineage.$2" 2>/dev/null; }
+# Usage: update_stage_status SESSION_DIR <stage>
+update_stage_status()  { update_session_field "$1" "stage_status" "$2"; }
+# Usage: read_stage_status SESSION_DIR  (default per mode: review→queued, else active)
+read_stage_status() {
+    local v; v=$(read_session_field "$1" "stage_status" 2>/dev/null)
+    if [ -z "$v" ]; then
+        local m; m=$(read_session_field "$1" "mode" 2>/dev/null)
+        case "$m" in review) v="queued";; *) v="active";; esac
+    fi
+    echo "$v"
+}
 
 # Extract owner/repo from session.json .project (https://github.com/OWNER/REPO)
 # Usage: _pr_repo SESSION_DIR
@@ -371,7 +427,13 @@ pr_ready() {
     fi
     [ -z "$num" ] && { echo "ERROR: no PR found for $1 (branch has no PR yet?)" >&2; return 1; }
     [ -z "$repo" ] && { echo "ERROR: missing repo" >&2; return 1; }
-    gh pr ready "$num" --repo "$repo" && echo "marked PR #$num ready" || { echo "ERROR: gh pr ready failed" >&2; return 1; }
+    if gh pr ready "$num" --repo "$repo"; then
+        # This dev session's PR is now open/ready — record the higher-level stage.
+        update_stage_status "$d" "pr_opened"
+        echo "marked PR #$num ready"
+    else
+        echo "ERROR: gh pr ready failed" >&2; return 1
+    fi
 }
 # Resolve a review thread (after replying, e.g. a confirmed false positive).
 resolve_comment() {
@@ -647,14 +709,27 @@ PRIN
 # Section headers are emitted as display-only rows with empty session+group.
 review_list_grouped() {
   local mergemine="" ready="" inflight="" rereview="" response="" approved="" mycomments="" mytracking=""
-  local d sname num author rs lc rp icon line
+  local d sname num author rs lc rp icon line prtag jira rowpfx jira_suffix _prepo
   local me_lc; me_lc=$(printf '%s' "${GITHUB_ME:-}" | tr '[:upper:]' '[:lower:]')
+  # Terminal work sessions (stage_status merged/abandoned, or archived) are hidden
+  # by default; the status-pane Ctrl-A keybind toggles the sentinel file to reveal
+  # them (CG_SHOW_ARCHIVED=1 also forces show). Never deleted — this is a view filter.
+  local show_archived=0
+  [ -f "$SESSIONS_DIR/.mc_show_archived" ] && show_archived=1
+  [ "${CG_SHOW_ARCHIVED:-}" = "1" ] && show_archived=1
   for d in "$SESSIONS_DIR"/pr-*; do
     [ -d "$d/repo" ] || continue                       # repo gone (deleted/merged) → skip
     [ "$(read_triage_state "$d")" = "done" ] && continue
     sname=$(basename "$d")
     num=$(read_session_field "$d" "pr.number")
     author=$(read_session_field "$d" "pr.author")
+    # Repo tag (non-default repos only) + jira ticket, applied to every PR row so
+    # same-numbered PRs across repos are distinguishable and the ticket shows when known.
+    _prepo=$(_pr_repo "$d"); _prepo="${_prepo##*/}"
+    prtag=""; [ -n "$_prepo" ] && [ "$_prepo" != "grace-frontend" ] && prtag="[$_prepo] "
+    jira=$(read_session_field "$d" "jira.ticket"); [ -z "$jira" ] && jira=$(read_lineage_field "$d" "ticket")
+    rowpfx="${prtag}PR #${num}"
+    jira_suffix=""; [ -n "$jira" ] && jira_suffix="  ${jira}"
     rs=$(read_review_state "$d")
     lc=$(read_lifecycle "$d")
     rp=$(read_rereview_pending "$d")
@@ -663,7 +738,7 @@ review_list_grouped() {
     if pr_is_mine "$d"; then
       local ms; ms=$(read_mine_stage "$d")
       if [ "$lc" = "approved" ]; then
-        mergemine="${mergemine}$(printf 'PR #%s  @%-14s 🚀 APPROVED — merge it!' "$num" "${author:-?}")\t\tmergemine"$'\n'
+        mergemine="${mergemine}$(printf '%s  @%-14s%s 🚀 APPROVED — merge it!' "$rowpfx" "${author:-?}" "$jira_suffix")\t\tmergemine"$'\n'
       elif [ "$ms" = "ready" ]; then
         # Count only UNHANDLED entries (Status: open), split by verdict, so the
         # label decrements as the user replies/fixes/dismisses — always in sync
@@ -685,20 +760,20 @@ review_list_grouped() {
           mc_label="✅ all addressed · close it"
         fi
         local aicon; aicon=$(attention_icon "$d" 1); [ -n "$aicon" ] && aicon="  $aicon"
-        mycomments="${mycomments}$(printf 'PR #%s  @%-14s %s%s' "$num" "${author:-?}" "$mc_label" "$aicon")\t${sname}\tmycomments"$'\n'
+        mycomments="${mycomments}$(printf '%s  @%-14s%s %s%s' "$rowpfx" "${author:-?}" "$jira_suffix" "$mc_label" "$aicon")\t${sname}\tmycomments"$'\n'
       elif [ "$ms" = "triaging" ]; then
-        inflight="${inflight}$(printf 'PR #%s  @%-14s 👀 triaging reviewer comments' "$num" "${author:-?}")\t\tinflight"$'\n'
+        inflight="${inflight}$(printf '%s  @%-14s%s 👀 triaging reviewer comments' "$rowpfx" "${author:-?}" "$jira_suffix")\t\tinflight"$'\n'
       else
         local mt_icon="📋 open · awaiting review"
         [ "$(read_session_field "$d" "is_draft" 2>/dev/null)" = "true" ] && mt_icon="📝 draft · in progress"
-        mytracking="${mytracking}$(printf 'PR #%s  @%-14s %s' "$num" "${author:-?}" "$mt_icon")\t\tmyprs"$'\n'
+        mytracking="${mytracking}$(printf '%s  @%-14s%s %s' "$rowpfx" "${author:-?}" "$jira_suffix" "$mt_icon")\t\tmyprs"$'\n'
       fi
       continue
     fi
 
     # Approved → stays until the PR merges. Waiting on the author. Display-only.
     if [ "$lc" = "approved" ]; then
-      approved="${approved}$(printf 'PR #%s  @%-14s ✅ approved · author will merge' "$num" "${author:-?}")\t\tapproved"$'\n'
+      approved="${approved}$(printf '%s  @%-14s%s ✅ approved · author will merge' "$rowpfx" "${author:-?}" "$jira_suffix")\t\tapproved"$'\n'
       continue
     fi
 
@@ -710,11 +785,11 @@ review_list_grouped() {
         queued)    icon="⏳ queued for $what";;
         reviewing) icon="👀 agent reviewing ($what)";;
       esac
-      inflight="${inflight}$(printf 'PR #%s  @%-14s %s' "$num" "${author:-?}" "$icon")\t\tinflight"$'\n'
+      inflight="${inflight}$(printf '%s  @%-14s%s %s' "$rowpfx" "${author:-?}" "$jira_suffix" "$icon")\t\tinflight"$'\n'
       continue
     fi
 
-    line="$(printf 'PR #%s  @%-14s %s\t%s' "$num" "${author:-?}" "$icon" "$sname")"
+    line="$(printf '%s  @%-14s%s %s\t%s' "$rowpfx" "${author:-?}" "$jira_suffix" "$icon" "$sname")"
     if [ "$rp" = "true" ]; then
       # Re-review has FINISHED (in-flight ones were caught above as "Agent
       # reviewing"). Needs your attention, but it's a quick check — only the
@@ -722,7 +797,7 @@ review_list_grouped() {
       local summary; summary=$(cat "$d/rereview_summary" 2>/dev/null)
       icon="🔁 re-review · quick"; [ "$rs" = "failed" ] && icon="⚠ re-review failed — retry"
       local aicon; aicon=$(attention_icon "$d" 1); [ -n "$aicon" ] && aicon="  $aicon"
-      local reline="$(printf 'PR #%s  @%-14s %s%s' "$num" "${author:-?}" "$icon" "$aicon")"
+      local reline="$(printf '%s  @%-14s%s %s%s' "$rowpfx" "${author:-?}" "$jira_suffix" "$icon" "$aicon")"
       [ -n "$summary" ] && reline="${reline}  ·  ${summary}"
       rereview="${rereview}${reline}\t${sname}\trereview"$'\n'
     elif [ "$lc" = "none" ]; then
@@ -734,11 +809,11 @@ review_list_grouped() {
         *)           icon="${rs:-…}";;
       esac
       local aicon; aicon=$(attention_icon "$d" 1); [ -n "$aicon" ] && aicon="  $aicon"
-      ready="${ready}$(printf 'PR #%s  @%-14s %s%s' "$num" "${author:-?}" "$icon" "$aicon")\t${sname}\tready"$'\n'
+      ready="${ready}$(printf '%s  @%-14s%s %s%s' "$rowpfx" "${author:-?}" "$jira_suffix" "$icon" "$aicon")\t${sname}\tready"$'\n'
     else
       # We posted comments / requested changes → waiting on the author.
       local aicon; aicon=$(attention_icon "$d" 1); [ -n "$aicon" ] && aicon="  $aicon"
-      response="${response}$(printf 'PR #%s  @%-14s 💬 waiting on author%s' "$num" "${author:-?}" "$aicon")\t${sname}\tresponse"$'\n'
+      response="${response}$(printf '%s  @%-14s%s 💬 waiting on author%s' "$rowpfx" "${author:-?}" "$jira_suffix" "$aicon")\t${sname}\tresponse"$'\n'
     fi
   done
   # Action zone (needs YOU) first, then passive/informational, then my open PRs.
@@ -759,13 +834,33 @@ review_list_grouped() {
       wmode=$(read_session_field "${wd%/}" "mode")
       case "$wmode" in investigation|development) : ;; *) continue;; esac
       wsn=$(basename "${wd%/}")
+      # Hide terminal work sessions by default (merged/abandoned or archived).
+      local wstage; wstage=$(read_stage_status "${wd%/}")
+      if [ "$show_archived" != "1" ]; then
+          case "$wstage" in merged|abandoned) continue;; esac
+          is_archived "${wd%/}" && continue
+      fi
       wkey=$(read_session_field "${wd%/}" "jira.ticket"); [ -z "$wkey" ] && wkey="$wsn"
       case "$wmode" in development) wemoji="🔨";; *) wemoji="🔍";; esac
+      # Lineage indicator: a dev session promoted in place from an investigation
+      # shows the 🔍→🔨 trail (via recorded history, or the inv- prefix for old
+      # sessions). Full collapsible grouping isn't done bash-side — see the report.
+      if [ "$wmode" = "development" ]; then
+          if jq -e 'any(.history[]?; .action=="promoted-to-development")' "${wd%/}/session.json" >/dev/null 2>&1; then
+              wemoji="🔍→🔨"
+          elif [[ "$wsn" == inv-* ]]; then
+              wemoji="🔍→🔨"
+          fi
+      fi
       wsummary=$(read_session_field "${wd%/}" "jira.summary")
       wnote=$(cat "${wd%/}/.cg_note" 2>/dev/null)
       wicon=$(attention_icon "${wd%/}" ""); [ -z "$wicon" ] && wicon="💤 idle"
+      # Surface notable higher-level stages inline (default active/queued omitted).
+      # wstage was read above for the terminal-hide check.
+      local wbadge=""
+      case "$wstage" in pr_opened) wbadge=" [PR open]";; superseded) wbadge=" [in review]";; merged) wbadge=" [✅ merged]";; abandoned) wbadge=" [✗ abandoned]";; esac
       wtitle="$wkey"; [ -n "$wsummary" ] && wtitle="$wkey — $wsummary"
-      work="${work}$(printf '%s %s  %s' "$wemoji" "$wtitle" "$wicon")\t${wsn}\twork"$'\n'
+      work="${work}$(printf '%s %s%s  %s' "$wemoji" "$wtitle" "$wbadge" "$wicon")\t${wsn}\twork"$'\n'
       [ -n "$wnote" ] && work="${work}$(printf '   %s' "$wnote")\t${wsn}\twork"$'\n'
   done
   [ -n "$work" ] && { printf '── 🔨 Your work ──\t\t\n'; printf '%b' "$work"; }
@@ -1031,7 +1126,7 @@ Never pass \`--force\` on your own initiative.
 - Never run \`gh\` yourself — only the cgremlin helpers above post to GitHub.
 - Write \`.review_body.md\` to the session root path shown above, NOT the repo subdirectory.
 
-For live UI/web checks, use the PR's PREVIEW — do NOT run the app locally. Find the Vercel preview URL or the Storybook preview link in the PR (\`gh pr view <n> --json statusCheckRollup,comments\` — the grace-frontend-dev deployment, or a Storybook link in the checks/comments) and drive the browser (chrome-devtools MCP) against that preview URL. ONLY run locally if I explicitly ask you to test locally — then \`cgremlin --run-local $(basename "$SDIR")\`, use https://local.findcare.dev.aplaceformom.com/ , watch logs/dev-server.log, and \`cgremlin --stop-local $(basename "$SDIR")\` when done.
+For live UI/web checks, use the PR's PREVIEW — do NOT run the app locally. Find the Vercel preview URL or the Storybook preview link in the PR (\`gh pr view <n> --json statusCheckRollup,comments\` — the grace-frontend-dev deployment, or a Storybook link in the checks/comments) and drive the browser (chrome-devtools MCP) against that preview URL. The preview is behind Vercel Deployment Protection — do NOT attempt an interactive Vercel login; instead read \`VERCEL_AUTOMATION_BYPASS_SECRET\` from \`~/.cgremlin/config\` (a \`KEY="value"\` line) and append \`?x-vercel-protection-bypass=<secret>&x-vercel-set-bypass-cookie=true\` to the preview URL on first navigation. ONLY run locally if I explicitly ask you to test locally — then \`cgremlin --run-local $(basename "$SDIR")\`, use https://local.findcare.dev.aplaceformom.com/ , watch logs/dev-server.log, and \`cgremlin --stop-local $(basename "$SDIR")\` when done.
 CTX
     fi
 
@@ -1163,8 +1258,9 @@ status_pane_loop() {
         # load->reload-sync so reviewing→ready and lifecycle moves appear without a keypress
         # (reload-sync keeps the current list visible during the refresh — no empty flash).
         sel=$("$_cg" --review-list-grouped | fzf --ansi --reverse --delimiter='\t' --with-nth=1 \
-            --header='Mission Control — Enter: open a ready review / re-review a waiting one' \
+            --header='Mission Control — Enter: open · Ctrl-A: show/hide archived (merged/abandoned)' \
             --bind="load:reload-sync:sleep 2; $_cg --review-list-grouped" \
+            --bind="ctrl-a:execute-silent(f=\"$SESSIONS_DIR/.mc_show_archived\"; if [ -f \"\$f\" ]; then rm -f \"\$f\"; else : > \"\$f\"; fi)+reload-sync($_cg --review-list-grouped)" \
             --bind='double-click:accept' 2>/dev/null)
         local rc=$?
         [ $rc -ne 0 ] && { sleep 1; continue; }   # Esc/Ctrl-C → loop
@@ -1180,7 +1276,11 @@ status_pane_loop() {
 add_session_history() {
     local session_dir="$1"
     local action="$2"
-    local details="${3:-{}}"
+    # NB: do NOT write this as ${3:-{}} — bash parses that as default "{" plus a
+    # literal "}", appending a stray "}" to a set $3 and corrupting the details JSON
+    # (which then fails jq --argjson and silently drops the history entry). Same
+    # pitfall guarded in create_session_json. See CLAUDE.md / docs/session-lineage.md.
+    local details="$3"; [ -z "$details" ] && details="{}"
     local session_file="$session_dir/session.json"
 
     if [ -f "$session_file" ]; then
@@ -1322,7 +1422,7 @@ PROTO_HEAD
     cat <<'PROTO_BODY'
 
 **Reaching the target (both subagents):**
-- **Vercel preview behind a login wall:** do NOT attempt an interactive Vercel login. Bypass deployment protection with the automation secret — read `VERCEL_AUTOMATION_BYPASS_SECRET` from `repo/.env.local` and append `?x-vercel-protection-bypass=<secret>&x-vercel-set-bypass-cookie=true` to the preview URL on first navigation (or send it as the `x-vercel-protection-bypass` request header).
+- **Vercel preview behind a login wall:** do NOT attempt an interactive Vercel login. Bypass deployment protection with the automation secret — read `VERCEL_AUTOMATION_BYPASS_SECRET` from `~/.cgremlin/config` (a `KEY="value"` line; fall back to `repo/.env.local` only if that config has no such key) and append `?x-vercel-protection-bypass=<secret>&x-vercel-set-bypass-cookie=true` to the preview URL on first navigation (or send it as the `x-vercel-protection-bypass` request header).
 - **Page behind Clerk auth (dev):** sign in with a Clerk test user — use an email of the form `<test-specific-name>+clerk_test@example.com` (the `+clerk_test` suffix is what makes it a test account; pick a name specific to this check, e.g. `uicheck-<ticket>`) and the email verification code `424242`.
 - chrome-devtools runs with an isolated (fresh) profile, so there is no saved session — do the bypass/login on every run.
 
@@ -2640,14 +2740,29 @@ select_pr() {
     show_context "New PR Review" "📁 $REPO_DISPLAY" >&2
     dim "Fetching open PRs..." >&2
 
-    # Fetch open PRs
-    local prs=$(gh pr list --repo "$REPO" --state open --limit 50 --json number,title,author --jq '.[] | "#\(.number) \(.title) (@\(.author.login))"' 2>/dev/null)
+    # Fetch open PRs (a human browsing/picking is a legitimate manual action, so
+    # we still show ALL of them — but flag authors outside WATCH_AUTHORS so it's
+    # clear which fall outside the normal auto-review watch list).
+    local pr_rows
+    pr_rows=$(gh pr list --repo "$REPO" --state open --limit 50 --json number,title,author \
+        --jq '.[] | [(.number|tostring), .title, .author.login] | @tsv' 2>/dev/null)
 
-    if [ -z "$prs" ]; then
+    if [ -z "$pr_rows" ]; then
         dim "No open PRs found in $REPO" >&2
         sleep 2
         return 1
     fi
+
+    local prs="" _n _t _a _line
+    while IFS=$'\t' read -r _n _t _a; do
+        [ -z "$_n" ] && continue
+        _line="#${_n} ${_t} (@${_a})"
+        if [ -n "${WATCH_AUTHORS:-}" ] && ! is_watched_author "$_a"; then
+            _line="${_line} ⚠️ off-list author"
+        fi
+        prs="${prs:+$prs
+}${_line}"
+    done <<< "$pr_rows"
 
     local pr_count=$(echo "$prs" | wc -l | xargs)
 
@@ -2976,6 +3091,9 @@ EOF
             jira: (if ($jira | length) > 0 then {ticket: $jira, type: $jira_type, summary: $jira_summary} else null end)
         }')
     create_session_json "$SESSION_DIR" "review" "https://github.com/$OWNER/$REPO" "$extra_json"
+
+    # Link this review session back to the dev/inv session that spawned it (if any).
+    link_pr_to_source "$SESSION_DIR" "$PR_NUMBER" "$JIRA_TICKET_ID"
 
     # Create CLAUDE.md inside repo/ so Claude auto-reads it
     cat > CLAUDE.md << CLAUDE_EOF
@@ -5651,6 +5769,23 @@ def get_model():
         pass
     return 'sonnet'
 
+def get_review_model():
+    """Read REVIEW_MODEL from ~/.cgremlin/config, defaulting to opus."""
+    config_path = Path.home() / '.cgremlin' / 'config'
+    try:
+        if config_path.exists():
+            with open(config_path) as f:
+                for line in f:
+                    line = line.strip()
+                    if line.startswith('#') or '=' not in line:
+                        continue
+                    key, _, val = line.partition('=')
+                    if key.strip() == 'REVIEW_MODEL':
+                        return val.strip().strip('"\'') or 'opus'
+    except Exception:
+        pass
+    return 'opus'
+
 def get_use_zellij():
     """Read USE_ZELLIJ from ~/.cgremlin/config, defaulting to False."""
     config_path = Path.home() / '.cgremlin' / 'config'
@@ -6399,7 +6534,7 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             # Build command that runs ACR then Claude in the terminal
             acr_prompt = "STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it (ACR_REVIEW.md has prior automated findings as context) and follow its output — skip everything else. STEP 2 (only if skill unavailable): ACR_REVIEW.md contains automated findings — use as input but verify independently. You are a senior engineer. Review ONLY files listed in Changed Files in CLAUDE.md. ANY finding whose file is not in that list is INVALID — delete it. Follow CLAUDE.md review guidelines. Write REVIEW.md with findings by severity. For each: file:line, what the code does, the problem, why it matters, and a concrete fix. Self-check: before finishing, verify every finding references a changed file."
             escaped_prompt = acr_prompt.replace("'", "'\\''")
-            claude_cmd = f"direnv allow '{repo_path}/.envrc' 2>/dev/null; cd '{repo_path}' && echo '=== Running ACR ===' && acr -r 5 -a claude -b {base_branch} -t 10m --local > '{session_path}/ACR_REVIEW.md' 2>&1; echo '=== Starting Claude ===' && claude --model {get_model()} --add-dir '{session_path}' -- '{escaped_prompt}'"
+            claude_cmd = f"direnv allow '{repo_path}/.envrc' 2>/dev/null; cd '{repo_path}' && echo '=== Running ACR ===' && acr -r 5 -a claude -b {base_branch} -t 10m --local > '{session_path}/ACR_REVIEW.md' 2>&1; echo '=== Starting Claude ===' && claude --model {get_review_model()} --add-dir '{session_path}' -- '{escaped_prompt}'"
 
             # Create logs directory
             logs_dir = session_path / 'logs'
@@ -6461,46 +6596,8 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
             if not file_path or not comment:
                 self.send_error(400, 'Missing file path or comment')
                 return
-            # Get PR info from session
-            pr_number = None
-            repo_owner = None
-            repo_name = None
-
-            session_json = session_path / 'session.json'
-            info_file = session_path / 'session-info.txt'
-
-            # Try V2 format first
-            if session_json.exists():
-                with open(session_json) as f:
-                    content = f.read().strip()
-                if content:
-                    data = json.loads(content)
-                    pr_info = data.get('pr', {})
-                    # Ensure PR number is string
-                    pr_number = str(pr_info.get('number', '')).strip() or None
-                    project = data.get('project', '')
-                    # Parse owner/repo from project URL
-                    match = re.search(r'github\.com/([^/]+)/([^/]+)', project)
-                    if match:
-                        repo_owner = match.group(1)
-                        repo_name = match.group(2).replace('.git', '')
-
-            # Fall back to V1 format
-            if not pr_number and info_file.exists():
-                content = info_file.read_text()
-                # Extract PR number
-                match = re.search(r'PR #(\d+)', content)
-                if match:
-                    pr_number = match.group(1)
-                # Extract repo from URL or Repository line
-                match = re.search(r'Repository:\s*([^\n]+)', content)
-                if match:
-                    repo_str = match.group(1).strip()
-                    if '/' in repo_str:
-                        parts = repo_str.split('/')
-                        if len(parts) >= 2:
-                            repo_owner = parts[-2]
-                            repo_name = parts[-1].replace('.git', '')
+            # Get PR info from session (V2 session.json first, V1 fallback)
+            pr_number, repo_owner, repo_name, _pr_base = self._derive_pr_ref(session_path)
 
             # Debug: Log extracted values
             print(f"[DEBUG] Extracted: PR#{pr_number}, Owner={repo_owner}, Repo={repo_name}", flush=True)
@@ -6724,42 +6821,8 @@ class DashboardHandler(http.server.SimpleHTTPRequestHandler):
         """Refresh PR comments and discussions"""
         import re
         try:
-            # Get PR info from session
-            pr_number = None
-            repo_owner = None
-            repo_name = None
-
-            session_json = session_path / 'session.json'
-            info_file = session_path / 'session-info.txt'
-
-            # Try V2 format first
-            if session_json.exists():
-                with open(session_json) as f:
-                    content = f.read().strip()
-                if content:
-                    data = json.loads(content)
-                    pr_info = data.get('pr', {})
-                    pr_number = pr_info.get('number')
-                    project = data.get('project', '')
-                    match = re.search(r'github\.com/([^/]+)/([^/]+)', project)
-                    if match:
-                        repo_owner = match.group(1)
-                        repo_name = match.group(2).replace('.git', '')
-
-            # Fall back to V1 format
-            if not pr_number and info_file.exists():
-                content = info_file.read_text()
-                match = re.search(r'PR #(\d+)', content)
-                if match:
-                    pr_number = match.group(1)
-                match = re.search(r'Repository:\s*([^\n]+)', content)
-                if match:
-                    repo_str = match.group(1).strip()
-                    if '/' in repo_str:
-                        parts = repo_str.split('/')
-                        if len(parts) >= 2:
-                            repo_owner = parts[-2]
-                            repo_name = parts[-1].replace('.git', '')
+            # Get PR info from session (V2 session.json first, V1 fallback)
+            pr_number, repo_owner, repo_name, _pr_base = self._derive_pr_ref(session_path)
 
             if not all([pr_number, repo_owner, repo_name]):
                 self.send_error(400, 'Could not determine PR info')
@@ -6928,53 +6991,8 @@ DO NOT COMMIT - the user will review and commit manually."""
         import re
 
         try:
-            # Get PR info from session (try V2 then V1)
-            pr_number = None
-            owner = None
-            repo = None
-
-            session_json = session_path / 'session.json'
-            info_file = session_path / 'session-info.txt'
-
-            # Try V2 format first
-            if session_json.exists():
-                try:
-                    content = session_json.read_text().strip()
-                    if content:
-                        data = json.loads(content)
-                        pr_info = data.get('pr', {})
-                        pr_number = pr_info.get('number')
-                        project = data.get('project', '')
-                        match = re.search(r'github\.com/([^/]+)/([^/]+)', project)
-                        if match:
-                            owner = match.group(1)
-                            repo = match.group(2).replace('.git', '')
-                except:
-                    pass
-
-            # Fall back to V1 format (session-info.txt)
-            if not pr_number and info_file.exists():
-                content = info_file.read_text()
-                # Extract PR number from "PR #930:" pattern
-                match = re.search(r'PR #(\d+)', content)
-                if match:
-                    pr_number = match.group(1)
-                # Extract repo from "Repository: org/repo" or URL pattern
-                match = re.search(r'Repository:\s*([^\n]+)', content)
-                if match:
-                    repo_str = match.group(1).strip()
-                    # Handle "org/repo" format
-                    if '/' in repo_str and 'github.com' not in repo_str:
-                        parts = repo_str.split('/')
-                        if len(parts) >= 2:
-                            owner = parts[0]
-                            repo = parts[1].replace('.git', '')
-                    # Handle full URL
-                    elif 'github.com' in repo_str:
-                        url_match = re.search(r'github\.com/([^/]+)/([^/\s]+)', repo_str)
-                        if url_match:
-                            owner = url_match.group(1)
-                            repo = url_match.group(2).replace('.git', '')
+            # Get PR info from session (V2 session.json first, V1 fallback)
+            pr_number, owner, repo, _pr_base = self._derive_pr_ref(session_path)
 
             if not all([pr_number, owner, repo]):
                 self.send_error(400, f'Could not determine PR info: pr={pr_number}, owner={owner}, repo={repo}')
@@ -7125,46 +7143,10 @@ DO NOT COMMIT - the user will review and commit manually."""
                 self.send_error(400, 'Repo not found (session may be archived)')
                 return
 
-            # --- Get PR info from session (try V2 then V1) ---
+            # --- Get PR info from session (V2 session.json first, V1 fallback) ---
             session_json = session_path / 'session.json'
             info_file = session_path / 'session-info.txt'
-
-            pr_number = None
-            pr_base = 'main'
-            repo_owner = None
-            repo_name = None
-
-            if session_json.exists():
-                try:
-                    content = session_json.read_text().strip()
-                    if content:
-                        data = json.loads(content)
-                        pr_number = data.get('pr', {}).get('number')
-                        pr_base = data.get('pr', {}).get('base', 'main')
-                        project = data.get('project', '')
-                        match = re.search(r'github\.com/([^/]+)/([^/]+)', project)
-                        if match:
-                            repo_owner = match.group(1)
-                            repo_name = match.group(2).replace('.git', '')
-                except:
-                    pass
-
-            if not pr_number and info_file.exists():
-                content = info_file.read_text()
-                match = re.search(r'PR #(\d+)', content)
-                if match:
-                    pr_number = match.group(1)
-                match = re.search(r'Branch:.*→\s*(\S+)', content)
-                if match:
-                    pr_base = match.group(1)
-                match = re.search(r'Repository:\s*([^\n]+)', content)
-                if match:
-                    repo_str = match.group(1).strip()
-                    if '/' in repo_str:
-                        parts = repo_str.split('/')
-                        if len(parts) >= 2:
-                            repo_owner = parts[-2]
-                            repo_name = parts[-1].replace('.git', '')
+            pr_number, repo_owner, repo_name, pr_base = self._derive_pr_ref(session_path)
 
             if not pr_number:
                 self.send_error(400, 'Could not find PR number')
@@ -7371,9 +7353,9 @@ Re-evaluate across ALL findings. Only OPEN 🔴/🟠 findings block approval.
             # Run claude directly (not via script(1) — script swallows the prompt argument)
             escaped_prompt = prompt.replace("'", "'\\''")
             if mode == 'acr+claude':
-                claude_cmd = f"direnv allow '{repo_path}/.envrc' 2>/dev/null; cd '{repo_path}' && echo '=== Running ACR ===' && acr -r 5 -a claude -b {pr_base} --local > '{session_path}/ACR_REVIEW.md' 2>&1; echo '=== Starting Claude ===' && claude --model {get_model()} --add-dir '{session_path}' -- '{escaped_prompt}'"
+                claude_cmd = f"direnv allow '{repo_path}/.envrc' 2>/dev/null; cd '{repo_path}' && echo '=== Running ACR ===' && acr -r 5 -a claude -b {pr_base} --local > '{session_path}/ACR_REVIEW.md' 2>&1; echo '=== Starting Claude ===' && claude --model {get_review_model()} --add-dir '{session_path}' -- '{escaped_prompt}'"
             else:
-                claude_cmd = f"direnv allow '{repo_path}/.envrc' 2>/dev/null; cd '{repo_path}' && claude --model {get_model()} --add-dir '{session_path}' -- '{escaped_prompt}'"
+                claude_cmd = f"direnv allow '{repo_path}/.envrc' 2>/dev/null; cd '{repo_path}' && claude --model {get_review_model()} --add-dir '{session_path}' -- '{escaped_prompt}'"
 
             color_cmd = iterm_color_escape(session_color(session_name))
             result = launch_in_terminal_tab(f"🔄 Re-review: {session_name}", claude_cmd, color_cmd)
@@ -7816,113 +7798,154 @@ Re-evaluate across ALL findings. Only OPEN 🔴/🟠 findings block approval.
         sessions = []
         now = time.time()
         for entry in Path(SESSIONS_DIR).iterdir():
-            if not entry.is_dir() or entry.name.startswith('.'):
+            try:
+                if not entry.is_dir() or entry.name.startswith('.'):
+                    continue
+                session_json = entry / 'session.json'
+                info_file = entry / 'session-info.txt'
+
+                info = {}
+
+                # V2 format: session.json (but fall back to v1 if empty/invalid)
+                if session_json.exists():
+                    info = self.parse_session_json(session_json)
+
+                # V1 format: session-info.txt (fallback if v2 missing or invalid)
+                if not info and info_file.exists():
+                    info = self.parse_session_info(info_file)
+                    # Detect session type from folder name for v1
+                    if entry.name.startswith('pr-'):
+                        info['session_type'] = 'review'
+                    elif entry.name.startswith('dev-'):
+                        info['session_type'] = 'development'
+                    elif entry.name.startswith('inv-'):
+                        info['session_type'] = 'investigation'
+                    else:
+                        info['session_type'] = 'unknown'
+
+                # Show broken sessions so they can be deleted from the UI
+                if not info:
+                    info = {
+                        'display_title': f'⚠ Broken session: {entry.name}',
+                        'status': 'broken',
+                        'created': '',
+                        'project': '',
+                    }
+                    if entry.name.startswith('pr-'):
+                        info['session_type'] = info['mode'] = 'review'
+                    elif entry.name.startswith('dev-'):
+                        info['session_type'] = info['mode'] = 'development'
+                    elif entry.name.startswith('inv-'):
+                        info['session_type'] = info['mode'] = 'investigation'
+                    else:
+                        info['session_type'] = info['mode'] = 'unknown'
+
+                # Detect session type from folder name if mode is unknown/missing
+                if info.get('session_type', 'unknown') == 'unknown' or info.get('mode', 'unknown') == 'unknown':
+                    if entry.name.startswith('pr-'):
+                        info['session_type'] = info['mode'] = 'review'
+                    elif entry.name.startswith('dev-'):
+                        info['session_type'] = info['mode'] = 'development'
+                    elif entry.name.startswith('inv-'):
+                        info['session_type'] = info['mode'] = 'investigation'
+
+                info['name'] = entry.name
+                # Check for output files in both root and repo/ folder
+                def has_file(name):
+                    root = entry / name
+                    repo = entry / 'repo' / name
+                    return (root.exists() and root.stat().st_size > 0) or (repo.exists() and repo.stat().st_size > 0)
+                info['has_review'] = has_file('REVIEW.md')
+                info['has_findings'] = has_file('FINDINGS.md')
+                info['has_devlog'] = has_file('DEVLOG.md')
+                info['archived'] = not (entry / 'repo').exists()
+
+                # Check for archived review versions (REVIEW-v1.md, REVIEW-v2.md, etc.)
+                review_versions = []
+                for f in entry.glob('REVIEW-v*.md'):
+                    if f.stat().st_size > 0:
+                        version = f.stem.replace('REVIEW-', '')
+                        review_versions.append(version)
+                info['review_versions'] = sorted(review_versions)
+
+                # Check for RE-REVIEW.md (indicates re-review in progress)
+                info['has_rereview'] = (entry / 'RE-REVIEW.md').exists() or (entry / 'repo' / 'RE-REVIEW.md').exists()
+
+                # Check terminal status
+                info['has_terminal'] = self.check_terminal_active(entry)
+
+                # --- Stable timestamps ---
+                # Parse creation time from folder name (e.g. pr-name-20260219-172956)
+                created_ts = 0
+                m = re.search(r'(\d{8})-(\d{6})$', entry.name)
+                if m:
+                    try:
+                        dt = datetime.datetime.strptime(m.group(1) + m.group(2), '%Y%m%d%H%M%S')
+                        created_ts = dt.timestamp()
+                    except ValueError:
+                        pass
+                if not created_ts:
+                    # Fallback: use created field from session-info or session.json
+                    created_str = info.get('created', '')
+                    if created_str:
+                        for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S'):
+                            try:
+                                created_ts = datetime.datetime.strptime(created_str[:19], fmt).timestamp()
+                                break
+                            except ValueError:
+                                pass
+                if not created_ts:
+                    created_ts = entry.stat().st_ctime
+                info['created_ts'] = created_ts
+
+                # Last activity: mtime of the directory
+                info['last_activity_ts'] = entry.stat().st_mtime
+
+                # Stale: no activity in 3+ days (and not archived)
+                days_inactive = (now - info['last_activity_ts']) / 86400
+                info['stale'] = days_inactive > 3 and not info['archived']
+
+                # --- Pipeline grouping key (works for lineage-aware AND legacy
+                # sessions). Ordered fallback: pipeline_id > jira ticket > PR number >
+                # own id (a pipeline of one). This is the ONLY place lineage-less
+                # sessions get grouped — an old inv/dev/pr trio sharing a ticket still
+                # collapses into one pipeline via the ticket fallback. ---
+                pid = info.get('pipeline_id') or ''
+                ticket = info.get('jira') or ''
+                pr_num = info.get('pr') or ''
+                # Repo slug (last path segment of the repo URL). PR numbers are only
+                # unique WITHIN a repo, so the PR-number fallback key must be repo-scoped
+                # to stop same-numbered PRs from different repos collapsing into one
+                # pipeline. Jira keys stay un-scoped (ticket IDs are globally unique).
+                repo_src = info.get('repository') or info.get('project') or ''
+                repo_slug = repo_src.rstrip('/').split('/')[-1] if repo_src else ''
+                if repo_slug.endswith('.git'):
+                    repo_slug = repo_slug[:-4]
+                if pid:
+                    pkey = pid
+                elif ticket:
+                    pkey = 'jira:' + str(ticket)
+                elif pr_num:
+                    pkey = 'pr:' + ((repo_slug + ':') if repo_slug else '') + str(pr_num)
+                else:
+                    pkey = 'sid:' + entry.name
+                info['pipeline_id'] = pid
+                info.setdefault('parent_session_id', None)
+                info['pipeline_key'] = pkey
+                # stage_status default for sessions with no explicit value (incl. V1)
+                if not info.get('stage_status'):
+                    info['stage_status'] = self._default_stage_status(
+                        info.get('mode') or info.get('session_type') or '', {})
+                # promoted flag default for V1/broken sessions
+                if 'promoted_from_investigation' not in info:
+                    info['promoted_from_investigation'] = (
+                        (info.get('mode') == 'development') and entry.name.startswith('inv-'))
+
+                sessions.append((entry, info))
+            except Exception:
+                # Session dir may vanish mid-iteration (watch-daemon deletes
+                # merged/closed sessions); skip this entry and keep going.
                 continue
-            session_json = entry / 'session.json'
-            info_file = entry / 'session-info.txt'
-
-            info = {}
-
-            # V2 format: session.json (but fall back to v1 if empty/invalid)
-            if session_json.exists():
-                info = self.parse_session_json(session_json)
-
-            # V1 format: session-info.txt (fallback if v2 missing or invalid)
-            if not info and info_file.exists():
-                info = self.parse_session_info(info_file)
-                # Detect session type from folder name for v1
-                if entry.name.startswith('pr-'):
-                    info['session_type'] = 'review'
-                elif entry.name.startswith('dev-'):
-                    info['session_type'] = 'development'
-                elif entry.name.startswith('inv-'):
-                    info['session_type'] = 'investigation'
-                else:
-                    info['session_type'] = 'unknown'
-
-            # Show broken sessions so they can be deleted from the UI
-            if not info:
-                info = {
-                    'display_title': f'⚠ Broken session: {entry.name}',
-                    'status': 'broken',
-                    'created': '',
-                    'project': '',
-                }
-                if entry.name.startswith('pr-'):
-                    info['session_type'] = info['mode'] = 'review'
-                elif entry.name.startswith('dev-'):
-                    info['session_type'] = info['mode'] = 'development'
-                elif entry.name.startswith('inv-'):
-                    info['session_type'] = info['mode'] = 'investigation'
-                else:
-                    info['session_type'] = info['mode'] = 'unknown'
-
-            # Detect session type from folder name if mode is unknown/missing
-            if info.get('session_type', 'unknown') == 'unknown' or info.get('mode', 'unknown') == 'unknown':
-                if entry.name.startswith('pr-'):
-                    info['session_type'] = info['mode'] = 'review'
-                elif entry.name.startswith('dev-'):
-                    info['session_type'] = info['mode'] = 'development'
-                elif entry.name.startswith('inv-'):
-                    info['session_type'] = info['mode'] = 'investigation'
-
-            info['name'] = entry.name
-            # Check for output files in both root and repo/ folder
-            def has_file(name):
-                root = entry / name
-                repo = entry / 'repo' / name
-                return (root.exists() and root.stat().st_size > 0) or (repo.exists() and repo.stat().st_size > 0)
-            info['has_review'] = has_file('REVIEW.md')
-            info['has_findings'] = has_file('FINDINGS.md')
-            info['has_devlog'] = has_file('DEVLOG.md')
-            info['archived'] = not (entry / 'repo').exists()
-
-            # Check for archived review versions (REVIEW-v1.md, REVIEW-v2.md, etc.)
-            review_versions = []
-            for f in entry.glob('REVIEW-v*.md'):
-                if f.stat().st_size > 0:
-                    version = f.stem.replace('REVIEW-', '')
-                    review_versions.append(version)
-            info['review_versions'] = sorted(review_versions)
-
-            # Check for RE-REVIEW.md (indicates re-review in progress)
-            info['has_rereview'] = (entry / 'RE-REVIEW.md').exists() or (entry / 'repo' / 'RE-REVIEW.md').exists()
-
-            # Check terminal status
-            info['has_terminal'] = self.check_terminal_active(entry)
-
-            # --- Stable timestamps ---
-            # Parse creation time from folder name (e.g. pr-name-20260219-172956)
-            created_ts = 0
-            m = re.search(r'(\d{8})-(\d{6})$', entry.name)
-            if m:
-                try:
-                    dt = datetime.datetime.strptime(m.group(1) + m.group(2), '%Y%m%d%H%M%S')
-                    created_ts = dt.timestamp()
-                except ValueError:
-                    pass
-            if not created_ts:
-                # Fallback: use created field from session-info or session.json
-                created_str = info.get('created', '')
-                if created_str:
-                    for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S'):
-                        try:
-                            created_ts = datetime.datetime.strptime(created_str[:19], fmt).timestamp()
-                            break
-                        except ValueError:
-                            pass
-            if not created_ts:
-                created_ts = entry.stat().st_ctime
-            info['created_ts'] = created_ts
-
-            # Last activity: mtime of the directory
-            info['last_activity_ts'] = entry.stat().st_mtime
-
-            # Stale: no activity in 3+ days (and not archived)
-            days_inactive = (now - info['last_activity_ts']) / 86400
-            info['stale'] = days_inactive > 3 and not info['archived']
-
-            sessions.append((entry, info))
 
         # Check PR states in parallel (uncached ones only)
         from concurrent.futures import ThreadPoolExecutor
@@ -8000,6 +8023,86 @@ Re-evaluate across ALL findings. Only OPEN 🔴/🟠 findings block approval.
             pass
         return None
 
+    def _derive_pr_ref(self, session_path):
+        """Derive (pr_number, owner, repo, base) for a PR session.
+
+        Consolidates the previously-duplicated derivation used by
+        post_review_comment / refresh_pr_discussion / import_pr_comments / the PR-base
+        block. V2 session.json first, then V1 session-info.txt fallback. pr_number is
+        coerced to a stripped str (or None); owner/repo have a trailing .git stripped;
+        base defaults to 'main'. Malformed V2 JSON silently falls through to V1.
+        """
+        import re
+        pr_number = None
+        owner = None
+        repo = None
+        base = 'main'
+        session_json = session_path / 'session.json'
+        info_file = session_path / 'session-info.txt'
+
+        # V2 format first
+        if session_json.exists():
+            try:
+                content = session_json.read_text().strip()
+                if content:
+                    data = json.loads(content)
+                    pr_info = data.get('pr', {}) or {}
+                    num = pr_info.get('number')
+                    if num is not None:
+                        pr_number = str(num).strip() or None
+                    base = pr_info.get('base', 'main') or 'main'
+                    project = data.get('project', '')
+                    match = re.search(r'github\.com/([^/]+)/([^/]+)', project)
+                    if match:
+                        owner = match.group(1)
+                        repo = match.group(2).replace('.git', '')
+            except Exception:
+                pass
+
+        # V1 fallback (session-info.txt)
+        if not pr_number and info_file.exists():
+            content = info_file.read_text()
+            match = re.search(r'PR #(\d+)', content)
+            if match:
+                pr_number = match.group(1)
+            match = re.search(r'Branch:.*→\s*(\S+)', content)
+            if match:
+                base = match.group(1)
+            match = re.search(r'Repository:\s*([^\n]+)', content)
+            if match:
+                repo_str = match.group(1).strip()
+                if 'github.com' in repo_str:
+                    url_match = re.search(r'github\.com/([^/]+)/([^/\s]+)', repo_str)
+                    if url_match:
+                        owner = url_match.group(1)
+                        repo = url_match.group(2).replace('.git', '')
+                elif '/' in repo_str:
+                    parts = repo_str.split('/')
+                    if len(parts) >= 2:
+                        owner = parts[-2]
+                        repo = parts[-1].replace('.git', '')
+
+        return pr_number, owner, repo, base
+
+    def _default_stage_status(self, mode, data):
+        """Default/derived stage_status when session.json lacks an explicit one.
+        Review sessions derive from lifecycle/review_state (see docs/session-lineage.md §5/§8);
+        investigation/development default to 'active'. Terminal development values
+        ('merged' after a PR merges, 'abandoned' after a PR closes unmerged) are always
+        written explicitly by the watch daemon, so they are never derived here — they
+        flow through unchanged (see parse_session_json's `data.get('stage_status') or ...`)."""
+        if mode == 'review':
+            lc = (data or {}).get('lifecycle', 'none')
+            rs = (data or {}).get('review_state', '')
+            if lc == 'approved':
+                return 'approved'
+            if lc == 'changes-requested':
+                return 'changes_requested'
+            if rs == 'ready':
+                return 'ready'
+            return 'queued'
+        return 'active'
+
     def parse_session_json(self, path):
         """Parse V2 session.json format"""
         import re
@@ -8069,6 +8172,22 @@ Re-evaluate across ALL findings. Only OPEN 🔴/🟠 findings block approval.
             # Override display_title if custom one was set
             if data.get('display_title'):
                 info['display_title'] = data['display_title']
+
+            # --- Session lineage (pipeline grouping). Backward-compatible: sessions
+            # predating this schema have no lineage/stage_status; defaults fill in and
+            # send_sessions_list computes a fallback pipeline_key from ticket/PR/id. ---
+            lineage = data.get('lineage', {}) or {}
+            info['pipeline_id'] = lineage.get('pipeline_id', '') or ''
+            info['parent_session_id'] = lineage.get('parent_session_id')
+            info['stage_status'] = data.get('stage_status') or self._default_stage_status(mode, data)
+            # A development session that began life as an investigation and was promoted
+            # in place (develop_start) — via the recorded history action, or, for old
+            # sessions with no history, the inv- dir prefix with mode=development.
+            history = data.get('history') or []
+            promoted = any((h or {}).get('action') == 'promoted-to-development' for h in history)
+            if not promoted and mode == 'development' and str(path).split('/')[-2].startswith('inv-'):
+                promoted = True
+            info['promoted_from_investigation'] = promoted
 
             # Terminal info
             terminal = data.get('terminal', {})
@@ -8445,6 +8564,18 @@ Re-evaluate across ALL findings. Only OPEN 🔴/🟠 findings block approval.
         .filter-input::placeholder { color: var(--text-tertiary); }
         .filter-input:focus { border-color: var(--accent); }
 
+        .show-archived-toggle {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-top: 8px;
+            font-size: 11px;
+            color: var(--text-tertiary);
+            cursor: pointer;
+            user-select: none;
+        }
+        .show-archived-toggle input { cursor: pointer; margin: 0; }
+
         .sidebar-body {
             flex: 1;
             overflow-y: auto;
@@ -8542,6 +8673,8 @@ Re-evaluate across ALL findings. Only OPEN 🔴/🟠 findings block approval.
         }
 
         .tag-mode { background: var(--accent-bg); color: var(--accent); }
+        .tag-repo { background: var(--amber-bg); color: var(--amber); }
+        .tag-jira { background: var(--blue-bg); color: var(--blue); }
         .tag-review { background: var(--blue-bg); color: var(--blue); }
         .tag-findings { background: var(--amber-bg); color: var(--amber); }
         .tag-devlog { background: rgba(167,139,250,0.1); color: #a78bfa; }
@@ -8553,6 +8686,76 @@ Re-evaluate across ALL findings. Only OPEN 🔴/🟠 findings block approval.
         .session-item.dimmed .si-title { opacity: 0.55; }
         .session-item.dimmed .si-folder { opacity: 0.4; }
         .session-item.dimmed:not(.active):hover .si-title { opacity: 0.75; }
+
+        /* ===== LINEAGE PIPELINE GROUPS ===== */
+        .lineage-group {
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            margin-bottom: 6px;
+            overflow: hidden;
+        }
+        .lineage-group.has-active { border-color: var(--accent-border); }
+        .lineage-header {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-wrap: wrap;
+            padding: 8px 10px;
+            cursor: pointer;
+            background: var(--bg-surface);
+        }
+        .lineage-header:hover { background: var(--bg-hover); }
+        .lineage-caret {
+            font-size: 10px;
+            color: var(--text-tertiary);
+            transition: transform var(--transition);
+        }
+        .lineage-group.collapsed .lineage-caret { transform: rotate(-90deg); }
+        .lineage-ticket {
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--text-primary);
+            font-family: var(--font-mono);
+        }
+        /* Explicit repo tag — shown only for non-default repos so same-numbered PRs
+           across repos are distinguishable (grace-frontend stays terse/untagged). */
+        .repo-tag {
+            font-size: 10px;
+            font-weight: 700;
+            padding: 1px 6px;
+            border-radius: 4px;
+            background: var(--amber-bg);
+            color: var(--amber);
+            font-family: var(--font-mono);
+            text-transform: lowercase;
+            letter-spacing: 0.3px;
+        }
+        .lineage-trail {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            flex-wrap: wrap;
+        }
+        .stage-badge {
+            font-size: 10px;
+            font-weight: 600;
+            padding: 2px 6px;
+            border-radius: 4px;
+            background: var(--accent-bg);
+            color: var(--accent);
+            white-space: nowrap;
+        }
+        .stage-badge:hover { filter: brightness(1.15); }
+        .stage-badge.stage-inv, .stage-badge.stage-promoted { background: var(--amber-bg); color: var(--amber); }
+        .stage-badge.stage-dev { background: rgba(167,139,250,0.12); color: #a78bfa; }
+        .stage-badge.stage-review { background: var(--blue-bg); color: var(--blue); }
+        .stage-badge.stage-done { background: var(--green-bg); color: var(--green); }
+        .stage-arrow { color: var(--text-tertiary); font-size: 10px; }
+        .lineage-members {
+            padding: 4px 6px 6px;
+            border-top: 1px solid var(--border);
+        }
+        .lineage-group.collapsed .lineage-members { display: none; }
 
         @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.3; } }
 
@@ -9178,6 +9381,9 @@ Re-evaluate across ALL findings. Only OPEN 🔴/🟠 findings block approval.
         </div>
         <div class="sidebar-search">
             <input type="text" class="filter-input" placeholder="Search sessions..." id="filter">
+            <label class="show-archived-toggle" title="Show merged/abandoned/archived sessions">
+                <input type="checkbox" id="showArchived"> Show archived
+            </label>
         </div>
         <div class="sidebar-body" id="sidebarBody"></div>
     </aside>
@@ -9448,20 +9654,186 @@ Re-evaluate across ALL findings. Only OPEN 🔴/🟠 findings block approval.
         }
     }
 
+    // Collapse state for lineage pipelines, keyed by pipeline_key. Persists across
+    // the periodic renderSessions() re-renders so a user's manual collapse sticks.
+    const collapsedPipelines = new Set();
+
+    // Per-stage rank so a pipeline's segments read investigation → development → review.
+    function stageRank(s) {
+        const m = s.mode || s.session_type || '';
+        if (m === 'investigation') return 0;
+        if (m === 'development') return 1;
+        if (m === 'review') return 2;
+        return 3;
+    }
+
+    // Build the ordered badge segments for one session. A development session that
+    // was promoted in place from an investigation contributes BOTH a 🔍 (promoted)
+    // and a 🔨 segment — each opening the same underlying session (single-session
+    // promotion model; see docs/session-lineage.md §6.2).
+    function stageBadges(s) {
+        const mode = s.mode || s.session_type || '';
+        const stage = (s.stage_status || '').replace(/_/g, ' ');
+        const out = [];
+        if (mode === 'investigation') {
+            out.push({ emoji: '🔍', label: 'Investigation' + (stage ? ' (' + stage + ')' : ''), name: s.name, cls: 'inv' });
+        } else if (mode === 'development') {
+            if (s.promoted_from_investigation)
+                out.push({ emoji: '🔍', label: 'Investigation (promoted)', name: s.name, cls: 'promoted' });
+            // Terminal 'merged' (PR merged, source archived) gets a distinct done badge.
+            if (s.stage_status === 'merged')
+                out.push({ emoji: '✅', label: 'Development (merged)', name: s.name, cls: 'done' });
+            else
+                out.push({ emoji: '🔨', label: 'Development' + (stage ? ' (' + stage + ')' : ''), name: s.name, cls: 'dev' });
+        } else if (mode === 'review') {
+            const rslug = sessionRepoSlug(s);
+            const rpfx = (rslug && rslug !== DEFAULT_REPO_SLUG) ? '[' + rslug + '] ' : '';
+            const pr = s.pr ? '#' + s.pr + ' ' : '';
+            out.push({ emoji: '🔔', label: rpfx + pr + 'Review' + (stage ? ' (' + stage + ')' : ''), name: s.name, cls: 'review' });
+        } else {
+            out.push({ emoji: '•', label: (mode || 'session') + (stage ? ' (' + stage + ')' : ''), name: s.name, cls: 'other' });
+        }
+        return out;
+    }
+
+    // Default repo — PRs from here stay terse (no tag). Every OTHER repo gets an
+    // explicit tag so same-numbered PRs across repos are visually distinguishable.
+    const DEFAULT_REPO_SLUG = 'grace-frontend';
+
+    // Last path segment of a session's repo URL (…/OWNER/REPO[.git] → REPO).
+    function sessionRepoSlug(s) {
+        var r = (s && (s.repository || s.project)) || '';
+        r = r.replace(/\\.git$/, '').replace(/\\/+$/, '');
+        var parts = r.split('/').filter(Boolean);
+        return parts.length ? parts[parts.length - 1] : '';
+    }
+
+    // Repo-tag HTML for a pipeline (derived from its members). Empty for the default
+    // repo (and when the repo can't be determined).
+    function pipelineRepoTagHtml(members) {
+        for (var i = 0; i < members.length; i++) {
+            var slug = sessionRepoSlug(members[i]);
+            if (slug) return (slug !== DEFAULT_REPO_SLUG)
+                ? '<span class="repo-tag">' + escapeHtml(slug) + '</span> ' : '';
+        }
+        return '';
+    }
+
+    function pipelineLabel(pkey, members) {
+        const tag = pipelineRepoTagHtml(members);
+        const withTicket = members.find(m => m.jira);
+        if (withTicket) return tag + escapeHtml(withTicket.jira);
+        if (pkey.startsWith('jira:')) return tag + escapeHtml(pkey.slice(5));
+        if (pkey.startsWith('pr:')) {
+            // Repo-scoped key 'pr:<repo>:<num>'; tolerate legacy 'pr:<num>'.
+            const rest = pkey.slice(3);
+            const ci = rest.lastIndexOf(':');
+            const prNum = ci >= 0 ? rest.slice(ci + 1) : rest;
+            return tag + 'PR #' + escapeHtml(prNum);
+        }
+        if (pkey.startsWith('pl-')) return tag + escapeHtml(pkey);
+        return escapeHtml(members[0] ? members[0].name : pkey);
+    }
+
+    // A collapsible lineage container: a header (ticket + stage-badge trail) plus the
+    // existing session items for each stage. Each trail badge and each item opens its
+    // own underlying session — grouping is purely visual.
+    function renderPipelineGroup(members, pkey) {
+        const ordered = members.slice().sort((a, b) => stageRank(a) - stageRank(b));
+        const segs = [];
+        ordered.forEach(m => stageBadges(m).forEach(b => segs.push(b)));
+        const trail = segs.map(b =>
+            '<span class="stage-badge stage-' + b.cls + '" title="' + escapeHtml(b.label) +
+            '" onclick="event.stopPropagation();selectSession(&quot;' + b.name + '&quot;)">' +
+            b.emoji + ' ' + escapeHtml(b.label) + '</span>'
+        ).join('<span class="stage-arrow">→</span>');
+
+        const collapsed = collapsedPipelines.has(pkey);
+        const hasActive = ordered.some(m => m.name === state.currentSession);
+        const body = ordered.map(m => renderSessionItem(m)).join('');
+        return '<div class="lineage-group' + (collapsed ? ' collapsed' : '') + (hasActive ? ' has-active' : '') +
+                    '" data-pkey="' + escapeHtml(pkey) + '">' +
+            '<div class="lineage-header" onclick="togglePipeline(&quot;' + escapeHtml(pkey) + '&quot;)">' +
+                '<span class="lineage-caret">▾</span>' +
+                '<span class="lineage-ticket">' + pipelineLabel(pkey, ordered) + '</span>' +
+                '<span class="lineage-trail">' + trail + '</span>' +
+            '</div>' +
+            '<div class="lineage-members">' + body + '</div>' +
+        '</div>';
+    }
+
+    function togglePipeline(pkey) {
+        if (collapsedPipelines.has(pkey)) collapsedPipelines.delete(pkey);
+        else collapsedPipelines.add(pkey);
+        renderSessions();
+    }
+
+    // A session is terminal (hidden by default) when it has reached a terminal
+    // stage_status (merged/abandoned) or has been archived (repo removed). Hidden is
+    // a view filter only — the session stays fully on disk and returns via the toggle.
+    function isTerminalSession(s) {
+        return !!s.archived || s.stage_status === 'merged' || s.stage_status === 'abandoned';
+    }
+
     function renderSessions() {
         const filter = document.getElementById('filter').value.toLowerCase();
+        const showArchived = document.getElementById('showArchived').checked;
         const filtered = state.sessions.filter(s =>
             Object.values(s).some(v => typeof v === 'string' && v.toLowerCase().includes(filter))
         );
 
-        // Server already sorts: live first, then by creation date, archived last.
-        // Group into visual sections.
-        const live = filtered.filter(s => !s.archived && s.has_terminal);
-        const active = filtered.filter(s => !s.archived && !s.has_terminal && !s.stale && s.pr_state !== 'MERGED' && s.pr_state !== 'CLOSED');
-        const done = filtered.filter(s => !s.archived && !s.has_terminal && (s.stale || s.pr_state === 'MERGED' || s.pr_state === 'CLOSED'));
-        const archived = filtered.filter(s => s.archived);
+        // Group by pipeline_key (server-provided, with ticket/PR/id fallback for
+        // lineage-less sessions). Preserve server sort order (live first) so groups
+        // are naturally ordered by their most-actionable member.
+        const groups = new Map();
+        for (const s of filtered) {
+            const k = s.pipeline_key || ('sid:' + s.name);
+            if (!groups.has(k)) groups.set(k, []);
+            groups.get(k).push(s);
+        }
+
+        // Multi-stage pipelines (>1 member, or a promoted single session whose 🔍→🔨
+        // trail is worth showing) render as lineage containers at the top. Lone
+        // sessions keep the familiar live/active/done/archived sectioning below — no
+        // visual regression for standalone work.
+        const pipelines = [];
+        const singles = [];
+        for (const [k, members] of groups) {
+            const multi = members.length > 1 || members.some(m => m.promoted_from_investigation);
+            if (multi) pipelines.push([k, members]);
+            else singles.push(members[0]);
+        }
+
+        // Hide-by-default filter (toggle off). A single terminal session drops out;
+        // a pipeline drops out only when ALL its segments are terminal (a partially
+        // finished pipeline stays visible so its trail is intact).
+        let hiddenCount = 0;
+        if (!showArchived) {
+            for (let i = pipelines.length - 1; i >= 0; i--) {
+                if (pipelines[i][1].every(isTerminalSession)) {
+                    hiddenCount += pipelines[i][1].length;
+                    pipelines.splice(i, 1);
+                }
+            }
+            for (let i = singles.length - 1; i >= 0; i--) {
+                if (isTerminalSession(singles[i])) {
+                    hiddenCount += 1;
+                    singles.splice(i, 1);
+                }
+            }
+        }
 
         let html = '';
+
+        if (pipelines.length > 0) {
+            html += '<div class="section-label">Pipelines &middot; ' + pipelines.length + '</div>';
+            html += pipelines.map(([k, members]) => renderPipelineGroup(members, k)).join('');
+        }
+
+        const live = singles.filter(s => !s.archived && s.has_terminal);
+        const active = singles.filter(s => !s.archived && !s.has_terminal && !s.stale && s.pr_state !== 'MERGED' && s.pr_state !== 'CLOSED');
+        const done = singles.filter(s => !s.archived && !s.has_terminal && (s.stale || s.pr_state === 'MERGED' || s.pr_state === 'CLOSED'));
+        const archived = singles.filter(s => s.archived);
 
         if (live.length > 0) {
             html += '<div class="section-label">Live &middot; ' + live.length + '</div>';
@@ -9483,8 +9855,13 @@ Re-evaluate across ALL findings. Only OPEN 🔴/🟠 findings block approval.
             html += archived.map(s => renderSessionItem(s)).join('');
         }
 
-        if (filtered.length === 0) {
-            html = '<div style="padding:24px;text-align:center;color:var(--text-tertiary);font-size:13px;">No sessions found</div>';
+        if (html === '') {
+            const msg = (filtered.length === 0) ? 'No sessions found'
+                : (hiddenCount > 0 ? hiddenCount + ' archived session' + (hiddenCount === 1 ? '' : 's') + ' hidden — enable "Show archived"' : 'No sessions found');
+            html = '<div style="padding:24px;text-align:center;color:var(--text-tertiary);font-size:13px;">' + msg + '</div>';
+        } else if (!showArchived && hiddenCount > 0) {
+            html += '<div style="padding:10px 8px;text-align:center;color:var(--text-tertiary);font-size:11px;">' +
+                hiddenCount + ' archived hidden · enable "Show archived" to view</div>';
         }
 
         document.getElementById('sidebarBody').innerHTML = html;
@@ -9500,6 +9877,11 @@ Re-evaluate across ALL findings. Only OPEN 🔴/🟠 findings block approval.
         const dimmed = isStale || isMerged || isClosed || s.archived;
 
         let tags = '';
+        // Repo tag (non-default repos only) + Jira ticket, so every session row shows
+        // which repo a PR number belongs to and its ticket when known.
+        const _rslug = sessionRepoSlug(s);
+        if (_rslug && _rslug !== DEFAULT_REPO_SLUG) tags += '<span class="tag tag-repo">' + escapeHtml(_rslug) + '</span>';
+        if (s.jira) tags += '<span class="tag tag-jira">' + escapeHtml(s.jira) + '</span>';
         if (s.has_terminal) tags += '<span class="tag tag-terminal">Live</span>';
         if (isMerged) tags += '<span class="tag tag-merged">Merged</span>';
         if (isClosed) tags += '<span class="tag tag-closed">Closed</span>';
@@ -9947,6 +10329,7 @@ Re-evaluate across ALL findings. Only OPEN 🔴/🟠 findings block approval.
     }
 
     document.getElementById('filter').addEventListener('input', renderSessions);
+    document.getElementById('showArchived').addEventListener('change', renderSessions);
 
     // ========================================
     // SESSION ACTIONS
@@ -10719,7 +11102,7 @@ Re-evaluate across ALL findings. Only OPEN 🔴/🟠 findings block approval.
         const sessionName = state.newSession.data.sessionName || state.currentSession;
         if (!sessionName) { showToast('No session to start', 'error'); return; }
         try {
-            const reviewPrompt = 'STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it and follow its output — skip everything else. STEP 2 (only if skill unavailable): You are a senior engineer. Review ONLY files listed in Changed Files in CLAUDE.md. ANY finding whose file is not in that list is INVALID — delete it. Follow CLAUDE.md review guidelines — it defines the confidence gate and the REVIEW.md format. First check intent: does the PR satisfy its Jira ticket (source of truth)? If it diverges, that is a 🔴 finding. Then write ONLY high-confidence findings that pass the evidence bar in CLAUDE.md (a bug: when it happens / what it does / what it should do; maintainability: what's mixed / the concrete cost / how to separate), otherwise drop it. Write findings in CLAUDE.md's plain format (What's wrong / Why it matters / Suggested fix) — clear language, no jargon. Severity is 🔴 Critical / 🟠 High / 🟡 Perf / 🔧 Maintainability. Cover Correctness, Security, Regression, provable Performance, and concrete separation-of-concerns — no cosmetic style, docs, or suggestions. Self-check: before finishing, verify every finding references a changed file and passes the bar.';
+            const reviewPrompt = 'STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it and follow its output — skip everything else. STEP 2 (only if skill unavailable): You are a senior engineer. Review ONLY files listed in Changed Files in CLAUDE.md. ANY finding whose file is not in that list is INVALID — delete it. Follow CLAUDE.md review guidelines — it defines the confidence gate and the REVIEW.md format. First check intent: does the PR satisfy its Jira ticket (source of truth)? If it diverges, that is a 🔴 finding. Then write ONLY high-confidence findings that pass the evidence bar in CLAUDE.md (a bug: when it happens / what it does / what it should do; maintainability: what is mixed / the concrete cost / how to separate), otherwise drop it. Write findings in the CLAUDE.md plain format (What is wrong / Why it matters / Suggested fix) — clear language, no jargon. Severity is 🔴 Critical / 🟠 High / 🟡 Perf / 🔧 Maintainability. Cover Correctness, Security, Regression, provable Performance, and concrete separation-of-concerns — no cosmetic style, docs, or suggestions. Self-check: before finishing, verify every finding references a changed file and passes the bar.';
             const endpoint = tool === 'acr+claude' ? API.START_ACR_CLAUDE : API.START_CLAUDE;
             if (tool === 'acr+claude') showToast('Running ACR review, then starting Claude...', 'info');
             const payload = { session: sessionName };
@@ -10854,7 +11237,21 @@ class ThreadingServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     allow_reuse_address = True
 
     def handle_error(self, request, client_address):
-        pass  # Suppress thread errors (e.g. broken pipe from disconnected clients)
+        # Suppress benign disconnect noise (broken pipe from clients that went
+        # away), but log any other unexpected handler exception so it is
+        # diagnosable. stdout/stderr are captured in $SESSIONS_DIR/.dashboard.log.
+        import sys, traceback, datetime
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (BrokenPipeError, ConnectionResetError, ConnectionAbortedError)):
+            return
+        try:
+            ts = datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            print('-' * 40, file=sys.stderr)
+            print(f'[{ts}] Exception handling request from {client_address}', file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+            print('-' * 40, file=sys.stderr, flush=True)
+        except Exception:
+            pass
 
 if __name__ == '__main__':
     import sys
@@ -12005,7 +12402,7 @@ pre_session_menu() {
                         dim "Type /exit when done to return here."
                         sleep 1
                         tput reset 2>/dev/null || clear
-                        cd "$SESSION_DIR/repo" && claude --model $MODEL --add-dir "$SESSION_DIR" -- "STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it (ACR_REVIEW.md has prior automated findings as context) and follow its output — skip everything else. STEP 2 (only if skill unavailable): ACR_REVIEW.md contains automated findings — use as input but verify independently. You are a senior engineer. Review ONLY files listed in Changed Files in CLAUDE.md. ANY finding whose file is not in that list is INVALID — delete it. Follow CLAUDE.md review guidelines. Write REVIEW.md with findings by severity. For each: file:line, what the code does, the problem, why it matters, and a concrete fix. Self-check: before finishing, verify every finding references a changed file."
+                        cd "$SESSION_DIR/repo" && claude --model $REVIEW_MODEL --add-dir "$SESSION_DIR" -- "STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it (ACR_REVIEW.md has prior automated findings as context) and follow its output — skip everything else. STEP 2 (only if skill unavailable): ACR_REVIEW.md contains automated findings — use as input but verify independently. You are a senior engineer. Review ONLY files listed in Changed Files in CLAUDE.md. ANY finding whose file is not in that list is INVALID — delete it. Follow CLAUDE.md review guidelines. Write REVIEW.md with findings by severity. For each: file:line, what the code does, the problem, why it matters, and a concrete fix. Self-check: before finishing, verify every finding references a changed file."
                         post_session_menu "$SESSION_DIR"
                         return 0
                         ;;
@@ -12024,7 +12421,7 @@ pre_session_menu() {
                         dim "Type /exit when done to return here."
                         sleep 1
                         tput reset 2>/dev/null || clear
-                        cd "$SESSION_DIR/repo" && claude --model $MODEL --add-dir "$SESSION_DIR" -- "STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it and follow its output — skip everything else. STEP 2 (only if skill unavailable): You are a senior engineer. Review ONLY files listed in Changed Files in CLAUDE.md. ANY finding whose file is not in that list is INVALID — delete it. Follow CLAUDE.md review guidelines — it defines the confidence gate and the REVIEW.md format. First check intent: does the PR satisfy its Jira ticket (source of truth)? If it diverges, that is a 🔴 finding. Then write ONLY high-confidence findings that pass the evidence bar in CLAUDE.md (a bug: when it happens / what it does / what it should do; maintainability: what's mixed / the concrete cost / how to separate), otherwise drop it. Write findings in CLAUDE.md's plain format (What's wrong / Why it matters / Suggested fix) — clear language, no jargon. Severity is 🔴 Critical / 🟠 High / 🟡 Perf / 🔧 Maintainability. Cover Correctness, Security, Regression, provable Performance, and concrete separation-of-concerns — no cosmetic style, docs, or suggestions. Self-check: before finishing, verify every finding references a changed file and passes the bar."
+                        cd "$SESSION_DIR/repo" && claude --model $REVIEW_MODEL --add-dir "$SESSION_DIR" -- "STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it and follow its output — skip everything else. STEP 2 (only if skill unavailable): You are a senior engineer. Review ONLY files listed in Changed Files in CLAUDE.md. ANY finding whose file is not in that list is INVALID — delete it. Follow CLAUDE.md review guidelines — it defines the confidence gate and the REVIEW.md format. First check intent: does the PR satisfy its Jira ticket (source of truth)? If it diverges, that is a 🔴 finding. Then write ONLY high-confidence findings that pass the evidence bar in CLAUDE.md (a bug: when it happens / what it does / what it should do; maintainability: what's mixed / the concrete cost / how to separate), otherwise drop it. Write findings in CLAUDE.md's plain format (What's wrong / Why it matters / Suggested fix) — clear language, no jargon. Severity is 🔴 Critical / 🟠 High / 🟡 Perf / 🔧 Maintainability. Cover Correctness, Security, Regression, provable Performance, and concrete separation-of-concerns — no cosmetic style, docs, or suggestions. Self-check: before finishing, verify every finding references a changed file and passes the bar."
                         post_session_menu "$SESSION_DIR"
                         return 0
                         ;;
@@ -12980,18 +13377,38 @@ main_menu() {
     done
 }
 
+# Case-insensitive membership test: is $1 an author in the WATCH_AUTHORS list?
+# Returns 0 (match) / 1 (no match). Empty author → no match. Shared by the
+# watch-daemon auto-discovery loop and the --review-pr entry point so the author
+# allowlist is enforced identically regardless of how a review is triggered.
+is_watched_author() {
+    local author="$1" wauthor a_l
+    [ -z "$author" ] && return 1
+    a_l=$(printf '%s' "$author" | tr '[:upper:]' '[:lower:]')
+    for wauthor in ${WATCH_AUTHORS:-}; do
+        [ "$a_l" = "$(printf '%s' "$wauthor" | tr '[:upper:]' '[:lower:]')" ] && return 0
+    done
+    return 1
+}
+
 watch_daemon_loop() {
     local _src="${BASH_SOURCE[0]:-$0}" _d
     while [ -L "$_src" ]; do _d="$(cd -P "$(dirname "$_src")" && pwd)"; _src="$(readlink "$_src")"; [[ "$_src" != /* ]] && _src="$_d/$_src"; done
     local _cg; _cg="$(cd -P "$(dirname "$_src")" && pwd)/$(basename "$_src")"
     local LOG="$SESSIONS_DIR/.watch-daemon.log"
-    # Give Zellij time to finish creating the mission-control session before
-    # the first cockpit-alive check (the launcher starts this daemon and then
-    # exec's Zellij, so the session doesn't exist yet on the first iteration).
+    # Brief startup delay before the first poll so a launching cgremlin session
+    # (or the mission-control launcher that spawns this daemon) settles first.
     sleep 15
+    # One-shot reconciliation: heal any dev/inv sessions whose PR session was reaped
+    # before the live merge-archiving branch existed (see reconcile_orphaned_sources).
+    reconcile_orphaned_sources || true
     while true; do
-        # Self-terminate if the cockpit session is gone (no orphans).
-        zellij list-sessions 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | grep -qE '^mission-control[[:space:]]' || { echo "cockpit gone, exiting $(date)" >> "$LOG"; exit 0; }
+        # The watch-daemon is an always-on background watcher: it runs independently
+        # of any UI session and keeps looping regardless of whether mission-control /
+        # Zellij is open. It stops only when explicitly killed (cgremlin
+        # --stop-watch-daemon) or the machine reboots. (Previously it self-terminated
+        # here when the mission-control cockpit session vanished — removed so the
+        # watcher persists across cgremlin sessions.)
 
         # --- Poll for new PRs from watched authors ---
         # gh emits one tab-separated row per PR (number, url, author) — robust,
@@ -13011,19 +13428,18 @@ watch_daemon_loop() {
                 me_l=$(printf '%s' "${GITHUB_ME:-}" | tr '[:upper:]' '[:lower:]')
                 while IFS=$'\t' read -r pr_num pr_url pr_author pr_isdraft; do
                     [ -z "$pr_num" ] || [ -z "$pr_url" ] || [ -z "$pr_author" ] && continue
-                    # Author in the watch list? (case-insensitive)
-                    matched=false
-                    for wauthor in $watch_authors; do
-                        [ "$(printf '%s' "$pr_author" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "$wauthor" | tr '[:upper:]' '[:lower:]')" ] && { matched=true; break; }
-                    done
-                    [ "$matched" = false ] && continue
+                    # Author in the watch list? (case-insensitive) — shared helper.
+                    is_watched_author "$pr_author" || continue
                     local is_me=false
                     [ -n "$me_l" ] && [ "$(printf '%s' "$pr_author" | tr '[:upper:]' '[:lower:]')" = "$me_l" ] && is_me=true
                     # Others' drafts aren't ready to review → skip. My drafts ARE tracked (for reference).
                     [ "$pr_isdraft" = "true" ] && [ "$is_me" = false ] && continue
-                    # Skip if a session already exists for this PR number
+                    # Skip if a session already exists for THIS repo's PR of this number.
+                    # PR numbers repeat across repos, so the glob must anchor on the
+                    # repo slug baked into the session-dir name (pr-<repo>-<num>-*),
+                    # not a bare pr-*-<num>-* which would match either repo's session.
                     already_tracked=false
-                    for ex in "$SESSIONS_DIR"/pr-*-"${pr_num}"-*; do
+                    for ex in "$SESSIONS_DIR"/pr-"${wrepo##*/}"-"${pr_num}"-*; do
                         [ -d "$ex" ] && { already_tracked=true; break; }
                     done
                     [ "$already_tracked" = true ] && continue
@@ -13049,9 +13465,27 @@ watch_daemon_loop() {
             meta=$(timeout 15 gh pr view "$num" --repo "$repo" --json state,reviewDecision,isDraft -q '.state + "\t" + (.reviewDecision // "") + "\t" + (.isDraft|tostring)' 2>/dev/null)
             state="${meta%%$'\t'*}"; meta_rest="${meta#*$'\t'}"
             review_decision="${meta_rest%%$'\t'*}"; pr_isdraft="${meta_rest##*$'\t'}"
-            # Merged/closed → done; delete the session.
+            # Merged/closed → the review is done. Before deleting the PR session,
+            # give the linked dev/investigation source a terminal stage_status
+            # (it was left at 'superseded' when the review took over): MERGED →
+            # mark 'merged' + archive (keeps REVIEW/FINDINGS/DEVLOG, drops repo/);
+            # CLOSED (unmerged/abandoned) → mark 'abandoned' only, no archive.
+            # If no source resolves, just delete the PR session as before.
             if [ "$state" = "MERGED" ] || [ "$state" = "CLOSED" ]; then
                 case "$d" in "$SESSIONS_DIR"/pr-*)
+                    local _src_tkt _src
+                    _src_tkt=$(read_session_field "$d" "jira.ticket"); [ -z "$_src_tkt" ] && _src_tkt=$(read_lineage_field "$d" "ticket")
+                    _src=$(resolve_pr_source "$d" "$num" "$_src_tkt")
+                    if [ -n "$_src" ] && [ -d "$_src" ]; then
+                        if [ "$state" = "MERGED" ]; then
+                            echo "PR $num merged → mark+archive source $(basename "$_src") $(date)" >> "$LOG"
+                            update_stage_status "$_src" "merged"
+                            archive_session "$_src" >> "$LOG" 2>&1
+                        else
+                            echo "PR $num closed unmerged → mark source $(basename "$_src") abandoned $(date)" >> "$LOG"
+                            update_stage_status "$_src" "abandoned"
+                        fi
+                    fi
                     echo "delete merged/closed $d $(date)" >> "$LOG"
                     local _apid; _apid=$(cat "$d/agent_pid" 2>/dev/null)
                     [ -n "$_apid" ] && kill "$_apid" 2>/dev/null || true
@@ -13285,6 +13719,19 @@ if [ "$1" = "--commit-fix" ];   then [ -z "$2" ] && { echo "Usage: cgremlin --co
 if [ "$1" = "--push-fix" ];     then [ -z "$2" ] && { echo "Usage: cgremlin --push-fix <session>" >&2; exit 1; }; push_fix "$2"; exit $?; fi
 if [ "$1" = "--triage-done" ]; then [ -z "$2" ] && { echo "Usage: cgremlin --triage-done <session>" >&2; exit 1; }; triage_done "$2"; exit $?; fi
 
+# Stop the always-on background watch-daemon (the only clean way to shut it down,
+# since it now runs independently of any UI session). Uses the same pgrep pattern
+# that guards its single-instance start. The pattern "cgremlin --watch-daemon" does
+# not match this "--stop-watch-daemon" process, so it won't kill itself.
+if [ "$1" = "--stop-watch-daemon" ]; then
+    if pgrep -f "cgremlin --watch-daemon" >/dev/null 2>&1; then
+        pkill -f "cgremlin --watch-daemon" && echo "watch-daemon stopped" || echo "failed to stop watch-daemon" >&2
+    else
+        echo "watch-daemon not running"
+    fi
+    exit 0
+fi
+
 # Handle --review-list-grouped argument (emit grouped open reviews for picker)
 if [ "$1" = "--review-list-grouped" ]; then
     review_list_grouped
@@ -13292,7 +13739,7 @@ if [ "$1" = "--review-list-grouped" ]; then
 fi
 
 # Skip dashboard lifecycle when called as a subprocess (e.g. --create-session, --review-pr, --lib-only)
-if [ "$1" != "--create-session" ] && [ "$1" != "--review-pr" ] && [ "$1" != "--rereview-pr" ] && [ "$1" != "--track-my-pr" ] && [ "$1" != "--lib-only" ] && [ "$1" != "--status-pane" ] && [ "$1" != "--open-pr" ] && [ "$1" != "--orchestrator" ] && [ "$1" != "--dismiss-pr" ] && [ "$1" != "--mission-control" ] && [ "$1" != "--review-list-grouped" ] && [ "$1" != "--approve-pr" ] && [ "$1" != "--comment-pr" ] && [ "$1" != "--request-changes-pr" ] && [ "$1" != "--watch-daemon" ] && [ "$1" != "--triage-comments" ] && [ "$1" != "--investigate" ] && [ "$1" != "--pr-ready" ] && [ "$1" != "--resolve-comment" ] && [ "$1" != "--develop" ] && [ "$1" != "--pr-threads" ] && [ "$1" != "--stop-local" ] && [ "$1" != "--run-local" ] && [ "$1" != "--agent-state" ] && [ "$1" != "--agent-note" ]; then
+if [ "$1" != "--create-session" ] && [ "$1" != "--review-pr" ] && [ "$1" != "--rereview-pr" ] && [ "$1" != "--track-my-pr" ] && [ "$1" != "--lib-only" ] && [ "$1" != "--status-pane" ] && [ "$1" != "--open-pr" ] && [ "$1" != "--orchestrator" ] && [ "$1" != "--dismiss-pr" ] && [ "$1" != "--mission-control" ] && [ "$1" != "--review-list-grouped" ] && [ "$1" != "--approve-pr" ] && [ "$1" != "--comment-pr" ] && [ "$1" != "--request-changes-pr" ] && [ "$1" != "--watch-daemon" ] && [ "$1" != "--reconcile-sessions" ] && [ "$1" != "--triage-comments" ] && [ "$1" != "--investigate" ] && [ "$1" != "--pr-ready" ] && [ "$1" != "--resolve-comment" ] && [ "$1" != "--develop" ] && [ "$1" != "--pr-threads" ] && [ "$1" != "--stop-local" ] && [ "$1" != "--run-local" ] && [ "$1" != "--agent-state" ] && [ "$1" != "--agent-note" ]; then
     cleanup_on_exit() {
         stop_dashboard_server 2>/dev/null
     }
@@ -13301,11 +13748,183 @@ if [ "$1" != "--create-session" ] && [ "$1" != "--review-pr" ] && [ "$1" != "--r
     if ! is_dashboard_running; then
         start_dashboard_server >/dev/null 2>&1 &
     fi
+
+    # Ensure the always-on watch-daemon is running. Mirrors the pgrep-guarded start
+    # in the mission-control launcher (~13500) so that ANY interactive cgremlin
+    # invocation (bare `cgremlin` → main_menu, etc.), not just mission-control,
+    # keeps the background watcher alive if it isn't already. The pgrep check is the
+    # single-instance guard: two back-to-back invocations won't spawn two daemons.
+    if ! pgrep -f "cgremlin --watch-daemon" >/dev/null 2>&1; then
+        _wd_src="${BASH_SOURCE[0]:-$0}"
+        while [ -L "$_wd_src" ]; do _wd_d="$(cd -P "$(dirname "$_wd_src")" && pwd)"; _wd_src="$(readlink "$_wd_src")"; [[ "$_wd_src" != /* ]] && _wd_src="$_wd_d/$_wd_src"; done
+        _wd_cg="$(cd -P "$(dirname "$_wd_src")" && pwd)/$(basename "$_wd_src")"
+        ( "$_wd_cg" --watch-daemon >/dev/null 2>&1 & )
+    fi
 fi
 
 # ============================================================================
 # NON-INTERACTIVE SESSION CREATION (for web UI)
 # ============================================================================
+
+# Resolve (read-only) the dev/inv source session linked to a PR review session,
+# without mutating anything. Prefers the explicit lineage parent_session_id written
+# at PR-creation time by link_pr_to_source; falls back to the SAME PR-number→ticket
+# matching link_pr_to_source uses, for PR sessions that predate the lineage feature
+# and have no parent_session_id. Echoes the matched source dir (or nothing).
+# Usage: resolve_pr_source PR_SESSION_DIR PR_NUMBER [JIRA_TICKET]
+resolve_pr_source() {
+    local pr_dir="$1" pr_number="$2" ticket="$3"
+    local self; self=$(basename "$pr_dir")
+    # Explicit lineage link (strongest, no scanning needed).
+    local parent; parent=$(read_lineage_field "$pr_dir" "parent_session_id")
+    if [ -n "$parent" ] && [ -d "$SESSIONS_DIR/$parent" ]; then
+        echo "$SESSIONS_DIR/$parent"; return 0
+    fi
+    local d m pr_repo
+    # Fallback pass 1: match on PR number (pr_ready back-fills pr.number on the source).
+    # PR numbers repeat across repos, so a number match only counts when the candidate
+    # source is in the SAME repo as this PR session (guard skipped only if a repo can't
+    # be determined on either side, preserving the pre-multi-repo behavior).
+    if [ -n "$pr_number" ]; then
+        pr_repo=$(_pr_repo "$pr_dir")
+        for d in $(ls -dt "$SESSIONS_DIR"/dev-* "$SESSIONS_DIR"/inv-* 2>/dev/null); do
+            [ -d "$d" ] || continue
+            [ "$(basename "$d")" = "$self" ] && continue
+            m=$(read_session_field "$d" "mode")
+            case "$m" in development|investigation) : ;; *) continue;; esac
+            if [ "$(read_session_field "$d" "pr.number")" = "$pr_number" ]; then
+                local cand_repo; cand_repo=$(_pr_repo "$d")
+                [ -n "$pr_repo" ] && [ -n "$cand_repo" ] && [ "$cand_repo" != "$pr_repo" ] && continue
+                echo "$d"; return 0
+            fi
+        done
+    fi
+    # Fallback pass 2: match on jira ticket.
+    if [ -n "$ticket" ]; then
+        for d in $(ls -dt "$SESSIONS_DIR"/dev-* "$SESSIONS_DIR"/inv-* 2>/dev/null); do
+            [ -d "$d" ] || continue
+            [ "$(basename "$d")" = "$self" ] && continue
+            m=$(read_session_field "$d" "mode")
+            case "$m" in development|investigation) : ;; *) continue;; esac
+            local t; t=$(read_session_field "$d" "jira.ticket"); [ -z "$t" ] && t=$(read_lineage_field "$d" "ticket")
+            if [ "$t" = "$ticket" ]; then echo "$d"; return 0; fi
+        done
+    fi
+    return 0
+}
+
+# Link a newly-created PR review session back to the dev/inv session that spawned
+# it. Best-effort — NEVER fails session creation. Priority: match on PR number
+# (pr_ready back-fills pr.number onto the dev session), else on jira ticket. On a
+# match: inherit the source's pipeline_id, record parent_session_id + ticket on the
+# review session, and mark the source stage_status=superseded. Sessions lacking
+# lineage fall back to the shared ticket, exactly as the renderers do.
+# Usage: link_pr_to_source PR_SESSION_DIR PR_NUMBER [JIRA_TICKET]
+link_pr_to_source() {
+    local pr_dir="$1" pr_number="$2" ticket="$3"
+    local self; self=$(basename "$pr_dir")
+    local match="" match_by="" d m pr_repo
+    # Pass 1: match on PR number (strongest signal). PR numbers repeat across repos,
+    # so a number match only counts when the candidate source shares this PR session's
+    # repo (guard skipped only when a repo can't be determined on either side).
+    if [ -n "$pr_number" ]; then
+        pr_repo=$(_pr_repo "$pr_dir")
+        for d in $(ls -dt "$SESSIONS_DIR"/dev-* "$SESSIONS_DIR"/inv-* 2>/dev/null); do
+            [ -d "$d" ] || continue
+            [ "$(basename "$d")" = "$self" ] && continue
+            m=$(read_session_field "$d" "mode")
+            case "$m" in development|investigation) : ;; *) continue;; esac
+            if [ "$(read_session_field "$d" "pr.number")" = "$pr_number" ]; then
+                local cand_repo; cand_repo=$(_pr_repo "$d")
+                [ -n "$pr_repo" ] && [ -n "$cand_repo" ] && [ "$cand_repo" != "$pr_repo" ] && continue
+                match="$d"; match_by="pr"; break
+            fi
+        done
+    fi
+    # Pass 2: fall back to jira ticket.
+    if [ -z "$match" ] && [ -n "$ticket" ]; then
+        for d in $(ls -dt "$SESSIONS_DIR"/dev-* "$SESSIONS_DIR"/inv-* 2>/dev/null); do
+            [ -d "$d" ] || continue
+            [ "$(basename "$d")" = "$self" ] && continue
+            m=$(read_session_field "$d" "mode")
+            case "$m" in development|investigation) : ;; *) continue;; esac
+            local t; t=$(read_session_field "$d" "jira.ticket"); [ -z "$t" ] && t=$(read_lineage_field "$d" "ticket")
+            if [ "$t" = "$ticket" ]; then match="$d"; match_by="ticket"; break; fi
+        done
+    fi
+    [ -z "$match" ] && return 0
+    local msn ppid; msn=$(basename "$match"); ppid=$(read_lineage_field "$match" "pipeline_id")
+    update_lineage_field "$pr_dir" "parent_session_id" "$msn"
+    [ -n "$ppid" ] && update_lineage_field "$pr_dir" "pipeline_id" "$ppid"
+    [ -n "$ticket" ] && update_lineage_field "$pr_dir" "ticket" "$ticket"
+    update_stage_status "$match" "superseded"
+    echo "linked review $self → source $msn (by $match_by)" >&2
+}
+
+# Reconcile dev/inv sessions whose review (pr-*) session was already reaped (e.g.
+# deleted by the watch daemon before the merge-archiving branch existed), leaving
+# the source stuck in a non-terminal stage_status with no live PR session to catch
+# its merge/close. For each candidate — a dev/inv session with a pr.number, no
+# matching pr-<num>-* dir, and not already terminal — read the real PR state via
+# `gh pr view` (same read pattern the watch-daemon merge branch uses) and apply the
+# SAME treatment: MERGED → update_stage_status merged + archive_session; CLOSED →
+# update_stage_status abandoned; OPEN or lookup-failure → leave untouched. Never
+# deletes anything. Logs each action to .watch-daemon.log prefixed "reconcile:".
+# Usage: reconcile_orphaned_sources
+reconcile_orphaned_sources() {
+    local LOG="$SESSIONS_DIR/.watch-daemon.log"
+    local d m num repo state ex found bn
+    echo "reconcile: start $(date)" >> "$LOG"
+    for d in "$SESSIONS_DIR"/dev-* "$SESSIONS_DIR"/inv-*; do
+        [ -d "$d" ] || continue
+        bn=$(basename "$d")
+        m=$(read_session_field "$d" "mode")
+        case "$m" in development|investigation) : ;; *) continue;; esac
+        # Skip sessions already in a terminal stage.
+        case "$(read_stage_status "$d")" in merged|abandoned) continue;; esac
+        # Need a PR number to reconcile against; derive from pr.number.
+        num=$(read_session_field "$d" "pr.number")
+        [ -z "$num" ] && continue
+        # Repo of this source (needed both for the orphan check and the gh lookup).
+        repo=$(_pr_repo "$d")
+        # If a review session for this PR still exists, it's not orphaned — the live
+        # watch-daemon branch will handle it. Skip. PR numbers repeat across repos, so
+        # anchor the glob on this source's repo slug (pr-<repo>-<num>-*); fall back to
+        # the bare number glob only when the repo can't be determined.
+        found=0
+        if [ -n "$repo" ]; then
+            for ex in "$SESSIONS_DIR"/pr-"${repo##*/}"-"${num}"-*; do
+                [ -d "$ex" ] && { found=1; break; }
+            done
+        else
+            for ex in "$SESSIONS_DIR"/pr-*-"${num}"-*; do
+                [ -d "$ex" ] && { found=1; break; }
+            done
+        fi
+        [ "$found" = 1 ] && continue
+        # Candidate is possibly-orphaned. Check the real PR state.
+        [ -z "$repo" ] && { echo "reconcile: skip $bn — no repo slug (PR #$num) $(date)" >> "$LOG"; continue; }
+        state=$(timeout 15 gh pr view "$num" --repo "$repo" --json state -q '.state' 2>/dev/null)
+        case "$state" in
+            MERGED)
+                echo "reconcile: PR $num merged → mark+archive source $bn $(date)" >> "$LOG"
+                update_stage_status "$d" "merged"
+                archive_session "$d" >> "$LOG" 2>&1
+                ;;
+            CLOSED)
+                echo "reconcile: PR $num closed unmerged → mark source $bn abandoned $(date)" >> "$LOG"
+                update_stage_status "$d" "abandoned"
+                ;;
+            OPEN)
+                : # still open — leave untouched
+                ;;
+            *)
+                echo "reconcile: skip $bn — gh pr view $num returned '${state:-<empty>}' $(date)" >> "$LOG"
+                ;;
+        esac
+    done
+    echo "reconcile: done $(date)" >> "$LOG"
+}
 
 create_pr_session_noninteractive() {
     local PR_URL="$1"
@@ -13366,6 +13985,7 @@ create_pr_session_noninteractive() {
 
     # Fallback: if session.json is empty/invalid, create minimal one
     if ! jq -e type "$SESSION_DIR/session.json" >/dev/null 2>&1; then
+        local _lin_ticket="null"; [ -n "$JIRA_TICKET" ] && _lin_ticket="\"$JIRA_TICKET\""
         cat > "$SESSION_DIR/session.json" <<FALLBACK
 {
   "id": "$SESSION_NAME",
@@ -13374,10 +13994,16 @@ create_pr_session_noninteractive() {
   "created": "$(date -Iseconds)",
   "status": "active",
   "pr": {"number": "$PR_NUMBER", "title": "$PR_TITLE", "url": "https://github.com/$OWNER/$REPO/pull/$PR_NUMBER", "head": "$PR_HEAD", "base": "$PR_BASE", "author": "$PR_AUTHOR"},
+  "lineage": {"pipeline_id": "pl-${SESSION_NAME}", "parent_session_id": null, "ticket": ${_lin_ticket}},
+  "stage_status": "queued",
   "history": []
 }
 FALLBACK
     fi
+
+    # Link this review session back to the dev/inv session that spawned it (if any):
+    # inherit its pipeline_id, record parent_session_id, mark the source superseded.
+    link_pr_to_source "$SESSION_DIR" "$PR_NUMBER" "$JIRA_TICKET"
 
     # Always create session-info.txt as dashboard fallback
     cat > "$SESSION_DIR/session-info.txt" <<INFO_EOF
@@ -13617,9 +14243,24 @@ develop_start() {
     [ -n "$ipid" ] && kill "$ipid" 2>/dev/null; rm -f "$SDIR/agent_pid"
     zellij --session mission-control action go-to-tab-name "$old_tab" 2>/dev/null && \
       zellij --session mission-control action close-tab 2>/dev/null || true
+    # Lineage bookkeeping (design decision (a): single-session + history trail —
+    # see docs/session-lineage.md §6.2). The dir is reused, so the investigation
+    # and development stages are the SAME session at different times; the trail
+    # lives in .history so renderers can show "🔍 Investigation (promoted) → 🔨
+    # Development". Old inv sessions predating lineage have no pipeline_id — mint one.
+    if [ -z "$(read_lineage_field "$SDIR" "pipeline_id")" ]; then
+        local pid
+        if [ -n "$jira" ]; then pid="pl-${jira}-$(date +%Y%m%d-%H%M%S)"; else pid="pl-${sess}"; fi
+        update_lineage_field "$SDIR" "pipeline_id" "$pid"
+    fi
+    [ -n "$jira" ] && update_lineage_field "$SDIR" "ticket" "$jira"
+    add_session_history "$SDIR" "promoted-to-development" \
+        "$(jq -n --arg t "${jira:-}" '{from: "investigation", ticket: $t}')"
     # Transition the SAME session to development. mode is the source of truth;
     # the dir keeps its inv-* name (all live type-detection reads the mode field).
     update_session_field "$SDIR" "mode" "development"
+    # The investigation stage is now "promoted"; the session becomes an active dev stage.
+    update_stage_status "$SDIR" "active"
     local branch="feature/${jira:-work}"
     ( cd "$SDIR/repo" && { git checkout -b "$branch" 2>/dev/null || git checkout "$branch" 2>/dev/null || true; } )
     update_session_field "$SDIR" "branch" "$branch"
@@ -13674,7 +14315,7 @@ source "$_cgremlin_path" --lib-only
 update_review_state "$SESSION_DIR" reviewing
 cd "$REPO_DIR" && script -q "$log_file" \
   claude -p "Run /APFM:apfm-review and write the findings to REVIEW.md following CLAUDE.md. Then ALWAYS run the '## LIVE UI CHECK' section in CLAUDE.md (PM + Designer subagents) and merge its 📋/🎨 findings into REVIEW.md — this is required even when apfm-review handled the code review. Proceed autonomously; do NOT ask for confirmation or a verdict. Read the PR with git (the branch is checked out) or gh pr view/diff as needed. If Jira/Atlassian MCP is unavailable, skip Jira context and proceed with the diff alone. Do NOT post to GitHub. Write the output to $SESSION_DIR/REVIEW.md." \
-  --permission-mode bypassPermissions --add-dir "$SESSION_DIR" < /dev/null
+  --permission-mode bypassPermissions --model "$REVIEW_MODEL" --add-dir "$SESSION_DIR" < /dev/null
 rc=\$?
 if [ \$rc -eq 0 ] && [ -s "$SESSION_DIR/REVIEW.md" ]; then
     update_review_state "$SESSION_DIR" ready
@@ -13696,7 +14337,10 @@ review_pr_noninteractive() {
     # Dedupe by PR number: reuse an existing session rather than create a duplicate.
     if [[ "$pr_input" =~ github\.com/([^/]+)/([^/]+)/pull/([0-9]+) ]]; then
         local o="${BASH_REMATCH[1]}" r="${BASH_REMATCH[2]}" n="${BASH_REMATCH[3]}"
-        local existing; existing=$(ls -dt "$SESSIONS_DIR"/pr-*-"${n}"-* 2>/dev/null | head -1)
+        # Dedupe within THIS repo only — PR numbers repeat across repos, so anchor on
+        # the repo slug baked into the session-dir name (pr-<repo>-<num>-*) rather than
+        # a bare pr-*-<num>-* which would falsely match the other repo's same-numbered PR.
+        local existing; existing=$(ls -dt "$SESSIONS_DIR"/pr-"${r}"-"${n}"-* 2>/dev/null | head -1)
         if [ -n "$existing" ] && [ -d "$existing/repo" ]; then
             local esn; esn=$(basename "$existing")
             local head; head=$(timeout 15 gh pr view "$n" --repo "$o/$r" --json headRefOid -q .headRefOid 2>/dev/null)
@@ -13792,8 +14436,8 @@ today=\$(date +%Y-%m-%d)
 {
 printf '# Re-Review: v%s\n\n## What Changed\n\n' "\$next_version"
 printf '| Info | Value |\n|------|-------|\n'
-printf '| **Previous** | v%s (commit `%s`) |\n' "\$version" "\$old_short"
-printf '| **Current** | v%s (commit `%s`) |\n' "\$next_version" "\$new_short"
+printf '| **Previous** | v%s (commit \`%s\`) |\n' "\$version" "\$old_short"
+printf '| **Current** | v%s (commit \`%s\`) |\n' "\$next_version" "\$new_short"
 printf '| **New Commits** | %s |\n\n' "\$commit_count"
 printf '### New Commits\n\`\`\`\n%s\n\`\`\`\n\n' "\${new_commits_text:-(none)}"
 printf '### Files Changed Since Last Review\n\`\`\`\n%s\n\`\`\`\n\n---\n\n' "\${changes_since:-(none)}"
@@ -13801,13 +14445,13 @@ printf '## Re-Review Instructions\n\n**Update REVIEW.md IN PLACE. Same schema as
 printf '### 1. VERIFY each prior finding was properly addressed (do this FIRST)\n'
 printf 'The point of a re-review is confirming old concerns were actually fixed, not just finding new ones. For every finding in the "What I found" table EXCEPT 🔇 dismissed:\n'
 printf -- '- Re-open the code at its **Where** location and re-check the problem it describes: does the situation in its "What'"'"'s wrong" still happen? For maintainability, are the mixed concerns actually separated now?\n'
-printf -- '- Classify with evidence (cite the changed lines): ✅ **resolved** (set Status `resolved`) · ⚠️ **partial** (keep OPEN, update "What'"'"'s wrong" with what still breaks) · ❌ **still open** (leave as-is) · 🔁 **regressed** (keep original + add a new finding for the regression).\n'
+printf -- '- Classify with evidence (cite the changed lines): ✅ **resolved** (set Status \`resolved\`) · ⚠️ **partial** (keep OPEN, update "What'"'"'s wrong" with what still breaks) · ❌ **still open** (leave as-is) · 🔁 **regressed** (keep original + add a new finding for the regression).\n'
 printf -- '- A fix you cannot confirm actually closes it is NOT resolved — treat as ⚠️ partial.\n'
 printf -- '- **🔇 dismissed?** → SKIP entirely. Do not re-flag, edit, or remove.\n\n'
 printf '### 2. Look for NEW findings — same evidence bar as the initial review\n'
 printf 'Review the full current PR diff. Add a finding ONLY if it passes the evidence bar in your head (a bug: when it happens / what it does / what it should do; maintainability: what'"'"'s mixed / the concrete cost / how to separate). If you cannot answer concretely, drop it.\n'
 printf 'Only Correctness, Security, Regression, provable Performance, and concrete separation-of-concerns. No cosmetic style, docs, or "nice to have". Also re-check intent: does the PR still satisfy the Jira ticket?\n'
-printf 'Write each new finding in the SAME plain format as the file (What'"'"'s wrong / Why it matters / Suggested fix), with a `<a id="fN"></a>` anchor and a linked table row. Number continuing from the last ID; set Status to `open`.\n\n'
+printf 'Write each new finding in the SAME plain format as the file (What'"'"'s wrong / Why it matters / Suggested fix), with a \`<a id="fN"></a>\` anchor and a linked table row. Number continuing from the last ID; set Status to \`open\`.\n\n'
 printf '### 3. Severity — exactly four\n🔴 Critical (blocks) · 🟠 High (should fix) · 🟡 Perf (provable, non-blocking) · 🔧 Maintainability (concrete SoC/coupling, non-blocking).\n\n'
 printf '### 4. Update Review History\nADD a new row — never remove existing rows:\n'
 printf '\`\`\`\n| v%s | %s | %s | Re-review: X resolved, Y partial, Z new |\n\`\`\`\n\n' "\$next_version" "\$today" "\$new_short"
@@ -13842,7 +14486,7 @@ update_session_field "$SESSION_DIR" "reviewed_sha" "\$new_commit"
 # --- Step 6: Run headless re-review with skill-aware prompt ---
 prompt="STEP 1: Check if /APFM:apfm-review skill is available. If yes, run it for re-review and follow its output — skip everything else. STEP 2 (only if skill unavailable): RE-REVIEW MODE — PR updated with \${commit_count} new commit(s). Read RE-REVIEW.md and follow it. Update REVIEW.md in-place. FIRST verify each prior finding was properly addressed: re-check whether the problem it describes still happens in the new code and classify ✅ resolved / ⚠️ partial (keep open) / ❌ still open / 🔁 regressed, with evidence — 🔇 dismissed stay untouched. THEN add NEW findings only if they pass the evidence bar in CLAUDE.md, written in the file's plain format (What's wrong / Why it matters / Suggested fix), and re-check the PR still satisfies its Jira ticket. Severity is 🔴 Critical / 🟠 High / 🟡 Perf / 🔧 Maintainability. Scope: ONLY files in the PR diff. Add a new row to Review History. Self-check: verify every finding references a changed file. As the very last action, write a single line to the file $SESSION_DIR/rereview_summary. Format: '✅ N/N resolved' if all prior findings are resolved, or '⚠️ K/N resolved, M new' otherwise. Write only that line — no other content."
 
-cd "$REPO_DIR" && claude -p "\$prompt" --permission-mode bypassPermissions --add-dir "$SESSION_DIR" < /dev/null
+cd "$REPO_DIR" && claude -p "\$prompt" --permission-mode bypassPermissions --model "$REVIEW_MODEL" --add-dir "$SESSION_DIR" < /dev/null
 rc=\$?
 if [ \$rc -eq 0 ] && [ -s "$SESSION_DIR/REVIEW.md" ]; then update_review_state "$SESSION_DIR" ready; else update_review_state "$SESSION_DIR" failed; fi
 rm -f "$SESSION_DIR/.cg_agent_state"
@@ -13943,7 +14587,24 @@ WRAPPER_EOF
 
 # Handle --review-pr argument (called from orchestrator)
 if [ "$1" = "--review-pr" ]; then
-    review_pr_noninteractive "$2" "$3"
+    rp_arg="$2"
+    # Author allowlist gate (mirrors the watch daemon): a PR from an author not
+    # in WATCH_AUTHORS should not get auto-reviewed via this entry point either.
+    # Pass --force (as $3) for a deliberate manual review of an off-list author.
+    # The daemon filters authors before it ever calls --review-pr, so on-list
+    # PRs pass straight through. Fail-open if the author can't be resolved (bad
+    # URL / gh error) so a lookup hiccup never blocks a legitimate review.
+    if [ "$3" != "--force" ] && [ -n "${WATCH_AUTHORS:-}" ]; then
+        rp_author=""
+        if [[ "$rp_arg" =~ github\.com/([^/]+)/([^/]+)/pull/([0-9]+) ]]; then
+            rp_author=$(timeout 15 gh pr view "${BASH_REMATCH[3]}" --repo "${BASH_REMATCH[1]}/${BASH_REMATCH[2]}" --json author -q .author.login 2>/dev/null)
+        fi
+        if [ -n "$rp_author" ] && ! is_watched_author "$rp_author"; then
+            echo "PR author '$rp_author' is not in WATCH_AUTHORS — use 'cgremlin --review-pr $rp_arg --force' to review anyway" >&2
+            exit 3
+        fi
+    fi
+    review_pr_noninteractive "$rp_arg"
     exit $?
 fi
 
@@ -13976,6 +14637,13 @@ fi
 # Handle --watch-daemon argument (background loop: delete merged sessions, auto-rereview on new commits)
 if [ "$1" = "--watch-daemon" ]; then
     watch_daemon_loop
+    exit 0
+fi
+
+# Handle --reconcile-sessions argument (one-shot: heal orphaned dev/inv sessions
+# whose PR session was already reaped). Non-destructive read + terminal marking.
+if [ "$1" = "--reconcile-sessions" ]; then
+    reconcile_orphaned_sources
     exit 0
 fi
 
@@ -14025,7 +14693,9 @@ launch_orchestrator() {
 You coordinate PR reviews. Default repo for bare PR numbers: ${DEFAULT_PROJECT:-(unset — require full URLs)}.
 When the user gives PR numbers or links:
 - Expand a bare number N to "\${DEFAULT_PROJECT}/pull/N" (strip any trailing .git). If DEFAULT_PROJECT is unset, ask for a full URL.
-- For each PR, run: \`cgremlin --review-pr <full-pr-url>\` (creates the session + launches a headless review). Report "#<n> queued".
+- For a PR the user explicitly names, run: \`cgremlin --review-pr <full-pr-url>\` (creates the session + launches a headless review). Report "#<n> queued".
+- Do NOT go hunting for PRs to review on your own initiative. The watch daemon already auto-discovers and reviews PRs from watched authors (the WATCH_AUTHORS allowlist) — only run \`--review-pr\` for a specific PR the user asked for by number or URL in this conversation.
+- NEVER pass \`--force\` to \`--review-pr\`: auto-pickup must respect the WATCH_AUTHORS allowlist. If \`--review-pr\` refuses because the author is off-list, do NOT retry with \`--force\` — tell the user the author is outside the watch list and let them decide.
 - Do NOT run reviews yourself. Do NOT post GitHub comments.
 - Finished reviews appear in the status PICKER; the user clicks one to open a floating agent pane. If the user asks YOU to open PR N: find its session with \`ls "\$HOME/.cgremlin/sessions"/pr-*-N-* | tail -1\` (newest), then run \`cgremlin --open-pr <session-name>\`.
 - When asked about a specific PR, summarize from its REVIEW.md. To dismiss one: \`cgremlin --dismiss-pr <session-name>\`.
