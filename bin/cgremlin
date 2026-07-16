@@ -948,12 +948,19 @@ create_work_agent_pane() {
     zellij list-sessions 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | grep -qE '^mission-control[[:space:]]' || return 0
     local title; title=$(work_agent_tab_name "$SDIR")
 
+    local _mode; _mode=$(read_session_field "$SDIR" "mode")
+    local _launch_model="$MODEL" _effort_flag=""
+    if [ "$_mode" = "investigation" ]; then
+        _launch_model="$INVESTIGATION_MODEL"
+        _effort_flag="--effort $INVESTIGATION_EFFORT"
+    fi
+
     local wrapper; wrapper=$(mktemp /tmp/cgremlin-work-XXXXXX)
     cat > "$wrapper" <<WRAPPER
 #!/bin/bash
 echo \$\$ > "$SDIR/agent_pid"
 cd "$SDIR" || exit 1
-exec claude --model "$MODEL" "Your very first action: read CLAUDE.md in this directory and follow it exactly — it is your autonomous working brief. Begin now; do not wait for my input; do not read any other CLAUDE.md."
+exec claude --model "$_launch_model" $_effort_flag "Your very first action: read CLAUDE.md in this directory and follow it exactly — it is your autonomous working brief. Begin now; do not wait for my input; do not read any other CLAUDE.md."
 WRAPPER
     chmod +x "$wrapper"
 
