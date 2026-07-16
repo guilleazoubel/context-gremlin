@@ -14365,9 +14365,23 @@ approve_plan() {
 # Promote an investigation INTO DEVELOPMENT in the same session (in place).
 # Usage: develop_start <investigation-session-name>
 develop_start() {
-    local sess="$1"                       # investigation session to promote IN PLACE
+    local sess="$1" force="$2"            # investigation session to promote IN PLACE
     local SDIR="$SESSIONS_DIR/$sess"
     [ -d "$SDIR/repo" ] || { echo "ERROR: session $sess not found" >&2; return 1; }
+    local plan_phase; plan_phase=$(read_session_field "$SDIR" "plan_review.phase")
+    local drive; drive=$(read_session_field "$SDIR" "plan_review.drive_to_completion")
+    if [ -n "$plan_phase" ] && [ "$plan_phase" != "approved" ] && [ "$force" != "--force" ]; then
+        if [ "$drive" != "true" ]; then
+            echo "ERROR: $sess plan_review.phase is '$plan_phase', not 'approved' — run 'cgremlin --approve-plan $sess' first, or pass --force to override." >&2
+            return 1
+        fi
+        # drive_to_completion: allow promotion once the plan is at least plan_ready
+        # (both reviewers already approved it per Task 5's --plan-ready call).
+        if [ "$plan_phase" != "plan_ready" ]; then
+            echo "ERROR: $sess plan_review.phase is '$plan_phase' — plan has not been reviewed yet even though drive_to_completion is set." >&2
+            return 1
+        fi
+    fi
     local jira; jira=$(read_session_field "$SDIR" "jira.ticket")
     # Compute the OLD tab name (🔍 …) BEFORE flipping mode, so we can close it.
     local old_tab; old_tab=$(work_agent_tab_name "$SDIR")
@@ -14755,8 +14769,8 @@ if [ "$1" = "--investigate" ]; then
 fi
 
 if [ "$1" = "--develop" ]; then
-    [ -z "$2" ] && { echo "Usage: cgremlin --develop <investigation-session>" >&2; exit 1; }
-    develop_start "$2"; exit $?
+    [ -z "$2" ] && { echo "Usage: cgremlin --develop <investigation-session> [--force]" >&2; exit 1; }
+    develop_start "$2" "$3"; exit $?
 fi
 
 if [ "$1" = "--track-my-pr" ]; then
