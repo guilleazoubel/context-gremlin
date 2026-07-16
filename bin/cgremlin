@@ -13734,6 +13734,22 @@ if [ "$1" = "--commit-fix" ];   then [ -z "$2" ] && { echo "Usage: cgremlin --co
 if [ "$1" = "--push-fix" ];     then [ -z "$2" ] && { echo "Usage: cgremlin --push-fix <session>" >&2; exit 1; }; push_fix "$2"; exit $?; fi
 if [ "$1" = "--triage-done" ]; then [ -z "$2" ] && { echo "Usage: cgremlin --triage-done <session>" >&2; exit 1; }; triage_done "$2"; exit $?; fi
 
+# Handle plan-review lifecycle (--plan-start / --plan-ready / --approve-plan)
+if [ "$1" = "--plan-start" ]; then
+    [ -z "$2" ] && { echo "Usage: cgremlin --plan-start <session>" >&2; exit 1; }
+    plan_start "$2"; exit $?
+fi
+
+if [ "$1" = "--plan-ready" ]; then
+    [ -z "$2" ] && { echo "Usage: cgremlin --plan-ready <session>" >&2; exit 1; }
+    plan_ready "$2"; exit $?
+fi
+
+if [ "$1" = "--approve-plan" ]; then
+    [ -z "$2" ] && { echo "Usage: cgremlin --approve-plan <session>" >&2; exit 1; }
+    approve_plan "$2"; exit $?
+fi
+
 # Stop the always-on background watch-daemon (the only clean way to shut it down,
 # since it now runs independently of any UI session). Uses the same pgrep pattern
 # that guards its single-instance start. The pattern "cgremlin --watch-daemon" does
@@ -14312,6 +14328,38 @@ BEGIN NOW: read FINDINGS.md (and REVIEW.md if present) + the ticket, write your 
 DEV
     mkdir -p "$SDIR/.claude"
     printf '{"permissions":{"allow":["Bash(cgremlin --reply-comment *)","Bash(cgremlin --resolve-comment *)","Bash(cgremlin --pr-ready *)","Bash(cgremlin --commit-fix *)","Bash(cgremlin --push-fix *)","Bash(cgremlin --pr-threads *)","Bash(cgremlin --run-local *)","Bash(cgremlin --stop-local *)","Bash(cgremlin --agent-state *)","Bash(cgremlin --agent-note *)"]}}\n' > "$SDIR/.claude/settings.local.json"
+}
+
+# Called by the investigation agent the moment it begins drafting PLAN.md.
+plan_start() {
+    local sess="$1"
+    local SDIR="$SESSIONS_DIR/$sess"
+    [ -d "$SDIR" ] || { echo "ERROR: session $sess not found" >&2; return 1; }
+    update_session_field "$SDIR" "plan_review.phase" "planning"
+    echo "$sess: plan_review.phase = planning"
+}
+
+# Called by the investigation agent once both PM and Principal Engineer approve PLAN.md.
+plan_ready() {
+    local sess="$1"
+    local SDIR="$SESSIONS_DIR/$sess"
+    [ -d "$SDIR" ] || { echo "ERROR: session $sess not found" >&2; return 1; }
+    update_session_field "$SDIR" "plan_review.phase" "plan_ready"
+    echo "$sess: plan_review.phase = plan_ready"
+}
+
+# Called on the user's explicit approval (chat instruction or dashboard button).
+approve_plan() {
+    local sess="$1"
+    local SDIR="$SESSIONS_DIR/$sess"
+    [ -d "$SDIR" ] || { echo "ERROR: session $sess not found" >&2; return 1; }
+    local phase; phase=$(read_session_field "$SDIR" "plan_review.phase")
+    if [ "$phase" != "plan_ready" ]; then
+        echo "ERROR: $sess plan_review.phase is '$phase', expected 'plan_ready' — the plan has not been reviewed yet" >&2
+        return 1
+    fi
+    update_session_field "$SDIR" "plan_review.phase" "approved"
+    echo "$sess: plan_review.phase = approved"
 }
 
 # Promote an investigation INTO DEVELOPMENT in the same session (in place).
