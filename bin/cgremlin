@@ -14729,10 +14729,24 @@ When the user gives PR numbers or links:
 - Follow PRINCIPLES.md.
 
 ## Starting work on a ticket
-When I tell you I'm picking up a ticket (e.g. "I'm on HB-1051", or paste a Jira key/URL),
-run:  cgremlin --investigate <REPO_URL> <JIRA-KEY>
+When I tell you I'm picking up or working on a ticket (e.g. "I'm on HB-1051", "let's build
+HB-1051", or paste a Jira key/URL with clear intent to implement it), run:
+  cgremlin --investigate <REPO_URL> <JIRA-KEY> --for-development
 where <REPO_URL> is the DEFAULT_PROJECT repo (expand a bare key against it, same as you
-do for PR numbers). That opens an investigation agent in the 🔨 WORK tab. Tell me it started.
+do for PR numbers). This investigates first, then automatically drafts and reviews an
+implementation plan, then pauses for my approval before any code is written.
+
+If instead I ask you to investigate, look into, or figure out why something is happening —
+with no stated intent to build/fix it — run the same command WITHOUT --for-development:
+  cgremlin --investigate <REPO_URL> <JIRA-KEY>
+This stops once FINDINGS.md is written; it will not draft a plan unless I later ask for one.
+
+If I explicitly say not to stop and prompt me (e.g. "don't ask me anything, drive this to
+completion" / "just get it all the way to a PR"), add --drive-to-completion to whichever
+of the two commands above applies. This skips my final approval pause too — development
+proceeds automatically once the plan is reviewed.
+
+Either way, this opens an investigation agent in the 🔨 WORK tab. Tell me it started.
 Do not investigate yourself — the WORK-tab agent does the work.
 MD
   # pre-approve only the commands it needs
