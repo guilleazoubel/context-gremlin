@@ -8797,6 +8797,8 @@ Re-evaluate across ALL findings. Only OPEN 🔴/🟠 findings block approval.
         .stage-badge.stage-dev { background: rgba(167,139,250,0.12); color: #a78bfa; }
         .stage-badge.stage-review { background: var(--blue-bg); color: var(--blue); }
         .stage-badge.stage-done { background: var(--green-bg); color: var(--green); }
+        .stage-badge.stage-planning { background: var(--amber-bg); color: var(--amber); }
+        .stage-badge.stage-plan-ready { background: var(--blue-bg); color: var(--blue); }
         .stage-arrow { color: var(--text-tertiary); font-size: 10px; }
         .lineage-members {
             padding: 4px 6px 6px;
@@ -9490,6 +9492,7 @@ Re-evaluate across ALL findings. Only OPEN 🔴/🟠 findings block approval.
         CONTENT: '/api/content',
         TERMINAL: '/api/terminal',
         ARCHIVE: '/api/archive',
+        APPROVE_PLAN: '/api/approve-plan',
         DELETE: '/api/delete',
         START_CLAUDE: '/api/start-claude',
         START_ACR_CLAUDE: '/api/start-acr-claude',
@@ -9724,6 +9727,12 @@ Re-evaluate across ALL findings. Only OPEN 🔴/🟠 findings block approval.
         const out = [];
         if (mode === 'investigation') {
             out.push({ emoji: '🔍', label: 'Investigation' + (stage ? ' (' + stage + ')' : ''), name: s.name, cls: 'inv' });
+            const planPhase = s.plan_review && s.plan_review.phase;
+            if (planPhase === 'planning') {
+                out.push({ emoji: '📝', label: 'Plan (drafting)', name: s.name, cls: 'planning' });
+            } else if (planPhase === 'plan_ready') {
+                out.push({ emoji: '📋', label: 'Plan (ready for approval)', name: s.name, cls: 'plan-ready' });
+            }
         } else if (mode === 'development') {
             if (s.promoted_from_investigation)
                 out.push({ emoji: '🔍', label: 'Investigation (promoted)', name: s.name, cls: 'promoted' });
@@ -10008,6 +10017,9 @@ Re-evaluate across ALL findings. Only OPEN 🔴/🟠 findings block approval.
         if (session.pr && !session.archived) {
             actions += '<button class="btn-action" onclick="refreshDiscussion()" id="btnRefreshDisc">💬 Refresh Discussion</button>';
         }
+        if (session.plan_review && session.plan_review.phase === 'plan_ready') {
+            actions += '<button class="btn-action primary" onclick="approvePlanForDevelopment()">✅ Approve for Development</button>';
+        }
         if (!session.archived) {
             actions += '<button class="btn-action warn" onclick="archiveSession()">📦 Archive</button>';
         } else {
@@ -10112,6 +10124,7 @@ Re-evaluate across ALL findings. Only OPEN 🔴/🟠 findings block approval.
         const tabs = [
             { id: 'review', label: 'Review', available: session.has_review },
             { id: 'findings', label: 'Findings', available: session.has_findings },
+            { id: 'plan', label: 'Plan', available: session.has_plan },
             { id: 'devlog', label: 'Devlog', available: session.has_devlog },
             { id: 'terminal', label: 'Terminal', available: session.has_terminal, live: true }
         ];
@@ -10394,6 +10407,20 @@ Re-evaluate across ALL findings. Only OPEN 🔴/🟠 findings block approval.
             renderSessionHeader();
             renderActionBar();
         } catch (e) { showToast('Archive failed: ' + e.message, 'error'); }
+    }
+
+    async function approvePlanForDevelopment() {
+        if (!state.currentSession) return;
+        const session = getCurrentSession();
+        if (!session || !session.plan_review || session.plan_review.phase !== 'plan_ready') return;
+        if (!confirm('Approve this plan and start development for "' + (session.display_title || state.currentSession) + '"?')) return;
+        try {
+            await apiPost(API.APPROVE_PLAN);
+            showToast('Plan approved — development starting');
+            await loadSessions();
+            renderSessionHeader();
+            renderActionBar();
+        } catch (e) { showToast('Approve failed: ' + e.message, 'error'); }
     }
 
     async function startClaude() {
