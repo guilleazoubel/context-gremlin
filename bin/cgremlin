@@ -46,6 +46,8 @@ load_config() {
             case "$key" in
                 MODEL) MODEL="$value" ;;
                 REVIEW_MODEL) REVIEW_MODEL="$value" ;;
+                INVESTIGATION_MODEL) INVESTIGATION_MODEL="$value" ;;
+                INVESTIGATION_EFFORT) INVESTIGATION_EFFORT="$value" ;;
                 DASHBOARD_AUTO_START) DASHBOARD_AUTO_START="$value" ;;
                 DEFAULT_PROJECT) DEFAULT_PROJECT="$value" ;;
                 USE_ZELLIJ) USE_ZELLIJ="$value" ;;
@@ -70,6 +72,8 @@ load_config() {
     : "${VERCEL_SCOPE:=grace-0118bc61}"
     : "${VERCEL_PROJECT:=grace-frontend-dev}"
     : "${LOCAL_NODE_VERSION:=24}"
+    : "${INVESTIGATION_MODEL:=opus}"
+    : "${INVESTIGATION_EFFORT:=xhigh}"
 }
 
 # Save configuration to file
@@ -85,6 +89,10 @@ MODEL="$MODEL"
 
 # Claude model for PR review / re-review sessions (sonnet/opus/haiku, defaults to opus)
 REVIEW_MODEL="$REVIEW_MODEL"
+
+# Claude model and effort for investigation sessions (defaults to opus/xhigh)
+INVESTIGATION_MODEL="$INVESTIGATION_MODEL"
+INVESTIGATION_EFFORT="$INVESTIGATION_EFFORT"
 
 # Auto-start dashboard when cgremlin launches (true/false)
 DASHBOARD_AUTO_START="$DASHBOARD_AUTO_START"
