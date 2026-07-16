@@ -752,7 +752,7 @@ echo "PASS: approve_plan sets phase to approved"
 rm -rf "$TMPD"
 ```
 Run: `bash /tmp/cg-test-approve.sh`
-Expected: five `PASS` lines.
+Expected: four `PASS` lines.
 
 - [ ] **Step 6: Commit**
 
