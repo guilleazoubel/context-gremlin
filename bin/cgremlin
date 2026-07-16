@@ -14325,7 +14325,56 @@ EOF
 # Usage: write_develop_brief SESSION_DIR
 write_develop_brief() {
     local SDIR="$1" key sn; key=$(read_session_field "$SDIR" "jira.ticket"); sn=$(basename "$SDIR")
-    cat > "$SDIR/CLAUDE.md" <<DEV
+    if [ -f "$SDIR/PLAN.md" ]; then
+        cat > "$SDIR/CLAUDE.md" <<DEV
+# DEVELOP — ${key:-(no ticket)}
+
+You are running in the session directory. The code is in \`./repo/\`. \`PLAN.md\`
+here is your ALREADY-REVIEWED-AND-APPROVED implementation plan — approved by PM +
+Principal Engineer subagents and authorized for promotion into development — and is
+your PRIMARY seed. \`FINDINGS.md\` is your investigation background (root cause +
+direction): read it too for context, but implement from PLAN.md. If a \`REVIEW.md\`
+is present, read it too. Keep a running plan/progress log in \`DEVELOPMENT.md\`.
+The Jira ticket
+${key:+(${key}) — fetch via Atlassian MCP getJiraIssue} is the source of truth.
+Cover ONLY what the ticket asks.
+
+## Flow (autonomous except at the gates below)
+1. **Read PLAN.md (your approved plan), then FINDINGS.md (and REVIEW.md if present) + the ticket.** PLAN.md was already reviewed and approved (PM + Principal Engineer) — implement from it (root cause is already known from FINDINGS.md, which is background). Copy/adapt PLAN.md's plan into DEVELOPMENT.md as your starting point; adapt only if you discover something in PLAN.md is factually wrong against the real current code — in that case note the discrepancy in DEVELOPMENT.md, do NOT silently deviate.
+   As your first action also record status: \`cgremlin --agent-note $sn "<ticket key>: <one-line goal>"\`; update it at each milestone (e.g. "implementing 3/5 — TDD", "tests green").
+2. **No plan re-gate — proceed to implementation.** PLAN.md was already reviewed (PM + Principal Engineer) and its promotion into development was explicitly authorized (human approval or drive_to_completion), so re-gating the same plan is redundant. Do NOT pause for plan approval; go straight to TDD implementation.
+3. **Implement with TDD.** For each unit: write the failing test, run it (confirm it fails), write minimal code, run to green, commit. Stay strictly in ticket scope.
+4. **Open a draft PR** on the pushed branch: \`gh pr create --draft\`, body summarizing the change and linking ${key:-the ticket}.
+5. **Verify (local during dev; preview after the PR).** During development, run \`cgremlin --run-local $sn\` and drive chrome-devtools against https://local.findcare.dev.aplaceformom.com/ . Once the draft PR (step 4) is open, ALSO verify against its Vercel preview URL. Run a FOCUSED functional smoke (prove the ticket's issue is fixed, plus a smoke pass of the feature and its likely splash-zone regressions — NOT the full e2e suite) AND the PM + Designer UI check below. Watch logs/dev-server.log; iterate to green; \`cgremlin --stop-local $sn\` when done.
+
+$(ui_check_protocol fix "the LOCAL url https://local.findcare.dev.aplaceformom.com/ during development, and the draft PR's Vercel preview URL once the PR is open")
+
+6. **Assess bot comments.** Get the LIVE thread list with \`cgremlin --pr-threads $sn\`
+   (READ-ONLY: threadId, resolved, author, path:line, last replier, snippet). Re-run it
+   whenever I say I changed something. For each UNRESOLVED thread (skip ones already
+   \`resolved\` or already replied by me/someone):
+   - false positive → reply "false positive: <reason>" then resolve it:
+       cgremlin --reply-comment $sn <thread-id>   (write the reply to ${SDIR}/.reply_body.md first)
+       cgremlin --resolve-comment $sn <thread-id>
+   - clearly valid → fix it (TDD for code changes).
+   - unsure → STOP and show it to me to discuss. (run \`cgremlin --agent-state $sn needs-input\` first)
+7. **Notify me** it's tested and comment-clean so I can watch it run against preview and ask questions. When it's tested and comment-clean, run \`cgremlin --agent-state $sn ready\` and \`cgremlin --agent-note $sn "tested & comment-clean — take a look"\`.
+8. **READY GATE.** Only when I say I'm satisfied, mark the PR ready: Before waiting for my go-ahead here, run \`cgremlin --agent-state $sn needs-input\`.
+       cgremlin --pr-ready $sn
+
+## Scope + tech debt
+Out-of-scope-but-needed work → propose a tech-debt Jira (Atlassian createJiraIssue) and create it ONLY with my explicit OK. Never expand scope silently.
+
+## Hard rules
+- Never mark the PR ready (\`--pr-ready\`) or create a Jira without my explicit go-ahead.
+- PLAN.md is already reviewed and approved — implement it directly without re-gating; if you find it is factually wrong against the code, surface the discrepancy (step 1) rather than silently deviating.
+- Post to GitHub only via the cgremlin helpers above (never raw gh for review/comment mutations); \`gh pr create --draft\`, \`gh pr view\`, git push are fine.
+- If you hit something you cannot pass (preview never deploys, environment broken), run \`cgremlin --agent-state $sn blocked\` and tell me.
+
+BEGIN NOW: read PLAN.md (your approved plan) and FINDINGS.md (and REVIEW.md if present) + the ticket, copy/adapt PLAN.md into DEVELOPMENT.md, and start implementing with TDD (no plan re-gate).
+DEV
+    else
+        cat > "$SDIR/CLAUDE.md" <<DEV
 # DEVELOP — ${key:-(no ticket)}
 
 You are running in the session directory. The code is in \`./repo/\`. \`FINDINGS.md\`
@@ -14369,6 +14418,7 @@ Out-of-scope-but-needed work → propose a tech-debt Jira (Atlassian createJiraI
 
 BEGIN NOW: read FINDINGS.md (and REVIEW.md if present) + the ticket, write your plan into DEVELOPMENT.md, and prepare it for the PLAN GATE.
 DEV
+    fi
     mkdir -p "$SDIR/.claude"
     printf '{"permissions":{"allow":["Bash(cgremlin --reply-comment *)","Bash(cgremlin --resolve-comment *)","Bash(cgremlin --pr-ready *)","Bash(cgremlin --commit-fix *)","Bash(cgremlin --push-fix *)","Bash(cgremlin --pr-threads *)","Bash(cgremlin --run-local *)","Bash(cgremlin --stop-local *)","Bash(cgremlin --agent-state *)","Bash(cgremlin --agent-note *)"]}}\n' > "$SDIR/.claude/settings.local.json"
 }
