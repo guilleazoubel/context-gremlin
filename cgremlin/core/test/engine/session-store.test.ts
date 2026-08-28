@@ -1,0 +1,85 @@
+import { describe, expect, it } from 'vitest';
+import { InMemoryFileSystem } from '../support/in-memory-file-system';
+import { SessionStore, SessionNotFoundError, SessionCorruptError } from '../../src/engine/session-store';
+import type { Session } from '../../src/schema/session';
+import { IllegalTransitionError } from '../../src/schema/pipeline';
+
+function makeSession(overrides: Partial<Session> = {}): Session {
+  return {
+    schemaVersion: 1,
+    id: 'inv-test-1',
+    mode: 'investigation',
+    createdAt: '2026-08-28T10:00:00.000Z',
+    workspace: { repoUrl: 'git@example.com:x/y.git' },
+    lineage: { pipelineId: 'pl-1', parentSessionId: null, ticket: null },
+    stageStatus: 'findings',
+    ...overrides,
+  } as Session;
+}
+
+describe('SessionStore', () => {
+  it('round-trips a session through save and load', async () => {
+    const fs = new InMemoryFileSystem();
+    const store = new SessionStore(fs, '/sessions');
+    const session = makeSession();
+    await store.save(session);
+    const loaded = await store.load(session.id);
+    expect(loaded).toEqual(session);
+  });
+
+  it('load throws SessionNotFoundError for an unknown id', async () => {
+    const fs = new InMemoryFileSystem();
+    const store = new SessionStore(fs, '/sessions');
+    await expect(store.load('nope')).rejects.toThrow(SessionNotFoundError);
+  });
+
+  it('load throws SessionCorruptError for invalid JSON on disk', async () => {
+    const fs = new InMemoryFileSystem();
+    await fs.mkdir('/sessions/bad', { recursive: true });
+    await fs.writeFile('/sessions/bad/session.json', '{not json');
+    const store = new SessionStore(fs, '/sessions');
+    await expect(store.load('bad')).rejects.toThrow(SessionCorruptError);
+  });
+
+  it('load throws SessionCorruptError for JSON that fails schema validation', async () => {
+    const fs = new InMemoryFileSystem();
+    await fs.mkdir('/sessions/bad2', { recursive: true });
+    await fs.writeFile('/sessions/bad2/session.json', JSON.stringify({ mode: 'investigation' }));
+    const store = new SessionStore(fs, '/sessions');
+    await expect(store.load('bad2')).rejects.toThrow(SessionCorruptError);
+  });
+
+  it('list returns an empty array when the sessions directory does not exist yet', async () => {
+    const fs = new InMemoryFileSystem();
+    const store = new SessionStore(fs, '/sessions');
+    expect(await store.list()).toEqual([]);
+  });
+
+  it('list returns every saved session', async () => {
+    const fs = new InMemoryFileSystem();
+    const store = new SessionStore(fs, '/sessions');
+    await store.save(makeSession({ id: 'inv-a' }));
+    await store.save(makeSession({ id: 'inv-b' }));
+    const sessions = await store.list();
+    expect(sessions.map((s) => s.id).sort()).toEqual(['inv-a', 'inv-b']);
+  });
+
+  it('transition applies a legal phase change and persists it', async () => {
+    const fs = new InMemoryFileSystem();
+    const store = new SessionStore(fs, '/sessions');
+    await store.save(makeSession({ id: 'inv-c', stageStatus: 'findings' }));
+    const updated = await store.transition('inv-c', 'planning');
+    expect(updated.stageStatus).toBe('planning');
+    const reloaded = await store.load('inv-c');
+    expect(reloaded.stageStatus).toBe('planning');
+  });
+
+  it('transition rejects an illegal phase change and leaves the persisted session unchanged', async () => {
+    const fs = new InMemoryFileSystem();
+    const store = new SessionStore(fs, '/sessions');
+    await store.save(makeSession({ id: 'inv-d', stageStatus: 'findings' }));
+    await expect(store.transition('inv-d', 'approved')).rejects.toThrow(IllegalTransitionError);
+    const reloaded = await store.load('inv-d');
+    expect(reloaded.stageStatus).toBe('findings');
+  });
+});
