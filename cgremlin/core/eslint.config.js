@@ -7,4 +7,12 @@ module.exports = tseslint.config(
   {
     ignores: ['dist/**', 'node_modules/**', 'eslint.config.js'],
   },
+  {
+    rules: {
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        { varsIgnorePattern: '^_', argsIgnorePattern: '^_' },
+      ],
+    },
+  },
 );
