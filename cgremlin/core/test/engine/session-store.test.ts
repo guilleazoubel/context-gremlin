@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { InMemoryFileSystem } from '../support/in-memory-file-system';
-import { SessionStore, SessionNotFoundError, SessionCorruptError } from '../../src/engine/session-store';
+import {
+  SessionStore,
+  SessionNotFoundError,
+  SessionCorruptError,
+  InvalidSessionIdError,
+} from '../../src/engine/session-store';
 import type { Session } from '../../src/schema/session';
 import { IllegalTransitionError } from '../../src/schema/pipeline';
 
@@ -81,5 +86,52 @@ describe('SessionStore', () => {
     await expect(store.transition('inv-d', 'approved')).rejects.toThrow(IllegalTransitionError);
     const reloaded = await store.load('inv-d');
     expect(reloaded.stageStatus).toBe('findings');
+  });
+
+  it('list skips a stray entry that is not a session directory', async () => {
+    const fs = new InMemoryFileSystem();
+    const store = new SessionStore(fs, '/sessions');
+    await store.save(makeSession({ id: 'inv-a' }));
+    await fs.writeFile('/sessions/.dashboard_server.py', '# not a session');
+    const sessions = await store.list();
+    expect(sessions.map((s) => s.id)).toEqual(['inv-a']);
+  });
+
+  it('list skips a corrupt sibling session and still returns healthy ones', async () => {
+    const fs = new InMemoryFileSystem();
+    const store = new SessionStore(fs, '/sessions');
+    await store.save(makeSession({ id: 'inv-a' }));
+    await fs.mkdir('/sessions/inv-broken', { recursive: true });
+    await fs.writeFile('/sessions/inv-broken/session.json', '{not json');
+    const sessions = await store.list();
+    expect(sessions.map((s) => s.id)).toEqual(['inv-a']);
+  });
+
+  it('list returns sessions sorted by id', async () => {
+    const fs = new InMemoryFileSystem();
+    const store = new SessionStore(fs, '/sessions');
+    await store.save(makeSession({ id: 'inv-b' }));
+    await store.save(makeSession({ id: 'inv-a' }));
+    const sessions = await store.list();
+    expect(sessions.map((s) => s.id)).toEqual(['inv-a', 'inv-b']);
+  });
+
+  it('save rejects a session id containing a path separator', async () => {
+    const fs = new InMemoryFileSystem();
+    const store = new SessionStore(fs, '/sessions');
+    await expect(store.save(makeSession({ id: '../escaped' }))).rejects.toThrow(
+      InvalidSessionIdError,
+    );
+  });
+
+  it('load rejects an id that is a path-traversal attempt', async () => {
+    const fs = new InMemoryFileSystem();
+    const store = new SessionStore(fs, '/sessions');
+    await expect(store.load('../../etc/passwd')).rejects.toThrow(InvalidSessionIdError);
+  });
+
+  it('constructor rejects a relative sessionsDir', () => {
+    const fs = new InMemoryFileSystem();
+    expect(() => new SessionStore(fs, 'sessions')).toThrow();
   });
 });

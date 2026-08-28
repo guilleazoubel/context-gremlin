@@ -3,6 +3,10 @@ import { testFileSystemContract } from '../support/file-system-contract';
 
 testFileSystemContract(
   'InMemoryFileSystem',
-  () => new InMemoryFileSystem(),
+  async () => {
+    const fs = new InMemoryFileSystem();
+    await fs.mkdir('/mem', { recursive: true });
+    return fs;
+  },
   (...segments) => `/mem/${segments.join('/')}`,
 );

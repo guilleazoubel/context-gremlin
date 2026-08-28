@@ -4,6 +4,11 @@ export class InMemoryFileSystem implements SessionFileSystem {
   private files = new Map<string, string>();
   private dirs = new Set<string>();
 
+  private parentOf(path: string): string {
+    const idx = path.lastIndexOf('/');
+    return idx <= 0 ? '/' : path.slice(0, idx);
+  }
+
   async mkdir(path: string, options?: { recursive?: boolean }): Promise<void> {
     if (options?.recursive) {
       const segments = path.split('/').filter(Boolean);
@@ -12,9 +17,13 @@ export class InMemoryFileSystem implements SessionFileSystem {
         current += `/${segment}`;
         this.dirs.add(current);
       }
-    } else {
-      this.dirs.add(path);
+      return;
     }
+    const parent = this.parentOf(path);
+    if (!this.dirs.has(parent)) {
+      throw new Error(`ENOENT: no such directory: ${parent}`);
+    }
+    this.dirs.add(path);
   }
 
   async exists(path: string): Promise<boolean> {
@@ -22,6 +31,10 @@ export class InMemoryFileSystem implements SessionFileSystem {
   }
 
   async writeFile(path: string, content: string): Promise<void> {
+    const parent = this.parentOf(path);
+    if (!this.dirs.has(parent)) {
+      throw new Error(`ENOENT: no such directory: ${parent}`);
+    }
     this.files.set(path, content);
   }
 
@@ -43,6 +56,9 @@ export class InMemoryFileSystem implements SessionFileSystem {
   }
 
   async readdir(path: string): Promise<string[]> {
+    if (!this.dirs.has(path)) {
+      throw new Error(`ENOENT: no such directory: ${path}`);
+    }
     const prefix = path.endsWith('/') ? path : `${path}/`;
     const names = new Set<string>();
     for (const filePath of this.files.keys()) {

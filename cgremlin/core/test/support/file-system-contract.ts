@@ -56,5 +56,20 @@ export function testFileSystemContract(
       expect(await fs.exists(makePath('deep'))).toBe(true);
       expect(await fs.exists(makePath('deep', 'nested'))).toBe(true);
     });
+
+    it('writeFile into a non-existent parent directory rejects', async () => {
+      const fs = await createFs();
+      await expect(fs.writeFile(makePath('missing-dir', 'file.txt'), 'x')).rejects.toThrow();
+    });
+
+    it('mkdir without recursive rejects when the parent does not exist', async () => {
+      const fs = await createFs();
+      await expect(fs.mkdir(makePath('a', 'b', 'c'))).rejects.toThrow();
+    });
+
+    it('readdir on a non-existent directory rejects', async () => {
+      const fs = await createFs();
+      await expect(fs.readdir(makePath('does-not-exist'))).rejects.toThrow();
+    });
   });
 }
