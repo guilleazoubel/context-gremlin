@@ -6,7 +6,7 @@ const LegacySessionSchema = z.object({
   mode: SessionModeSchema,
   project: z.string().min(1),
   created: z.string().min(1),
-  status: z.string().min(1).optional(),
+  stage_status: z.string().min(1).optional(),
   lineage: z
     .object({
       pipeline_id: z.string().min(1).optional(),
@@ -16,7 +16,23 @@ const LegacySessionSchema = z.object({
     .optional(),
 });
 
-export class LegacySessionMigrationError extends Error {}
+export class LegacySessionMigrationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'LegacySessionMigrationError';
+  }
+}
+
+function defaultStageStatus(mode: SessionMode): string {
+  switch (mode) {
+    case 'review':
+      return 'queued';
+    case 'development':
+      return 'active';
+    case 'investigation':
+      return 'findings';
+  }
+}
 
 export function migrateLegacySession(raw: unknown): Session {
   const parsedLegacy = LegacySessionSchema.safeParse(raw);
@@ -37,7 +53,7 @@ export function migrateLegacySession(raw: unknown): Session {
   const candidate = {
     schemaVersion: 1 as const,
     id: legacy.id,
-    mode: legacy.mode as SessionMode,
+    mode: legacy.mode,
     createdAt: createdAtDate.toISOString(),
     workspace: {
       repoUrl: legacy.project,
@@ -47,7 +63,7 @@ export function migrateLegacySession(raw: unknown): Session {
       parentSessionId: legacy.lineage?.parent_session_id ?? null,
       ticket: legacy.lineage?.ticket ?? null,
     },
-    stageStatus: legacy.status ?? 'active',
+    stageStatus: legacy.stage_status ?? defaultStageStatus(legacy.mode),
   };
 
   return parseSession(candidate);

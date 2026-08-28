@@ -1,4 +1,4 @@
-import type { SessionMode } from './session';
+import type { SessionMode } from './session-mode';
 
 export const INVESTIGATION_PHASES = [
   'findings',
@@ -6,6 +6,7 @@ export const INVESTIGATION_PHASES = [
   'plan_ready',
   'approved',
   'promoted_to_development',
+  'abandoned',
 ] as const;
 export type InvestigationPhase = (typeof INVESTIGATION_PHASES)[number];
 
@@ -34,30 +35,37 @@ export type PhaseFor<M extends SessionMode> = M extends 'investigation'
     ? DevelopmentPhase
     : ReviewPhase;
 
-const TRANSITIONS: Record<SessionMode, Record<string, readonly string[]>> = {
-  investigation: {
-    findings: ['planning'],
-    planning: ['plan_ready'],
-    plan_ready: ['approved'],
-    approved: ['promoted_to_development'],
-    promoted_to_development: [],
-  },
-  development: {
-    active: ['pr_opened', 'abandoned'],
-    pr_opened: ['superseded', 'abandoned'],
-    superseded: ['merged', 'abandoned'],
-    merged: [],
-    abandoned: [],
-  },
-  review: {
-    queued: ['reviewing'],
-    reviewing: ['ready', 'dismissed'],
-    ready: ['approved', 'changes_requested', 'dismissed'],
-    changes_requested: ['reviewing', 'dismissed'],
-    approved: [],
-    dismissed: [],
-  },
+const INVESTIGATION_TRANSITIONS: Record<InvestigationPhase, readonly InvestigationPhase[]> = {
+  findings: ['planning', 'abandoned'],
+  planning: ['plan_ready', 'abandoned'],
+  plan_ready: ['approved', 'abandoned'],
+  approved: ['promoted_to_development', 'abandoned'],
+  promoted_to_development: [],
+  abandoned: [],
 };
+
+const DEVELOPMENT_TRANSITIONS: Record<DevelopmentPhase, readonly DevelopmentPhase[]> = {
+  active: ['pr_opened', 'abandoned'],
+  pr_opened: ['superseded', 'merged', 'abandoned'],
+  superseded: ['merged', 'abandoned'],
+  merged: [],
+  abandoned: [],
+};
+
+const REVIEW_TRANSITIONS: Record<ReviewPhase, readonly ReviewPhase[]> = {
+  queued: ['reviewing'],
+  reviewing: ['ready', 'dismissed'],
+  ready: ['approved', 'changes_requested', 'dismissed'],
+  changes_requested: ['reviewing', 'dismissed'],
+  approved: [],
+  dismissed: [],
+};
+
+const TRANSITIONS = {
+  investigation: INVESTIGATION_TRANSITIONS,
+  development: DEVELOPMENT_TRANSITIONS,
+  review: REVIEW_TRANSITIONS,
+} as const;
 
 export class IllegalTransitionError extends Error {
   constructor(mode: SessionMode, from: string, to: string) {
@@ -71,7 +79,8 @@ export function canTransition<M extends SessionMode>(
   from: PhaseFor<M>,
   to: PhaseFor<M>,
 ): boolean {
-  return TRANSITIONS[mode][from]?.includes(to) ?? false;
+  const table = TRANSITIONS[mode] as Record<string, readonly string[]> | undefined;
+  return table?.[from]?.includes(to) ?? false;
 }
 
 export function transitionPhase<M extends SessionMode>(

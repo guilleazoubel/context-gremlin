@@ -36,6 +36,14 @@ describe('pipeline transition table', () => {
     expect(canTransition('review', 'changes_requested', 'reviewing')).toBe(true);
   });
 
+  it('allows development pr_opened -> merged directly (matches reconcile_orphaned_sources)', () => {
+    expect(canTransition('development', 'pr_opened', 'merged')).toBe(true);
+  });
+
+  it('allows investigation approved -> abandoned (matches reconcile_orphaned_sources on stale investigations)', () => {
+    expect(canTransition('investigation', 'approved', 'abandoned')).toBe(true);
+  });
+
   it('terminal phases have no outgoing transitions', () => {
     expect(canTransition('development', 'merged', 'active')).toBe(false);
     expect(canTransition('review', 'approved', 'reviewing')).toBe(false);

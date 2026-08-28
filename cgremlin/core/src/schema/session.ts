@@ -1,12 +1,13 @@
 import { z } from 'zod';
+import { SessionModeSchema, type SessionMode } from './session-mode';
+import { INVESTIGATION_PHASES, DEVELOPMENT_PHASES, REVIEW_PHASES } from './pipeline';
 
-export const SessionModeSchema = z.enum(['review', 'investigation', 'development']);
-export type SessionMode = z.infer<typeof SessionModeSchema>;
+export { SessionModeSchema };
+export type { SessionMode };
 
-export const SessionSchema = z.object({
+const SessionBaseSchema = z.object({
   schemaVersion: z.literal(1),
   id: z.string().min(1),
-  mode: SessionModeSchema,
   createdAt: z.string().datetime(),
   workspace: z.object({
     repoUrl: z.string().min(1),
@@ -18,8 +19,22 @@ export const SessionSchema = z.object({
     parentSessionId: z.string().min(1).nullable(),
     ticket: z.string().min(1).nullable(),
   }),
-  stageStatus: z.string().min(1),
 });
+
+export const SessionSchema = z.discriminatedUnion('mode', [
+  SessionBaseSchema.extend({
+    mode: z.literal('investigation'),
+    stageStatus: z.enum(INVESTIGATION_PHASES),
+  }),
+  SessionBaseSchema.extend({
+    mode: z.literal('development'),
+    stageStatus: z.enum(DEVELOPMENT_PHASES),
+  }),
+  SessionBaseSchema.extend({
+    mode: z.literal('review'),
+    stageStatus: z.enum(REVIEW_PHASES),
+  }),
+]);
 
 export type Session = z.infer<typeof SessionSchema>;
 

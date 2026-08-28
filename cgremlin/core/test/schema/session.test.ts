@@ -14,7 +14,7 @@ const validSession = {
     parentSessionId: null,
     ticket: 'HB-1234',
   },
-  stageStatus: 'active',
+  stageStatus: 'findings',
 };
 
 describe('SessionSchema', () => {
@@ -32,6 +32,11 @@ describe('SessionSchema', () => {
       ...validSession,
       lineage: { ...validSession.lineage, pipelineId: '' },
     };
+    expect(() => parseSession(invalid)).toThrow();
+  });
+
+  it('rejects a stageStatus that is not valid for the session mode', () => {
+    const invalid = { ...validSession, stageStatus: 'merged' }; // 'merged' is a development phase, not investigation
     expect(() => parseSession(invalid)).toThrow();
   });
 
