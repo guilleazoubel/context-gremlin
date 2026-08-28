@@ -4,8 +4,17 @@ export class InMemoryFileSystem implements SessionFileSystem {
   private files = new Map<string, string>();
   private dirs = new Set<string>();
 
-  async mkdir(path: string, _options?: { recursive?: boolean }): Promise<void> {
-    this.dirs.add(path);
+  async mkdir(path: string, options?: { recursive?: boolean }): Promise<void> {
+    if (options?.recursive) {
+      const segments = path.split('/').filter(Boolean);
+      let current = '';
+      for (const segment of segments) {
+        current += `/${segment}`;
+        this.dirs.add(current);
+      }
+    } else {
+      this.dirs.add(path);
+    }
   }
 
   async exists(path: string): Promise<boolean> {

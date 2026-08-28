@@ -49,5 +49,12 @@ export function testFileSystemContract(
       const fs = await createFs();
       await expect(fs.readFile(makePath('nope.txt'))).rejects.toThrow();
     });
+
+    it('mkdir with recursive:true also makes ancestor directories exist', async () => {
+      const fs = await createFs();
+      await fs.mkdir(makePath('deep', 'nested', 'dir'), { recursive: true });
+      expect(await fs.exists(makePath('deep'))).toBe(true);
+      expect(await fs.exists(makePath('deep', 'nested'))).toBe(true);
+    });
   });
 }
