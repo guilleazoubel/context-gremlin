@@ -9,12 +9,14 @@ import { WorkspaceManager } from '../../src/workspace/workspace-manager';
 import { InMemoryFileSystem } from '../support/in-memory-file-system';
 import { FakeGitRunner } from '../support/fake-git-runner';
 import type { Session } from '../../src/schema/session';
+import type { SessionFileSystem } from '../../src/fs/session-file-system';
 
 let dir: string;
 let socketPath: string;
 let server: http.Server;
 
-function request(
+function requestOn(
+  targetSocketPath: string,
   method: string,
   urlPath: string,
   body?: unknown,
@@ -23,7 +25,7 @@ function request(
     const payload = body === undefined ? undefined : JSON.stringify(body);
     const req = http.request(
       {
-        socketPath,
+        socketPath: targetSocketPath,
         path: urlPath,
         method,
         headers: payload
@@ -43,6 +45,62 @@ function request(
     if (payload) req.write(payload);
     req.end();
   });
+}
+
+function request(
+  method: string,
+  urlPath: string,
+  body?: unknown,
+): Promise<{ status: number; body: unknown }> {
+  return requestOn(socketPath, method, urlPath, body);
+}
+
+/**
+ * Wraps a SessionFileSystem and injects a real timer delay on every
+ * operation, forcing genuine event-loop interleaving between concurrent
+ * requests. InMemoryFileSystem alone resolves everything via microtasks,
+ * so two "concurrent" HTTP requests never actually overlap without this —
+ * which is exactly how the lock's effect went untested before this fix.
+ */
+class DelayedFileSystem implements SessionFileSystem {
+  constructor(
+    private readonly inner: SessionFileSystem,
+    private readonly delayMs = 5,
+  ) {}
+
+  private delay(): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, this.delayMs));
+  }
+
+  async readFile(path: string): Promise<string> {
+    await this.delay();
+    return this.inner.readFile(path);
+  }
+
+  async writeFile(path: string, content: string): Promise<void> {
+    await this.delay();
+    return this.inner.writeFile(path, content);
+  }
+
+  async rename(from: string, to: string): Promise<void> {
+    await this.delay();
+    return this.inner.rename(from, to);
+  }
+
+  async readdir(path: string): Promise<string[]> {
+    await this.delay();
+    return this.inner.readdir(path);
+  }
+
+  async mkdir(path: string, options?: { recursive?: boolean }): Promise<void> {
+    await this.delay();
+    return this.inner.mkdir(path, options);
+  }
+
+  async exists(path: string): Promise<boolean> {
+    await this.delay();
+    return this.inner.exists(path);
+  }
 }
 
 beforeAll(async () => {
@@ -145,14 +203,72 @@ describe('API server', () => {
     expect(res.status).toBe(204);
   });
 
+  it('POST /workspaces returns 400 for an invalid mode', async () => {
+    const res = await request('POST', '/workspaces', {
+      repoUrl: 'git@github.com:org/repo.git',
+      worktreePath: '/work/inv-1',
+      branchName: 'main',
+      baseRef: 'origin/main',
+      mode: 'bogus',
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /workspaces returns 400 for a missing required field', async () => {
+    const res = await request('POST', '/workspaces', {
+      repoUrl: 'git@github.com:org/repo.git',
+      branchName: 'main',
+      baseRef: 'origin/main',
+      mode: 'investigation',
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 400 for a malformed JSON body', async () => {
+    const res = await new Promise<{ status: number }>((resolve, reject) => {
+      const req = http.request(
+        {
+          socketPath,
+          path: '/sessions',
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+        },
+        (r) => {
+          r.on('data', () => undefined);
+          r.on('end', () => resolve({ status: r.statusCode ?? 0 }));
+        },
+      );
+      req.on('error', reject);
+      req.write('{not valid json');
+      req.end();
+    });
+    expect(res.status).toBe(400);
+  });
+
   it('concurrent transitions to the same target for the same session id are serialized: exactly one succeeds', async () => {
-    const session = makeSession({ id: 'inv-race', stageStatus: 'findings' });
-    await request('POST', '/sessions', session);
-    const [r1, r2] = await Promise.all([
-      request('POST', '/sessions/inv-race/transition', { to: 'planning' }),
-      request('POST', '/sessions/inv-race/transition', { to: 'planning' }),
-    ]);
-    const statuses = [r1.status, r2.status].sort((a, b) => a - b);
-    expect(statuses).toEqual([200, 409]);
+    const delayedFs = new DelayedFileSystem(new InMemoryFileSystem());
+    const git = new FakeGitRunner();
+    const delayedStore = new SessionStore(delayedFs, '/sessions');
+    const delayedWorkspaceManager = new WorkspaceManager(git, delayedFs, '/mirrors');
+    const delayedServer = createApiServer({
+      sessionStore: delayedStore,
+      workspaceManager: delayedWorkspaceManager,
+    });
+    const delayedSocketPath = path.join(dir, 'concurrency.sock');
+    await new Promise<void>((resolve) => delayedServer.listen(delayedSocketPath, resolve));
+
+    try {
+      const session = makeSession({ id: 'inv-race', stageStatus: 'findings' });
+      await requestOn(delayedSocketPath, 'POST', '/sessions', session);
+      const [r1, r2] = await Promise.all([
+        requestOn(delayedSocketPath, 'POST', '/sessions/inv-race/transition', { to: 'planning' }),
+        requestOn(delayedSocketPath, 'POST', '/sessions/inv-race/transition', { to: 'planning' }),
+      ]);
+      const statuses = [r1.status, r2.status].sort((a, b) => a - b);
+      expect(statuses).toEqual([200, 409]);
+    } finally {
+      await new Promise<void>((resolve) => delayedServer.close(() => resolve()));
+      await rm(delayedSocketPath, { force: true });
+    }
   });
 });

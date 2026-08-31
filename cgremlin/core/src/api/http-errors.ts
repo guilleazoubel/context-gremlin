@@ -15,6 +15,8 @@ export function mapErrorToHttp(err: unknown): HttpError {
       return { status: 409, body: { error: message } };
     case 'SessionCorruptError':
       return { status: 500, body: { error: message } };
+    case 'ValidationError':
+      return { status: 400, body: { error: message } };
     default:
       return { status: 500, body: { error: message } };
   }

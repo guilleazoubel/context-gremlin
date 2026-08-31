@@ -1,8 +1,9 @@
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import type { SessionStore } from '../engine/session-store';
-import type { WorkspaceManager, CreateWorkspaceParams } from '../workspace/workspace-manager';
+import type { WorkspaceManager } from '../workspace/workspace-manager';
 import { KeyedLock } from './keyed-lock';
 import { mapErrorToHttp } from './http-errors';
+import { parseCreateWorkspaceRequest, ValidationError } from './validation';
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
@@ -10,7 +11,12 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
     chunks.push(chunk as Buffer);
   }
   const raw = Buffer.concat(chunks).toString('utf8');
-  return raw ? JSON.parse(raw) : undefined;
+  if (!raw) return undefined;
+  try {
+    return JSON.parse(raw);
+  } catch (err) {
+    throw new ValidationError(`Invalid JSON request body: ${(err as Error).message}`);
+  }
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
@@ -79,8 +85,9 @@ async function handleRequest(
     }
 
     if (req.method === 'POST' && parts.length === 1 && parts[0] === 'workspaces') {
-      const body = (await readJsonBody(req)) as CreateWorkspaceParams;
-      const mirrorPath = await deps.workspaceManager.createWorkspace(body);
+      const body = await readJsonBody(req);
+      const params = parseCreateWorkspaceRequest(body);
+      const mirrorPath = await deps.workspaceManager.createWorkspace(params);
       sendJson(res, 201, { mirrorPath });
       return;
     }

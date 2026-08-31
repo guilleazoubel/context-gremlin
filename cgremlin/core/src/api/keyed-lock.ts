@@ -6,13 +6,19 @@ export class KeyedLock {
     const result = previousTail.then(fn, fn);
     // Store a tail that never rejects, so a prior failure never blocks
     // subsequent calls for the same key from running.
-    this.tails.set(
-      key,
-      result.then(
-        () => undefined,
-        () => undefined,
-      ),
+    const settledTail = result.then(
+      () => undefined,
+      () => undefined,
     );
+    this.tails.set(key, settledTail);
+    // Prune the entry once this is the last queued call for the key, so
+    // one-shot keys (invalid/nonexistent session ids) don't grow the map
+    // without bound.
+    void settledTail.then(() => {
+      if (this.tails.get(key) === settledTail) {
+        this.tails.delete(key);
+      }
+    });
     return result;
   }
 }

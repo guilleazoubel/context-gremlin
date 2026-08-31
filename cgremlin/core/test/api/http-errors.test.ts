@@ -6,6 +6,7 @@ import {
   SessionCorruptError,
 } from '../../src/engine/session-store';
 import { IllegalTransitionError } from '../../src/schema/pipeline';
+import { ValidationError } from '../../src/api/validation';
 
 describe('mapErrorToHttp', () => {
   it('maps SessionNotFoundError to 404', () => {
@@ -29,6 +30,11 @@ describe('mapErrorToHttp', () => {
   it('maps SessionCorruptError to 500', () => {
     const result = mapErrorToHttp(new SessionCorruptError('inv-1', 'bad json'));
     expect(result.status).toBe(500);
+  });
+
+  it('maps ValidationError to 400', () => {
+    const result = mapErrorToHttp(new ValidationError('bad body'));
+    expect(result.status).toBe(400);
   });
 
   it('maps an unknown Error to 500', () => {
