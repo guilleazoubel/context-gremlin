@@ -29,12 +29,25 @@ export class WorkspaceManager {
       params.branchName,
       params.baseRef,
     );
-    await writePermissionSettings(this.fs, params.worktreePath, params.mode);
+    try {
+      await writePermissionSettings(this.fs, params.worktreePath, params.mode);
+    } catch (err) {
+      // Best-effort rollback so a retry with the same branchName doesn't
+      // fail with "a branch already exists" — surface the original error
+      // regardless of whether rollback itself succeeds.
+      await removeWorktree(this.git, mirrorPath, params.worktreePath, params.branchName).catch(
+        () => undefined,
+      );
+      throw err;
+    }
+    // Callers (Phase 1c) should persist this mirror path on the session
+    // record and pass it back for teardown, rather than re-deriving it —
+    // removeWorkspace re-derives from repoUrl only for convenience today.
     return mirrorPath;
   }
 
-  async removeWorkspace(repoUrl: string, worktreePath: string): Promise<void> {
+  async removeWorkspace(repoUrl: string, worktreePath: string, branchName: string): Promise<void> {
     const mirrorPath = `${this.mirrorsDir}/${mirrorDirName(repoUrl)}`;
-    await removeWorktree(this.git, mirrorPath, worktreePath);
+    await removeWorktree(this.git, mirrorPath, worktreePath, branchName);
   }
 }

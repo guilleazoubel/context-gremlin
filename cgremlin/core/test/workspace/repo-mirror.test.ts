@@ -15,30 +15,60 @@ describe('mirrorDirName', () => {
       'github.com-aplaceformom-grace-frontend.git',
     );
   });
+
+  it('strips a trailing slash before slugifying', () => {
+    expect(mirrorDirName('https://github.com/org/repo/')).toBe('github.com-org-repo.git');
+  });
 });
 
 describe('ensureMirror', () => {
-  it('clones the mirror when it does not exist yet', async () => {
+  it('clones as bare, configures the fetch refspec, and fetches when the mirror does not exist yet', async () => {
     const git = new FakeGitRunner();
     const fs = new InMemoryFileSystem();
     const mirrorPath = await ensureMirror(git, fs, '/mirrors', 'git@github.com:org/repo.git');
     expect(mirrorPath).toBe('/mirrors/github.com-org-repo.git');
     expect(git.calls).toEqual([
       {
-        args: ['clone', '--mirror', 'git@github.com:org/repo.git', '/mirrors/github.com-org-repo.git'],
+        args: ['clone', '--bare', 'git@github.com:org/repo.git', '/mirrors/github.com-org-repo.git'],
         cwd: '/mirrors',
       },
+      {
+        args: ['config', 'remote.origin.fetch', '+refs/heads/*:refs/remotes/origin/*'],
+        cwd: '/mirrors/github.com-org-repo.git',
+      },
+      { args: ['fetch', '--prune', 'origin'], cwd: '/mirrors/github.com-org-repo.git' },
     ]);
   });
 
-  it('fetches instead of cloning when the mirror already exists', async () => {
+  it('only fetches when the mirror already has a HEAD file (already cloned)', async () => {
     const git = new FakeGitRunner();
     const fs = new InMemoryFileSystem();
     await fs.mkdir('/mirrors/github.com-org-repo.git', { recursive: true });
+    await fs.writeFile('/mirrors/github.com-org-repo.git/HEAD', 'ref: refs/heads/master\n');
     const mirrorPath = await ensureMirror(git, fs, '/mirrors', 'git@github.com:org/repo.git');
     expect(mirrorPath).toBe('/mirrors/github.com-org-repo.git');
     expect(git.calls).toEqual([
-      { args: ['fetch', '--all', '--prune'], cwd: '/mirrors/github.com-org-repo.git' },
+      { args: ['fetch', '--prune', 'origin'], cwd: '/mirrors/github.com-org-repo.git' },
     ]);
+  });
+
+  it('treats a directory without a HEAD file as not yet cloned, and attempts to clone', async () => {
+    const git = new FakeGitRunner();
+    const fs = new InMemoryFileSystem();
+    await fs.mkdir('/mirrors/github.com-org-repo.git', { recursive: true });
+    await ensureMirror(git, fs, '/mirrors', 'git@github.com:org/repo.git');
+    expect(git.calls[0]).toEqual({
+      args: ['clone', '--bare', 'git@github.com:org/repo.git', '/mirrors/github.com-org-repo.git'],
+      cwd: '/mirrors',
+    });
+  });
+
+  it('propagates a clone failure instead of swallowing it', async () => {
+    const git = new FakeGitRunner();
+    const fs = new InMemoryFileSystem();
+    git.queueResponse(new Error('clone failed: repository not found'));
+    await expect(ensureMirror(git, fs, '/mirrors', 'git@github.com:org/repo.git')).rejects.toThrow(
+      'clone failed',
+    );
   });
 });
