@@ -29,6 +29,16 @@ describe('ensureMirror + createWorktree against real git', () => {
     const mirrorsDir = path.join(dir, 'mirrors');
     const mirrorPath = await ensureMirror(git, fs, mirrorsDir, originPath);
 
+    // Direct regression test for the mirror-push defect: `clone --mirror` sets
+    // remote.origin.mirror=true in the shared bare-repo config, which turns an
+    // ordinary `git push origin` from any worktree into a mirror push that
+    // force-deletes remote branches. `git config --get` exits non-zero on an
+    // unset key, so a rejection here means "unset", which is what we want.
+    const { stdout: mirrorConfig } = await git
+      .run(['config', '--get', 'remote.origin.mirror'], { cwd: mirrorPath })
+      .catch((err: unknown) => ({ stdout: '', stderr: (err as Error).message }));
+    expect(mirrorConfig.trim()).toBe('');
+
     const { stdout: branchOut } = await git.run(['branch', '--show-current'], { cwd: originPath });
     const defaultBranch = branchOut.trim();
     const baseRef = `origin/${defaultBranch}`;
