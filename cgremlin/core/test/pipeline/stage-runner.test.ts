@@ -118,6 +118,17 @@ describe('StageRunner.run', () => {
     expect(session.lastRun).toMatchObject({ outcome: 'succeeded', error: null });
   });
 
+  it('activeSessionIds reflects sessions with an in-flight run, and is empty once it exits', async () => {
+    const { runner, sr } = await setup();
+    expect(sr.activeSessionIds()).toEqual([]);
+    const p = sr.run({ sessionId: 'inv-1', stage: 'findings', brief: null, prompt: 'go' });
+    await flush();
+    expect(sr.activeSessionIds()).toEqual(['inv-1']);
+    runner.emitExit(runner.lastHandle(), { code: 0, signal: null });
+    await p;
+    expect(sr.activeSessionIds()).toEqual([]);
+  });
+
   it('marks failed on non-zero exit and on signal, with a message', async () => {
     const { runner, sr } = await setup();
     const p1 = sr.run({ sessionId: 'inv-1', stage: 'findings', brief: null, prompt: 'go' });

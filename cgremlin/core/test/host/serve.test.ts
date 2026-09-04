@@ -1,10 +1,11 @@
 import { mkdtemp, rm, stat } from 'node:fs/promises';
 import http from 'node:http';
+import net from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { serve } from '../../src/host/serve';
-import type { EngineAdapters } from '../../src/host/build-engine';
+import type { EngineAdapters, ScannerLike } from '../../src/host/build-engine';
 import { resolveCoreConfig, type CoreConfig } from '../../src/config/core-config';
 import { SocketInUseError } from '../../src/api/listen';
 import { InMemoryFileSystem } from '../support/in-memory-file-system';
@@ -12,6 +13,7 @@ import { FakeGitRunner } from '../support/fake-git-runner';
 import { FakeGhRunner } from '../support/fake-gh-runner';
 import { FakeAgentRunner } from '../support/fake-agent-runner';
 import { FakeClock } from '../support/fake-clock';
+import { migrateV1ToV2 } from '../../src/schema/session';
 
 function requestOn(
   socketPath: string,
@@ -53,6 +55,30 @@ async function createInvestigation(socketPath: string): Promise<string> {
     driveToCompletion: false,
   });
   return (res.body as { session: { id: string } }).session.id;
+}
+
+function staleRunningSession(id: string) {
+  const v2 = migrateV1ToV2({
+    schemaVersion: 1,
+    id,
+    mode: 'investigation',
+    createdAt: '2026-09-04T10:00:00.000Z',
+    workspace: { repoUrl: 'u', worktreePath: `/worktrees/${id}`, branch: 'investigate/STALE-1' },
+    lineage: { pipelineId: id, parentSessionId: null, ticket: 'STALE-1' },
+    stageStatus: 'findings',
+  });
+  return {
+    ...v2,
+    lastRun: {
+      stage: 'findings' as const,
+      startedAt: '2026-09-04T10:00:00.000Z',
+      finishedAt: null,
+      exitCode: null,
+      signal: null,
+      outcome: 'running' as const,
+      error: null,
+    },
+  };
 }
 
 let dir: string;
@@ -181,6 +207,115 @@ describe('serve', () => {
       await expect(stat(handle.socketPath)).rejects.toThrow(); // close() actually ran
     } finally {
       await handle.close();
+    }
+  });
+
+  it('close() waits for an in-flight discovery tick before it resolves', async () => {
+    const clock = new FakeClock();
+    let releaseTick: (() => void) | undefined;
+    const tickHeld = new Promise<void>((resolve) => {
+      releaseTick = resolve;
+    });
+    const fakeScanner: ScannerLike = {
+      run: async () => {
+        await tickHeld;
+        return { reconciled: 0, actions: [], skipped: [], created: [], started: [], ignoredOwn: 0, errors: [] };
+      },
+      lastReport: null,
+    };
+    const handle = await serve(testConfig(), testAdapters({ clock }), {
+      log: () => {},
+      makeTickable: () => fakeScanner,
+    });
+    try {
+      clock.fire();
+      let closed = false;
+      const closePromise = handle.close().then(() => {
+        closed = true;
+      });
+      await new Promise((r) => setTimeout(r, 30));
+      expect(closed).toBe(false); // the tick is still in flight
+      releaseTick?.();
+      await closePromise;
+      expect(closed).toBe(true);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it("close() stops only sessions the StageRunner actively tracks, leaving a stale on-disk 'running' session with no live process alone", async () => {
+    const runner = new FakeAgentRunner();
+    const handle = await serve(testConfig(), testAdapters({ runner }), { log: () => {} });
+    try {
+      await handle.engine.store.save(staleRunningSession('stale-1'));
+
+      const liveId = await createInvestigation(handle.socketPath);
+      await requestOn(handle.socketPath, 'POST', `/sessions/${liveId}/run`, { stage: 'findings' });
+      await new Promise((r) => setTimeout(r, 20));
+
+      const stopSpy = vi.spyOn(handle.engine.pipeline, 'stop');
+      await handle.close();
+
+      // Exactly the live session, never the stale on-disk one — a mutation
+      // that iterated store.list()'s lastRun field unconditionally would
+      // also call stop('stale-1') here.
+      expect(stopSpy.mock.calls).toEqual([[liveId]]);
+      expect(runner.isStopped(runner.lastHandle())).toBe(true);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('close() still completes cleanup when pipeline.stop rejects, then rethrows that error', async () => {
+    const sigintBefore = process.listenerCount('SIGINT');
+    const handle = await serve(testConfig(), testAdapters(), { log: () => {} });
+    const id = await createInvestigation(handle.socketPath);
+    await requestOn(handle.socketPath, 'POST', `/sessions/${id}/run`, { stage: 'findings' });
+    await new Promise((r) => setTimeout(r, 20));
+
+    vi.spyOn(handle.engine.pipeline, 'stop').mockRejectedValue(new Error('stop boom'));
+
+    await expect(handle.close()).rejects.toThrow('stop boom');
+    await expect(stat(handle.socketPath)).rejects.toThrow();
+    expect(process.listenerCount('SIGINT')).toBe(sigintBefore);
+  });
+
+  it('a client holding an open connection does not block close()', async () => {
+    const handle = await serve(testConfig(), testAdapters(), { log: () => {} });
+    // A raw, never-completed connection: the server never gets a full
+    // request to respond to and close, so without closeAllConnections()
+    // server.close() would wait for it (and this test's client) forever.
+    const socket = net.createConnection(handle.socketPath);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        socket.once('connect', () => resolve());
+        socket.once('error', reject);
+      });
+      const start = Date.now();
+      await handle.close();
+      expect(Date.now() - start).toBeLessThan(1000);
+    } finally {
+      socket.destroy();
+    }
+  });
+
+  it('logs a shutdown.timeout line and still resolves close() if the server never finishes closing in time', async () => {
+    const lines: string[] = [];
+    const handle = await serve(testConfig(), testAdapters(), {
+      log: (l) => lines.push(l),
+      serverCloseTimeoutMs: 20,
+    });
+    const originalClose = handle.engine.server.close.bind(handle.engine.server);
+    // Simulate a server.close() that never invokes its callback (e.g. a
+    // connection that will never end) — never call cb.
+    handle.engine.server.close = (() => handle.engine.server) as typeof handle.engine.server.close;
+    try {
+      await handle.close();
+      const parsed = lines.map((l) => JSON.parse(l) as { type: string });
+      expect(parsed.some((e) => e.type === 'shutdown.timeout')).toBe(true);
+    } finally {
+      handle.engine.server.close = originalClose;
+      await new Promise<void>((resolve) => handle.engine.server.close(() => resolve()));
     }
   });
 });

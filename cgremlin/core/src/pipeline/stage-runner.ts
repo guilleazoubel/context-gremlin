@@ -44,6 +44,11 @@ export class StageRunner {
     return this.active.has(sessionId);
   }
 
+  /** The ids of sessions with an in-flight run right now — the source of truth for "what to stop" on shutdown, not any on-disk field. */
+  activeSessionIds(): string[] {
+    return [...this.active.keys()];
+  }
+
   async stop(sessionId: string): Promise<boolean> {
     const run = this.active.get(sessionId);
     if (!run) return false;

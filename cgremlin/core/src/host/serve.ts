@@ -7,10 +7,14 @@ import { CodexRunner } from '../agent/codex-runner';
 import type { AgentRunner } from '../agent/agent-runner';
 import type { CoreConfig } from '../config/core-config';
 import { listenOnSocket } from '../api/listen';
-import { buildEngine, type EngineAdapters } from './build-engine';
+import { buildEngine, type BuildEngineOptions, type Engine, type EngineAdapters } from './build-engine';
+
+const DEFAULT_SERVER_CLOSE_TIMEOUT_MS = 5000;
 
 export interface ServeHandle {
   socketPath: string;
+  /** Exposed for introspection/testing — the same wired parts `buildEngine` returned. */
+  engine: Engine;
   close(): Promise<void>;
   onSignal(sig: NodeJS.Signals): void;
 }
@@ -19,10 +23,33 @@ export interface ServeOptions {
   log: (line: string) => void;
   verbose?: boolean;
   signals?: readonly NodeJS.Signals[];
+  makeTickable?: BuildEngineOptions['makeTickable'];
+  /** How long close() waits for server.close() before giving up and logging shutdown.timeout. Default 5000. */
+  serverCloseTimeoutMs?: number;
 }
 
 function logLine(log: (line: string) => void, type: string, payload: Record<string, unknown> = {}): void {
   log(JSON.stringify({ ts: new Date().toISOString(), type, ...payload }));
+}
+
+/**
+ * Races `server.close()` against `timeoutMs`, always clearing the timer.
+ * `closeAllConnections()` (called by the caller before this) should make
+ * `server.close()` finish promptly even with connections open, but a
+ * misbehaving/hung listener socket must never keep an engine shutdown
+ * hanging forever — log and give up instead.
+ */
+async function closeServerWithTimeout(server: Engine['server'], timeoutMs: number, log: (line: string) => void): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const closed = new Promise<'closed'>((resolve) => server.close(() => resolve('closed')));
+  const timedOut = new Promise<'timeout'>((resolve) => {
+    timer = setTimeout(() => resolve('timeout'), timeoutMs);
+  });
+  const result = await Promise.race([closed, timedOut]);
+  clearTimeout(timer);
+  if (result === 'timeout') {
+    logLine(log, 'shutdown.timeout');
+  }
 }
 
 /**
@@ -42,8 +69,8 @@ export async function serve(config: CoreConfig, adapters: EngineAdapters, opts: 
   await adapters.fs.mkdir(worktreesDir, { recursive: true });
   await adapters.fs.mkdir(mirrorsDir, { recursive: true });
 
-  const engine = buildEngine(config, adapters);
-  const { server, scheduler, pipeline, events, store } = engine;
+  const engine = buildEngine(config, adapters, { makeTickable: opts.makeTickable });
+  const { server, scheduler, pipeline, events } = engine;
 
   const unsubscribers: Array<() => void> = [
     events.on('session.created', (e) => logLine(opts.log, 'session.created', { sessionId: e.session.id })),
@@ -79,23 +106,40 @@ export async function serve(config: CoreConfig, adapters: EngineAdapters, opts: 
   async function close(): Promise<void> {
     if (closed) return;
     closed = true;
-    scheduler.stop();
-    const sessions = await store.list();
-    for (const session of sessions) {
-      if (session.lastRun?.outcome === 'running') {
-        await pipeline.stop(session.id);
+    let firstError: unknown;
+    try {
+      // Await any tick already in flight BEFORE reading what's active: a
+      // tick that fired just before shutdown could otherwise start a
+      // rereview/agent after we've already begun tearing everything down,
+      // leaving it running forever with nothing left to stop it.
+      await scheduler.stop();
+      // StageRunner's in-memory active map is the only trustworthy source
+      // of "what's actually running" — an on-disk lastRun.outcome==='running'
+      // can be stale (a crashed engine, a session nobody ever resumed) and
+      // stopping by that alone would be a no-op at best, misleading at worst.
+      for (const id of pipeline.activeSessionIds()) {
+        await pipeline.stop(id);
       }
+    } catch (err) {
+      firstError = err;
+    } finally {
+      // Everything below must run even if the above threw, so a shutdown
+      // never leaves the socket file, process listeners, or a hung server
+      // behind — that would break a later `serve()` on the same socket.
+      server.closeAllConnections();
+      await closeServerWithTimeout(server, opts.serverCloseTimeoutMs ?? DEFAULT_SERVER_CLOSE_TIMEOUT_MS, opts.log);
+      await unlink(socketPath).catch((err: NodeJS.ErrnoException) => {
+        if (err.code !== 'ENOENT') throw err;
+      });
+      for (const off of unsubscribers) off();
+      for (const { sig, handler } of processHandlers) process.removeListener(sig, handler);
     }
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-    await unlink(socketPath).catch((err: NodeJS.ErrnoException) => {
-      if (err.code !== 'ENOENT') throw err;
-    });
-    for (const off of unsubscribers) off();
-    for (const { sig, handler } of processHandlers) process.removeListener(sig, handler);
+    if (firstError !== undefined) throw firstError;
   }
 
   return {
     socketPath,
+    engine,
     close,
     onSignal: (sig) => signalHandler(sig),
   };

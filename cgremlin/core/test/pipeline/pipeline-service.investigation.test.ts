@@ -312,4 +312,16 @@ describe('PipelineService — investigation', () => {
     const worktreeRemove = h.git.calls.find((c) => c.args[0] === 'worktree' && c.args[1] === 'remove');
     expect(worktreeRemove).toBeDefined();
   });
+
+  it('activeSessionIds passes through to the underlying StageRunner — the source of truth for what to stop on shutdown', async () => {
+    const h = createHarness();
+    const inv = await createInvestigation(h.service);
+    expect(h.service.activeSessionIds()).toEqual([]);
+    const p = h.service.runFindings(inv.id);
+    await flush();
+    expect(h.service.activeSessionIds()).toEqual([inv.id]);
+    await h.finishRun({ 'FINDINGS.md': '# Findings' }, { code: 0, signal: null });
+    await p;
+    expect(h.service.activeSessionIds()).toEqual([]);
+  });
 });

@@ -50,10 +50,22 @@ export class DiscoveryScheduler {
     this.handle = this.clock.setInterval(() => this.fire(), this.intervalMs);
   }
 
-  stop(): void {
+  /**
+   * Clears the interval and, if a tick is currently in flight, waits for it
+   * to settle before resolving — a caller tearing down the engine must never
+   * race a tick that started just before shutdown (it could otherwise start
+   * an agent after the engine has already begun closing everything down). A
+   * rejecting tick is swallowed here; `runTick` already records it as
+   * `lastError`.
+   */
+  async stop(): Promise<void> {
     if (this.handle !== null) {
       this.clock.clearInterval(this.handle);
       this.handle = null;
+    }
+    const inFlight = this.pending;
+    if (inFlight !== null) {
+      await inFlight.catch(() => undefined);
     }
   }
 
