@@ -281,7 +281,7 @@ the working agent), and that dispatches work to working agents and supervises th
 staying on track and making good decisions — the role the human-driven supervising session
 plays during this rebuild.
 
-Ruling: record as a new phase **after Phase 4 (dashboard)**, before Phase 5, with its own
+Ruling: record as a new phase **after Phase 4** (originally the dashboard; on 2026-09-04 the user dropped the dashboard and Phase 4 became "PR Inventory, Host and CLI" — see that spec), before Phase 5, with its own
 brainstorming pass. Reasons: (a) it is a *client* of the Phase 3 engine API plus the Phase 4
 event stream, so it needs both to exist first; (b) it introduces a second agent-runner shape
 (long-lived interactive sessions that can be messaged, alongside today's headless runs),
