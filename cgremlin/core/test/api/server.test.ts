@@ -153,6 +153,7 @@ async function createDelayedServer(socketFileName: string) {
     events,
     sessionsDir: '/sessions',
     runnerKind: 'claude-code',
+    lock,
   });
   const pipeline = new PipelineService({
     store,
@@ -162,6 +163,7 @@ async function createDelayedServer(socketFileName: string) {
     git,
     events,
     config: { sessionsDir: '/sessions', worktreesDir: '/worktrees', defaultBaseRef: 'origin/main' },
+    lock,
   });
   const srv = createApiServer({
     sessionStore: store,
@@ -208,6 +210,7 @@ beforeEach(async () => {
     fs: h.fs,
     sessionsDir: SESSIONS_DIR,
     events: h.events,
+    lock: h.lock,
   });
   await new Promise<void>((resolve) => server.listen(socketPath, resolve));
 });
@@ -558,6 +561,32 @@ describe('API server', () => {
     expect((idleStopRes.body as { stopped: boolean }).stopped).toBe(false);
   });
 
+  it('POST /sessions/:id/run immediately followed by POST /sessions/:id/stop on the same id completes without deadlocking', async () => {
+    // /run no longer wraps in the server's lock (PipelineService locks the
+    // pre-run window itself, releasing exactly at run.started, before the
+    // HTTP response for /run is even sent) — /stop still does wrap in the
+    // server's lock. If /run's lock were somehow still held when /stop's
+    // request lands, this would hang forever (KeyedLock is not re-entrant,
+    // but a lock held by a DIFFERENT request never releases from here).
+    const createRes = await request('POST', '/sessions/investigations', {
+      repoUrl: 'git@github.com:acme/app.git',
+      ticket: 'APP-7b',
+      intent: 'investigate_only',
+      driveToCompletion: false,
+    });
+    const id = (createRes.body as { session: Session }).session.id;
+
+    const start = Date.now();
+    const runRes = await request('POST', `/sessions/${id}/run`, { stage: 'findings' });
+    expect(runRes.status).toBe(202);
+    const stopRes = await request('POST', `/sessions/${id}/stop`);
+    expect(stopRes.status).toBe(200);
+    expect(Date.now() - start).toBeLessThan(1000);
+
+    h.runner.emitExit(h.runner.lastHandle(), { code: null, signal: 'SIGTERM' });
+    await flush();
+  });
+
   it('POST /sessions/:id/promote filters run.started by the actual development session, so concurrent promotes do not cross-assign', async () => {
     const d = await createDelayedServer('promote-race.sock');
     try {
@@ -590,6 +619,54 @@ describe('API server', () => {
       await rm(d.sock, { force: true });
     }
   });
+
+  it('a develop run\'s post-exit patch never clobbers a concurrent /transition to abandoned (the proven session-store race), over 20 iterations', async () => {
+    const d = await createDelayedServer('post-run-lock-race.sock');
+    try {
+      for (let i = 0; i < 20; i++) {
+        const devId = `dev-race-${i}`;
+        const worktreePath = `/worktrees/${devId}`;
+        const dev = makeSession({
+          id: devId,
+          mode: 'development',
+          stageStatus: 'active',
+          workspace: { repoUrl: 'git@github.com:acme/app.git', worktreePath },
+          lineage: { pipelineId: devId, parentSessionId: null, ticket: null },
+        });
+        await d.store.save(dev);
+
+        const runRes = await requestOn(d.sock, 'POST', `/sessions/${devId}/run`, { stage: 'develop' });
+        expect(runRes.status).toBe(202);
+
+        // Emitting exit here kicks off StageRunner's post-exit lastRun/agent
+        // patch (load -> save, each delayed by DelayedFileSystem) in the
+        // background; the transition request below races it for real,
+        // exercising the exact clobber this fix closes — not a simulated one.
+        d.runner.emitExit(d.runner.lastHandle(), { code: 0, signal: null });
+
+        const abandonRes = await requestOn(d.sock, 'POST', `/sessions/${devId}/transition`, { to: 'abandoned' });
+        expect(abandonRes.status).toBe(200);
+
+        // Let both in-flight delayed writes fully settle before asserting —
+        // whichever of the two actually wrote last, the lock serializes them
+        // so the later one always sees (and preserves) the earlier one's write.
+        await new Promise((resolve) => setTimeout(resolve, 80));
+
+        const final = await d.store.load(devId);
+        expect(final.stageStatus).toBe('abandoned');
+
+        const removeRes = await requestOn(d.sock, 'DELETE', '/workspaces', {
+          repoUrl: 'git@github.com:acme/app.git',
+          worktreePath,
+          branchName: 'main',
+        });
+        expect(removeRes.status).toBe(204);
+      }
+    } finally {
+      await d.close();
+      await rm(d.sock, { force: true });
+    }
+  }, 20_000);
 
   it('a ReconciliationTick sharing the server\'s lock waits for an in-flight API rereview on the same session, then re-plans from the fresh state instead of starting a second rereview', async () => {
     const d = await createDelayedServer('shared-lock.sock');
@@ -789,6 +866,7 @@ describe('discovery routes (configured)', () => {
       sessionsDir: SESSIONS_DIR,
       events: dh.h.events,
       discovery: { scheduler: new DiscoveryScheduler(dh.tick, 60_000), config: dh.config },
+      lock: dh.h.lock,
     });
     await new Promise<void>((resolve) => discServer.listen(discSocketPath, resolve));
   });
@@ -827,6 +905,7 @@ describe('discovery routes (configured)', () => {
       sessionsDir: SESSIONS_DIR,
       events: dh.h.events,
       discovery: { scheduler, config: dh.config },
+      lock: dh.h.lock,
     });
     const brokenSocketPath = path.join(dir, 'api-discovery-broken.sock');
     await new Promise<void>((resolve) => brokenServer.listen(brokenSocketPath, resolve));
@@ -861,6 +940,7 @@ describe('discovery routes (configured)', () => {
       sessionsDir: SESSIONS_DIR,
       events: slow.h.events,
       discovery: { scheduler: new DiscoveryScheduler(slow.tick, 60_000), config: slow.config },
+      lock: slow.h.lock,
     });
     await new Promise<void>((resolve) => slowServer.listen(slowSocketPath, resolve));
     try {

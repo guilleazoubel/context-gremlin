@@ -7,7 +7,6 @@ import { mapPrView, PR_LIST_FIELDS } from '../../src/gh/pr-view';
 import { DefaultPRDiscoveryStrategy } from '../../src/discovery/pr-discovery-strategy';
 import { ReviewSessionFactory } from '../../src/pipeline/review-session-factory';
 import { planReconciliation, ReconciliationTick } from '../../src/discovery/reconciliation';
-import { KeyedLock } from '../../src/api/keyed-lock';
 import { SessionStore } from '../../src/engine/session-store';
 import { stamp } from '../../src/pipeline/pipeline-service';
 import { migrateV1ToV2, type ReviewSession, type Session } from '../../src/schema/session';
@@ -255,7 +254,11 @@ function tickHarness() {
     gh, store: h.store, workspace: h.workspace, events: h.events,
     sessionsDir: SESSIONS_DIR, worktreesDir: WORKTREES_DIR, now: FIXED_NOW,
   });
-  const lock = new KeyedLock();
+  // Share h's own lock — StageRunner/PipelineService (inside h) and
+  // ReconciliationTick must use the SAME KeyedLock instance for the
+  // per-session locking invariant (pipeline-service.ts) to actually
+  // serialize anything between a tick and h.service's own calls.
+  const lock = h.lock;
   return { h, gh, strategy, factory, lock };
 }
 
