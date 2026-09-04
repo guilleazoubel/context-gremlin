@@ -55,70 +55,102 @@ export class StageRunner {
   async run(input: StageRunInput): Promise<StageRunResult> {
     const { sessionId, stage } = input;
     if (this.active.has(sessionId)) throw new RunInProgressError(sessionId);
-    let session = await this.deps.store.load(sessionId);
-    const worktreePath = session.workspace.worktreePath;
-    if (!worktreePath) throw new WorkspaceMissingError(sessionId);
-
-    const sessionDir = `${this.deps.sessionsDir}/${sessionId}`;
+    // Reserve the slot synchronously, before any await, so a stop() called
+    // immediately after run() — even before the session has been loaded —
+    // is observed once the run actually reaches the point of starting the
+    // agent (see the stopRequested check below).
     const active: ActiveRun = { handle: null, stopRequested: false };
     this.active.set(sessionId, active);
     try {
-      await this.deps.fs.mkdir(sessionDir, { recursive: true });
-      if (input.brief !== null) await this.deps.fs.writeFile(`${sessionDir}/BRIEF.md`, input.brief);
-      await this.deps.fs.writeFile(`${sessionDir}/AGENT_STATE`, 'working');
+      let session = await this.deps.store.load(sessionId);
+      const worktreePath = session.workspace.worktreePath;
+      if (!worktreePath) throw new WorkspaceMissingError(sessionId);
 
-      const startedAt = this.now().toISOString();
-      const running: LastRun = { stage, startedAt, finishedAt: null, exitCode: null, signal: null, outcome: 'running', error: null };
-      const previousResumeId = session.agent?.resumeId ?? null;
-      session = { ...session, lastRun: running, agent: { runner: this.deps.runnerKind, resumeId: previousResumeId } };
-      await this.deps.store.save(session);
-      this.deps.events.emit('run.started', { session, stage });
+      const sessionDir = `${this.deps.sessionsDir}/${sessionId}`;
+      try {
+        await this.deps.fs.mkdir(sessionDir, { recursive: true });
+        if (input.brief !== null) await this.deps.fs.writeFile(`${sessionDir}/BRIEF.md`, input.brief);
+        await this.deps.fs.writeFile(`${sessionDir}/AGENT_STATE`, 'working');
 
-      let startupError: unknown = undefined;
-      const exitPromise = new Promise<AgentExitResult>((resolve) => {
-        void (async () => {
-          const handle = await this.deps.runner.start({
-            sessionId,
-            workingDirectory: worktreePath,
-            additionalDirs: [sessionDir],
-            resumeId: previousResumeId ?? undefined,
-          });
-          active.handle = handle;
-          this.deps.runner.onOutput(handle, (chunk) => this.deps.events.emit('run.output', { sessionId, stage, chunk }));
-          this.deps.runner.onExit(handle, resolve);
-          if (active.stopRequested) await this.deps.runner.stop(handle);
-          await this.deps.runner.sendPrompt(handle, input.prompt);
-        })().catch((err) => { startupError = err; resolve({ code: null, signal: null }); });
-      });
-      const exit = await exitPromise;
-      if (startupError !== undefined) throw startupError;
+        const startedAt = this.now().toISOString();
+        const running: LastRun = { stage, startedAt, finishedAt: null, exitCode: null, signal: null, outcome: 'running', error: null };
+        const previousResumeId = session.agent?.resumeId ?? null;
+        session = { ...session, lastRun: running, agent: { runner: this.deps.runnerKind, resumeId: previousResumeId } };
+        await this.deps.store.save(session);
+        this.deps.events.emit('run.started', { session, stage });
 
-      const outcome: StageRunResult['outcome'] = active.stopRequested
-        ? 'stopped'
-        : exit.code === 0 && exit.signal === null ? 'succeeded' : 'failed';
-      const error =
-        outcome === 'stopped' ? 'stopped by user'
-        : outcome === 'failed' ? (exit.signal ? `agent killed by ${exit.signal}` : `agent exited with code ${exit.code}`)
-        : null;
-      const resumeId = (active.handle && this.deps.runner.getResumeId?.(active.handle)) ?? previousResumeId;
-      session = await this.deps.store.load(sessionId); // re-read: nothing else writes during a run, but never clobber a newer save
-      session = {
-        ...session,
-        lastRun: { ...running, finishedAt: this.now().toISOString(), exitCode: exit.code, signal: exit.signal, outcome, error },
-        agent: { runner: this.deps.runnerKind, resumeId },
-      };
-      await this.deps.store.save(session);
-      this.deps.events.emit('run.finished', { session, stage, outcome });
-      return { exit, outcome, session };
-    } catch (err) {
-      const current = await this.deps.store.load(sessionId);
-      const failed: LastRun = {
-        stage, startedAt: current.lastRun?.startedAt ?? this.now().toISOString(), finishedAt: this.now().toISOString(),
-        exitCode: null, signal: null, outcome: 'failed', error: err instanceof Error ? err.message : String(err),
-      };
-      await this.deps.store.save({ ...current, lastRun: failed });
-      this.deps.events.emit('run.finished', { session: { ...current, lastRun: failed }, stage, outcome: 'failed' });
-      throw err;
+        let startupError: unknown = undefined;
+        const exitPromise = new Promise<AgentExitResult>((resolve) => {
+          void (async () => {
+            const handle = await this.deps.runner.start({
+              sessionId,
+              workingDirectory: worktreePath,
+              additionalDirs: [sessionDir],
+              resumeId: previousResumeId ?? undefined,
+            });
+            active.handle = handle;
+            this.deps.runner.onOutput(handle, (chunk) => this.deps.events.emit('run.output', { sessionId, stage, chunk }));
+            this.deps.runner.onExit(handle, resolve);
+            if (active.stopRequested) {
+              // A stop() arrived before the agent actually started (e.g.
+              // during runner.start()'s own await). Never call sendPrompt in
+              // that case: for ClaudeCodeRunner that would spawn a real,
+              // orphaned process nothing would ever track or reap.
+              await this.deps.runner.stop(handle);
+              resolve({ code: null, signal: null });
+              return;
+            }
+            await this.deps.runner.sendPrompt(handle, input.prompt);
+          })().catch((err) => { startupError = err; resolve({ code: null, signal: null }); });
+        });
+        const exit = await exitPromise;
+        if (startupError !== undefined) throw startupError;
+
+        // No await happens between exitPromise settling and this read, so a
+        // stop() cannot interleave and flip stopRequested here — keep it
+        // that way; do not insert an await between exitPromise settling and
+        // the outcome computation below.
+        const outcome: StageRunResult['outcome'] = active.stopRequested
+          ? 'stopped'
+          : exit.code === 0 && exit.signal === null ? 'succeeded' : 'failed';
+        const error =
+          outcome === 'stopped' ? 'stopped by user'
+          : outcome === 'failed' ? (exit.signal ? `agent killed by ${exit.signal}` : `agent exited with code ${exit.code}`)
+          : null;
+        const resumeId = (active.handle && this.deps.runner.getResumeId?.(active.handle)) ?? previousResumeId;
+        session = await this.deps.store.load(sessionId); // re-read: nothing else writes during a run, but never clobber a newer save
+        session = {
+          ...session,
+          lastRun: { ...running, finishedAt: this.now().toISOString(), exitCode: exit.code, signal: exit.signal, outcome, error },
+          agent: { runner: this.deps.runnerKind, resumeId },
+        };
+        await this.deps.store.save(session);
+        this.deps.events.emit('run.finished', { session, stage, outcome });
+        return { exit, outcome, session };
+      } catch (err) {
+        const failed: LastRun = {
+          stage,
+          startedAt: session.lastRun?.startedAt ?? this.now().toISOString(),
+          finishedAt: this.now().toISOString(),
+          exitCode: null,
+          signal: null,
+          outcome: 'failed',
+          error: err instanceof Error ? err.message : String(err),
+        };
+        let finishedSession: Session = { ...session, lastRun: failed };
+        try {
+          const current = await this.deps.store.load(sessionId);
+          finishedSession = { ...current, lastRun: failed };
+          await this.deps.store.save(finishedSession);
+        } catch {
+          // Persisting the failure record itself failed (e.g. disk full,
+          // then a corrupt reload) — don't let that secondary error mask
+          // the original failure. Fall back to the in-memory session
+          // snapshot and keep rethrowing the ORIGINAL err below.
+        }
+        this.deps.events.emit('run.finished', { session: finishedSession, stage, outcome: 'failed' });
+        throw err;
+      }
     } finally {
       this.active.delete(sessionId);
     }

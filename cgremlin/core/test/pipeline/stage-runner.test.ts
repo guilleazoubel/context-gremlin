@@ -153,4 +153,42 @@ describe('StageRunner.run', () => {
     expect((await store.load('inv-1')).lastRun).toMatchObject({ outcome: 'failed', error: 'spawn ENOENT' });
     expect(sr.isRunning('inv-1')).toBe(false);
   });
+
+  it('stop() requested before the agent starts never sends a prompt', async () => {
+    const { runner, sr } = await setup();
+    const p = sr.run({ sessionId: 'inv-1', stage: 'findings', brief: null, prompt: 'go' });
+    expect(await sr.stop('inv-1')).toBe(true);
+    const result = await p;
+    expect(result.outcome).toBe('stopped');
+    expect(runner.getPrompts(runner.lastHandle())).toEqual([]);
+    expect(result.session.lastRun).toMatchObject({ outcome: 'stopped', error: 'stopped by user' });
+    expect(sr.isRunning('inv-1')).toBe(false);
+  });
+
+  it('a failure while persisting the failed-run record does not mask the original error, and run.finished still fires once', async () => {
+    const { store, runner, events, sr } = await setup();
+    const finished: string[] = [];
+    events.on('run.finished', (e) => finished.push(e.outcome));
+
+    let saveCount = 0;
+    const originalSave = store.save.bind(store);
+    store.save = async (session) => {
+      saveCount += 1;
+      if (saveCount === 2) {
+        // The final (post-exit) save fails, and every load from then on is
+        // corrupt too — simulating a disk that went from full to corrupt.
+        store.load = async () => { throw new Error('corrupt'); };
+        throw new Error('disk full');
+      }
+      return originalSave(session);
+    };
+
+    const p = sr.run({ sessionId: 'inv-1', stage: 'findings', brief: null, prompt: 'go' });
+    await flush();
+    runner.emitExit(runner.lastHandle(), { code: 0, signal: null });
+
+    await expect(p).rejects.toThrow('disk full');
+    expect(finished).toEqual(['failed']);
+    expect(sr.isRunning('inv-1')).toBe(false);
+  });
 });
