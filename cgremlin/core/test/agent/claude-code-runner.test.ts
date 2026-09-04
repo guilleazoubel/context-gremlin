@@ -157,6 +157,7 @@ describe('ClaudeCodeRunner', () => {
 
 describeAgentRunnerContract('ClaudeCodeRunner', {
   makeRunner: () => new ClaudeCodeRunner({ claudeBinary: FIXTURE }),
+  makeUnspawnableRunner: () => new ClaudeCodeRunner({ claudeBinary: '/nonexistent/agent-binary' }),
   echoPrompt: 'hello',
   expectedEcho: (prompt) => `echo: ${prompt}`,
   hangPrompt: 'HANG_FOREVER',

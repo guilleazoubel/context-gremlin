@@ -3,6 +3,7 @@ import type { AgentRunner } from '../../src/agent/agent-runner';
 
 export interface ContractFixture {
   makeRunner(): AgentRunner; // fresh adapter bound to the fixture binary
+  makeUnspawnableRunner(): AgentRunner; // adapter bound to a binary path that does not exist
   echoPrompt: string; // a prompt the fixture echoes
   expectedEcho: (prompt: string) => string; // e.g. p => `echo: ${p}`
   hangPrompt: string; // fixture never exits
@@ -123,6 +124,34 @@ export function describeAgentRunnerContract(name: string, fixture: ContractFixtu
         expect(err).toBeInstanceOf(Error);
         expect((err as Error).name.endsWith('UnknownAgentHandleError')).toBe(true);
       }
+    });
+
+    it('parses a stdout event split across chunks with no trailing newline, flushed on close', async () => {
+      const runner = fixture.makeRunner();
+      const handle = await runner.start({ sessionId: 'a', workingDirectory: process.cwd() });
+      const stdout: string[] = [];
+      const exits: Array<{ code: number | null; signal: string | null }> = [];
+      runner.onOutput(handle, (chunk) => {
+        if (chunk.stream === 'stdout') stdout.push(chunk.data);
+      });
+      runner.onExit(handle, (result) => exits.push(result));
+      await runner.sendPrompt(handle, 'SPLIT_LINES');
+      const expected = fixture.expectedEcho('SPLIT_LINES');
+      expect(stdout.filter((s) => s === expected)).toHaveLength(1);
+      expect(exits).toEqual([{ code: 0, signal: null }]);
+    });
+
+    it('a runner bound to an unspawnable binary: sendPrompt rejects, and onExit fires at most once', async () => {
+      const runner = fixture.makeUnspawnableRunner();
+      const handle = await runner.start({ sessionId: 'a', workingDirectory: process.cwd() });
+      const exits: Array<{ code: number | null; signal: string | null }> = [];
+      runner.onExit(handle, (result) => exits.push(result));
+      await expect(runner.sendPrompt(handle, 'hello')).rejects.toThrow();
+      // Node may still emit a 'close' event after 'error' for a failed spawn
+      // (with code -2) on some platforms — give it a moment to settle rather
+      // than asserting onExit fired exactly zero times.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(exits.length).toBeLessThanOrEqual(1);
     });
   });
 }

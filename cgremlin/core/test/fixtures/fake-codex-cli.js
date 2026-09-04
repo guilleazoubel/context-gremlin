@@ -26,6 +26,17 @@ if (prompt === 'HANG_FOREVER') {
   // now pinned for adapter #2 too.
   process.stdin.on('end', () => process.exit(0));
   process.stdin.resume();
+} else if (prompt === 'SPLIT_LINES') {
+  // Writes one JSON line across two chunks with a delay between them (the
+  // first chunk ends mid-JSON, so no newline has appeared yet), and never
+  // terminates the line with '\n' at all — only the runner's close-time
+  // "flush the trailing partial buffer" fallback ever delivers this line.
+  const fullLine = JSON.stringify({ type: 'item.completed', item: { id: 'item_0', type: 'agent_message', text: `echo: ${prompt}` } });
+  const mid = Math.floor(fullLine.length / 2);
+  process.stdout.write(fullLine.slice(0, mid));
+  setTimeout(() => {
+    process.stdout.write(fullLine.slice(mid)); // still no trailing newline
+  }, 20);
 } else if (prompt === 'FAIL_LOUDLY') {
   emit({ type: 'item.completed', item: { id: 'item_0', type: 'error', message: 'Model metadata for `x` not found. Defaulting to fallback metadata.' } });
   emit({ type: 'turn.started' });

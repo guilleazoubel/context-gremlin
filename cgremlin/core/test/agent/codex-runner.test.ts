@@ -191,6 +191,7 @@ describe('CodexRunner', () => {
 
 describeAgentRunnerContract('CodexRunner', {
   makeRunner: () => new CodexRunner({ codexBinary: FIXTURE }),
+  makeUnspawnableRunner: () => new CodexRunner({ codexBinary: '/nonexistent/agent-binary' }),
   echoPrompt: 'hello',
   expectedEcho: (prompt) => `echo: ${prompt}`,
   hangPrompt: 'HANG_FOREVER',

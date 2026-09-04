@@ -32,6 +32,20 @@ if (prompt === 'HANG_FOREVER') {
   // stdin 'ignore' (not an open pipe); the Phase 2a hang regression check.
   process.stdin.on('end', () => process.exit(0));
   process.stdin.resume();
+} else if (prompt === 'SPLIT_LINES') {
+  // Writes one JSON line across two chunks with a delay between them (the
+  // first chunk ends mid-JSON, so no newline has appeared yet), and never
+  // terminates the line with '\n' at all — only the runner's close-time
+  // "flush the trailing partial buffer" fallback ever delivers this line.
+  const fullLine = JSON.stringify({
+    type: 'assistant',
+    message: { content: [{ type: 'text', text: `echo: ${prompt}` }] },
+  });
+  const mid = Math.floor(fullLine.length / 2);
+  process.stdout.write(fullLine.slice(0, mid));
+  setTimeout(() => {
+    process.stdout.write(fullLine.slice(mid)); // still no trailing newline
+  }, 20);
 } else if (prompt === 'FAIL_LOUDLY') {
   process.stderr.write('simulated failure on stderr\n');
   process.exitCode = 1;
