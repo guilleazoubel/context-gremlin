@@ -375,13 +375,13 @@ async function handleRequest(
       }
 
       if (method === 'GET' && parts.length === 2 && parts[1] === 'status') {
+        // Falls back to inventoryStore.load() when lastReport is null (e.g.
+        // right after a process restart, before this process's first scan),
+        // matching GET /prs's own source-of-truth preference exactly.
+        const inventory = await loadCurrentInventory(inv);
         sendJson(res, 200, {
           running: inv.scheduler.isRunning(),
-          // scanner.lastReport, not scheduler.lastReport: consistent with
-          // GET /prs's own source-of-truth preference, and correct even when
-          // a scan was triggered directly (e.g. in tests) rather than via
-          // the scheduler.
-          lastScanAt: inv.scanner.lastReport?.inventory.scannedAt ?? null,
+          lastScanAt: inventory?.scannedAt ?? null,
           lastError: inv.scheduler.lastError,
           skippedBeats: inv.scheduler.skippedBeats,
         });
@@ -407,6 +407,12 @@ async function handleRequest(
         const number = Number(parts[3]);
         await lock.withLock(`pr:${repoSlug}#${number}`, async () => {
           if (url.searchParams.get('refresh') === '1') {
+            // A scheduler-driven tick could already be in flight; wait for it
+            // to settle before starting our own rather than colliding with
+            // TickInProgressError. A second collision (a new tick starting
+            // in the gap between waitForIdle and runNow) can still 409 —
+            // acceptable, and far rarer than the naive immediate-runNow race.
+            await inv.scheduler.waitForIdle();
             await inv.scheduler.runNow();
           }
           await handleReviewStart(res, deps, inv, repoSlug, number);

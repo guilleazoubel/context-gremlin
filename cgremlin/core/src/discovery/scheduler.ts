@@ -43,6 +43,14 @@ export class DiscoveryScheduler<R = unknown> {
     return this.handle !== null;
   }
 
+  /** Resolves once the currently-pending tick (if any) has settled. */
+  async waitForIdle(): Promise<void> {
+    const p = this.pending;
+    if (p) {
+      await p.catch(() => undefined);
+    }
+  }
+
   start(): void {
     if (this.handle !== null) return;
     this.handle = this.clock.setInterval(() => this.fire(), this.intervalMs);

@@ -21,8 +21,10 @@ import { KeyedLock } from '../../src/api/keyed-lock';
 import { ReconciliationTick } from '../../src/discovery/reconciliation';
 import { InventoryScanner, type ScanReport } from '../../src/inventory/inventory-scanner';
 import { InventoryStore } from '../../src/inventory/inventory-store';
+import type { Inventory } from '../../src/inventory/inventory';
 import { ReviewSessionFactory } from '../../src/pipeline/review-session-factory';
 import { FakeGhRunner } from '../support/fake-gh-runner';
+import type { GhRunner } from '../../src/gh/gh-runner';
 
 const APPROVED_PLAN = `## Review Status
 - PM: ✅ Approved — solves exactly the ticket
@@ -1173,5 +1175,89 @@ it('two concurrent POST /prs/.../review for the same fresh PR create exactly one
     expect((await d.store.list()).length).toBe(1);
   } finally {
     await d.close();
+  }
+});
+
+it('F6: POST .../review?refresh=1 waits for a pending scheduler tick instead of colliding with it', async () => {
+  class SlowGhRunner implements GhRunner {
+    constructor(private readonly inner: GhRunner, private readonly delayMs: number) {}
+    async run(args: string[]): Promise<{ stdout: string; stderr: string }> {
+      await new Promise((resolve) => setTimeout(resolve, this.delayMs));
+      return this.inner.run(args);
+    }
+  }
+  const slow = createInventoryHarness(inventoryScanConfig(), (gh) => new SlowGhRunner(gh, 30));
+  slow.gh.queueResponse({ stdout: JSON.stringify([prsFixtureItem(10, 'bob')]) });
+  await slow.scanner.run(); // baseline scan, so PR #10 is in the inventory
+
+  const slowSocketPath = path.join(dir, 'api-f6-slow.sock');
+  const slowServer = createApiServer({
+    sessionStore: slow.h.store,
+    workspaceManager: slow.h.workspace,
+    pipeline: slow.h.service,
+    fs: slow.h.fs,
+    sessionsDir: SESSIONS_DIR,
+    events: slow.h.events,
+    lock: slow.h.lock,
+    inventory: {
+      scanner: slow.scanner, scheduler: slow.scheduler, factory: slow.factory, inventoryStore: slow.inventoryStore,
+      config: { me: slow.config.me },
+    },
+  });
+  await new Promise<void>((resolve) => slowServer.listen(slowSocketPath, resolve));
+  try {
+    slow.gh.queueResponse({ stdout: JSON.stringify([prsFixtureItem(10, 'bob')]) }); // the pending scheduler tick's pr list
+    const pendingTick = slow.scheduler.runNow();
+    await new Promise((resolve) => setTimeout(resolve, 5)); // let it actually start before we race it
+
+    slow.gh.queueResponse({ stdout: JSON.stringify([prsFixtureItem(10, 'bob')]) }); // the refresh=1 scan's pr list
+    slow.gh.queueResponse({ stdout: prViewFixture(10, 'bob') }); // factory's own gh pr view call
+    const res = await requestOn(slowSocketPath, 'POST', '/prs/acme/app/10/review?refresh=1');
+
+    expect(res.status).toBe(202); // not 409 — it waited for the pending tick instead of colliding
+    await pendingTick;
+  } finally {
+    await new Promise<void>((resolve) => slowServer.close(() => resolve()));
+    await rm(slowSocketPath, { force: true });
+  }
+});
+
+it('F5/M1 + F7: GET /prs and GET /prs/status fall back to inventoryStore.load() when lastReport is null (e.g. after a process restart)', async () => {
+  const fresh = createInventoryHarness();
+  const preWritten: Inventory = {
+    scannedAt: '2026-01-01T00:00:00.000Z',
+    repos: ['acme/app'],
+    entries: [],
+    errors: [],
+  };
+  await fresh.inventoryStore.save(preWritten);
+  expect(fresh.scanner.lastReport).toBeNull(); // this process never scanned
+
+  const freshSocketPath = path.join(dir, 'api-fresh-restart.sock');
+  const freshServer = createApiServer({
+    sessionStore: fresh.h.store,
+    workspaceManager: fresh.h.workspace,
+    pipeline: fresh.h.service,
+    fs: fresh.h.fs,
+    sessionsDir: SESSIONS_DIR,
+    events: fresh.h.events,
+    lock: fresh.h.lock,
+    inventory: {
+      scanner: fresh.scanner, scheduler: fresh.scheduler, factory: fresh.factory, inventoryStore: fresh.inventoryStore,
+      config: { me: fresh.config.me },
+    },
+  });
+  await new Promise<void>((resolve) => freshServer.listen(freshSocketPath, resolve));
+  try {
+    const prsRes = await requestOn(freshSocketPath, 'GET', '/prs');
+    expect(prsRes.status).toBe(200);
+    expect((prsRes.body as { inventory: Inventory }).inventory.scannedAt).toBe('2026-01-01T00:00:00.000Z');
+
+    const statusRes = await requestOn(freshSocketPath, 'GET', '/prs/status');
+    expect(statusRes.status).toBe(200);
+    expect((statusRes.body as { lastScanAt: string }).lastScanAt).toBe('2026-01-01T00:00:00.000Z');
+  } finally {
+    await new Promise<void>((resolve) => freshServer.close(() => resolve()));
+    await rm(freshSocketPath, { force: true });
   }
 });
