@@ -4,6 +4,7 @@ import type { SessionStore } from '../engine/session-store';
 import type { EngineEvents } from '../engine/events';
 import type { Session } from '../schema/session';
 import type { LastRun, StageName } from '../schema/stage';
+import { KeyedLock } from '../api/keyed-lock';
 
 export class RunInProgressError extends Error {
   constructor(sessionId: string) {
@@ -26,6 +27,8 @@ export interface StageRunnerDeps {
   sessionsDir: string;
   runnerKind: 'claude-code' | 'codex';
   now?: () => Date;
+  /** Shared with PipelineService (and the API server) — see the locking invariant documented atop pipeline-service.ts. Required (not optional): a wiring that forgets to share it is a bug, not a degraded-but-working mode. */
+  lock: KeyedLock;
 }
 export interface StageRunInput { sessionId: string; stage: StageName; brief: string | null; prompt: string }
 export interface StageRunResult { exit: AgentExitResult; outcome: 'succeeded' | 'failed' | 'stopped'; session: Session }
@@ -35,9 +38,11 @@ interface ActiveRun { handle: AgentHandle | null; stopRequested: boolean }
 export class StageRunner {
   private readonly active = new Map<string, ActiveRun>();
   private readonly now: () => Date;
+  private readonly lock: KeyedLock;
 
   constructor(private readonly deps: StageRunnerDeps) {
     this.now = deps.now ?? (() => new Date());
+    this.lock = deps.lock;
   }
 
   isRunning(sessionId: string): boolean {
@@ -66,6 +71,14 @@ export class StageRunner {
     // agent (see the stopRequested check below).
     const active: ActiveRun = { handle: null, stopRequested: false };
     this.active.set(sessionId, active);
+    // Set the moment `run.started` fires — the caller (an API handler, or
+    // PipelineService's runStageLocked) holds the per-session lock up to
+    // exactly that point and releases it right after, per the invariant
+    // documented atop pipeline-service.ts. Before that point we're still
+    // inside the caller's lock, so acquiring it again here would deadlock
+    // (KeyedLock is not re-entrant); after it, nothing else holds the lock
+    // for this session, so every write below must acquire it itself.
+    let runStarted = false;
     try {
       let session = await this.deps.store.load(sessionId);
       const worktreePath = session.workspace.worktreePath;
@@ -90,6 +103,7 @@ export class StageRunner {
         session = { ...session, lastRun: running, agent: { runner: this.deps.runnerKind, resumeId: seedResumeId } };
         await this.deps.store.save(session);
         this.deps.events.emit('run.started', { session, stage });
+        runStarted = true;
 
         let startupError: unknown = undefined;
         const exitPromise = new Promise<AgentExitResult>((resolve) => {
@@ -133,13 +147,25 @@ export class StageRunner {
           error = `runner changed from ${priorAgent!.runner} to ${this.deps.runnerKind}; started a fresh conversation`;
         }
         const resumeId = (active.handle && this.deps.runner.getResumeId?.(active.handle)) ?? seedResumeId;
-        session = await this.deps.store.load(sessionId); // re-read: nothing else writes during a run, but never clobber a newer save
-        session = {
-          ...session,
-          lastRun: { ...running, finishedAt: this.now().toISOString(), exitCode: exit.code, signal: exit.signal, outcome, error },
-          agent: { runner: this.deps.runnerKind, resumeId },
+        const finishedLastRun: LastRun = {
+          ...running,
+          finishedAt: this.now().toISOString(),
+          exitCode: exit.code,
+          signal: exit.signal,
+          outcome,
+          error,
         };
-        await this.deps.store.save(session);
+        // Locked: something else (a human transition, another chained stage)
+        // may have written this session while the agent was running — only
+        // `run.started` released the lock the caller held, so this is the
+        // first write since then. Merge onto whatever is freshest, touching
+        // only lastRun/agent, never clobbering a concurrent stageStatus change.
+        session = await this.lock.withLock(sessionId, async () => {
+          const fresh = await this.deps.store.load(sessionId);
+          const merged: Session = { ...fresh, lastRun: finishedLastRun, agent: { runner: this.deps.runnerKind, resumeId } };
+          await this.deps.store.save(merged);
+          return merged;
+        });
         this.deps.events.emit('run.finished', { session, stage, outcome });
         return { exit, outcome, session };
       } catch (err) {
@@ -153,10 +179,21 @@ export class StageRunner {
           error: err instanceof Error ? err.message : String(err),
         };
         let finishedSession: Session = { ...session, lastRun: failed };
-        try {
+        const persistFailure = async () => {
           const current = await this.deps.store.load(sessionId);
           finishedSession = { ...current, lastRun: failed };
           await this.deps.store.save(finishedSession);
+        };
+        try {
+          // If run.started never fired, the caller still holds the lock for
+          // this session (it releases exactly at run.started) — acquiring
+          // it again here would deadlock. Only once run.started has fired
+          // has the caller released it, making this write our own to make.
+          if (runStarted) {
+            await this.lock.withLock(sessionId, persistFailure);
+          } else {
+            await persistFailure();
+          }
         } catch {
           // Persisting the failure record itself failed (e.g. disk full,
           // then a corrupt reload) — don't let that secondary error mask

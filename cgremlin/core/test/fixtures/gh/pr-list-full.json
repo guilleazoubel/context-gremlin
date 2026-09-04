@@ -1,0 +1,1435 @@
+[
+  {
+    "author": {
+      "id": "MDQ6VXNlcjM3OTk5MDc=",
+      "is_bot": false,
+      "login": "ebubae",
+      "name": "Ebube Chuba"
+    },
+    "baseRefName": "main",
+    "comments": [
+      {
+        "id": "IC_kwDOPYIaBc8AAAABRFU5Jg",
+        "author": {
+          "login": "vercel"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "createdAt": "2026-08-27T15:29:29Z",
+        "includesCreatedEdit": true,
+        "isMinimized": false,
+        "minimizedReason": "",
+        "reactionGroups": [],
+        "url": "https://github.com/aplaceformom/grace-frontend/pull/1974#issuecomment-5441403174",
+        "viewerDidAuthor": false
+      },
+      {
+        "id": "IC_kwDOPYIaBc8AAAABRFkv4w",
+        "author": {
+          "login": "ebubae"
+        },
+        "authorAssociation": "MEMBER",
+        "body": "[BLANKED]",
+        "createdAt": "2026-08-27T15:50:26Z",
+        "includesCreatedEdit": false,
+        "isMinimized": false,
+        "minimizedReason": "",
+        "reactionGroups": [],
+        "url": "https://github.com/aplaceformom/grace-frontend/pull/1974#issuecomment-5441662947",
+        "viewerDidAuthor": false
+      },
+      {
+        "id": "IC_kwDOPYIaBc8AAAABRGF_tA",
+        "author": {
+          "login": "ebubae"
+        },
+        "authorAssociation": "MEMBER",
+        "body": "[BLANKED]",
+        "createdAt": "2026-08-27T16:36:31Z",
+        "includesCreatedEdit": false,
+        "isMinimized": false,
+        "minimizedReason": "",
+        "reactionGroups": [],
+        "url": "https://github.com/aplaceformom/grace-frontend/pull/1974#issuecomment-5442207668",
+        "viewerDidAuthor": false
+      },
+      {
+        "id": "IC_kwDOPYIaBc8AAAABRHPTzA",
+        "author": {
+          "login": "ebubae"
+        },
+        "authorAssociation": "MEMBER",
+        "body": "[BLANKED]",
+        "createdAt": "2026-08-27T18:20:10Z",
+        "includesCreatedEdit": false,
+        "isMinimized": false,
+        "minimizedReason": "",
+        "reactionGroups": [],
+        "url": "https://github.com/aplaceformom/grace-frontend/pull/1974#issuecomment-5443408844",
+        "viewerDidAuthor": false
+      },
+      {
+        "id": "IC_kwDOPYIaBc8AAAABSaw-ng",
+        "author": {
+          "login": "apfm-sonar"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "createdAt": "2026-09-03T19:27:21Z",
+        "includesCreatedEdit": false,
+        "isMinimized": false,
+        "minimizedReason": "",
+        "reactionGroups": [],
+        "url": "https://github.com/aplaceformom/grace-frontend/pull/1974#issuecomment-5530992286",
+        "viewerDidAuthor": false
+      },
+      {
+        "id": "IC_kwDOPYIaBc8AAAABSm4BwQ",
+        "author": {
+          "login": "ebubae"
+        },
+        "authorAssociation": "MEMBER",
+        "body": "[BLANKED]",
+        "createdAt": "2026-09-04T16:45:28Z",
+        "includesCreatedEdit": false,
+        "isMinimized": false,
+        "minimizedReason": "",
+        "reactionGroups": [],
+        "url": "https://github.com/aplaceformom/grace-frontend/pull/1974#issuecomment-5543690689",
+        "viewerDidAuthor": false
+      }
+    ],
+    "headRefName": "hb-1245-total-opt-out",
+    "headRefOid": "e63fdac98e8027c07bf0ac0c2570962425b4bc64",
+    "isDraft": true,
+    "latestReviews": [
+      {
+        "id": "",
+        "author": {
+          "login": "github-actions"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-09-03T19:17:48Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": ""
+        }
+      },
+      {
+        "id": "",
+        "author": {
+          "login": "gitstream-cm"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-08-27T16:17:58Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": ""
+        }
+      },
+      {
+        "id": "",
+        "author": {
+          "login": "austinbrownapfm"
+        },
+        "authorAssociation": "MEMBER",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-09-03T18:27:35Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "CHANGES_REQUESTED",
+        "commit": {
+          "oid": ""
+        }
+      },
+      {
+        "id": "",
+        "author": {
+          "login": "aplaceformom-bot"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-09-03T19:18:13Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "APPROVED",
+        "commit": {
+          "oid": ""
+        }
+      }
+    ],
+    "number": 1974,
+    "reviewDecision": "CHANGES_REQUESTED",
+    "reviewRequests": [
+      {
+        "__typename": "Team",
+        "name": "grace-data",
+        "slug": "aplaceformom/grace-data"
+      }
+    ],
+    "reviews": [
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABLJCexQ",
+        "author": {
+          "login": "gitstream-cm"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-08-27T15:32:02Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "3ff765ae53d38686a92c3d0eadcd7d66c80c48a1"
+        }
+      },
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABLJKE3g",
+        "author": {
+          "login": "github-actions"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-08-27T15:45:24Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "3ff765ae53d38686a92c3d0eadcd7d66c80c48a1"
+        }
+      },
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABLJYfpA",
+        "author": {
+          "login": "github-actions"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-08-27T16:10:39Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "038e283dca69156891958e14c5fa2ffc726f8f2d"
+        }
+      },
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABLJcvUA",
+        "author": {
+          "login": "gitstream-cm"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-08-27T16:17:58Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "831a253a83a4a8752b2c86eb3fbed013fbaf85f4"
+        }
+      },
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABLJls0Q",
+        "author": {
+          "login": "github-actions"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-08-27T16:34:22Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "831a253a83a4a8752b2c86eb3fbed013fbaf85f4"
+        }
+      },
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABLhthXw",
+        "author": {
+          "login": "github-actions"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-08-31T15:56:47Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "3d5d2b044eb02053055efdf9f57c7cae505de5e4"
+        }
+      },
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABME5rZA",
+        "author": {
+          "login": "austinbrownapfm"
+        },
+        "authorAssociation": "MEMBER",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-09-03T18:27:35Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "CHANGES_REQUESTED",
+        "commit": {
+          "oid": "3d5d2b044eb02053055efdf9f57c7cae505de5e4"
+        }
+      },
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABMFN-uw",
+        "author": {
+          "login": "ebubae"
+        },
+        "authorAssociation": "MEMBER",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-09-03T19:04:00Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "3d5d2b044eb02053055efdf9f57c7cae505de5e4"
+        }
+      },
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABMFV0Pg",
+        "author": {
+          "login": "github-actions"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-09-03T19:17:48Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "e63fdac98e8027c07bf0ac0c2570962425b4bc64"
+        }
+      },
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABMFWD6Q",
+        "author": {
+          "login": "aplaceformom-bot"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-09-03T19:18:13Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "APPROVED",
+        "commit": {
+          "oid": "e63fdac98e8027c07bf0ac0c2570962425b4bc64"
+        }
+      }
+    ],
+    "title": "feat(consent): total opt-out and phone-call toggle in Account Settings (HB-1245)",
+    "updatedAt": "2026-09-04T16:45:28Z",
+    "url": "https://github.com/aplaceformom/grace-frontend/pull/1974"
+  },
+  {
+    "author": {
+      "id": "U_kgDOEKyaSw",
+      "is_bot": false,
+      "login": "mattsmith-apfm",
+      "name": ""
+    },
+    "baseRefName": "main",
+    "comments": [
+      {
+        "id": "IC_kwDOPYIaBc8AAAABSZ2vHQ",
+        "author": {
+          "login": "vercel"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "createdAt": "2026-09-03T18:09:22Z",
+        "includesCreatedEdit": true,
+        "isMinimized": false,
+        "minimizedReason": "",
+        "reactionGroups": [],
+        "url": "https://github.com/aplaceformom/grace-frontend/pull/2010#issuecomment-5530038045",
+        "viewerDidAuthor": false
+      },
+      {
+        "id": "IC_kwDOPYIaBc8AAAABSnUReQ",
+        "author": {
+          "login": "apfm-sonar"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "createdAt": "2026-09-04T17:27:15Z",
+        "includesCreatedEdit": false,
+        "isMinimized": false,
+        "minimizedReason": "",
+        "reactionGroups": [],
+        "url": "https://github.com/aplaceformom/grace-frontend/pull/2010#issuecomment-5544153465",
+        "viewerDidAuthor": false
+      },
+      {
+        "id": "IC_kwDOPYIaBc8AAAABSncqnQ",
+        "author": {
+          "login": "mattsmith-apfm"
+        },
+        "authorAssociation": "MEMBER",
+        "body": "[BLANKED]",
+        "createdAt": "2026-09-04T17:39:57Z",
+        "includesCreatedEdit": true,
+        "isMinimized": false,
+        "minimizedReason": "",
+        "reactionGroups": [],
+        "url": "https://github.com/aplaceformom/grace-frontend/pull/2010#issuecomment-5544290973",
+        "viewerDidAuthor": false
+      }
+    ],
+    "headRefName": "worktree-feat+hb-1432-signup-workflow",
+    "headRefOid": "ad4bfa1cad690b25f054ae05a6b86c95584e97ef",
+    "isDraft": false,
+    "latestReviews": [
+      {
+        "id": "",
+        "author": {
+          "login": "github-actions"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-09-04T17:17:42Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": ""
+        }
+      },
+      {
+        "id": "",
+        "author": {
+          "login": "gitstream-cm"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-09-04T17:14:44Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": ""
+        }
+      },
+      {
+        "id": "",
+        "author": {
+          "login": "austinbrownapfm"
+        },
+        "authorAssociation": "MEMBER",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-09-04T18:47:43Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "APPROVED",
+        "commit": {
+          "oid": ""
+        }
+      }
+    ],
+    "number": 2010,
+    "reviewDecision": "APPROVED",
+    "reviewRequests": [
+      {
+        "__typename": "Team",
+        "name": "grace-data",
+        "slug": "aplaceformom/grace-data"
+      }
+    ],
+    "reviews": [
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABMExRVA",
+        "author": {
+          "login": "gitstream-cm"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-09-03T18:11:35Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "ef147bb1b3ad8c15f09d6d465b0b050c818c85fd"
+        }
+      },
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABMF8AYw",
+        "author": {
+          "login": "gitstream-cm"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-09-03T20:27:00Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "02cdde31996cd37957d85e053102ebf7016ca2b0"
+        }
+      },
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABMMe4lw",
+        "author": {
+          "login": "mattsmith-apfm"
+        },
+        "authorAssociation": "MEMBER",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-09-04T13:13:54Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "b0e7d252330a2f27fa7766a3626a3e2c27f0494a"
+        }
+      },
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABMNC1Nw",
+        "author": {
+          "login": "gitstream-cm"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-09-04T14:07:09Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "c49a7526cd758007b49202056ff2b27dc19028bc"
+        }
+      },
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABMNrdsw",
+        "author": {
+          "login": "github-actions"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-09-04T15:02:23Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "5169223fa198b9e0f94e64f6eb8c92d19f1e8db5"
+        }
+      },
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABMOpy5A",
+        "author": {
+          "login": "github-actions"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-09-04T16:38:35Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "18a4a12c71d77dd7e111650e45c0e2d564a17b2b"
+        }
+      },
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABMO66bg",
+        "author": {
+          "login": "mattsmith-apfm"
+        },
+        "authorAssociation": "MEMBER",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-09-04T17:11:56Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "ad4bfa1cad690b25f054ae05a6b86c95584e97ef"
+        }
+      },
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABMO8ORA",
+        "author": {
+          "login": "gitstream-cm"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-09-04T17:14:44Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "ad4bfa1cad690b25f054ae05a6b86c95584e97ef"
+        }
+      },
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABMO9vtQ",
+        "author": {
+          "login": "github-actions"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-09-04T17:17:42Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "ad4bfa1cad690b25f054ae05a6b86c95584e97ef"
+        }
+      },
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABMPudEw",
+        "author": {
+          "login": "austinbrownapfm"
+        },
+        "authorAssociation": "MEMBER",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-09-04T18:47:43Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "APPROVED",
+        "commit": {
+          "oid": "ad4bfa1cad690b25f054ae05a6b86c95584e97ef"
+        }
+      }
+    ],
+    "title": "feat(HB-1432): give the /signup OTP step its own history entry via the workflow engine",
+    "updatedAt": "2026-09-04T17:42:17Z",
+    "url": "https://github.com/aplaceformom/grace-frontend/pull/2010"
+  },
+  {
+    "author": {
+      "id": "U_kgDODAUCiQ",
+      "is_bot": false,
+      "login": "guilleazoubel",
+      "name": ""
+    },
+    "baseRefName": "main",
+    "comments": [
+      {
+        "id": "IC_kwDOPYIaBc8AAAABOwLNAQ",
+        "author": {
+          "login": "vercel"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "createdAt": "2026-08-13T18:48:25Z",
+        "includesCreatedEdit": false,
+        "isMinimized": false,
+        "minimizedReason": "",
+        "reactionGroups": [],
+        "url": "https://github.com/aplaceformom/grace-frontend/pull/1889#issuecomment-5285006593",
+        "viewerDidAuthor": false
+      }
+    ],
+    "headRefName": "feat/ac-verify-v0",
+    "headRefOid": "e3ede6ffeb371e56ced79241bc5ad27052be25f7",
+    "isDraft": true,
+    "latestReviews": [
+      {
+        "id": "",
+        "author": {
+          "login": "gitstream-cm"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-08-14T21:00:47Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": ""
+        }
+      }
+    ],
+    "number": 1889,
+    "reviewDecision": "REVIEW_REQUIRED",
+    "reviewRequests": [],
+    "reviews": [
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABJeJJdg",
+        "author": {
+          "login": "gitstream-cm"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-08-13T18:50:43Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "f04418b34b128587854b6bbc67f0cd41ff6e3060"
+        }
+      },
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABJeRAng",
+        "author": {
+          "login": "gitstream-cm"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-08-13T19:06:54Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "c5415f0bcff66f016b79ec6b74f2f85b641a049d"
+        }
+      },
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABJeU8OA",
+        "author": {
+          "login": "gitstream-cm"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-08-13T19:15:00Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "c4de84ce95ff59d821e6332d883854d44ade0951"
+        }
+      },
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABJedsnQ",
+        "author": {
+          "login": "gitstream-cm"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-08-13T19:32:58Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "2e687aae5b5f7e5f81fc45713e2ab11e81dc2450"
+        }
+      },
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABJehIWg",
+        "author": {
+          "login": "gitstream-cm"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-08-13T19:39:58Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "3fdf1eb5579612911a1849214180a1ab8f933c60"
+        }
+      },
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABJeihzQ",
+        "author": {
+          "login": "gitstream-cm"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-08-13T19:42:47Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "720a227290f0392c2ec252196537c90d7722be54"
+        }
+      },
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABJfh3dA",
+        "author": {
+          "login": "gitstream-cm"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-08-13T22:02:14Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "b2e041a56c2548931ad88dac18b48eb5ba23ef98"
+        }
+      },
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABJftLEA",
+        "author": {
+          "login": "gitstream-cm"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-08-13T22:37:17Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "7514227fbd7341a9bff27427527a9ddaef4d325b"
+        }
+      },
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABJnrTRQ",
+        "author": {
+          "login": "gitstream-cm"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-08-14T19:30:43Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "7724f71bbf31dde78c893d5b5f4453a35c6f7128"
+        }
+      },
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABJnyrXQ",
+        "author": {
+          "login": "gitstream-cm"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-08-14T19:49:20Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "5ef978293ae6803c5cf14578a5b443375a515e6a"
+        }
+      },
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABJoQcnA",
+        "author": {
+          "login": "gitstream-cm"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-08-14T21:00:47Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "eda560ccef19bce8fd788ff09dccbae5366935e1"
+        }
+      }
+    ],
+    "title": "feat(ac-verify): AI-verified acceptance criteria between two refs (v0 spike)",
+    "updatedAt": "2026-08-19T18:57:58Z",
+    "url": "https://github.com/aplaceformom/grace-frontend/pull/1889"
+  },
+  {
+    "author": {
+      "id": "MDQ6VXNlcjU1NzYwMTQ=",
+      "is_bot": false,
+      "login": "karimnaguib",
+      "name": "Karim Naguib"
+    },
+    "baseRefName": "main",
+    "comments": [
+      {
+        "id": "IC_kwDOPYIaBc8AAAABN1WAcg",
+        "author": {
+          "login": "vercel"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "createdAt": "2026-08-07T23:53:56Z",
+        "includesCreatedEdit": false,
+        "isMinimized": false,
+        "minimizedReason": "",
+        "reactionGroups": [],
+        "url": "https://github.com/aplaceformom/grace-frontend/pull/1854#issuecomment-5223317618",
+        "viewerDidAuthor": false
+      },
+      {
+        "id": "IC_kwDOPYIaBc8AAAABN1WS-A",
+        "author": {
+          "login": "gitstream-cm"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "createdAt": "2026-08-07T23:54:56Z",
+        "includesCreatedEdit": false,
+        "isMinimized": false,
+        "minimizedReason": "",
+        "reactionGroups": [],
+        "url": "https://github.com/aplaceformom/grace-frontend/pull/1854#issuecomment-5223322360",
+        "viewerDidAuthor": false
+      },
+      {
+        "id": "IC_kwDOPYIaBc8AAAABN7hBiQ",
+        "author": {
+          "login": "apfm-sonar"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "createdAt": "2026-08-09T04:37:45Z",
+        "includesCreatedEdit": false,
+        "isMinimized": false,
+        "minimizedReason": "",
+        "reactionGroups": [],
+        "url": "https://github.com/aplaceformom/grace-frontend/pull/1854#issuecomment-5229789577",
+        "viewerDidAuthor": false
+      }
+    ],
+    "headRefName": "codex/journey-aware-agent-poc",
+    "headRefOid": "fe3238c91adca7813b76863a8143346260bfbe1f",
+    "isDraft": true,
+    "latestReviews": [
+      {
+        "id": "",
+        "author": {
+          "login": "gitstream-cm"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-08-09T03:23:01Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": ""
+        }
+      }
+    ],
+    "number": 1854,
+    "reviewDecision": "REVIEW_REQUIRED",
+    "reviewRequests": [
+      {
+        "__typename": "Team",
+        "name": "grace-b2b",
+        "slug": "aplaceformom/grace-b2b"
+      },
+      {
+        "__typename": "Team",
+        "name": "grace-b2c",
+        "slug": "aplaceformom/grace-b2c"
+      },
+      {
+        "__typename": "Team",
+        "name": "grace-data",
+        "slug": "aplaceformom/grace-data"
+      }
+    ],
+    "reviews": [
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABI09WvA",
+        "author": {
+          "login": "gitstream-cm"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-08-07T23:55:42Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "ccd7a805e4a093df97a55d3d319f137c255e9a0b"
+        }
+      },
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABI0-UjQ",
+        "author": {
+          "login": "gitstream-cm"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-08-07T23:59:33Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "43c0574dfea63edf331951098f99843908c24eb1"
+        }
+      },
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABI1EzPg",
+        "author": {
+          "login": "gitstream-cm"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-08-08T00:23:03Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "24397233acdb85a722f3722eb21b769d49a6c95d"
+        }
+      },
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABI1JopQ",
+        "author": {
+          "login": "gitstream-cm"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-08-08T00:42:03Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "c1265235a55a30691bdcea6916004b85dad9ea9d"
+        }
+      },
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABI3Xamg",
+        "author": {
+          "login": "gitstream-cm"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-08-08T21:59:53Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "f8a6a478ec45e4bf3b167d96622ff3ad09c6f3a9"
+        }
+      },
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABI3YEBg",
+        "author": {
+          "login": "gitstream-cm"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-08-08T22:06:29Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "4acae8b0e21d1213370bed3517032fc85d4a44e1"
+        }
+      },
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABI3Zogg",
+        "author": {
+          "login": "gitstream-cm"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-08-08T22:22:15Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "ad072f34b1115d553b6672cad51d6afebdf36b74"
+        }
+      },
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABI33rkA",
+        "author": {
+          "login": "gitstream-cm"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-08-09T03:23:01Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "5e2e6470d4d355e1736f053c30efe5c5ec4ed194"
+        }
+      }
+    ],
+    "title": "Add isolated Grace agent comparison preview",
+    "updatedAt": "2026-08-12T14:29:16Z",
+    "url": "https://github.com/aplaceformom/grace-frontend/pull/1854"
+  },
+  {
+    "author": {
+      "id": "U_kgDOCx-kSg",
+      "is_bot": false,
+      "login": "austinbrownapfm",
+      "name": "Austin Brown"
+    },
+    "baseRefName": "main",
+    "comments": [
+      {
+        "id": "IC_kwDOPYIaBc8AAAABSc9BTg",
+        "author": {
+          "login": "vercel"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "createdAt": "2026-09-03T23:08:26Z",
+        "includesCreatedEdit": true,
+        "isMinimized": false,
+        "minimizedReason": "",
+        "reactionGroups": [],
+        "url": "https://github.com/aplaceformom/grace-frontend/pull/2019#issuecomment-5533286734",
+        "viewerDidAuthor": false
+      },
+      {
+        "id": "IC_kwDOPYIaBc8AAAABSdbvyQ",
+        "author": {
+          "login": "austinbrownapfm"
+        },
+        "authorAssociation": "MEMBER",
+        "body": "[BLANKED]",
+        "createdAt": "2026-09-04T00:12:06Z",
+        "includesCreatedEdit": false,
+        "isMinimized": false,
+        "minimizedReason": "",
+        "reactionGroups": [],
+        "url": "https://github.com/aplaceformom/grace-frontend/pull/2019#issuecomment-5533790153",
+        "viewerDidAuthor": false
+      },
+      {
+        "id": "IC_kwDOPYIaBc8AAAABSmQlcg",
+        "author": {
+          "login": "austinbrownapfm"
+        },
+        "authorAssociation": "MEMBER",
+        "body": "[BLANKED]",
+        "createdAt": "2026-09-04T15:52:43Z",
+        "includesCreatedEdit": true,
+        "isMinimized": false,
+        "minimizedReason": "",
+        "reactionGroups": [],
+        "url": "https://github.com/aplaceformom/grace-frontend/pull/2019#issuecomment-5543044466",
+        "viewerDidAuthor": false
+      },
+      {
+        "id": "IC_kwDOPYIaBc8AAAABSmg7uw",
+        "author": {
+          "login": "austinbrownapfm"
+        },
+        "authorAssociation": "MEMBER",
+        "body": "[BLANKED]",
+        "createdAt": "2026-09-04T16:13:34Z",
+        "includesCreatedEdit": false,
+        "isMinimized": false,
+        "minimizedReason": "",
+        "reactionGroups": [],
+        "url": "https://github.com/aplaceformom/grace-frontend/pull/2019#issuecomment-5543312315",
+        "viewerDidAuthor": false
+      },
+      {
+        "id": "IC_kwDOPYIaBc8AAAABSmv3DA",
+        "author": {
+          "login": "apfm-sonar"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "createdAt": "2026-09-04T16:33:31Z",
+        "includesCreatedEdit": false,
+        "isMinimized": false,
+        "minimizedReason": "",
+        "reactionGroups": [],
+        "url": "https://github.com/aplaceformom/grace-frontend/pull/2019#issuecomment-5543556876",
+        "viewerDidAuthor": false
+      }
+    ],
+    "headRefName": "poc/user-segment-router",
+    "headRefOid": "3cfb99c018aebf6b60b2b133e498282af1c2199d",
+    "isDraft": true,
+    "latestReviews": [
+      {
+        "id": "",
+        "author": {
+          "login": "gitstream-cm"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-09-04T16:14:56Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": ""
+        }
+      }
+    ],
+    "number": 2019,
+    "reviewDecision": "REVIEW_REQUIRED",
+    "reviewRequests": [],
+    "reviews": [
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABMHCbOw",
+        "author": {
+          "login": "gitstream-cm"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-09-03T23:10:34Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "4fe70675654393617fb6021b04b281bc904512ed"
+        }
+      },
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABMHHmrg",
+        "author": {
+          "login": "gitstream-cm"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-09-03T23:27:13Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "da76c87a3e1dfea1b8aaaef2356f598e7d240a14"
+        }
+      },
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABMHPcHw",
+        "author": {
+          "login": "gitstream-cm"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-09-03T23:50:58Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "2b6d4ed40c3788eefe3ee1e6e6bcad5a4cfea040"
+        }
+      },
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABMNu2-g",
+        "author": {
+          "login": "gitstream-cm"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-09-04T15:06:42Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "eb7506909a924c954bb8e425e5b5ffa4c9613ccd"
+        }
+      },
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABMOa1xg",
+        "author": {
+          "login": "gitstream-cm"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-09-04T16:14:56Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "3cfb99c018aebf6b60b2b133e498282af1c2199d"
+        }
+      }
+    ],
+    "title": "feat: UserSegmentRouter platform \u2014 segment-driven experiences (PoC)",
+    "updatedAt": "2026-09-04T16:33:32Z",
+    "url": "https://github.com/aplaceformom/grace-frontend/pull/2019"
+  },
+  {
+    "author": {
+      "id": "U_kgDOEKyaSw",
+      "is_bot": false,
+      "login": "mattsmith-apfm",
+      "name": ""
+    },
+    "baseRefName": "main",
+    "comments": [
+      {
+        "id": "IC_kwDOPYIaBc8AAAABG2XNYA",
+        "author": {
+          "login": "vercel"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "createdAt": "2026-06-19T20:49:16Z",
+        "includesCreatedEdit": true,
+        "isMinimized": false,
+        "minimizedReason": "",
+        "reactionGroups": [],
+        "url": "https://github.com/aplaceformom/grace-frontend/pull/1619#issuecomment-4754623840",
+        "viewerDidAuthor": false
+      },
+      {
+        "id": "IC_kwDOPYIaBc8AAAABG2XciA",
+        "author": {
+          "login": "gitstream-cm"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "createdAt": "2026-06-19T20:50:03Z",
+        "includesCreatedEdit": false,
+        "isMinimized": false,
+        "minimizedReason": "",
+        "reactionGroups": [],
+        "url": "https://github.com/aplaceformom/grace-frontend/pull/1619#issuecomment-4754627720",
+        "viewerDidAuthor": false
+      },
+      {
+        "id": "IC_kwDOPYIaBc8AAAABG2bsJA",
+        "author": {
+          "login": "apfm-sonar"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "createdAt": "2026-06-19T21:03:46Z",
+        "includesCreatedEdit": false,
+        "isMinimized": false,
+        "minimizedReason": "",
+        "reactionGroups": [],
+        "url": "https://github.com/aplaceformom/grace-frontend/pull/1619#issuecomment-4754697252",
+        "viewerDidAuthor": false
+      }
+    ],
+    "headRefName": "fix/storybook-preview-stable-branch-alias",
+    "headRefOid": "e5cd942453355117e467b79dac4f5e5c3853ea89",
+    "isDraft": true,
+    "latestReviews": [
+      {
+        "id": "",
+        "author": {
+          "login": "github-actions"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-06-19T21:01:01Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": ""
+        }
+      },
+      {
+        "id": "",
+        "author": {
+          "login": "gitstream-cm"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-06-19T21:01:52Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": ""
+        }
+      }
+    ],
+    "number": 1619,
+    "reviewDecision": "REVIEW_REQUIRED",
+    "reviewRequests": [
+      {
+        "__typename": "Team",
+        "name": "grace-b2b",
+        "slug": "aplaceformom/grace-b2b"
+      },
+      {
+        "__typename": "Team",
+        "name": "grace-b2c",
+        "slug": "aplaceformom/grace-b2c"
+      },
+      {
+        "__typename": "Team",
+        "name": "grace-data",
+        "slug": "aplaceformom/grace-data"
+      }
+    ],
+    "reviews": [
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABDlHhTQ",
+        "author": {
+          "login": "gitstream-cm"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-06-19T20:51:03Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "aa06df4b4624f5359a0e7d2760f4ecd79eb49ac5"
+        }
+      },
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABDlIhBg",
+        "author": {
+          "login": "mattsmith-apfm"
+        },
+        "authorAssociation": "MEMBER",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-06-19T20:55:23Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "aa06df4b4624f5359a0e7d2760f4ecd79eb49ac5"
+        }
+      },
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABDlJGRw",
+        "author": {
+          "login": "mattsmith-apfm"
+        },
+        "authorAssociation": "MEMBER",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-06-19T20:58:05Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "aa06df4b4624f5359a0e7d2760f4ecd79eb49ac5"
+        }
+      },
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABDlJc8w",
+        "author": {
+          "login": "mattsmith-apfm"
+        },
+        "authorAssociation": "MEMBER",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-06-19T20:59:44Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "aa06df4b4624f5359a0e7d2760f4ecd79eb49ac5"
+        }
+      },
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABDlJvdw",
+        "author": {
+          "login": "github-actions"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-06-19T21:01:01Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "e5cd942453355117e467b79dac4f5e5c3853ea89"
+        }
+      },
+      {
+        "id": "PRR_kwDOPYIaBc8AAAABDlJ4Gg",
+        "author": {
+          "login": "gitstream-cm"
+        },
+        "authorAssociation": "NONE",
+        "body": "[BLANKED]",
+        "submittedAt": "2026-06-19T21:01:52Z",
+        "includesCreatedEdit": false,
+        "reactionGroups": [],
+        "state": "COMMENTED",
+        "commit": {
+          "oid": "e5cd942453355117e467b79dac4f5e5c3853ea89"
+        }
+      }
+    ],
+    "title": "fix(ci): stable Storybook preview URL per PR",
+    "updatedAt": "2026-06-19T21:03:47Z",
+    "url": "https://github.com/aplaceformom/grace-frontend/pull/1619"
+  }
+]

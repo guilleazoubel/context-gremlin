@@ -1,7 +1,6 @@
 import type { GhRunner } from '../gh/gh-runner';
-import { PR_VIEW_FIELDS, mapPrView, parsePrView } from '../gh/pr-view';
+import { PR_VIEW_FIELDS, mapPrView, parsePrView, type ReviewDecision } from '../gh/pr-view';
 import { parsePrUrl } from '../gh/pr-url';
-import type { CandidatePR } from '../discovery/pr-discovery-strategy';
 import { linkPrToSource } from '../discovery/link-pr-to-source';
 import type { SessionStore } from '../engine/session-store';
 import type { WorkspaceManager } from '../workspace/workspace-manager';
@@ -9,6 +8,18 @@ import type { EngineEvents } from '../engine/events';
 import type { ReviewSession } from '../schema/session';
 import { stamp } from './pipeline-service';
 import { extractTicketKey } from '../gh/ticket-key';
+
+export interface CandidatePR {
+  kind: 'review' | 'own';
+  repo: string;
+  number: number;
+  url: string;
+  author: string;
+  isDraft: boolean;
+  reviewDecision: ReviewDecision;
+  headSha: string;
+  title: string;
+}
 
 export interface ReviewSessionFactoryDeps {
   gh: GhRunner;

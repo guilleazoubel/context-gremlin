@@ -15,11 +15,14 @@ import {
   parseRunStageRequest,
   ValidationError,
 } from './validation';
-import { assertWorktreeNotInUse } from '../workspace/workspace-in-use';
+import { assertWorktreeNotInUse, TERMINAL_PHASES_BY_MODE } from '../workspace/workspace-in-use';
 import { ArtifactNotFoundError } from './artifacts';
 import type { DiscoveryScheduler } from '../discovery/scheduler';
-import type { DiscoveryConfig } from '../discovery/discovery-config';
 import { awaitRunStart } from '../pipeline/run-start';
+import type { InventoryScanner, ScanReport } from '../inventory/inventory-scanner';
+import type { InventoryStore } from '../inventory/inventory-store';
+import { groupInventory, type Inventory, type InventoryEntry } from '../inventory/inventory';
+import type { ReviewSessionFactory, CandidatePR } from '../pipeline/review-session-factory';
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
@@ -53,8 +56,112 @@ export interface ApiServerDeps {
   fs: SessionFileSystem;
   sessionsDir: string;
   events: EngineEvents;
-  discovery?: { scheduler: DiscoveryScheduler; config: DiscoveryConfig };
+  inventory?: {
+    scanner: InventoryScanner;
+    scheduler: DiscoveryScheduler<ScanReport>;
+    factory: ReviewSessionFactory;
+    inventoryStore: InventoryStore;
+    config: { me: string };
+  };
   lock?: KeyedLock;
+}
+
+export class OwnPrError extends Error {
+  constructor(repo: string, number: number) {
+    super(`PR ${repo}#${number} is authored by the configured user; the engine never reviews its own PRs`);
+    this.name = 'OwnPrError';
+  }
+}
+
+export class NoScanYetError extends Error {
+  constructor() {
+    super('no inventory scan has been run yet');
+    this.name = 'NoScanYetError';
+  }
+}
+
+type InventoryDeps = NonNullable<ApiServerDeps['inventory']>;
+
+async function loadCurrentInventory(inv: InventoryDeps): Promise<Inventory | null> {
+  return inv.scanner.lastReport?.inventory ?? (await inv.inventoryStore.load());
+}
+
+function findEntry(inv: Inventory, repo: string, number: number): InventoryEntry | undefined {
+  return inv.entries.find((e) => e.repo === repo && e.number === number);
+}
+
+async function handleReviewStart(
+  res: ServerResponse,
+  deps: ApiServerDeps,
+  inv: InventoryDeps,
+  repoSlug: string,
+  number: number,
+): Promise<void> {
+  const inventory = await loadCurrentInventory(inv);
+  if (!inventory) throw new NoScanYetError();
+  const entry = findEntry(inventory, repoSlug, number);
+  if (!entry) {
+    sendJson(res, 404, { error: `PR ${repoSlug}#${number} is not in the current inventory` });
+    return;
+  }
+  // Re-check against the live config rather than trusting entry.isMine (a
+  // snapshot from whenever the inventory was last scanned) — the same
+  // never-trust-a-stale-snapshot reasoning as the fresh session lookup below.
+  if (entry.author.toLowerCase() === inv.config.me.toLowerCase()) {
+    throw new OwnPrError(repoSlug, number);
+  }
+
+  const sessions = await deps.sessionStore.list();
+  const existing = sessions.find(
+    (s) =>
+      s.mode === 'review' &&
+      !TERMINAL_PHASES_BY_MODE.review.has(s.stageStatus) &&
+      s.pr !== null &&
+      s.pr.repo === repoSlug &&
+      s.pr.number === number,
+  );
+
+  if (existing) {
+    const isLive = deps.pipeline.activeSessionIds().includes(existing.id);
+    if (!isLive) {
+      if (existing.stageStatus === 'queued' || existing.stageStatus === 'failed') {
+        await awaitRunStart(deps.events, existing.id, deps.pipeline.runReview(existing.id));
+        const session = await deps.sessionStore.load(existing.id);
+        sendJson(res, 202, { session, created: false, started: true });
+        return;
+      }
+      if (existing.stageStatus === 'reviewing') {
+        // No live run for a session that claims to be 'reviewing' means the
+        // host crashed mid-run — the on-disk phase is stale. Mark it failed
+        // (a legal transition from 'reviewing') before restarting, rather
+        // than leaving it stuck forever or silently resuming as if nothing
+        // happened.
+        await deps.pipeline.transition(existing.id, 'failed');
+        await awaitRunStart(deps.events, existing.id, deps.pipeline.runReview(existing.id));
+        const session = await deps.sessionStore.load(existing.id);
+        sendJson(res, 202, { session, created: false, started: true });
+        return;
+      }
+    }
+    sendJson(res, 200, { session: existing, created: false, started: false });
+    return;
+  }
+
+  const candidate: CandidatePR = {
+    kind: 'review',
+    repo: repoSlug,
+    number,
+    url: entry.url,
+    author: entry.author,
+    isDraft: entry.isDraft,
+    reviewDecision: entry.reviewDecision,
+    headSha: entry.headSha,
+    title: entry.title,
+  };
+  const created = await inv.factory.createFromCandidate(candidate);
+  await awaitRunStart(deps.events, created.id, deps.pipeline.runReview(created.id));
+  const session = await deps.sessionStore.load(created.id);
+  sendJson(res, 202, { session, created: true, started: true });
 }
 
 export function createApiServer(deps: ApiServerDeps): http.Server {
@@ -175,10 +282,17 @@ async function handleRequest(
       return;
     }
 
+    // /transition, /run, /promote, /rereview, /retry, and /approve-plan are
+    // NOT wrapped in lock.withLock here — PipelineService now owns per-session
+    // locking for all of these itself (see the invariant documented atop
+    // pipeline-service.ts). Wrapping them here too would nest a second
+    // lock.withLock for the same session id inside the first and deadlock,
+    // since KeyedLock is not re-entrant. Only /artifacts (a pure read) and
+    // /stop (StageRunner.stop never touches the store) still lock here.
     if (method === 'POST' && parts.length === 3 && parts[0] === 'sessions' && parts[2] === 'transition') {
       const id = parts[1];
       const body = (await readJsonBody(req)) as { to: string };
-      const updated = await lock.withLock(id, () => deps.pipeline.transition(id, body.to));
+      const updated = await deps.pipeline.transition(id, body.to);
       sendJson(res, 200, { session: updated });
       return;
     }
@@ -186,26 +300,26 @@ async function handleRequest(
     if (method === 'POST' && parts.length === 3 && parts[0] === 'sessions' && parts[2] === 'run') {
       const id = parts[1];
       const { stage } = parseRunStageRequest(await readJsonBody(req));
-      await lock.withLock(id, () => respondAfterRunStarted(res, deps, id, deps.pipeline.runStage(id, stage)));
+      await respondAfterRunStarted(res, deps, id, deps.pipeline.runStage(id, stage));
       return;
     }
 
     if (method === 'POST' && parts.length === 3 && parts[0] === 'sessions' && parts[2] === 'approve-plan') {
       const id = parts[1];
-      const session: Session = await lock.withLock(id, () => deps.pipeline.approvePlan(id));
+      const session: Session = await deps.pipeline.approvePlan(id);
       sendJson(res, 200, { session });
       return;
     }
 
     if (method === 'POST' && parts.length === 3 && parts[0] === 'sessions' && parts[2] === 'promote') {
       const id = parts[1];
-      await lock.withLock(id, () => handlePromote(res, deps, id));
+      await handlePromote(res, deps, id);
       return;
     }
 
     if (method === 'POST' && parts.length === 3 && parts[0] === 'sessions' && parts[2] === 'rereview') {
       const id = parts[1];
-      await lock.withLock(id, () => respondAfterRunStarted(res, deps, id, deps.pipeline.runRereview(id)));
+      await respondAfterRunStarted(res, deps, id, deps.pipeline.runRereview(id));
       return;
     }
 
@@ -218,7 +332,7 @@ async function handleRequest(
 
     if (method === 'POST' && parts.length === 3 && parts[0] === 'sessions' && parts[2] === 'retry') {
       const id = parts[1];
-      await lock.withLock(id, () => respondAfterRunStarted(res, deps, id, deps.pipeline.retry(id)));
+      await respondAfterRunStarted(res, deps, id, deps.pipeline.retry(id));
       return;
     }
 
@@ -239,30 +353,69 @@ async function handleRequest(
       return;
     }
 
-    if (parts.length === 2 && parts[0] === 'discovery' && ['tick', 'config', 'status'].includes(parts[1])) {
-      if (!deps.discovery) {
-        sendJson(res, 404, { error: 'discovery not configured' });
+    if (parts[0] === 'prs') {
+      if (!deps.inventory) {
+        sendJson(res, 404, { error: 'inventory not configured' });
         return;
       }
-      const { scheduler, config } = deps.discovery;
+      const inv = deps.inventory;
 
-      if (method === 'POST' && parts[1] === 'tick') {
-        const report = await scheduler.runNow();
+      if (method === 'GET' && parts.length === 1) {
+        const inventory = await loadCurrentInventory(inv);
+        if (!inventory) throw new NoScanYetError();
+        const groups = inv.scanner.lastReport?.groups ?? groupInventory(inventory);
+        sendJson(res, 200, { inventory, groups });
+        return;
+      }
+
+      if (method === 'POST' && parts.length === 2 && parts[1] === 'scan') {
+        const report = await inv.scheduler.runNow();
         sendJson(res, 200, report);
         return;
       }
 
-      if (method === 'GET' && parts[1] === 'config') {
-        sendJson(res, 200, config);
+      if (method === 'GET' && parts.length === 2 && parts[1] === 'status') {
+        // Falls back to inventoryStore.load() when lastReport is null (e.g.
+        // right after a process restart, before this process's first scan),
+        // matching GET /prs's own source-of-truth preference exactly.
+        const inventory = await loadCurrentInventory(inv);
+        sendJson(res, 200, {
+          running: inv.scheduler.isRunning(),
+          lastScanAt: inventory?.scannedAt ?? null,
+          lastError: inv.scheduler.lastError,
+          skippedBeats: inv.scheduler.skippedBeats,
+        });
         return;
       }
 
-      if (method === 'GET' && parts[1] === 'status') {
-        sendJson(res, 200, {
-          running: scheduler.isRunning(),
-          lastReport: scheduler.lastReport,
-          skippedBeats: scheduler.skippedBeats,
-          lastError: scheduler.lastError,
+      if (method === 'GET' && parts.length === 4) {
+        const repoSlug = `${parts[1]}/${parts[2]}`;
+        const number = Number(parts[3]);
+        const inventory = await loadCurrentInventory(inv);
+        if (!inventory) throw new NoScanYetError();
+        const entry = findEntry(inventory, repoSlug, number);
+        if (!entry) {
+          sendJson(res, 404, { error: `PR ${repoSlug}#${number} is not in the current inventory` });
+          return;
+        }
+        sendJson(res, 200, { entry });
+        return;
+      }
+
+      if (method === 'POST' && parts.length === 5 && parts[4] === 'review') {
+        const repoSlug = `${parts[1]}/${parts[2]}`;
+        const number = Number(parts[3]);
+        await lock.withLock(`pr:${repoSlug}#${number}`, async () => {
+          if (url.searchParams.get('refresh') === '1') {
+            // A scheduler-driven tick could already be in flight; wait for it
+            // to settle before starting our own rather than colliding with
+            // TickInProgressError. A second collision (a new tick starting
+            // in the gap between waitForIdle and runNow) can still 409 —
+            // acceptable, and far rarer than the naive immediate-runNow race.
+            await inv.scheduler.waitForIdle();
+            await inv.scheduler.runNow();
+          }
+          await handleReviewStart(res, deps, inv, repoSlug, number);
         });
         return;
       }

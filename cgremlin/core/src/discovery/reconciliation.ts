@@ -2,10 +2,7 @@ import type { GhRunner } from '../gh/gh-runner';
 import { PR_VIEW_FIELDS, mapPrView, parsePrView } from '../gh/pr-view';
 import type { SessionStore } from '../engine/session-store';
 import type { EngineEvents } from '../engine/events';
-import type { CandidatePR, PRDiscoveryStrategy } from './pr-discovery-strategy';
-import type { ReviewSessionFactory } from '../pipeline/review-session-factory';
 import type { PipelineService } from '../pipeline/pipeline-service';
-import type { DiscoveryConfig } from './discovery-config';
 import type { ReviewSession, Session } from '../schema/session';
 import { canTransition, type DevelopmentPhase, type ReviewPhase } from '../schema/pipeline';
 import { TERMINAL_PHASES_BY_MODE } from '../workspace/workspace-in-use';
@@ -14,9 +11,7 @@ import type { KeyedLock } from '../api/keyed-lock';
 
 export type ReconcileAction =
   | { type: 'transition'; sessionId: string; to: string; reason: string }
-  | { type: 'rereview'; sessionId: string; reason: string }
-  | { type: 'create-review'; candidate: CandidatePR }
-  | { type: 'ignore-own'; candidate: CandidatePR };
+  | { type: 'rereview'; sessionId: string; reason: string };
 
 export interface SkippedTransition {
   sessionId: string;
@@ -112,11 +107,8 @@ export function planReconciliation(input: PlanReconciliationInput): PlanReconcil
 export interface ReconciliationTickDeps {
   gh: GhRunner;
   store: SessionStore;
-  strategy: PRDiscoveryStrategy;
-  factory: ReviewSessionFactory;
   pipeline: PipelineService;
   events: EngineEvents;
-  config: DiscoveryConfig;
   lock: KeyedLock;
 }
 
@@ -124,9 +116,6 @@ export interface TickReport {
   reconciled: number;
   actions: ReconcileAction[];
   skipped: SkippedTransition[];
-  created: string[];
-  started: string[];
-  ignoredOwn: number;
   errors: { where: string; error: string }[];
 }
 
@@ -134,26 +123,19 @@ function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+// Only reconciles review sessions that already exist (rereview on new sha,
+// approve, dismiss on merge/close). Discovering brand-new candidate PRs and
+// auto-starting their review is retired (Phase 4 — see InventoryScanner):
+// no code path here creates a session or starts a review for a PR the
+// engine doesn't already have a session for.
 export class ReconciliationTick {
   constructor(private readonly deps: ReconciliationTickDeps) {}
-
-  private async startReview(sessionId: string, report: TickReport): Promise<void> {
-    try {
-      await awaitRunStart(this.deps.events, sessionId, this.deps.pipeline.runReview(sessionId));
-      report.started.push(sessionId);
-    } catch (err) {
-      report.errors.push({ where: sessionId, error: errorMessage(err) });
-    }
-  }
 
   async run(): Promise<TickReport> {
     const report: TickReport = {
       reconciled: 0,
       actions: [],
       skipped: [],
-      created: [],
-      started: [],
-      ignoredOwn: 0,
       errors: [],
     };
 
@@ -170,14 +152,21 @@ export class ReconciliationTick {
 
     for (const review of reviewSessions) {
       try {
-        await this.deps.lock.withLock(review.id, async () => {
-          // Re-load under the lock: an API request may have already acted on
-          // this session while it sat in our snapshot from above, and we must
-          // plan off the current truth, not the stale copy — the lock is
-          // shared with the API server for exactly this reason.
+        // Step 1, locked: read fresh + fetch the gh view + decide what to do.
+        // An API request may have already acted on this session while it sat
+        // in our snapshot from above, so this must plan off the current
+        // truth, not the stale copy — the lock is shared with the API server
+        // (and with PipelineService, which now does its own per-session
+        // locking around every session write — see pipeline-service.ts) for
+        // exactly this reason. This lock is released before Step 2 runs the
+        // decided actions: those go through PipelineService methods that
+        // acquire the SAME per-session lock themselves, and KeyedLock is not
+        // re-entrant — nesting a second acquisition for this id inside this
+        // one would deadlock.
+        const planned = await this.deps.lock.withLock(review.id, async () => {
           const fresh = await this.deps.store.load(review.id);
           if (fresh.mode !== 'review' || TERMINAL_PHASES_BY_MODE.review.has(fresh.stageStatus) || !fresh.pr) {
-            return;
+            return null;
           }
           const pr = fresh.pr;
           const { stdout } = await this.deps.gh.run([
@@ -185,68 +174,42 @@ export class ReconciliationTick {
           ]);
           const view = mapPrView(pr.repo, parsePrView(stdout));
           const source = sessions.find((s) => s.id === fresh.lineage.parentSessionId) ?? null;
-
           const { actions, skipped } = planReconciliation({ review: fresh, view, source });
-          report.actions.push(...actions);
-          report.skipped.push(...skipped);
-          report.reconciled += 1;
+          return { fresh, source, actions, skipped };
+        });
+        if (planned === null) continue;
+        const { fresh, source, actions, skipped } = planned;
+        report.actions.push(...actions);
+        report.skipped.push(...skipped);
+        report.reconciled += 1;
 
-          for (const action of actions) {
-            if (action.type === 'transition') {
-              const targetMode = action.sessionId === fresh.id ? 'review' : source?.mode;
-              if (targetMode && TERMINAL_PHASES_BY_MODE[targetMode].has(action.to)) {
-                // Don't leave an agent running against a session about to
-                // become terminal (its worktree may be reclaimed) — stop() is
-                // a harmless no-op if nothing is actually running.
-                await this.deps.pipeline.stop(action.sessionId);
-              }
-              await this.deps.pipeline.transition(action.sessionId, action.to);
-            } else if (action.type === 'rereview') {
-              try {
-                await awaitRunStart(this.deps.events, action.sessionId, this.deps.pipeline.runRereview(action.sessionId));
-              } catch (err) {
-                report.errors.push({ where: review.id, error: errorMessage(err) });
-              }
+        // Step 2, unlocked: apply the decided actions. Each of these
+        // PipelineService calls acquires the per-session lock itself and
+        // re-validates against fresh state before writing, so a concurrent
+        // API action landing in this window is handled safely (the stale
+        // plan's action simply fails/no-ops instead of corrupting anything),
+        // never silently clobbered.
+        for (const action of actions) {
+          if (action.type === 'transition') {
+            const targetMode = action.sessionId === fresh.id ? 'review' : source?.mode;
+            if (targetMode && TERMINAL_PHASES_BY_MODE[targetMode].has(action.to)) {
+              // Don't leave an agent running against a session about to
+              // become terminal (its worktree may be reclaimed) — stop() is
+              // a harmless no-op if nothing is actually running.
+              await this.deps.pipeline.stop(action.sessionId);
+            }
+            await this.deps.pipeline.transition(action.sessionId, action.to);
+          } else if (action.type === 'rereview') {
+            try {
+              await awaitRunStart(this.deps.events, action.sessionId, this.deps.pipeline.runRereview(action.sessionId));
+            } catch (err) {
+              report.errors.push({ where: review.id, error: errorMessage(err) });
             }
           }
-
-          // Recovery: a queued session that has never been run — whether just
-          // created this tick's discovery pass on an earlier run, or left over
-          // across an engine restart — needs its review started.
-          const final = await this.deps.store.load(fresh.id);
-          if (final.mode === 'review' && final.stageStatus === 'queued' && final.lastRun === null) {
-            await this.startReview(final.id, report);
-          }
-        });
+        }
       } catch (err) {
         report.errors.push({ where: review.id, error: errorMessage(err) });
       }
-    }
-
-    try {
-      const existingSessions = await this.deps.store.list();
-      const candidates = await this.deps.strategy.poll(this.deps.config, { existingSessions });
-      for (const { repo, error } of this.deps.strategy.lastErrors) {
-        report.errors.push({ where: repo, error });
-      }
-      for (const candidate of candidates) {
-        if (candidate.kind === 'own') {
-          report.ignoredOwn += 1;
-          continue;
-        }
-        try {
-          const created = await this.deps.factory.createFromCandidate(candidate);
-          report.created.push(created.id);
-          await this.deps.lock.withLock(created.id, () => this.startReview(created.id, report));
-        } catch (err) {
-          report.errors.push({
-            where: `${candidate.repo}#${candidate.number}`,
-            error: errorMessage(err),
-          });
-        }
-      }
-    } catch (err) {
-      report.errors.push({ where: 'strategy.poll', error: errorMessage(err) });
     }
 
     return report;

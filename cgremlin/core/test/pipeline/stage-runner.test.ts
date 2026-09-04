@@ -4,6 +4,7 @@ import { InMemoryFileSystem } from '../support/in-memory-file-system';
 import { SessionStore } from '../../src/engine/session-store';
 import { EngineEvents } from '../../src/engine/events';
 import { RunInProgressError, StageRunner, WorkspaceMissingError } from '../../src/pipeline/stage-runner';
+import { KeyedLock } from '../../src/api/keyed-lock';
 import { migrateV1ToV2 } from '../../src/schema/session';
 
 const sessionsDir = '/sessions';
@@ -37,8 +38,9 @@ async function setup(session = inv(), opts: { runnerKind?: 'claude-code' | 'code
   const runner = new FakeAgentRunner();
   const events = new EngineEvents();
   const now = () => new Date('2026-09-04T12:00:00.000Z');
-  const sr = new StageRunner({ runner, store, fs, events, sessionsDir, runnerKind: opts.runnerKind ?? 'claude-code', now });
-  return { fs, store, runner, events, sr };
+  const lock = new KeyedLock();
+  const sr = new StageRunner({ runner, store, fs, events, sessionsDir, runnerKind: opts.runnerKind ?? 'claude-code', now, lock });
+  return { fs, store, runner, events, sr, lock };
 }
 
 describe('StageRunner.run', () => {
@@ -152,6 +154,17 @@ describe('StageRunner.run', () => {
     runner.emitExit(runner.lastHandle(), { code: 0, signal: null });
     await p;
     expect(settled).toBe(true);
+  });
+
+  it('activeSessionIds lists sessions with an in-flight run, and clears once it finishes', async () => {
+    const { runner, sr } = await setup();
+    expect(sr.activeSessionIds()).toEqual([]);
+    const p = sr.run({ sessionId: 'inv-1', stage: 'findings', brief: null, prompt: 'go' });
+    await flush();
+    expect(sr.activeSessionIds()).toEqual(['inv-1']);
+    runner.emitExit(runner.lastHandle(), { code: 0, signal: null });
+    await p;
+    expect(sr.activeSessionIds()).toEqual([]);
   });
 
   it('stop() kills the runner and the run resolves as stopped once exit arrives', async () => {

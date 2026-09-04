@@ -3,7 +3,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import {
-  ciStatus, CheckRunSchema, mapPrView, parsePrList, parsePrView, StatusCheckSchema,
+  ciStatus, CheckRunSchema, mapPrView, parsePrInventoryList, parsePrList, parsePrView, StatusCheckSchema,
 } from '../../src/gh/pr-view';
 
 const fixturesDir = path.join(__dirname, '../fixtures/gh');
@@ -56,6 +56,50 @@ describe('parsePrList', () => {
     const items = JSON.parse(openListJson);
     items[0].reviewDecision = 'BOGUS_DECISION';
     expect(() => parsePrList(JSON.stringify(items))).toThrow();
+  });
+});
+
+describe('parsePrInventoryList', () => {
+  const fullListJson = fixture('pr-list-full.json');
+
+  it('parses the real fixture into 6 typed items with reviews, comments and latestReviews arrays', () => {
+    const items = parsePrInventoryList(fullListJson);
+    expect(items.length).toBe(6);
+    for (const item of items) {
+      expect(Array.isArray(item.reviews)).toBe(true);
+      expect(Array.isArray(item.comments)).toBe(true);
+      expect(Array.isArray(item.latestReviews)).toBe(true);
+    }
+  });
+
+  it('parses a review with state COMMENTED', () => {
+    const items = parsePrInventoryList(fullListJson);
+    const states = new Set(items.flatMap((item) => item.reviews.map((review) => review.state)));
+    expect(states.has('COMMENTED')).toBe(true);
+  });
+
+  it('normalizes comments: null to []', () => {
+    const raw = JSON.parse(fullListJson);
+    raw[0].comments = null;
+    const items = parsePrInventoryList(JSON.stringify(raw));
+    expect(items[0].comments).toEqual([]);
+  });
+
+  it('normalizes an item missing reviews entirely to []', () => {
+    const raw = JSON.parse(fullListJson);
+    delete raw[0].reviews;
+    const items = parsePrInventoryList(JSON.stringify(raw));
+    expect(items[0].reviews).toEqual([]);
+  });
+
+  it('empty stdout parses to []', () => {
+    expect(parsePrInventoryList('')).toEqual([]);
+  });
+
+  it('rejects a comment author object without a login', () => {
+    const raw = JSON.parse(fullListJson);
+    raw[0].comments[0].author = {};
+    expect(() => parsePrInventoryList(JSON.stringify(raw))).toThrow();
   });
 });
 

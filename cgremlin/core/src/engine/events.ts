@@ -1,6 +1,7 @@
 import type { Session } from '../schema/session';
 import type { StageName, RunOutcome } from '../schema/stage';
 import type { AgentOutput } from '../agent/agent-runner';
+import type { Inventory } from '../inventory/inventory';
 
 export interface EngineEventMap {
   'session.created': { session: Session };
@@ -8,6 +9,7 @@ export interface EngineEventMap {
   'run.started': { session: Session; stage: StageName };
   'run.output': { sessionId: string; stage: StageName; chunk: AgentOutput };
   'run.finished': { session: Session; stage: StageName; outcome: RunOutcome };
+  'inventory.updated': { inventory: Inventory };
 }
 
 type Listener<K extends keyof EngineEventMap> = (payload: EngineEventMap[K]) => void;
