@@ -76,6 +76,15 @@ function viewJson(overrides: Record<string, unknown> = {}): string {
   return JSON.stringify({ ...baseView, ...overrides });
 }
 
+function inventoryItem(number: number, repo: string) {
+  return {
+    number, url: `https://github.com/${repo}/pull/${number}`, author: { login: 'bob' },
+    isDraft: false, reviewDecision: '', headRefOid: 'a'.repeat(40), headRefName: 'feature',
+    baseRefName: 'main', title: 't', updatedAt: '2026-09-04T00:00:00.000Z',
+    latestReviews: [], reviews: [], comments: [],
+  };
+}
+
 describe('InventoryScanner', () => {
   it('pins the gh pr list argv per repo using PR_INVENTORY_FIELDS', async () => {
     const { gh, scanner } = buildScanner();
@@ -182,5 +191,66 @@ describe('InventoryScanner', () => {
 
     expect(report.inventory.errors.some((e) => e.error.includes('disk error'))).toBe(true);
     expect(report.reconciliation.errors.some((e) => e.error.includes('disk error'))).toBe(true);
+  });
+
+  it('F1: a per-repo gh failure carries forward that repo\'s previous entries (with their old seenAt), not dropping them', async () => {
+    const REPO2 = 'acme/other';
+    let call = 0;
+    const now = () => (call++ === 0 ? new Date('2026-09-04T18:00:00.000Z') : new Date('2026-09-04T19:00:00.000Z'));
+    const h = createHarness();
+    const gh = new FakeGhRunner();
+    const lock = new KeyedLock();
+    const reconciliationTick = new ReconciliationTick({ gh, store: h.store, pipeline: h.service, events: h.events, lock });
+    const inventoryStore = new InventoryStore(h.fs, '/state/inventory.json');
+    const scanner = new InventoryScanner({
+      gh, store: h.store, inventoryStore,
+      reconciler: { reconcile: () => reconciliationTick.run() },
+      events: h.events,
+      config: scannerConfig({ repos: [REPO, REPO2] }),
+      now,
+    });
+
+    gh.queueResponse({ stdout: fullListJson });
+    gh.queueResponse({ stdout: JSON.stringify([inventoryItem(99, REPO2)]) });
+    const report1 = await scanner.run();
+    const first99 = report1.inventory.entries.find((e) => e.number === 99);
+    expect(first99?.seenAt).toBe('2026-09-04T18:00:00.000Z');
+
+    gh.queueResponse({ stdout: fullListJson });
+    gh.queueResponse(new Error('gh: rate limited'));
+    const report2 = await scanner.run();
+
+    expect(report2.inventory.errors).toEqual([{ repo: REPO2, error: expect.stringContaining('rate limited') }]);
+    const carried99 = report2.inventory.entries.find((e) => e.number === 99 && e.repo === REPO2);
+    expect(carried99?.seenAt).toBe('2026-09-04T18:00:00.000Z'); // preserved, not overwritten
+    const repoEntry = report2.inventory.entries.find((e) => e.repo === REPO && e.number === 1974);
+    expect(repoEntry?.seenAt).toBe('2026-09-04T19:00:00.000Z'); // the healthy repo still gets the new timestamp
+  });
+
+  it('F3: never throws when inventoryStore.save rejects; the error lands in inventory.errors and inventory.updated still fires', async () => {
+    class FailingInventoryStore extends InventoryStore {
+      save(): Promise<void> {
+        return Promise.reject(new Error('disk full'));
+      }
+    }
+    const h = createHarness();
+    const gh = new FakeGhRunner();
+    const lock = new KeyedLock();
+    const reconciliationTick = new ReconciliationTick({ gh, store: h.store, pipeline: h.service, events: h.events, lock });
+    const failingInventoryStore = new FailingInventoryStore(h.fs, '/state/inventory.json');
+    gh.queueResponse({ stdout: fullListJson });
+    const scanner = new InventoryScanner({
+      gh, store: h.store, inventoryStore: failingInventoryStore,
+      reconciler: { reconcile: () => reconciliationTick.run() },
+      events: h.events, config: scannerConfig(), now: FIXED_NOW,
+    });
+    const emitted: Inventory[] = [];
+    h.events.on('inventory.updated', (e) => emitted.push(e.inventory));
+
+    const report = await scanner.run();
+
+    expect(report.inventory.errors.some((e) => e.repo === '*' && e.error.includes('disk full'))).toBe(true);
+    expect(emitted.length).toBe(1);
+    expect(scanner.lastReport).toEqual(report);
   });
 });

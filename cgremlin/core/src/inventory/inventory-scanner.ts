@@ -50,6 +50,13 @@ export class InventoryScanner implements Tickable<ScanReport> {
       errors.push({ repo: '*', error: `store.list failed: ${errorMessage(err)}` });
     }
 
+    // On a per-repo failure, fall back to that repo's entries from the last
+    // completed scan (in memory, or on disk if this process hasn't scanned
+    // yet) instead of dropping the repo's PRs entirely for one bad tick — a
+    // transient gh failure must not make PRs vanish from the inventory or
+    // 404 an in-flight POST .../review. Loaded at most once per run().
+    let fallbackInventory: Inventory | null = this._lastReport?.inventory ?? null;
+
     const entries: InventoryEntry[] = [];
     for (const repo of this.deps.config.repos) {
       try {
@@ -64,6 +71,10 @@ export class InventoryScanner implements Tickable<ScanReport> {
         entries.push(...buildEntries(repo, items, sessions, this.deps.config, nowIso));
       } catch (err) {
         errors.push({ repo, error: errorMessage(err) });
+        if (fallbackInventory === null) {
+          fallbackInventory = await this.deps.inventoryStore.load();
+        }
+        entries.push(...(fallbackInventory?.entries.filter((e) => e.repo === repo) ?? []));
       }
     }
 
@@ -75,7 +86,11 @@ export class InventoryScanner implements Tickable<ScanReport> {
     };
     const groups = groupInventory(inventory);
 
-    await this.deps.inventoryStore.save(inventory);
+    try {
+      await this.deps.inventoryStore.save(inventory);
+    } catch (err) {
+      inventory.errors.push({ repo: '*', error: `inventoryStore.save failed: ${errorMessage(err)}` });
+    }
 
     const report: ScanReport = { inventory, groups, reconciliation };
     this._lastReport = report;
