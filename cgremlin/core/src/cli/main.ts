@@ -30,9 +30,31 @@ const COMMANDS: Record<string, Command> = {
   config: configCommand,
 };
 
-/** Pure dispatcher: parses only the command name, hands the rest of argv to the command untouched. */
+const CONFIG_FLAG_PREFIX = '--config=';
+
+/** Extracts a shared `--config <path>` / `--config=<path>` flag out of argv, leaving the rest untouched for the command itself. */
+function extractConfigFlag(args: readonly string[]): { configPath: string | undefined; rest: string[] } {
+  const rest: string[] = [];
+  let configPath: string | undefined;
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i];
+    if (arg === '--config') {
+      configPath = args[i + 1];
+      i += 1;
+      continue;
+    }
+    if (arg.startsWith(CONFIG_FLAG_PREFIX)) {
+      configPath = arg.slice(CONFIG_FLAG_PREFIX.length);
+      continue;
+    }
+    rest.push(arg);
+  }
+  return { configPath, rest };
+}
+
+/** Pure dispatcher: parses only the command name and the shared `--config` flag, hands the rest of argv to the command untouched. */
 export async function main(argv: readonly string[], io: CommandIO): Promise<number> {
-  const [command, ...rest] = argv;
+  const [command, ...rawRest] = argv;
   if (command === '--help' || command === '-h' || command === 'help') {
     io.stdout.write(USAGE);
     return 0;
@@ -42,7 +64,9 @@ export async function main(argv: readonly string[], io: CommandIO): Promise<numb
     io.stderr.write(USAGE);
     return 2;
   }
-  return handler(rest, io);
+  const { configPath, rest } = extractConfigFlag(rawRest);
+  const effectiveIo: CommandIO = configPath !== undefined ? { ...io, configPath } : io;
+  return handler(rest, effectiveIo);
 }
 
 /** The real entry point — builds real io from the process and exits with the command's code. */
@@ -53,5 +77,10 @@ export async function run(): Promise<void> {
     home: homedir(),
     fs: new NodeFileSystem(),
   };
-  process.exitCode = await main(process.argv.slice(2), io);
+  try {
+    process.exitCode = await main(process.argv.slice(2), io);
+  } catch (err) {
+    io.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
+    process.exitCode = 1;
+  }
 }

@@ -50,9 +50,34 @@ export function isSuccessStatus(status: number): boolean {
   return status >= 200 && status < 300;
 }
 
-/** Extracts a flag's value out of an argv-style args array, e.g. `--config path` -> 'path'. Does not mutate args. */
-export function parseFlagValue(args: readonly string[], flag: string): string | undefined {
-  const idx = args.indexOf(flag);
-  if (idx === -1 || idx === args.length - 1) return undefined;
-  return args[idx + 1];
+function isSocketConnectionError(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException | undefined)?.code;
+  return code === 'ENOENT' || code === 'ECONNREFUSED';
+}
+
+/**
+ * Loads config, then runs `fn(config)` against the socket — any connection
+ * failure (no engine listening at that path) is mapped to a one-line
+ * friendly message and exit 1, instead of an unhandled rejection with a
+ * stack trace. `printHttpError` (for a normal non-2xx HTTP response) is
+ * unrelated and still the caller's job inside `fn`.
+ */
+export async function runSocketCommand(
+  io: CommandIO,
+  fn: (config: CoreConfig) => Promise<number>,
+): Promise<number> {
+  const config = await loadConfigOrFail(io);
+  if (!config) return 1;
+  try {
+    return await fn(config);
+  } catch (err) {
+    if (isSocketConnectionError(err)) {
+      io.stderr.write(
+        `engine is not running (no socket at ${config.socketPath}); start it with cgremlin-core serve\n`,
+      );
+    } else {
+      io.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
+    }
+    return 1;
+  }
 }

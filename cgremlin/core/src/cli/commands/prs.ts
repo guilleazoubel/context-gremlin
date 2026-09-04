@@ -1,5 +1,5 @@
 import { request } from '../client';
-import { isSuccessStatus, loadConfigOrFail, printHttpError, type CommandIO } from '../command-io';
+import { isSuccessStatus, printHttpError, runSocketCommand, type CommandIO } from '../command-io';
 import type { Inventory, InventoryEntry, InventoryGroups } from '../../inventory/inventory';
 
 function flagsFor(entry: InventoryEntry): string {
@@ -34,18 +34,17 @@ export function renderPrsTable(inventory: Inventory, groups: InventoryGroups): s
 
 /** `cgremlin-core prs [--json]` — the current PR inventory, grouped (GET /prs). */
 export async function prsCommand(args: readonly string[], io: CommandIO): Promise<number> {
-  const config = await loadConfigOrFail(io);
-  if (!config) return 1;
-
-  const res = await request(config.socketPath!, 'GET', '/prs');
-  if (!isSuccessStatus(res.status)) {
-    return printHttpError(io, res.status, res.body);
-  }
-  if (args.includes('--json')) {
-    io.stdout.write(`${JSON.stringify(res.body)}\n`);
+  return runSocketCommand(io, async (config) => {
+    const res = await request(config.socketPath!, 'GET', '/prs');
+    if (!isSuccessStatus(res.status)) {
+      return printHttpError(io, res.status, res.body);
+    }
+    if (args.includes('--json')) {
+      io.stdout.write(`${JSON.stringify(res.body)}\n`);
+      return 0;
+    }
+    const { inventory, groups } = res.body as { inventory: Inventory; groups: InventoryGroups };
+    io.stdout.write(renderPrsTable(inventory, groups));
     return 0;
-  }
-  const { inventory, groups } = res.body as { inventory: Inventory; groups: InventoryGroups };
-  io.stdout.write(renderPrsTable(inventory, groups));
-  return 0;
+  });
 }

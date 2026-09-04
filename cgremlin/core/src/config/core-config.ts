@@ -38,18 +38,20 @@ function expandHome(value: string, home: string): string {
   return value;
 }
 
-/** Parses `raw` against {@link CoreConfigSchema}, then expands `~` in `stateDir` and derives any unset per-directory/path fields from it. */
+/** Parses `raw` against {@link CoreConfigSchema}, then expands a leading `~` in every path field (stateDir and any explicit override) and derives any unset per-directory/path fields from stateDir. */
 export function resolveCoreConfig(raw: unknown, home: string): CoreConfig {
   const parsed = CoreConfigSchema.parse(raw);
   const stateDir = expandHome(parsed.stateDir, home);
+  const expandOrDerive = (value: string | undefined, suffix: string): string =>
+    value !== undefined ? expandHome(value, home) : `${stateDir}/${suffix}`;
   return {
     ...parsed,
     stateDir,
-    sessionsDir: parsed.sessionsDir ?? `${stateDir}/sessions`,
-    worktreesDir: parsed.worktreesDir ?? `${stateDir}/worktrees`,
-    mirrorsDir: parsed.mirrorsDir ?? `${stateDir}/mirrors`,
-    socketPath: parsed.socketPath ?? `${stateDir}/engine.sock`,
-    inventoryPath: parsed.inventoryPath ?? `${stateDir}/inventory.json`,
+    sessionsDir: expandOrDerive(parsed.sessionsDir, 'sessions'),
+    worktreesDir: expandOrDerive(parsed.worktreesDir, 'worktrees'),
+    mirrorsDir: expandOrDerive(parsed.mirrorsDir, 'mirrors'),
+    socketPath: expandOrDerive(parsed.socketPath, 'engine.sock'),
+    inventoryPath: expandOrDerive(parsed.inventoryPath, 'inventory.json'),
   };
 }
 
@@ -103,6 +105,22 @@ export function importLegacyConfig(
   return { repos, watchAuthors, me, runnerOptions: model ? { model } : {} };
 }
 
+function randomSuffix(): string {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
+// Maps each derived-path field to the suffix resolveCoreConfig would derive
+// it from stateDir with — used to recognize (and omit) a value that's just
+// the derived default, so persisting never bakes in a stale absolute path
+// that a later stateDir change is supposed to move.
+const DERIVED_PATH_SUFFIXES: Record<string, string> = {
+  sessionsDir: 'sessions',
+  worktreesDir: 'worktrees',
+  mirrorsDir: 'mirrors',
+  socketPath: 'engine.sock',
+  inventoryPath: 'inventory.json',
+};
+
 export async function writeCoreConfig(
   fs: SessionFileSystem,
   path: string,
@@ -113,6 +131,14 @@ export async function writeCoreConfig(
   if (exists && !opts.force) {
     throw new ConfigError(`Config file '${path}' already exists; pass { force: true } to overwrite`);
   }
+  const toPersist: Record<string, unknown> = { ...cfg };
+  for (const [key, suffix] of Object.entries(DERIVED_PATH_SUFFIXES)) {
+    if (toPersist[key] === `${cfg.stateDir}/${suffix}`) {
+      delete toPersist[key];
+    }
+  }
   await fs.mkdir(dirname(path), { recursive: true });
-  await fs.writeFile(path, JSON.stringify(cfg, null, 2));
+  const tmpPath = `${path}.${randomSuffix()}.tmp`;
+  await fs.writeFile(tmpPath, JSON.stringify(toPersist, null, 2));
+  await fs.rename(tmpPath, path);
 }

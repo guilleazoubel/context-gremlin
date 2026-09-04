@@ -97,7 +97,14 @@ export async function serve(config: CoreConfig, adapters: EngineAdapters, opts: 
   const signals = opts.signals ?? (['SIGINT', 'SIGTERM'] as const);
   const signalHandler = (sig: NodeJS.Signals): void => {
     logLine(opts.log, 'signal', { signal: sig });
-    void close();
+    // Fire-and-forget from this synchronous handler's own perspective, but
+    // still attach a rejection handler — close() is memoized below, so this
+    // is the SAME promise any other caller (e.g. the CLI's serve command)
+    // awaits; without this .catch, a rejecting close triggered by a signal
+    // would be an unhandled rejection with nothing else to observe it.
+    close().catch((err) => {
+      logLine(opts.log, 'shutdown.error', { error: err instanceof Error ? err.message : String(err) });
+    });
   };
   const processHandlers = signals.map((sig) => {
     const handler = () => signalHandler(sig);
@@ -105,10 +112,12 @@ export async function serve(config: CoreConfig, adapters: EngineAdapters, opts: 
     return { sig, handler };
   });
 
-  let closed = false;
-  async function close(): Promise<void> {
-    if (closed) return;
-    closed = true;
+  let closingPromise: Promise<void> | undefined;
+  function close(): Promise<void> {
+    closingPromise ??= doClose();
+    return closingPromise;
+  }
+  async function doClose(): Promise<void> {
     let firstError: unknown;
     try {
       // Await any tick already in flight BEFORE reading what's active: a

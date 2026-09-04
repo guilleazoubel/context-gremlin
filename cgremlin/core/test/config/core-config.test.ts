@@ -44,6 +44,26 @@ describe('resolveCoreConfig', () => {
   it('rejects a repo slug without an owner/name shape', () => {
     expect(() => resolveCoreConfig({ repos: ['not-a-slug'], me: 'me' }, HOME)).toThrow();
   });
+
+  it('expands a leading ~ in every explicit path field, not just stateDir', () => {
+    const cfg = resolveCoreConfig(
+      {
+        repos: ['acme/app'],
+        me: 'me',
+        sessionsDir: '~/custom-sessions',
+        worktreesDir: '~/custom-worktrees',
+        mirrorsDir: '~/custom-mirrors',
+        socketPath: '~/custom.sock',
+        inventoryPath: '~/custom-inventory.json',
+      },
+      HOME,
+    );
+    expect(cfg.sessionsDir).toBe(`${HOME}/custom-sessions`);
+    expect(cfg.worktreesDir).toBe(`${HOME}/custom-worktrees`);
+    expect(cfg.mirrorsDir).toBe(`${HOME}/custom-mirrors`);
+    expect(cfg.socketPath).toBe(`${HOME}/custom.sock`);
+    expect(cfg.inventoryPath).toBe(`${HOME}/custom-inventory.json`);
+  });
 });
 
 describe('importLegacyConfig', () => {
@@ -118,5 +138,40 @@ describe('writeCoreConfig / loadCoreConfig', () => {
     await fs.mkdir('/state', { recursive: true });
     await fs.writeFile('/state/core.json', JSON.stringify({ repos: [], me: 'me' }));
     await expect(loadCoreConfig(fs, '/state/core.json', HOME)).rejects.toThrow(ConfigError);
+  });
+
+  it('persists only stateDir and explicit overrides, never the derived paths', async () => {
+    const fs = new InMemoryFileSystem();
+    const cfg = resolveCoreConfig({ repos: ['acme/app'], me: 'me' }, HOME);
+    await writeCoreConfig(fs, '/state/core.json', cfg, { force: false });
+    const raw = JSON.parse(await fs.readFile('/state/core.json')) as Record<string, unknown>;
+    expect(raw.sessionsDir).toBeUndefined();
+    expect(raw.worktreesDir).toBeUndefined();
+    expect(raw.mirrorsDir).toBeUndefined();
+    expect(raw.socketPath).toBeUndefined();
+    expect(raw.inventoryPath).toBeUndefined();
+    expect(raw.stateDir).toBe(cfg.stateDir);
+  });
+
+  it('keeps an explicit derived-path override when persisting', async () => {
+    const fs = new InMemoryFileSystem();
+    const cfg = resolveCoreConfig({ repos: ['acme/app'], me: 'me', sessionsDir: '/custom/sessions' }, HOME);
+    await writeCoreConfig(fs, '/state/core.json', cfg, { force: false });
+    const raw = JSON.parse(await fs.readFile('/state/core.json')) as Record<string, unknown>;
+    expect(raw.sessionsDir).toBe('/custom/sessions');
+  });
+
+  it('writes via tmp+rename rather than directly to the target path', async () => {
+    const fs = new InMemoryFileSystem();
+    const cfg = resolveCoreConfig({ repos: ['acme/app'], me: 'me' }, HOME);
+    const originalRename = fs.rename.bind(fs);
+    let renamedFrom: string | undefined;
+    fs.rename = async (from, to) => {
+      renamedFrom = from;
+      return originalRename(from, to);
+    };
+    await writeCoreConfig(fs, '/state/core.json', cfg, { force: false });
+    expect(renamedFrom).toMatch(/\.tmp$/);
+    expect(await fs.exists('/state/core.json')).toBe(true);
   });
 });

@@ -174,6 +174,58 @@ describe('serve', () => {
     await expect(handle.close()).resolves.toBeUndefined();
   });
 
+  it('two concurrent close() calls share the same in-flight outcome — the second does not return before the first settles', async () => {
+    const handle = await serve(testConfig(), testAdapters(), { log: () => {} });
+    const id = await createInvestigation(handle.socketPath);
+    await requestOn(handle.socketPath, 'POST', `/sessions/${id}/run`, { stage: 'findings' });
+    await new Promise((r) => setTimeout(r, 20));
+
+    let releaseStop: (() => void) | undefined;
+    const stopHeld = new Promise<void>((resolve) => {
+      releaseStop = resolve;
+    });
+    vi.spyOn(handle.engine.pipeline, 'stop').mockImplementation(async () => {
+      await stopHeld;
+      return true;
+    });
+
+    let secondSettled = false;
+    const p1 = handle.close();
+    const p2 = handle.close().then(() => {
+      secondSettled = true;
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(secondSettled).toBe(false); // still waiting on the same in-flight close, not resolved early
+
+    releaseStop?.();
+    await p1;
+    await p2;
+    expect(secondSettled).toBe(true);
+  });
+
+  it('a rejecting close() triggered by onSignal logs shutdown.error and never surfaces as an unhandled rejection', async () => {
+    const lines: string[] = [];
+    const handle = await serve(testConfig(), testAdapters(), { log: (l) => lines.push(l) });
+    const id = await createInvestigation(handle.socketPath);
+    await requestOn(handle.socketPath, 'POST', `/sessions/${id}/run`, { stage: 'findings' });
+    await new Promise((r) => setTimeout(r, 20));
+    vi.spyOn(handle.engine.pipeline, 'stop').mockRejectedValue(new Error('boom via signal'));
+
+    const unhandled: unknown[] = [];
+    const onUnhandledRejection = (err: unknown) => unhandled.push(err);
+    process.on('unhandledRejection', onUnhandledRejection);
+    try {
+      handle.onSignal('SIGINT');
+      await new Promise((r) => setTimeout(r, 30));
+      expect(unhandled).toEqual([]);
+      const parsed = lines.map((l) => JSON.parse(l) as { type: string; error?: string });
+      expect(parsed.some((e) => e.type === 'shutdown.error' && e.error === 'boom via signal')).toBe(true);
+    } finally {
+      process.removeListener('unhandledRejection', onUnhandledRejection);
+      await handle.close().catch(() => undefined);
+    }
+  });
+
   it('a second serve() on the same socket while the first runs rejects with SocketInUseError', async () => {
     const config = testConfig();
     const handle = await serve(config, testAdapters(), { log: () => {} });

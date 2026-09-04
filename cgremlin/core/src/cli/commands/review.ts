@@ -1,5 +1,5 @@
 import { request } from '../client';
-import { isSuccessStatus, loadConfigOrFail, printHttpError, type CommandIO } from '../command-io';
+import { isSuccessStatus, printHttpError, runSocketCommand, type CommandIO } from '../command-io';
 import { parsePrUrl } from '../../gh/pr-url';
 import type { Session } from '../../schema/session';
 
@@ -19,15 +19,14 @@ export async function reviewCommand(args: readonly string[], io: CommandIO): Pro
     return 1;
   }
 
-  const config = await loadConfigOrFail(io);
-  if (!config) return 1;
-
-  const res = await request(config.socketPath!, 'POST', `/prs/${ref.owner}/${ref.repo}/${ref.number}/review`);
-  if (!isSuccessStatus(res.status)) {
-    return printHttpError(io, res.status, res.body);
-  }
-  const { session, created, started } = res.body as { session: Session; created: boolean; started: boolean };
-  const verb = created ? 'Created and started' : started ? 'Started' : 'Already tracked (not started)';
-  io.stdout.write(`${verb} review session ${session.id}\n`);
-  return 0;
+  return runSocketCommand(io, async (config) => {
+    const res = await request(config.socketPath!, 'POST', `/prs/${ref.owner}/${ref.repo}/${ref.number}/review`);
+    if (!isSuccessStatus(res.status)) {
+      return printHttpError(io, res.status, res.body);
+    }
+    const { session, created, started } = res.body as { session: Session; created: boolean; started: boolean };
+    const verb = created ? 'Created and started' : started ? 'Started' : 'Already tracked (not started)';
+    io.stdout.write(`${verb} review session ${session.id}\n`);
+    return 0;
+  });
 }
