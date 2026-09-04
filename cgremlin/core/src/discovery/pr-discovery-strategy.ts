@@ -19,13 +19,14 @@ export interface DiscoveryContext {
   existingSessions: readonly Session[];
 }
 
-export interface PRDiscoveryStrategy {
-  poll(config: DiscoveryConfig, ctx: DiscoveryContext): Promise<CandidatePR[]>;
-}
-
 export interface DiscoveryRepoError {
   repo: string;
   error: string;
+}
+
+export interface PRDiscoveryStrategy {
+  readonly lastErrors: readonly DiscoveryRepoError[];
+  poll(config: DiscoveryConfig, ctx: DiscoveryContext): Promise<CandidatePR[]>;
 }
 
 function isAlreadyTracked(sessions: readonly Session[], repo: string, number: number): boolean {
