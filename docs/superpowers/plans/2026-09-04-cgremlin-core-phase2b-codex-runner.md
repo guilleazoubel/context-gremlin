@@ -27,6 +27,7 @@
 - stderr on a plain `exec` always contains `Reading additional input from stdin...` even with stdin closed; the process does NOT hang with stdin `ignore`d (run5: exit 0, ~5 s). Non-JSON mode prints only the final text to stdout and everything else to stderr.
 - `-o/--output-last-message <file>` writes the raw final text (not JSON). Not used by this adapter.
 - Token usage appears only in `turn.completed.usage` (no total, no cost).
+- **Round 2 (2026-09-04, after merge):** a resumed turn keeps the thread's writable roots ONLY when its cwd equals the first turn's cwd; from any other cwd the sandbox silently reverts to read-only. `-c sandbox_mode="workspace-write"` on `exec resume` restores write access (and the original `--add-dir` root is honored again); `writable_roots` alone does not. `resume --help`'s example key `sandbox_permissions` did not work; `sandbox_mode` did. Real runs also emit `item.completed` items of type `file_change` and `command_execution`, which the adapter ignores (correct). Follow-up: the adapter passes `-c sandbox_mode="<sandbox>"` on every resumed turn as defense in depth.
 
 ## Global Constraints
 
