@@ -12,6 +12,7 @@ interface FakeAgentState {
   exitCallbacks: Array<(result: AgentExitResult) => void>;
   prompts: string[];
   stopped: boolean;
+  resumeId?: string;
 }
 
 export class UnknownAgentHandleError extends Error {
@@ -33,6 +34,7 @@ export class FakeAgentRunner implements AgentRunner {
       exitCallbacks: [],
       prompts: [],
       stopped: false,
+      resumeId: ctx.resumeId,
     });
     return { id };
   }
@@ -75,6 +77,14 @@ export class FakeAgentRunner implements AgentRunner {
 
   getContext(handle: AgentHandle): SessionContext {
     return this.requireState(handle).ctx;
+  }
+
+  getResumeId(handle: AgentHandle): string | undefined {
+    return this.requireState(handle).resumeId;
+  }
+
+  setResumeId(handle: AgentHandle, id: string): void {
+    this.requireState(handle).resumeId = id;
   }
 
   private requireState(handle: AgentHandle): FakeAgentState {

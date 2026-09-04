@@ -44,7 +44,7 @@ export class ClaudeCodeRunner implements AgentRunner {
 
   async start(ctx: SessionContext): Promise<AgentHandle> {
     const id = `claude-agent-${this.nextId++}`;
-    this.handles.set(id, { ctx, outputCallbacks: [], exitCallbacks: [] });
+    this.handles.set(id, { ctx, outputCallbacks: [], exitCallbacks: [], claudeSessionId: ctx.resumeId });
     return { id };
   }
 
@@ -64,6 +64,9 @@ export class ClaudeCodeRunner implements AgentRunner {
       '--permission-mode',
       this.permissionMode,
     ];
+    for (const dir of state.ctx.additionalDirs ?? []) {
+      args.push('--add-dir', dir);
+    }
     if (this.model) {
       args.push('--model', this.model);
     }
@@ -173,6 +176,10 @@ export class ClaudeCodeRunner implements AgentRunner {
 
   getClaudeSessionId(handle: AgentHandle): string | undefined {
     return this.requireState(handle).claudeSessionId;
+  }
+
+  getResumeId(handle: AgentHandle): string | undefined {
+    return this.getClaudeSessionId(handle);
   }
 
   private requireState(handle: AgentHandle): ClaudeAgentState {
