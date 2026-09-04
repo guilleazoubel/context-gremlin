@@ -122,7 +122,12 @@ Mode-specific additions:
 
 `StageName = 'findings' | 'plan' | 'develop' | 'review' | 'rereview'`.
 
-Transition table changes: review gains `failed` (ruling 4) and `ready → reviewing`.
+Transition table changes: review gains `failed` (ruling 4) and `ready → reviewing`;
+investigation gains the direct edge `plan_ready → promoted_to_development`, taken only
+when `PlanGate.canPromote` holds via `driveToCompletion` (amended 2026-09-04 during 3a
+Task 8: the table originally lacked this edge and an implementation synthesized a
+`plan_ready → approved` hop nobody took; the audit trail must never show an approval
+that did not happen — legacy drive-to-completion likewise skipped `--approve-plan`).
 No other table changes.
 
 ## 4. Components (3a)

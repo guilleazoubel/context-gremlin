@@ -63,3 +63,10 @@ describe('review phase additions (phase 3a)', () => {
     expect(canTransition('review', 'failed', 'ready')).toBe(false);
   });
 });
+
+describe('drive-to-completion promotion edge (phase 3a)', () => {
+  it('allows drive-to-completion to promote directly from plan_ready, but not from planning', () => {
+    expect(canTransition('investigation', 'plan_ready', 'promoted_to_development')).toBe(true);
+    expect(canTransition('investigation', 'planning', 'promoted_to_development')).toBe(false);
+  });
+});

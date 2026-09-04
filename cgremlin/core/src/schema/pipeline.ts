@@ -39,7 +39,7 @@ export type PhaseFor<M extends SessionMode> = M extends 'investigation'
 const INVESTIGATION_TRANSITIONS: Record<InvestigationPhase, readonly InvestigationPhase[]> = {
   findings: ['planning', 'abandoned'],
   planning: ['plan_ready', 'abandoned'],
-  plan_ready: ['approved', 'abandoned'],
+  plan_ready: ['approved', 'promoted_to_development', 'abandoned'],
   approved: ['promoted_to_development', 'abandoned'],
   promoted_to_development: [],
   abandoned: [],
