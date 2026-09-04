@@ -26,6 +26,20 @@ const ORIGIN_FETCH_HEADS_REFSPEC = '+refs/heads/*:refs/remotes/origin/*';
 // remote.
 const ORIGIN_FETCH_PULLS_REFSPEC = '+refs/pull/*/head:refs/remotes/origin/pr/*';
 
+// `git config --get-all` exits 1 with empty stdout/stderr when the key is
+// simply unset — true for any mirror not created (or not yet touched) by
+// this module's own "new mirror" branch below. That is the one failure mode
+// worth tolerating here; anything else (e.g. a corrupt repo, a missing
+// binary) must keep propagating instead of being silently treated as "no
+// refspecs configured".
+function isMissingConfigKeyError(err: unknown): boolean {
+  return (
+    err instanceof Error &&
+    (err as { code?: unknown }).code === 1 &&
+    (err as { stderr?: unknown }).stderr === ''
+  );
+}
+
 export async function ensureMirror(
   git: GitRunner,
   fs: SessionFileSystem,
@@ -47,11 +61,22 @@ export async function ensureMirror(
     await git.run(['config', 'remote.origin.fetch', ORIGIN_FETCH_HEADS_REFSPEC], { cwd: mirrorPath });
     await git.run(['config', '--add', 'remote.origin.fetch', ORIGIN_FETCH_PULLS_REFSPEC], { cwd: mirrorPath });
   } else {
-    const { stdout } = await git.run(['config', '--get-all', 'remote.origin.fetch'], { cwd: mirrorPath });
-    const existingRefspecs = stdout
-      .split('\n')
-      .map((line) => line.trim())
-      .filter((line) => line.length > 0);
+    let existingRefspecs: string[];
+    try {
+      const { stdout } = await git.run(['config', '--get-all', 'remote.origin.fetch'], { cwd: mirrorPath });
+      existingRefspecs = stdout
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0);
+    } catch (err) {
+      if (!isMissingConfigKeyError(err)) {
+        throw err;
+      }
+      existingRefspecs = [];
+    }
+    if (!existingRefspecs.includes(ORIGIN_FETCH_HEADS_REFSPEC)) {
+      await git.run(['config', '--add', 'remote.origin.fetch', ORIGIN_FETCH_HEADS_REFSPEC], { cwd: mirrorPath });
+    }
     if (!existingRefspecs.includes(ORIGIN_FETCH_PULLS_REFSPEC)) {
       await git.run(['config', '--add', 'remote.origin.fetch', ORIGIN_FETCH_PULLS_REFSPEC], { cwd: mirrorPath });
     }
