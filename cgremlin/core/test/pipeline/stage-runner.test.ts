@@ -113,6 +113,17 @@ describe('StageRunner.run', () => {
     expect(settled).toBe(true);
   });
 
+  it('activeSessionIds lists sessions with an in-flight run, and clears once it finishes', async () => {
+    const { runner, sr } = await setup();
+    expect(sr.activeSessionIds()).toEqual([]);
+    const p = sr.run({ sessionId: 'inv-1', stage: 'findings', brief: null, prompt: 'go' });
+    await flush();
+    expect(sr.activeSessionIds()).toEqual(['inv-1']);
+    runner.emitExit(runner.lastHandle(), { code: 0, signal: null });
+    await p;
+    expect(sr.activeSessionIds()).toEqual([]);
+  });
+
   it('stop() kills the runner and the run resolves as stopped once exit arrives', async () => {
     const { runner, sr } = await setup();
     const p = sr.run({ sessionId: 'inv-1', stage: 'findings', brief: null, prompt: 'go' });

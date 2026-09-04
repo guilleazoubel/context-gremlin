@@ -427,6 +427,10 @@ export class PipelineService {
     return this.deps.stageRunner.stop(id);
   }
 
+  activeSessionIds(): string[] {
+    return this.deps.stageRunner.activeSessionIds();
+  }
+
   async retry(id: string): Promise<Session> {
     const session = await this.deps.store.load(id);
     if (!session.lastRun) {

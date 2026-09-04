@@ -13,6 +13,7 @@ import { UnsupportedStageError } from '../../src/pipeline/pipeline-service';
 import { WorkspaceInUseError } from '../../src/workspace/workspace-in-use';
 import { ArtifactNotFoundError } from '../../src/api/artifacts';
 import { TickInProgressError } from '../../src/discovery/scheduler';
+import { OwnPrError, NoScanYetError } from '../../src/api/server';
 
 describe('mapErrorToHttp', () => {
   it('maps SessionNotFoundError to 404', () => {
@@ -80,5 +81,13 @@ describe('mapErrorToHttp', () => {
 
   it('maps TickInProgressError to 409', () => {
     expect(mapErrorToHttp(new TickInProgressError()).status).toBe(409);
+  });
+
+  it('maps OwnPrError to 409', () => {
+    expect(mapErrorToHttp(new OwnPrError('acme/app', 5)).status).toBe(409);
+  });
+
+  it('maps NoScanYetError to 404', () => {
+    expect(mapErrorToHttp(new NoScanYetError()).status).toBe(404);
   });
 });

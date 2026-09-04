@@ -15,11 +15,14 @@ import {
   parseRunStageRequest,
   ValidationError,
 } from './validation';
-import { assertWorktreeNotInUse } from '../workspace/workspace-in-use';
+import { assertWorktreeNotInUse, TERMINAL_PHASES_BY_MODE } from '../workspace/workspace-in-use';
 import { ArtifactNotFoundError } from './artifacts';
 import type { DiscoveryScheduler } from '../discovery/scheduler';
-import type { DiscoveryConfig } from '../discovery/discovery-config';
 import { awaitRunStart } from '../pipeline/run-start';
+import type { InventoryScanner, ScanReport } from '../inventory/inventory-scanner';
+import type { InventoryStore } from '../inventory/inventory-store';
+import { groupInventory, type Inventory, type InventoryEntry } from '../inventory/inventory';
+import type { ReviewSessionFactory, CandidatePR } from '../pipeline/review-session-factory';
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
@@ -53,8 +56,97 @@ export interface ApiServerDeps {
   fs: SessionFileSystem;
   sessionsDir: string;
   events: EngineEvents;
-  discovery?: { scheduler: DiscoveryScheduler; config: DiscoveryConfig };
+  inventory?: {
+    scanner: InventoryScanner;
+    scheduler: DiscoveryScheduler<ScanReport>;
+    factory: ReviewSessionFactory;
+    inventoryStore: InventoryStore;
+    config: { me: string };
+  };
   lock?: KeyedLock;
+}
+
+export class OwnPrError extends Error {
+  constructor(repo: string, number: number) {
+    super(`PR ${repo}#${number} is authored by the configured user; the engine never reviews its own PRs`);
+    this.name = 'OwnPrError';
+  }
+}
+
+export class NoScanYetError extends Error {
+  constructor() {
+    super('no inventory scan has been run yet');
+    this.name = 'NoScanYetError';
+  }
+}
+
+type InventoryDeps = NonNullable<ApiServerDeps['inventory']>;
+
+async function loadCurrentInventory(inv: InventoryDeps): Promise<Inventory | null> {
+  return inv.scanner.lastReport?.inventory ?? (await inv.inventoryStore.load());
+}
+
+function findEntry(inv: Inventory, repo: string, number: number): InventoryEntry | undefined {
+  return inv.entries.find((e) => e.repo === repo && e.number === number);
+}
+
+async function handleReviewStart(
+  res: ServerResponse,
+  deps: ApiServerDeps,
+  inv: InventoryDeps,
+  repoSlug: string,
+  number: number,
+): Promise<void> {
+  const inventory = await loadCurrentInventory(inv);
+  if (!inventory) throw new NoScanYetError();
+  const entry = findEntry(inventory, repoSlug, number);
+  if (!entry) {
+    sendJson(res, 404, { error: `PR ${repoSlug}#${number} is not in the current inventory` });
+    return;
+  }
+  // Re-check against the live config rather than trusting entry.isMine (a
+  // snapshot from whenever the inventory was last scanned) — the same
+  // never-trust-a-stale-snapshot reasoning as the fresh session lookup below.
+  if (entry.author.toLowerCase() === inv.config.me.toLowerCase()) {
+    throw new OwnPrError(repoSlug, number);
+  }
+
+  const sessions = await deps.sessionStore.list();
+  const existing = sessions.find(
+    (s) =>
+      s.mode === 'review' &&
+      !TERMINAL_PHASES_BY_MODE.review.has(s.stageStatus) &&
+      s.pr !== null &&
+      s.pr.repo === repoSlug &&
+      s.pr.number === number,
+  );
+
+  if (existing) {
+    if (existing.stageStatus === 'queued' && !deps.pipeline.activeSessionIds().includes(existing.id)) {
+      await awaitRunStart(deps.events, existing.id, deps.pipeline.runReview(existing.id));
+      const session = await deps.sessionStore.load(existing.id);
+      sendJson(res, 202, { session, created: false, started: true });
+      return;
+    }
+    sendJson(res, 200, { session: existing, created: false, started: false });
+    return;
+  }
+
+  const candidate: CandidatePR = {
+    kind: 'review',
+    repo: repoSlug,
+    number,
+    url: entry.url,
+    author: entry.author,
+    isDraft: entry.isDraft,
+    reviewDecision: entry.reviewDecision,
+    headSha: entry.headSha,
+    title: entry.title,
+  };
+  const created = await inv.factory.createFromCandidate(candidate);
+  await awaitRunStart(deps.events, created.id, deps.pipeline.runReview(created.id));
+  const session = await deps.sessionStore.load(created.id);
+  sendJson(res, 202, { session, created: true, started: true });
 }
 
 export function createApiServer(deps: ApiServerDeps): http.Server {
@@ -239,30 +331,63 @@ async function handleRequest(
       return;
     }
 
-    if (parts.length === 2 && parts[0] === 'discovery' && ['tick', 'config', 'status'].includes(parts[1])) {
-      if (!deps.discovery) {
-        sendJson(res, 404, { error: 'discovery not configured' });
+    if (parts[0] === 'prs') {
+      if (!deps.inventory) {
+        sendJson(res, 404, { error: 'inventory not configured' });
         return;
       }
-      const { scheduler, config } = deps.discovery;
+      const inv = deps.inventory;
 
-      if (method === 'POST' && parts[1] === 'tick') {
-        const report = await scheduler.runNow();
+      if (method === 'GET' && parts.length === 1) {
+        const inventory = await loadCurrentInventory(inv);
+        if (!inventory) throw new NoScanYetError();
+        const groups = inv.scanner.lastReport?.groups ?? groupInventory(inventory);
+        sendJson(res, 200, { inventory, groups });
+        return;
+      }
+
+      if (method === 'POST' && parts.length === 2 && parts[1] === 'scan') {
+        const report = await inv.scheduler.runNow();
         sendJson(res, 200, report);
         return;
       }
 
-      if (method === 'GET' && parts[1] === 'config') {
-        sendJson(res, 200, config);
+      if (method === 'GET' && parts.length === 2 && parts[1] === 'status') {
+        sendJson(res, 200, {
+          running: inv.scheduler.isRunning(),
+          // scanner.lastReport, not scheduler.lastReport: consistent with
+          // GET /prs's own source-of-truth preference, and correct even when
+          // a scan was triggered directly (e.g. in tests) rather than via
+          // the scheduler.
+          lastScanAt: inv.scanner.lastReport?.inventory.scannedAt ?? null,
+          lastError: inv.scheduler.lastError,
+          skippedBeats: inv.scheduler.skippedBeats,
+        });
         return;
       }
 
-      if (method === 'GET' && parts[1] === 'status') {
-        sendJson(res, 200, {
-          running: scheduler.isRunning(),
-          lastReport: scheduler.lastReport,
-          skippedBeats: scheduler.skippedBeats,
-          lastError: scheduler.lastError,
+      if (method === 'GET' && parts.length === 4) {
+        const repoSlug = `${parts[1]}/${parts[2]}`;
+        const number = Number(parts[3]);
+        const inventory = await loadCurrentInventory(inv);
+        if (!inventory) throw new NoScanYetError();
+        const entry = findEntry(inventory, repoSlug, number);
+        if (!entry) {
+          sendJson(res, 404, { error: `PR ${repoSlug}#${number} is not in the current inventory` });
+          return;
+        }
+        sendJson(res, 200, { entry });
+        return;
+      }
+
+      if (method === 'POST' && parts.length === 5 && parts[4] === 'review') {
+        const repoSlug = `${parts[1]}/${parts[2]}`;
+        const number = Number(parts[3]);
+        await lock.withLock(`pr:${repoSlug}#${number}`, async () => {
+          if (url.searchParams.get('refresh') === '1') {
+            await inv.scheduler.runNow();
+          }
+          await handleReviewStart(res, deps, inv, repoSlug, number);
         });
         return;
       }

@@ -12,14 +12,16 @@ import { EngineEvents } from '../../src/engine/events';
 import { InMemoryFileSystem } from '../support/in-memory-file-system';
 import { FakeGitRunner } from '../support/fake-git-runner';
 import { FakeAgentRunner } from '../support/fake-agent-runner';
-import { migrateV1ToV2, type Session, type SessionV1 } from '../../src/schema/session';
+import { migrateV1ToV2, type ReviewSession, type Session, type SessionV1 } from '../../src/schema/session';
 import type { SessionFileSystem } from '../../src/fs/session-file-system';
-import { createHarness, flush, SESSIONS_DIR, type PipelineHarness } from '../support/pipeline-harness';
-import { createDiscoveryHarness } from '../support/discovery-harness';
+import { createHarness, flush, SESSIONS_DIR, WORKTREES_DIR, FIXED_NOW, type PipelineHarness } from '../support/pipeline-harness';
+import { createInventoryHarness, inventoryScanConfig } from '../support/inventory-harness';
 import { DiscoveryScheduler } from '../../src/discovery/scheduler';
-import type { GhRunner } from '../../src/gh/gh-runner';
 import { KeyedLock } from '../../src/api/keyed-lock';
 import { ReconciliationTick } from '../../src/discovery/reconciliation';
+import { InventoryScanner, type ScanReport } from '../../src/inventory/inventory-scanner';
+import { InventoryStore } from '../../src/inventory/inventory-store';
+import { ReviewSessionFactory } from '../../src/pipeline/review-session-factory';
 import { FakeGhRunner } from '../support/fake-gh-runner';
 
 const APPROVED_PLAN = `## Review Status
@@ -136,7 +138,7 @@ class DelayedFileSystem implements SessionFileSystem {
  * requests actually interleave in the event loop instead of resolving
  * back-to-back via microtasks (see DelayedFileSystem's own doc comment).
  */
-async function createDelayedServer(socketFileName: string) {
+async function createDelayedServer(socketFileName: string, opts: { inventory?: boolean } = {}) {
   const delayedFs = new DelayedFileSystem(new InMemoryFileSystem());
   const git = new FakeGitRunner();
   const store = new SessionStore(delayedFs, '/sessions');
@@ -161,6 +163,23 @@ async function createDelayedServer(socketFileName: string) {
     events,
     config: { sessionsDir: '/sessions', worktreesDir: '/worktrees', defaultBaseRef: 'origin/main' },
   });
+
+  let inventoryDeps: { gh: FakeGhRunner; scanner: InventoryScanner; scheduler: DiscoveryScheduler<ScanReport>; factory: ReviewSessionFactory; inventoryStore: InventoryStore } | undefined;
+  if (opts.inventory) {
+    const gh = new FakeGhRunner();
+    const reconciliationTick = new ReconciliationTick({ gh, store, pipeline, events, lock });
+    const inventoryStore = new InventoryStore(delayedFs, '/state/inventory.json');
+    const scanner = new InventoryScanner({
+      gh, store, inventoryStore, reconciler: { reconcile: () => reconciliationTick.run() },
+      events, config: inventoryScanConfig(), now: FIXED_NOW,
+    });
+    const scheduler = new DiscoveryScheduler<ScanReport>(scanner, 60_000);
+    const factory = new ReviewSessionFactory({
+      gh, store, workspace, events, sessionsDir: '/sessions', worktreesDir: '/worktrees', now: FIXED_NOW,
+    });
+    inventoryDeps = { gh, scanner, scheduler, factory, inventoryStore };
+  }
+
   const srv = createApiServer({
     sessionStore: store,
     workspaceManager: workspace,
@@ -169,6 +188,15 @@ async function createDelayedServer(socketFileName: string) {
     sessionsDir: '/sessions',
     events,
     lock,
+    ...(inventoryDeps
+      ? {
+          inventory: {
+            scanner: inventoryDeps.scanner, scheduler: inventoryDeps.scheduler,
+            factory: inventoryDeps.factory, inventoryStore: inventoryDeps.inventoryStore,
+            config: { me: 'me-user' },
+          },
+        }
+      : {}),
   });
   const sock = path.join(dir, socketFileName);
   await new Promise<void>((resolve) => srv.listen(sock, resolve));
@@ -183,6 +211,7 @@ async function createDelayedServer(socketFileName: string) {
     workspace,
     git,
     fs: delayedFs,
+    inventory: inventoryDeps,
   };
 }
 
@@ -741,149 +770,235 @@ describe('API server', () => {
     expect(emitted).toEqual([{ from: 'findings', to: 'planning' }]);
   });
 
-  it('POST /discovery/tick 404s when discovery is not configured', async () => {
-    const res = await request('POST', '/discovery/tick');
+  it('GET /prs 404s when inventory is not configured', async () => {
+    const res = await request('GET', '/prs');
     expect(res.status).toBe(404);
-    expect(res.body).toEqual({ error: 'discovery not configured' });
+    expect(res.body).toEqual({ error: 'inventory not configured' });
   });
 
-  it('GET /discovery/config 404s when discovery is not configured', async () => {
-    const res = await request('GET', '/discovery/config');
+  it('POST /prs/scan 404s when inventory is not configured', async () => {
+    const res = await request('POST', '/prs/scan');
     expect(res.status).toBe(404);
-    expect(res.body).toEqual({ error: 'discovery not configured' });
+    expect(res.body).toEqual({ error: 'inventory not configured' });
   });
 
-  it('GET /discovery/status 404s when discovery is not configured', async () => {
-    const res = await request('GET', '/discovery/status');
+  it('GET /prs/status 404s when inventory is not configured', async () => {
+    const res = await request('GET', '/prs/status');
     expect(res.status).toBe(404);
-    expect(res.body).toEqual({ error: 'discovery not configured' });
+    expect(res.body).toEqual({ error: 'inventory not configured' });
   });
 });
 
-describe('discovery routes (configured)', () => {
-  let discSocketPath: string;
-  let discServer: http.Server;
-  let dh: ReturnType<typeof createDiscoveryHarness>;
+function prsFixtureItem(number: number, author: string, overrides: Record<string, unknown> = {}) {
+  return {
+    number, url: `https://github.com/acme/app/pull/${number}`, author: { login: author },
+    isDraft: false, reviewDecision: '', headRefOid: 'a'.repeat(40), headRefName: `feature-${number}`,
+    baseRefName: 'main', title: `PR #${number}`, updatedAt: '2026-09-04T00:00:00.000Z',
+    latestReviews: [], reviews: [], comments: [], ...overrides,
+  };
+}
 
-  function discRequest(method: string, urlPath: string, body?: unknown) {
-    return requestOn(discSocketPath, method, urlPath, body);
+function prViewFixture(number: number, author: string) {
+  return JSON.stringify({
+    number, title: `PR #${number}`, author: { login: author }, headRefName: `feature-${number}`,
+    headRefOid: 'a'.repeat(40), baseRefName: 'main', url: `https://github.com/acme/app/pull/${number}`,
+    state: 'OPEN', isDraft: false, reviewDecision: '', mergedAt: null, closedAt: null,
+    latestReviews: [], statusCheckRollup: [],
+  });
+}
+
+function queuedReviewSession(id: string, number: number): ReviewSession {
+  const v2 = migrateV1ToV2({
+    schemaVersion: 1, id, mode: 'review', createdAt: '2026-09-04T10:00:00.000Z',
+    workspace: { repoUrl: 'git@github.com:acme/app.git', worktreePath: `${WORKTREES_DIR}/${id}` },
+    lineage: { pipelineId: id, parentSessionId: null, ticket: null },
+    stageStatus: 'queued',
+  }) as ReviewSession;
+  return {
+    ...v2,
+    pr: {
+      repo: 'acme/app', number, url: `https://github.com/acme/app/pull/${number}`,
+      headSha: 'a'.repeat(40), reviewedSha: null, title: `PR #${number}`, author: 'bob',
+    },
+  };
+}
+
+function reviewingReviewSession(id: string, number: number): ReviewSession {
+  const v2 = migrateV1ToV2({
+    schemaVersion: 1, id, mode: 'review', createdAt: '2026-09-04T10:00:00.000Z',
+    workspace: { repoUrl: 'git@github.com:acme/app.git', worktreePath: `${WORKTREES_DIR}/${id}` },
+    lineage: { pipelineId: id, parentSessionId: null, ticket: null },
+    stageStatus: 'reviewing',
+  }) as ReviewSession;
+  return {
+    ...v2,
+    lastRun: {
+      stage: 'review', startedAt: '2026-09-04T10:00:00.000Z', finishedAt: null,
+      exitCode: null, signal: null, outcome: 'running', error: null,
+    },
+    pr: {
+      repo: 'acme/app', number, url: `https://github.com/acme/app/pull/${number}`,
+      headSha: 'a'.repeat(40), reviewedSha: null, title: `PR #${number}`, author: 'bob',
+    },
+  };
+}
+
+describe('PR inventory routes (configured)', () => {
+  let prsSocketPath: string;
+  let prsServer: http.Server;
+  let ih: ReturnType<typeof createInventoryHarness>;
+
+  function prsRequest(method: string, urlPath: string, body?: unknown) {
+    return requestOn(prsSocketPath, method, urlPath, body);
   }
 
   beforeEach(async () => {
-    dh = createDiscoveryHarness();
-    discSocketPath = path.join(dir, 'api-discovery.sock');
-    discServer = createApiServer({
-      sessionStore: dh.h.store,
-      workspaceManager: dh.h.workspace,
-      pipeline: dh.h.service,
-      fs: dh.h.fs,
+    ih = createInventoryHarness();
+    ih.gh.queueResponse({ stdout: JSON.stringify([prsFixtureItem(10, 'bob'), prsFixtureItem(11, 'me-user')]) });
+    await ih.scanner.run();
+
+    prsSocketPath = path.join(dir, 'api-prs.sock');
+    prsServer = createApiServer({
+      sessionStore: ih.h.store,
+      workspaceManager: ih.h.workspace,
+      pipeline: ih.h.service,
+      fs: ih.h.fs,
       sessionsDir: SESSIONS_DIR,
-      events: dh.h.events,
-      discovery: { scheduler: new DiscoveryScheduler(dh.tick, 60_000), config: dh.config },
+      events: ih.h.events,
+      inventory: {
+        scanner: ih.scanner, scheduler: ih.scheduler, factory: ih.factory, inventoryStore: ih.inventoryStore,
+        config: { me: ih.config.me },
+      },
     });
-    await new Promise<void>((resolve) => discServer.listen(discSocketPath, resolve));
+    await new Promise<void>((resolve) => prsServer.listen(prsSocketPath, resolve));
   });
 
   afterEach(async () => {
-    await new Promise<void>((resolve) => discServer.close(() => resolve()));
-    await rm(discSocketPath, { force: true });
+    await new Promise<void>((resolve) => prsServer.close(() => resolve()));
+    await rm(prsSocketPath, { force: true });
   });
 
-  it('POST /discovery/tick runs one tick now and returns the TickReport', async () => {
-    const res = await discRequest('POST', '/discovery/tick');
+  it('GET /prs returns the inventory and groups from the last scan', async () => {
+    const res = await prsRequest('GET', '/prs');
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ reconciled: 0, errors: [] });
+    const body = res.body as { inventory: { entries: unknown[] }; groups: { unreviewed: unknown[]; mine: unknown[] } };
+    expect(body.inventory.entries.length).toBe(2);
+    expect(body.groups.unreviewed.length).toBe(1);
+    expect(body.groups.mine.length).toBe(1);
   });
 
-  it('GET /discovery/config returns the configured DiscoveryConfig', async () => {
-    const res = await discRequest('GET', '/discovery/config');
+  it('GET /prs/:owner/:repo/:number returns the single entry', async () => {
+    const res = await prsRequest('GET', '/prs/acme/app/10');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual(dh.config);
+    expect((res.body as { entry: { number: number } }).entry.number).toBe(10);
   });
 
-  it('GET /discovery/status returns running/lastReport/skippedBeats/lastError', async () => {
-    const res = await discRequest('GET', '/discovery/status');
+  it('GET /prs/:owner/:repo/:number 404s for a PR not in the inventory', async () => {
+    const res = await prsRequest('GET', '/prs/acme/app/999');
+    expect(res.status).toBe(404);
+  });
+
+  it('POST /prs/scan runs a fresh scan and returns the ScanReport', async () => {
+    ih.gh.queueResponse({ stdout: JSON.stringify([prsFixtureItem(10, 'bob'), prsFixtureItem(11, 'me-user')]) });
+    const res = await prsRequest('POST', '/prs/scan');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ running: false, lastReport: null, skippedBeats: 0, lastError: null });
+    expect((res.body as { inventory: { entries: unknown[] } }).inventory.entries.length).toBe(2);
   });
 
-  it('GET /discovery/status reports lastError after a tick that rejects', async () => {
-    const scheduler = new DiscoveryScheduler({ run: () => Promise.reject(new Error('boom')) }, 60_000);
-    const brokenServer = createApiServer({
-      sessionStore: dh.h.store,
-      workspaceManager: dh.h.workspace,
-      pipeline: dh.h.service,
-      fs: dh.h.fs,
-      sessionsDir: SESSIONS_DIR,
-      events: dh.h.events,
-      discovery: { scheduler, config: dh.config },
+  it('GET /prs/status reports running/lastScanAt/lastError/skippedBeats', async () => {
+    const res = await prsRequest('GET', '/prs/status');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      running: false, lastScanAt: FIXED_NOW().toISOString(), lastError: null, skippedBeats: 0,
     });
-    const brokenSocketPath = path.join(dir, 'api-discovery-broken.sock');
-    await new Promise<void>((resolve) => brokenServer.listen(brokenSocketPath, resolve));
-    try {
-      const tickRes = await requestOn(brokenSocketPath, 'POST', '/discovery/tick');
-      expect(tickRes.status).toBe(500);
-      const statusRes = await requestOn(brokenSocketPath, 'GET', '/discovery/status');
-      expect(statusRes.status).toBe(200);
-      expect(statusRes.body).toEqual({ running: false, lastReport: null, skippedBeats: 0, lastError: 'boom' });
-    } finally {
-      await new Promise<void>((resolve) => brokenServer.close(() => resolve()));
-      await rm(brokenSocketPath, { force: true });
-    }
   });
 
-  it('POST /discovery/tick returns 409 when a tick is already running', async () => {
-    class SlowGhRunner implements GhRunner {
-      constructor(private readonly inner: GhRunner, private readonly delayMs: number) {}
-      async run(args: string[]): Promise<{ stdout: string; stderr: string }> {
-        await new Promise((resolve) => setTimeout(resolve, this.delayMs));
-        return this.inner.run(args);
-      }
-    }
-    const slow = createDiscoveryHarness({}, (gh) => new SlowGhRunner(gh, 30));
-    // With no discovery poll left, a tick over zero review sessions would
-    // complete instantly (no gh call at all) — give it one real review
-    // session so the tick's own `gh pr view` call is the thing SlowGhRunner
-    // delays, making a genuinely slow, in-progress tick to race against.
-    const reviewId = 'pr-app-9-x';
-    const v1: SessionV1 = {
-      schemaVersion: 1, id: reviewId, mode: 'review', createdAt: '2026-09-04T10:00:00.000Z',
-      workspace: { repoUrl: 'git@github.com:acme/app.git', worktreePath: '/worktrees/pr-app-9-x', branch: 'pr-9' },
-      lineage: { pipelineId: reviewId, parentSessionId: null, ticket: null },
-      stageStatus: 'ready',
-    };
-    const review = migrateV1ToV2(v1);
-    if (review.mode !== 'review') throw new Error('mode changed');
-    review.pr = {
-      repo: 'acme/app', number: 9, url: 'https://github.com/acme/app/pull/9',
-      headSha: 'a'.repeat(40), reviewedSha: 'a'.repeat(40), title: 't', author: 'bob',
-    };
-    await slow.h.store.save(review);
-    slow.gh.queueResponse({ stdout: JSON.stringify({
-      number: 9, title: 't', author: { login: 'bob' }, headRefName: 'pr-9', headRefOid: 'a'.repeat(40),
-      baseRefName: 'main', url: 'https://github.com/acme/app/pull/9', state: 'OPEN', isDraft: false,
-      reviewDecision: '', mergedAt: null, closedAt: null, latestReviews: [], statusCheckRollup: [],
-    }) });
-    const slowSocketPath = path.join(dir, 'api-discovery-slow.sock');
-    const slowServer = createApiServer({
-      sessionStore: slow.h.store,
-      workspaceManager: slow.h.workspace,
-      pipeline: slow.h.service,
-      fs: slow.h.fs,
-      sessionsDir: SESSIONS_DIR,
-      events: slow.h.events,
-      discovery: { scheduler: new DiscoveryScheduler(slow.tick, 60_000), config: slow.config },
-    });
-    await new Promise<void>((resolve) => slowServer.listen(slowSocketPath, resolve));
-    try {
-      const first = requestOn(slowSocketPath, 'POST', '/discovery/tick');
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      const second = await requestOn(slowSocketPath, 'POST', '/discovery/tick');
-      expect(second.status).toBe(409);
-      expect((await first).status).toBe(200);
-    } finally {
-      await new Promise<void>((resolve) => slowServer.close(() => resolve()));
-      await rm(slowSocketPath, { force: true });
-    }
+  it('POST /prs/:owner/:repo/:number/review on an own PR returns 409', async () => {
+    const res = await prsRequest('POST', '/prs/acme/app/11/review');
+    expect(res.status).toBe(409);
   });
+
+  it('POST /prs/:owner/:repo/:number/review on a PR not in the inventory returns 404', async () => {
+    const res = await prsRequest('POST', '/prs/acme/app/999/review');
+    expect(res.status).toBe(404);
+  });
+
+  it('POST /prs/:owner/:repo/:number/review creates and starts a review for a fresh PR', async () => {
+    ih.gh.queueResponse({ stdout: prViewFixture(10, 'bob') }); // ReviewSessionFactory's own gh pr view call
+    const res = await prsRequest('POST', '/prs/acme/app/10/review');
+    expect(res.status).toBe(202);
+    const body = res.body as { session: Session; created: boolean; started: boolean };
+    expect(body.created).toBe(true);
+    expect(body.started).toBe(true);
+    expect(body.session.stageStatus).toBe('reviewing');
+    expect((await ih.h.store.list()).length).toBe(1);
+  });
+
+  it('an existing queued session with no live run is started: 202 { created:false, started:true }', async () => {
+    const review = queuedReviewSession('pr-app-10-x', 10);
+    await ih.h.store.save(review);
+    const res = await prsRequest('POST', '/prs/acme/app/10/review');
+    expect(res.status).toBe(202);
+    const body = res.body as { session: Session; created: boolean; started: boolean };
+    expect(body.created).toBe(false);
+    expect(body.started).toBe(true);
+    expect(body.session.id).toBe('pr-app-10-x');
+    expect(body.session.stageStatus).toBe('reviewing');
+    expect((await ih.h.store.list()).length).toBe(1); // reused, not duplicated
+  });
+
+  it('an existing reviewing session responds 200 { created:false, started:false } and starts no new run', async () => {
+    const review = reviewingReviewSession('pr-app-10-x', 10);
+    await ih.h.store.save(review);
+    const res = await prsRequest('POST', '/prs/acme/app/10/review');
+    expect(res.status).toBe(200);
+    const body = res.body as { session: Session; created: boolean; started: boolean };
+    expect(body.created).toBe(false);
+    expect(body.started).toBe(false);
+    expect(body.session.id).toBe('pr-app-10-x');
+    expect(() => ih.h.runner.lastHandle()).toThrow(); // no run was started at all
+  });
+
+  it('?refresh=1 runs exactly one additional scan before deciding', async () => {
+    // PR #12 does not exist in the beforeEach scan — only visible once the
+    // refresh scan (queued here) actually runs, proving it really happened.
+    ih.gh.queueResponse({
+      stdout: JSON.stringify([prsFixtureItem(10, 'bob'), prsFixtureItem(11, 'me-user'), prsFixtureItem(12, 'carol')]),
+    });
+    ih.gh.queueResponse({ stdout: prViewFixture(12, 'carol') }); // factory's own gh pr view call
+    const res = await prsRequest('POST', '/prs/acme/app/12/review?refresh=1');
+    expect(res.status).toBe(202);
+    const inv = await ih.inventoryStore.load();
+    expect(inv?.entries.length).toBe(3);
+  });
+
+  it('mutation guard: GET /prs and POST /prs/scan create no sessions and start no runs', async () => {
+    ih.gh.queueResponse({ stdout: JSON.stringify([prsFixtureItem(10, 'bob'), prsFixtureItem(11, 'me-user')]) });
+    await prsRequest('GET', '/prs');
+    await prsRequest('POST', '/prs/scan');
+    expect(await ih.h.store.list()).toEqual([]);
+    expect(() => ih.h.runner.lastHandle()).toThrow();
+  });
+});
+
+it('two concurrent POST /prs/.../review for the same fresh PR create exactly one session', async () => {
+  const d = await createDelayedServer('prs-race.sock', { inventory: true });
+  try {
+    if (!d.inventory) throw new Error('inventory deps missing');
+    d.inventory.gh.queueResponse({ stdout: JSON.stringify([prsFixtureItem(20, 'bob')]) });
+    await d.inventory.scanner.run();
+    // Only ONE request should ever reach the factory's own gh pr view call —
+    // the second, lock-serialized request must see the first's session via
+    // its own fresh store.list() lookup instead of creating a duplicate.
+    d.inventory.gh.queueResponse({ stdout: prViewFixture(20, 'bob') });
+
+    const [resA, resB] = await Promise.all([
+      requestOn(d.sock, 'POST', '/prs/acme/app/20/review'),
+      requestOn(d.sock, 'POST', '/prs/acme/app/20/review'),
+    ]);
+    expect([resA.status, resB.status].sort()).toEqual([200, 202]);
+    expect((await d.store.list()).length).toBe(1);
+  } finally {
+    await d.close();
+  }
 });
