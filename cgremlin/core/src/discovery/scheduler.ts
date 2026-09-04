@@ -1,12 +1,10 @@
-import type { TickReport } from './reconciliation';
-
 export interface Clock {
   setInterval(fn: () => void, ms: number): unknown;
   clearInterval(handle: unknown): void;
 }
 
-export interface Tickable {
-  run(): Promise<TickReport>;
+export interface Tickable<R = unknown> {
+  run(): Promise<R>;
 }
 
 export class TickInProgressError extends Error {
@@ -16,20 +14,20 @@ export class TickInProgressError extends Error {
   }
 }
 
-export class DiscoveryScheduler {
+export class DiscoveryScheduler<R = unknown> {
   private handle: unknown = null;
-  private pending: Promise<TickReport> | null = null;
-  private _lastReport: TickReport | null = null;
+  private pending: Promise<R> | null = null;
+  private _lastReport: R | null = null;
   private _lastError: string | null = null;
   private _skippedBeats = 0;
 
   constructor(
-    private readonly tick: Tickable,
+    private readonly tick: Tickable<R>,
     private readonly intervalMs: number,
     private readonly clock: Clock = globalThis as unknown as Clock,
   ) {}
 
-  get lastReport(): TickReport | null {
+  get lastReport(): R | null {
     return this._lastReport;
   }
 
@@ -43,6 +41,14 @@ export class DiscoveryScheduler {
 
   isRunning(): boolean {
     return this.handle !== null;
+  }
+
+  /** Resolves once the currently-pending tick (if any) has settled. */
+  async waitForIdle(): Promise<void> {
+    const p = this.pending;
+    if (p) {
+      await p.catch(() => undefined);
+    }
   }
 
   start(): void {
@@ -70,7 +76,7 @@ export class DiscoveryScheduler {
     p.catch(() => undefined);
   }
 
-  private async runTick(): Promise<TickReport> {
+  private async runTick(): Promise<R> {
     try {
       const report = await this.tick.run();
       this._lastReport = report;
@@ -84,7 +90,7 @@ export class DiscoveryScheduler {
     }
   }
 
-  async runNow(): Promise<TickReport> {
+  async runNow(): Promise<R> {
     if (this.pending !== null) {
       throw new TickInProgressError();
     }

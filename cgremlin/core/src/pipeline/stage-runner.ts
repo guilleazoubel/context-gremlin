@@ -49,6 +49,10 @@ export class StageRunner {
     return this.active.has(sessionId);
   }
 
+  activeSessionIds(): string[] {
+    return [...this.active.keys()];
+  }
+
   async stop(sessionId: string): Promise<boolean> {
     const run = this.active.get(sessionId);
     if (!run) return false;

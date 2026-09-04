@@ -17,7 +17,7 @@ function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void; reject: 
 }
 
 function makeReport(overrides: Partial<TickReport> = {}): TickReport {
-  return { reconciled: 0, actions: [], skipped: [], created: [], started: [], ignoredOwn: 0, errors: [], ...overrides };
+  return { reconciled: 0, actions: [], skipped: [], errors: [], ...overrides };
 }
 
 class FakeClock implements Clock {
@@ -143,6 +143,48 @@ describe('DiscoveryScheduler', () => {
     expect(tick.calls).toBe(1);
     expect(report.reconciled).toBe(5);
     expect(scheduler.lastReport).toEqual(report);
+  });
+
+  it('F6: waitForIdle resolves immediately when no tick is pending', async () => {
+    const clock = new FakeClock();
+    const tick = new FakeTick();
+    const scheduler = new DiscoveryScheduler(tick, 1000, clock);
+    let resolved = false;
+    void scheduler.waitForIdle().then(() => { resolved = true; });
+    await flush();
+    expect(resolved).toBe(true);
+  });
+
+  it('F6: waitForIdle resolves only once the currently-pending tick settles', async () => {
+    const clock = new FakeClock();
+    const tick = new FakeTick();
+    const d = deferred<TickReport>();
+    tick.setNext(() => d.promise);
+    const scheduler = new DiscoveryScheduler(tick, 1000, clock);
+    const runPromise = scheduler.runNow();
+    let resolved = false;
+    void scheduler.waitForIdle().then(() => { resolved = true; });
+    await flush();
+    expect(resolved).toBe(false);
+    d.resolve(makeReport());
+    await runPromise;
+    await flush();
+    expect(resolved).toBe(true);
+  });
+
+  it('F6: waitForIdle resolves even if the pending tick rejects', async () => {
+    const clock = new FakeClock();
+    const tick = new FakeTick();
+    const d = deferred<TickReport>();
+    tick.setNext(() => d.promise);
+    const scheduler = new DiscoveryScheduler(tick, 1000, clock);
+    const runPromise = scheduler.runNow();
+    runPromise.catch(() => undefined);
+    let resolved = false;
+    void scheduler.waitForIdle().then(() => { resolved = true; });
+    d.reject(new Error('boom'));
+    await flush();
+    expect(resolved).toBe(true);
   });
 
   it('a rejecting tick is caught, recorded as lastError, and the scheduler keeps running', async () => {

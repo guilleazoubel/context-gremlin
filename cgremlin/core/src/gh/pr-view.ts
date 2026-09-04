@@ -3,6 +3,7 @@ import type { PrInfo } from '../schema/stage';
 
 export const PR_LIST_FIELDS =
   'number,url,author,isDraft,reviewDecision,headRefOid,headRefName,baseRefName,title,updatedAt';
+export const PR_INVENTORY_FIELDS = `${PR_LIST_FIELDS},latestReviews,reviews,comments`;
 export const PR_VIEW_FIELDS =
   'number,title,author,headRefName,headRefOid,baseRefName,url,state,isDraft,reviewDecision,mergedAt,closedAt,latestReviews,statusCheckRollup';
 
@@ -29,6 +30,45 @@ export const PrListItemSchema = z.object({
 export type PrListItem = z.infer<typeof PrListItemSchema>;
 
 export const PrListSchema = z.array(PrListItemSchema);
+
+export const ActivityAuthorSchema = z.object({ login: z.string() });
+
+export const PrReviewSchema = z
+  .object({
+    author: ActivityAuthorSchema,
+    state: z.string(),
+    submittedAt: z.string(),
+  })
+  .passthrough();
+export type PrReview = z.infer<typeof PrReviewSchema>;
+
+export const PrCommentSchema = z
+  .object({
+    author: ActivityAuthorSchema,
+    createdAt: z.string(),
+  })
+  .passthrough();
+export type PrComment = z.infer<typeof PrCommentSchema>;
+
+export const PrInventoryItemSchema = PrListItemSchema.extend({
+  latestReviews: z.array(PrReviewSchema).nullable().default([]),
+  reviews: z.array(PrReviewSchema).nullable().default([]),
+  comments: z.array(PrCommentSchema).nullable().default([]),
+});
+// The schema stays nullable so it can parse gh's raw JSON (which may omit
+// these keys or emit an explicit null), but parsePrInventoryList always
+// normalizes them to [] before returning — this narrowed type lets callers
+// use these arrays directly, without repeating that normalization.
+export type PrInventoryItem = Omit<
+  z.infer<typeof PrInventoryItemSchema>,
+  'latestReviews' | 'reviews' | 'comments'
+> & {
+  latestReviews: PrReview[];
+  reviews: PrReview[];
+  comments: PrComment[];
+};
+
+export const PrInventoryListSchema = z.array(PrInventoryItemSchema);
 
 export const CheckRunSchema = z.object({
   __typename: z.literal('CheckRun'),
@@ -134,6 +174,18 @@ export function parsePrList(stdout: string): PrListItem[] {
   const trimmed = stdout.trim();
   if (trimmed === '') return [];
   return PrListSchema.parse(JSON.parse(trimmed));
+}
+
+export function parsePrInventoryList(stdout: string): PrInventoryItem[] {
+  const trimmed = stdout.trim();
+  if (trimmed === '') return [];
+  const parsed = PrInventoryListSchema.parse(JSON.parse(trimmed));
+  return parsed.map((item) => ({
+    ...item,
+    latestReviews: item.latestReviews ?? [],
+    reviews: item.reviews ?? [],
+    comments: item.comments ?? [],
+  }));
 }
 
 export function parsePrView(stdout: string): PrView {
