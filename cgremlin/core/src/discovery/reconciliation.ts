@@ -157,7 +157,12 @@ export class ReconciliationTick {
       errors: [],
     };
 
-    const sessions = await this.deps.store.list();
+    let sessions: Session[] = [];
+    try {
+      sessions = await this.deps.store.list();
+    } catch (err) {
+      report.errors.push({ where: 'store.list', error: errorMessage(err) });
+    }
     const reviewSessions = sessions.filter(
       (s): s is ReviewSession =>
         s.mode === 'review' && !TERMINAL_PHASES_BY_MODE.review.has(s.stageStatus) && s.pr !== null,

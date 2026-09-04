@@ -811,10 +811,35 @@ describe('discovery routes (configured)', () => {
     expect(res.body).toEqual(dh.config);
   });
 
-  it('GET /discovery/status returns running/lastReport/skippedBeats', async () => {
+  it('GET /discovery/status returns running/lastReport/skippedBeats/lastError', async () => {
     const res = await discRequest('GET', '/discovery/status');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ running: false, lastReport: null, skippedBeats: 0 });
+    expect(res.body).toEqual({ running: false, lastReport: null, skippedBeats: 0, lastError: null });
+  });
+
+  it('GET /discovery/status reports lastError after a tick that rejects', async () => {
+    const scheduler = new DiscoveryScheduler({ run: () => Promise.reject(new Error('boom')) }, 60_000);
+    const brokenServer = createApiServer({
+      sessionStore: dh.h.store,
+      workspaceManager: dh.h.workspace,
+      pipeline: dh.h.service,
+      fs: dh.h.fs,
+      sessionsDir: SESSIONS_DIR,
+      events: dh.h.events,
+      discovery: { scheduler, config: dh.config },
+    });
+    const brokenSocketPath = path.join(dir, 'api-discovery-broken.sock');
+    await new Promise<void>((resolve) => brokenServer.listen(brokenSocketPath, resolve));
+    try {
+      const tickRes = await requestOn(brokenSocketPath, 'POST', '/discovery/tick');
+      expect(tickRes.status).toBe(500);
+      const statusRes = await requestOn(brokenSocketPath, 'GET', '/discovery/status');
+      expect(statusRes.status).toBe(200);
+      expect(statusRes.body).toEqual({ running: false, lastReport: null, skippedBeats: 0, lastError: 'boom' });
+    } finally {
+      await new Promise<void>((resolve) => brokenServer.close(() => resolve()));
+      await rm(brokenSocketPath, { force: true });
+    }
   });
 
   it('POST /discovery/tick returns 409 when a tick is already running', async () => {

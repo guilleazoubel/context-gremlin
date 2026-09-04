@@ -8,6 +8,7 @@ import { DefaultPRDiscoveryStrategy } from '../../src/discovery/pr-discovery-str
 import { ReviewSessionFactory } from '../../src/pipeline/review-session-factory';
 import { planReconciliation, ReconciliationTick } from '../../src/discovery/reconciliation';
 import { KeyedLock } from '../../src/api/keyed-lock';
+import { SessionStore } from '../../src/engine/session-store';
 import { migrateV1ToV2, type ReviewSession, type Session } from '../../src/schema/session';
 import type { DevelopmentPhase, InvestigationPhase, ReviewPhase } from '../../src/schema/pipeline';
 import type { DiscoveryConfig } from '../../src/discovery/discovery-config';
@@ -493,6 +494,30 @@ describe('ReconciliationTick', () => {
     expect(report.errors).toEqual([
       { where: expect.stringContaining('acme/app'), error: expect.stringContaining('network unreachable') },
     ]);
+  });
+
+  it('never throws — a failing initial store.list() lands in errors and the tick still returns a report', async () => {
+    const { h, gh, strategy, factory, lock } = tickHarness();
+    class FailingStore extends SessionStore {
+      list(): Promise<Session[]> {
+        return Promise.reject(new Error('disk error'));
+      }
+    }
+    const failingStore = new FailingStore(h.fs, SESSIONS_DIR);
+
+    const tick = new ReconciliationTick({
+      gh, store: failingStore, strategy, factory, pipeline: h.service, events: h.events, lock,
+      config: discoveryConfig({ repos: ['acme/app'] }),
+    });
+    const report = await tick.run();
+
+    expect(report.reconciled).toBe(0);
+    expect(report.created).toEqual([]);
+    // Both the initial list() and the second one (inside the discovery pass)
+    // fail independently against the same broken store, so both are recorded.
+    expect(report.errors.length).toBe(2);
+    expect(report.errors.every((e) => e.error.includes('disk error'))).toBe(true);
+    expect(gh.calls).toEqual([]);
   });
 
   it('links a discovered candidate to its development source via the ticket key in the branch name, then merges that source once the PR merges (proves source lookup is not always null)', async () => {

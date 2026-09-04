@@ -262,6 +262,7 @@ async function handleRequest(
           running: scheduler.isRunning(),
           lastReport: scheduler.lastReport,
           skippedBeats: scheduler.skippedBeats,
+          lastError: scheduler.lastError,
         });
         return;
       }
