@@ -102,7 +102,7 @@ export function migrateLegacySession(raw: unknown): Session {
     legacy.mode === 'investigation'
       ? { ...base, intent: legacy.intent ?? 'investigate_only', driveToCompletion }
       : legacy.mode === 'review'
-        ? { ...base, reviewVersion: 0 }
+        ? { ...base, reviewVersion: 0, lastRereviewSummary: null }
         : base;
   return parseSession(candidate);
 }

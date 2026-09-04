@@ -64,6 +64,7 @@ export class ReviewSessionFactory {
       pr: mapped.pr,
       stageStatus: 'queued',
       reviewVersion: 0,
+      lastRereviewSummary: null,
     };
 
     const { linked, source, supersede } = linkPrToSource(session, await store.list());

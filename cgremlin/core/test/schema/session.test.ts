@@ -74,6 +74,19 @@ describe('schema v2', () => {
     expect(s.reviewVersion).toBe(0);
   });
 
+  it('parseSession upgrades a v1 review document with lastRereviewSummary defaulted to null', () => {
+    const s = parseSession({ ...v1Investigation, id: 'r1', mode: 'review', stageStatus: 'queued' });
+    if (s.mode !== 'review') throw new Error('mode changed');
+    expect(s.lastRereviewSummary).toBeNull();
+  });
+
+  it('accepts a review document with lastRereviewSummary populated', () => {
+    const base = migrateV1ToV2({ ...v1Investigation, id: 'r1', mode: 'review', stageStatus: 'queued' });
+    const s = parseSession({ ...base, lastRereviewSummary: { resolved: 1, total: 3, newFindings: 2 } });
+    if (s.mode !== 'review') throw new Error('mode changed');
+    expect(s.lastRereviewSummary).toEqual({ resolved: 1, total: 3, newFindings: 2 });
+  });
+
   it('migrateV1ToV2 is idempotent through parseSession (v2 in, same v2 out)', () => {
     const once = parseSession(v1Investigation);
     expect(parseSession(once)).toEqual(once);
