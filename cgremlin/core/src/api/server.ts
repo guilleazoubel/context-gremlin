@@ -122,11 +122,26 @@ async function handleReviewStart(
   );
 
   if (existing) {
-    if (existing.stageStatus === 'queued' && !deps.pipeline.activeSessionIds().includes(existing.id)) {
-      await awaitRunStart(deps.events, existing.id, deps.pipeline.runReview(existing.id));
-      const session = await deps.sessionStore.load(existing.id);
-      sendJson(res, 202, { session, created: false, started: true });
-      return;
+    const isLive = deps.pipeline.activeSessionIds().includes(existing.id);
+    if (!isLive) {
+      if (existing.stageStatus === 'queued' || existing.stageStatus === 'failed') {
+        await awaitRunStart(deps.events, existing.id, deps.pipeline.runReview(existing.id));
+        const session = await deps.sessionStore.load(existing.id);
+        sendJson(res, 202, { session, created: false, started: true });
+        return;
+      }
+      if (existing.stageStatus === 'reviewing') {
+        // No live run for a session that claims to be 'reviewing' means the
+        // host crashed mid-run — the on-disk phase is stale. Mark it failed
+        // (a legal transition from 'reviewing') before restarting, rather
+        // than leaving it stuck forever or silently resuming as if nothing
+        // happened.
+        await deps.pipeline.transition(existing.id, 'failed');
+        await awaitRunStart(deps.events, existing.id, deps.pipeline.runReview(existing.id));
+        const session = await deps.sessionStore.load(existing.id);
+        sendJson(res, 202, { session, created: false, started: true });
+        return;
+      }
     }
     sendJson(res, 200, { session: existing, created: false, started: false });
     return;

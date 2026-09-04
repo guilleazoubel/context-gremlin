@@ -949,6 +949,22 @@ function queuedReviewSession(id: string, number: number): ReviewSession {
   };
 }
 
+function failedReviewSession(id: string, number: number): ReviewSession {
+  const v2 = migrateV1ToV2({
+    schemaVersion: 1, id, mode: 'review', createdAt: '2026-09-04T10:00:00.000Z',
+    workspace: { repoUrl: 'git@github.com:acme/app.git', worktreePath: `${WORKTREES_DIR}/${id}` },
+    lineage: { pipelineId: id, parentSessionId: null, ticket: null },
+    stageStatus: 'failed',
+  }) as ReviewSession;
+  return {
+    ...v2,
+    pr: {
+      repo: 'acme/app', number, url: `https://github.com/acme/app/pull/${number}`,
+      headSha: 'a'.repeat(40), reviewedSha: null, title: `PR #${number}`, author: 'bob',
+    },
+  };
+}
+
 function reviewingReviewSession(id: string, number: number): ReviewSession {
   const v2 = migrateV1ToV2({
     schemaVersion: 1, id, mode: 'review', createdAt: '2026-09-04T10:00:00.000Z',
@@ -1074,16 +1090,46 @@ describe('PR inventory routes (configured)', () => {
     expect((await ih.h.store.list()).length).toBe(1); // reused, not duplicated
   });
 
-  it('an existing reviewing session responds 200 { created:false, started:false } and starts no new run', async () => {
+  it('F4: an existing failed session with no live run is restarted: 202 { created:false, started:true }', async () => {
+    const review = failedReviewSession('pr-app-10-x', 10);
+    await ih.h.store.save(review);
+    const res = await prsRequest('POST', '/prs/acme/app/10/review');
+    expect(res.status).toBe(202);
+    const body = res.body as { session: Session; created: boolean; started: boolean };
+    expect(body.created).toBe(false);
+    expect(body.started).toBe(true);
+    expect(body.session.id).toBe('pr-app-10-x');
+    expect(body.session.stageStatus).toBe('reviewing');
+  });
+
+  it('F4: an existing reviewing session with no live run (orphaned by a crashed host) is marked failed then restarted: 202 { created:false, started:true }', async () => {
     const review = reviewingReviewSession('pr-app-10-x', 10);
     await ih.h.store.save(review);
+    expect(ih.h.service.activeSessionIds()).not.toContain('pr-app-10-x'); // no live run on disk-only state
+    const res = await prsRequest('POST', '/prs/acme/app/10/review');
+    expect(res.status).toBe(202);
+    const body = res.body as { session: Session; created: boolean; started: boolean };
+    expect(body.created).toBe(false);
+    expect(body.started).toBe(true);
+    expect(body.session.id).toBe('pr-app-10-x');
+    expect(body.session.stageStatus).toBe('reviewing');
+  });
+
+  it('F4: a genuinely live reviewing session (in activeSessionIds) responds 200 { created:false, started:false } and starts no second run', async () => {
+    ih.gh.queueResponse({ stdout: prViewFixture(10, 'bob') }); // ReviewSessionFactory's own gh pr view call
+    const firstRes = await prsRequest('POST', '/prs/acme/app/10/review');
+    expect(firstRes.status).toBe(202);
+    const sessionId = (firstRes.body as { session: Session }).session.id;
+    expect(ih.h.service.activeSessionIds()).toContain(sessionId);
+    const handleBefore = ih.h.runner.lastHandle().id;
+
     const res = await prsRequest('POST', '/prs/acme/app/10/review');
     expect(res.status).toBe(200);
     const body = res.body as { session: Session; created: boolean; started: boolean };
     expect(body.created).toBe(false);
     expect(body.started).toBe(false);
-    expect(body.session.id).toBe('pr-app-10-x');
-    expect(() => ih.h.runner.lastHandle()).toThrow(); // no run was started at all
+    expect(body.session.id).toBe(sessionId);
+    expect(ih.h.runner.lastHandle().id).toBe(handleBefore); // no second agent handle was started
   });
 
   it('?refresh=1 runs exactly one additional scan before deciding', async () => {
