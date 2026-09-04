@@ -128,6 +128,10 @@ when `PlanGate.canPromote` holds via `driveToCompletion` (amended 2026-09-04 dur
 Task 8: the table originally lacked this edge and an implementation synthesized a
 `plan_ready → approved` hop nobody took; the audit trail must never show an approval
 that did not happen — legacy drive-to-completion likewise skipped `--approve-plan`).
+Amended 2026-09-04 during 3b Task 6 review — GitHub facts apply regardless of local phase
+(legacy applied them unconditionally): review `queued → approved | dismissed`,
+`changes_requested → approved`, `failed → approved`; development `active → merged` (3a
+records no `pr_opened`, so a merged PR must still terminate its development session).
 No other table changes.
 
 ## 4. Components (3a)
