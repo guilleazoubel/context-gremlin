@@ -81,6 +81,9 @@ export async function serve(config: CoreConfig, adapters: EngineAdapters, opts: 
     events.on('run.finished', (e) =>
       logLine(opts.log, 'run.finished', { sessionId: e.session.id, stage: e.stage, outcome: e.outcome }),
     ),
+    events.on('inventory.updated', (e) =>
+      logLine(opts.log, 'inventory.updated', { entries: e.inventory.entries.length, errors: e.inventory.errors.length }),
+    ),
   ];
   if (opts.verbose) {
     unsubscribers.push(

@@ -3,8 +3,10 @@ import http from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { buildEngine, type EngineAdapters, type ScannerLike } from '../../src/host/build-engine';
+import { buildEngine, type EngineAdapters } from '../../src/host/build-engine';
 import { resolveCoreConfig, type CoreConfig } from '../../src/config/core-config';
+import { InventoryScanner, type ScanReport } from '../../src/inventory/inventory-scanner';
+import type { Tickable } from '../../src/discovery/scheduler';
 import { InMemoryFileSystem } from '../support/in-memory-file-system';
 import { FakeGitRunner } from '../support/fake-git-runner';
 import { FakeGhRunner } from '../support/fake-gh-runner';
@@ -123,19 +125,25 @@ describe('buildEngine', () => {
     }
   });
 
-  it('wires the default ReconciliationTick-based scanner from CoreConfig, runnable with no errors', async () => {
+  it('wires the default InventoryScanner from CoreConfig, runnable with no errors', async () => {
     const engine = buildEngine(testConfig(), testAdapters());
+    expect(engine.scanner).toBeInstanceOf(InventoryScanner);
     expect(engine.scanner.lastReport).toBeNull();
     const report = await engine.scanner.run();
-    expect(report.errors).toEqual([]);
+    expect(report.inventory.errors).toEqual([]);
+    expect(report.reconciliation.errors).toEqual([]);
   });
 
-  it('uses an injected makeTickable instead of the default ReconciliationTick-based one', () => {
-    const fakeScanner: ScannerLike = {
-      run: async () => ({ reconciled: 0, actions: [], skipped: [], created: [], started: [], ignoredOwn: 0, errors: [] }),
-      lastReport: 'stub',
+  it('an injected makeTickable overrides what the scheduler ticks, while engine.scanner stays the real InventoryScanner', async () => {
+    const fakeReport: ScanReport = {
+      inventory: { scannedAt: '2026-09-04T12:00:00.000Z', repos: [], entries: [], errors: [] },
+      groups: { unreviewed: [], teamOnIt: [], ours: [], mine: [] },
+      reconciliation: { reconciled: 0, actions: [], skipped: [], errors: [] },
     };
-    const engine = buildEngine(testConfig(), testAdapters(), { makeTickable: () => fakeScanner });
-    expect(engine.scanner).toBe(fakeScanner);
+    const fakeTickable: Tickable<ScanReport> = { run: async () => fakeReport };
+    const engine = buildEngine(testConfig(), testAdapters(), { makeTickable: () => fakeTickable });
+    expect(engine.scanner).toBeInstanceOf(InventoryScanner);
+    const report = await engine.scheduler.runNow();
+    expect(report).toBe(fakeReport);
   });
 });

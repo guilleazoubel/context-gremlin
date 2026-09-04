@@ -11,10 +11,10 @@ import { KeyedLock } from '../api/keyed-lock';
 import { StageRunner } from '../pipeline/stage-runner';
 import { PipelineService } from '../pipeline/pipeline-service';
 import { ReviewSessionFactory } from '../pipeline/review-session-factory';
-import { DefaultPRDiscoveryStrategy } from '../discovery/pr-discovery-strategy';
 import { ReconciliationTick } from '../discovery/reconciliation';
-import type { DiscoveryConfig } from '../discovery/discovery-config';
 import { DiscoveryScheduler, type Clock, type Tickable } from '../discovery/scheduler';
+import { InventoryScanner, type ScanReport } from '../inventory/inventory-scanner';
+import { InventoryStore } from '../inventory/inventory-store';
 import { createApiServer } from '../api/server';
 
 export interface EngineAdapters {
@@ -27,17 +27,10 @@ export interface EngineAdapters {
   now?: () => Date;
 }
 
-// Stream A's InventoryScanner isn't merged yet; `scanner` holds whatever
-// `makeTickable` produces (the existing ReconciliationTick by default, via a
-// thin adapter carrying a `lastReport` stub) so B4 can swap in the real
-// InventoryScanner — which has the same run()/lastReport shape — as a
-// one-line change to the default below, with no changes to serve()/tests.
-export type ScannerLike = Tickable & { lastReport: unknown };
-
 export interface Engine {
   server: http.Server;
-  scheduler: DiscoveryScheduler;
-  scanner: ScannerLike;
+  scheduler: DiscoveryScheduler<ScanReport>;
+  scanner: InventoryScanner;
   pipeline: PipelineService;
   events: EngineEvents;
   store: SessionStore;
@@ -48,30 +41,22 @@ export interface Engine {
 export interface TickableParts {
   gh: GhRunner;
   store: SessionStore;
-  factory: ReviewSessionFactory;
   pipeline: PipelineService;
   events: EngineEvents;
   lock: KeyedLock;
-  discoveryConfig: DiscoveryConfig;
+  inventoryStore: InventoryStore;
+  scanner: InventoryScanner;
 }
 
 export interface BuildEngineOptions {
-  makeTickable?: (parts: TickableParts) => ScannerLike;
-}
-
-function defaultMakeTickable(parts: TickableParts): ScannerLike {
-  const strategy = new DefaultPRDiscoveryStrategy(parts.gh);
-  const tick = new ReconciliationTick({
-    gh: parts.gh,
-    store: parts.store,
-    strategy,
-    factory: parts.factory,
-    pipeline: parts.pipeline,
-    events: parts.events,
-    config: parts.discoveryConfig,
-    lock: parts.lock,
-  });
-  return { run: () => tick.run(), lastReport: null };
+  /**
+   * Overrides what the scheduler ticks (default: the real `scanner` this
+   * function always builds) — a test seam only. `Engine.scanner` and the
+   * server's `inventory.scanner` are always the real InventoryScanner
+   * regardless of this override, so a substitute here only affects what
+   * `scheduler.runNow()`/the interval actually invoke.
+   */
+  makeTickable?: (parts: TickableParts) => Tickable<ScanReport>;
 }
 
 /**
@@ -86,6 +71,7 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
   const sessionsDir = config.sessionsDir!;
   const worktreesDir = config.worktreesDir!;
   const mirrorsDir = config.mirrorsDir!;
+  const inventoryPath = config.inventoryPath!;
 
   const store = new SessionStore(adapters.fs, sessionsDir);
   const workspace = new WorkspaceManager(adapters.git, adapters.fs, mirrorsDir);
@@ -99,6 +85,7 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     sessionsDir,
     runnerKind: adapters.runnerKind,
     now: adapters.now,
+    lock,
   });
   const pipeline = new PipelineService({
     store,
@@ -115,6 +102,7 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
       includeLiveUiCheck: config.includeLiveUiCheck,
     },
     now: adapters.now,
+    lock,
   });
   const factory = new ReviewSessionFactory({
     gh: adapters.gh,
@@ -126,17 +114,27 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     now: adapters.now,
   });
 
-  const discoveryConfig: DiscoveryConfig = {
-    repos: config.repos,
-    watchAuthors: config.watchAuthors,
-    me: config.me,
-    pollIntervalMs: config.pollIntervalMs,
-    prListLimit: config.prListLimit,
-  };
+  const inventoryStore = new InventoryStore(adapters.fs, inventoryPath);
+  const tick = new ReconciliationTick({ gh: adapters.gh, store, pipeline, events, lock });
+  const scanner = new InventoryScanner({
+    gh: adapters.gh,
+    store,
+    inventoryStore,
+    reconciler: { reconcile: () => tick.run() },
+    events,
+    config: {
+      repos: config.repos,
+      me: config.me,
+      watchAuthors: config.watchAuthors,
+      prListLimit: config.prListLimit,
+    },
+    now: adapters.now,
+  });
 
-  const makeTickable = opts.makeTickable ?? defaultMakeTickable;
-  const scanner = makeTickable({ gh: adapters.gh, store, factory, pipeline, events, lock, discoveryConfig });
-  const scheduler = new DiscoveryScheduler(scanner, config.pollIntervalMs, adapters.clock);
+  const tickable = opts.makeTickable
+    ? opts.makeTickable({ gh: adapters.gh, store, pipeline, events, lock, inventoryStore, scanner })
+    : scanner;
+  const scheduler = new DiscoveryScheduler<ScanReport>(tickable, config.pollIntervalMs, adapters.clock);
 
   const server = createApiServer({
     sessionStore: store,
@@ -145,7 +143,7 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     fs: adapters.fs,
     sessionsDir,
     events,
-    discovery: { scheduler, config: discoveryConfig },
+    inventory: { scanner, scheduler, factory, inventoryStore, config: { me: config.me } },
     lock,
   });
 

@@ -5,7 +5,9 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { serve } from '../../src/host/serve';
-import type { EngineAdapters, ScannerLike } from '../../src/host/build-engine';
+import type { EngineAdapters } from '../../src/host/build-engine';
+import type { ScanReport } from '../../src/inventory/inventory-scanner';
+import type { Tickable } from '../../src/discovery/scheduler';
 import { resolveCoreConfig, type CoreConfig } from '../../src/config/core-config';
 import { SocketInUseError } from '../../src/api/listen';
 import { InMemoryFileSystem } from '../support/in-memory-file-system';
@@ -216,16 +218,19 @@ describe('serve', () => {
     const tickHeld = new Promise<void>((resolve) => {
       releaseTick = resolve;
     });
-    const fakeScanner: ScannerLike = {
+    const fakeTickable: Tickable<ScanReport> = {
       run: async () => {
         await tickHeld;
-        return { reconciled: 0, actions: [], skipped: [], created: [], started: [], ignoredOwn: 0, errors: [] };
+        return {
+          inventory: { scannedAt: '2026-09-04T12:00:00.000Z', repos: [], entries: [], errors: [] },
+          groups: { unreviewed: [], teamOnIt: [], ours: [], mine: [] },
+          reconciliation: { reconciled: 0, actions: [], skipped: [], errors: [] },
+        };
       },
-      lastReport: null,
     };
     const handle = await serve(testConfig(), testAdapters({ clock }), {
       log: () => {},
-      makeTickable: () => fakeScanner,
+      makeTickable: () => fakeTickable,
     });
     try {
       clock.fire();
