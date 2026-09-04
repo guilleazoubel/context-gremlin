@@ -45,6 +45,24 @@ describe('PipelineService — investigation', () => {
     expect(await h.store.load(inv.id)).toEqual(inv);
   });
 
+  it('createInvestigationSession with ticket null derives the id/branch from "no-ticket" and renders "(no ticket)" in the findings brief', async () => {
+    const h = createHarness();
+    const inv = await createInvestigation(h.service, { ticket: null });
+
+    expect(inv.id).toContain('no-ticket');
+    expect(inv.id).not.toContain('null');
+    expect(inv.lineage.ticket).toBeNull();
+    expect(inv.workspace.branch).toBe(`investigate/${inv.id}`);
+
+    const p = h.service.runFindings(inv.id);
+    await flush();
+    const sessionDir = `${SESSIONS_DIR}/${inv.id}`;
+    expect(await h.fs.readFile(`${sessionDir}/BRIEF.md`)).toContain('(no ticket)');
+
+    await h.finishRun({ 'FINDINGS.md': '# Findings\nroot cause found' }, { code: 0, signal: null });
+    await p;
+  });
+
   it('propagates the error and saves nothing when createWorkspace rejects', async () => {
     const h = createHarness();
     h.workspace.createWorkspace = async () => {
