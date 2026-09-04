@@ -9,6 +9,7 @@ import { ReviewSessionFactory } from '../../src/pipeline/review-session-factory'
 import { planReconciliation, ReconciliationTick } from '../../src/discovery/reconciliation';
 import { KeyedLock } from '../../src/api/keyed-lock';
 import { SessionStore } from '../../src/engine/session-store';
+import { stamp } from '../../src/pipeline/pipeline-service';
 import { migrateV1ToV2, type ReviewSession, type Session } from '../../src/schema/session';
 import type { DevelopmentPhase, InvestigationPhase, ReviewPhase } from '../../src/schema/pipeline';
 import type { DiscoveryConfig } from '../../src/discovery/discovery-config';
@@ -62,10 +63,12 @@ function reviewSession(overrides: {
   return { ...v2, pr: prOf(repo, number, overrides.reviewedSha ?? 'a'.repeat(40)) };
 }
 
-function developmentSession(id: string, stageStatus: DevelopmentPhase, repo = 'acme/app', number = 5): Session {
+function developmentSession(
+  id: string, stageStatus: DevelopmentPhase, repo = 'acme/app', number = 5, worktreePath?: string,
+): Session {
   const v2 = migrateV1ToV2({
     schemaVersion: 1, id, mode: 'development', createdAt: '2026-09-01T00:00:00.000Z',
-    workspace: { repoUrl: `git@github.com:${repo}.git` },
+    workspace: { repoUrl: `git@github.com:${repo}.git`, ...(worktreePath ? { worktreePath } : {}) },
     lineage: { pipelineId: id, parentSessionId: null, ticket: null },
     stageStatus,
   });
@@ -323,6 +326,34 @@ describe('ReconciliationTick', () => {
     void runPromise; // left pending deliberately: the fake never emits exit on its own after stop()
   });
 
+  it('X1: stops any agent before a transition that lands on a terminal phase, not just review->dismissed (development source at active with a develop run pending)', async () => {
+    const { h, gh, strategy, factory, lock } = tickHarness();
+    const source = developmentSession('dev-1', 'active', 'acme/app', 5, `${WORKTREES_DIR}/dev-1`);
+    await h.store.save(source);
+    const review = reviewSession({ stageStatus: 'ready', repo: 'acme/app', number: 5, parentSessionId: 'dev-1' });
+    await h.store.save(review);
+
+    // Start a real develop run so dev-1 has an active agent handle.
+    const developPromise = h.service.runDevelop('dev-1');
+    await flush();
+    const handle = h.runner.lastHandle();
+    expect(h.runner.isStopped(handle)).toBe(false);
+
+    gh.queueResponse({ stdout: viewJson({ state: 'MERGED', mergedAt: '2026-09-04T00:00:00Z' }) });
+    gh.queueResponse({ stdout: '[]' });
+
+    const tick = new ReconciliationTick({
+      gh, store: h.store, strategy, factory, pipeline: h.service, events: h.events, lock,
+      config: discoveryConfig({ repos: ['acme/app'] }),
+    });
+    const report = await tick.run();
+
+    expect(report.errors).toEqual([]);
+    expect(h.runner.isStopped(handle)).toBe(true);
+    expect((await h.store.load('dev-1')).stageStatus).toBe('merged');
+    void developPromise; // left pending deliberately: the fake never emits exit on its own after stop()
+  });
+
   it('invokes runRereview for the new-commit case, seen as the review session moving to reviewing', async () => {
     const { h, gh, strategy, factory, lock } = tickHarness();
     const review = reviewSession({ stageStatus: 'ready', reviewedSha: 'a'.repeat(40), repo: 'acme/app', number: 5 });
@@ -455,6 +486,45 @@ describe('ReconciliationTick', () => {
     expect(sessions.some((s) => s.mode === 'review' && s.pr?.number === 9)).toBe(true);
     const created = await h.store.load(createdId);
     expect(created.stageStatus).toBe('reviewing');
+  });
+
+  it('X3: starting review for a freshly discovered session is protected by the shared lock, not started until the lock is free', async () => {
+    const { h, gh, strategy, factory, lock } = tickHarness();
+    gh.queueResponse({
+      stdout: JSON.stringify([{
+        number: 11, url: 'https://github.com/acme/app/pull/11',
+        author: { login: 'bob', is_bot: false }, isDraft: false, reviewDecision: '',
+        headRefOid: 'f'.repeat(40), headRefName: 'feature', baseRefName: 'main',
+        title: 'locked PR', updatedAt: '2026-09-04T00:00:00.000Z',
+      }]),
+    });
+    gh.queueResponse({ stdout: viewJson({ number: 11, url: 'https://github.com/acme/app/pull/11' }) });
+
+    // The factory's default id is deterministic given a fixed clock — compute
+    // it ahead of time so we can hold its lock before the tick even creates it.
+    const expectedId = `pr-app-11-${stamp(FIXED_NOW())}`;
+    let releaseHold: () => void = () => {};
+    const held = lock.withLock(expectedId, () => new Promise<void>((resolve) => { releaseHold = resolve; }));
+
+    const tick = new ReconciliationTick({
+      gh, store: h.store, strategy, factory, pipeline: h.service, events: h.events, lock,
+      config: discoveryConfig({ repos: ['acme/app'], watchAuthors: ['bob'], me: 'me-user' }),
+    });
+    const tickPromise = tick.run();
+    await flush();
+
+    // The session was created (queued), but starting its review must be
+    // blocked behind the lock we're holding for the same id.
+    const createdSoFar = await h.store.load(expectedId);
+    expect(createdSoFar.stageStatus).toBe('queued');
+
+    releaseHold();
+    await held;
+    const report = await tickPromise;
+
+    expect(report.created).toEqual([expectedId]);
+    expect(report.started).toEqual([expectedId]);
+    expect((await h.store.load(expectedId)).stageStatus).toBe('reviewing');
   });
 
   it('counts an own candidate but does not create a session for it', async () => {

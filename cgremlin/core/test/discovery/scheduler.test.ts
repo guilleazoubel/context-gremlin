@@ -160,5 +160,8 @@ describe('DiscoveryScheduler', () => {
     clock.fire();
     await flush();
     expect(scheduler.lastReport?.reconciled).toBe(1);
+    // X2: a later successful tick must clear the stale error, not leave it
+    // reported forever.
+    expect(scheduler.lastError).toBeNull();
   });
 });

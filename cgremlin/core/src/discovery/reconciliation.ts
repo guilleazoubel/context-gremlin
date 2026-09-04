@@ -193,9 +193,11 @@ export class ReconciliationTick {
 
           for (const action of actions) {
             if (action.type === 'transition') {
-              if (action.sessionId === fresh.id && action.to === 'dismissed' && fresh.stageStatus === 'reviewing') {
-                // Don't leave the agent running against a PR we're about to
-                // dismiss out from under it.
+              const targetMode = action.sessionId === fresh.id ? 'review' : source?.mode;
+              if (targetMode && TERMINAL_PHASES_BY_MODE[targetMode].has(action.to)) {
+                // Don't leave an agent running against a session about to
+                // become terminal (its worktree may be reclaimed) — stop() is
+                // a harmless no-op if nothing is actually running.
                 await this.deps.pipeline.stop(action.sessionId);
               }
               await this.deps.pipeline.transition(action.sessionId, action.to);
@@ -235,7 +237,7 @@ export class ReconciliationTick {
         try {
           const created = await this.deps.factory.createFromCandidate(candidate);
           report.created.push(created.id);
-          await this.startReview(created.id, report);
+          await this.deps.lock.withLock(created.id, () => this.startReview(created.id, report));
         } catch (err) {
           report.errors.push({
             where: `${candidate.repo}#${candidate.number}`,

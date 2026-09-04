@@ -74,6 +74,7 @@ export class DiscoveryScheduler {
     try {
       const report = await this.tick.run();
       this._lastReport = report;
+      this._lastError = null;
       return report;
     } catch (err) {
       this._lastError = err instanceof Error ? err.message : String(err);
