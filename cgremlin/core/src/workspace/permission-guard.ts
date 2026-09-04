@@ -7,30 +7,13 @@ export interface PermissionConfig {
 }
 
 export const DEFAULT_PERMISSIONS: Record<SessionMode, PermissionConfig> = {
-  investigation: {
-    allow: [
-      'Bash(cgremlin --develop *)',
-      'Bash(cgremlin --approve-plan *)',
-      'Bash(cgremlin --plan-start *)',
-      'Bash(cgremlin --plan-ready *)',
-      'Bash(cgremlin --run-local *)',
-      'Bash(cgremlin --stop-local *)',
-      'Bash(cgremlin --agent-state *)',
-      'Bash(cgremlin --agent-note *)',
-    ],
-  },
+  investigation: {},
   development: {
-    allow: [
-      'Bash(cgremlin --reply-comment *)',
-      'Bash(cgremlin --resolve-comment *)',
-      'Bash(cgremlin --pr-ready *)',
-      'Bash(cgremlin --commit-fix *)',
-      'Bash(cgremlin --push-fix *)',
-      'Bash(cgremlin --pr-threads *)',
-      'Bash(cgremlin --run-local *)',
-      'Bash(cgremlin --stop-local *)',
-      'Bash(cgremlin --agent-state *)',
-      'Bash(cgremlin --agent-note *)',
+    deny: [
+      'Bash(gh pr review:*)',
+      'Bash(gh pr comment:*)',
+      'Bash(gh pr merge:*)',
+      'Bash(gh pr close:*)',
     ],
   },
   review: {
