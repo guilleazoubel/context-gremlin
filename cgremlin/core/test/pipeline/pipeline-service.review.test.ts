@@ -197,4 +197,57 @@ describe('PipelineService — review', () => {
     expect(await h.fs.exists(`${sessionDir}/RE-REVIEW.md`)).toBe(false);
     expect(() => h.runner.lastHandle()).toThrow();
   });
+
+  it('does not archive or bump reviewVersion when there was no REVIEW.md to archive', async () => {
+    const h = createHarness();
+    const review = await saveReviewSession(h, { stageStatus: 'failed' });
+    const sessionDir = `${SESSIONS_DIR}/${review.id}`;
+    // No REVIEW.md was ever written (e.g. the prior review run failed before producing one).
+
+    h.git.queueResponse({ stdout: 'aaa', stderr: '' }); // rev-parse HEAD
+    h.git.queueResponse({ stdout: '', stderr: '' }); // fetch
+    h.git.queueResponse({ stdout: 'bbb', stderr: '' }); // rev-parse FETCH_HEAD
+    h.git.queueResponse({ stdout: '', stderr: '' }); // reset --hard
+    h.git.queueResponse({ stdout: 'abc1234 fix the bug', stderr: '' }); // log
+    h.git.queueResponse({ stdout: ' 1 file changed', stderr: '' }); // diff --stat
+
+    const p = h.service.runRereview(review.id);
+    await flush();
+
+    expect(await h.fs.exists(`${sessionDir}/REVIEW-v1.md`)).toBe(false);
+    const duringRun = await h.store.load(review.id);
+    if (duringRun.mode !== 'review') throw new Error('mode changed');
+    expect(duringRun.reviewVersion).toBe(0);
+    const reReview = await h.fs.readFile(`${sessionDir}/RE-REVIEW.md`);
+    expect(reReview).toContain('(none');
+
+    await h.finishRun({ 'REVIEW.md': 'new review', rereview_summary: '✅ 1/1 resolved' }, { code: 0, signal: null });
+    const session = await p;
+    expect(session.stageStatus).toBe('ready');
+  });
+
+  it('trims trailing newlines from real git rev-parse output before building commit ranges and PR shas', async () => {
+    const h = createHarness();
+    const review = await saveReviewSession(h, { stageStatus: 'changes_requested' });
+    const sessionDir = `${SESSIONS_DIR}/${review.id}`;
+    await h.fs.writeFile(`${sessionDir}/REVIEW.md`, 'old review');
+
+    h.git.queueResponse({ stdout: 'aaa\n', stderr: '' }); // rev-parse HEAD
+    h.git.queueResponse({ stdout: '', stderr: '' }); // fetch
+    h.git.queueResponse({ stdout: 'bbb\n', stderr: '' }); // rev-parse FETCH_HEAD
+    h.git.queueResponse({ stdout: '', stderr: '' }); // reset --hard
+    h.git.queueResponse({ stdout: 'l1\nl2\n', stderr: '' }); // log
+    h.git.queueResponse({ stdout: ' 1 file changed\n', stderr: '' }); // diff --stat
+
+    const p = h.service.runRereview(review.id);
+    await flush();
+
+    expect(h.git.calls[4].args).toEqual(['log', '--oneline', 'aaa..bbb']);
+    expect(h.git.calls[5].args).toEqual(['diff', '--stat', 'aaa...HEAD']);
+
+    await h.finishRun({ 'REVIEW.md': 'new review', rereview_summary: '✅ 2/2 resolved' }, { code: 0, signal: null });
+    const session = await p;
+    if (session.mode !== 'review') throw new Error('mode changed');
+    expect(session.pr?.headSha).toBe('bbb');
+  });
 });

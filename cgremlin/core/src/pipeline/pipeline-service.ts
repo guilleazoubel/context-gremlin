@@ -313,15 +313,22 @@ export class PipelineService {
     ).stdout;
 
     const sessionDir = this.sessionDir(id);
-    const version = await nextReviewVersion(this.deps.fs, sessionDir);
     const existingReview = await readNonEmpty(this.deps.fs, `${sessionDir}/REVIEW.md`);
+    // reviewVersion counts archived files, so only bump it (and only claim a
+    // previous-review filename) when an archive was actually written — a
+    // rereview off a failed run that never produced a REVIEW.md has nothing
+    // to archive, and must not lie about either the count or the filename.
+    let previousReviewLine = 'Previous review: (none — no prior REVIEW.md was present)';
     if (existingReview !== null) {
+      const version = await nextReviewVersion(this.deps.fs, sessionDir);
       await this.deps.fs.writeFile(`${sessionDir}/REVIEW-v${version}.md`, existingReview);
+      await this.deps.store.save({ ...session, reviewVersion: version });
+      previousReviewLine = `Previous review: REVIEW-v${version}.md`;
     }
     const reReviewContent = [
       `# RE-REVIEW — PR #${session.pr.number}`,
       ``,
-      `Previous review: REVIEW-v${version}.md`,
+      previousReviewLine,
       `Reviewed commit: ${oldCommit}`,
       `New head: ${newCommit}`,
       ``,
@@ -334,7 +341,6 @@ export class PipelineService {
     ].join('\n');
     await this.deps.fs.writeFile(`${sessionDir}/RE-REVIEW.md`, reReviewContent);
 
-    await this.deps.store.save({ ...session, reviewVersion: version });
     await this.transition(id, 'reviewing');
 
     const prompt = renderRereviewPrompt({ sessionDir, commitCount, reviewSkillCommand: this.deps.config.reviewSkillCommand });
