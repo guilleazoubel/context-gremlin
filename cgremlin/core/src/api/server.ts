@@ -19,6 +19,7 @@ import { assertWorktreeNotInUse } from '../workspace/workspace-in-use';
 import { ArtifactNotFoundError } from './artifacts';
 import type { DiscoveryScheduler } from '../discovery/scheduler';
 import type { DiscoveryConfig } from '../discovery/discovery-config';
+import { awaitRunStart } from '../pipeline/run-start';
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
@@ -62,39 +63,15 @@ export function createApiServer(deps: ApiServerDeps): http.Server {
   });
 }
 
-/**
- * Waits until either `guard` (the pipeline call already in flight) rejects,
- * or a 'run.started' event fires for `sessionId` — whichever comes first.
- * The HTTP response goes out once the run has *started*, not once the full
- * agent turn has finished; the turn keeps running in the background.
- * `guard` is deliberately never awaited by the caller beyond this race, so
- * it always gets a `.catch` here — StageRunner/PipelineService already
- * persist a failure and emit `run.finished` for it, so nothing is lost.
- */
-async function raceRunStarted(events: EngineEvents, sessionId: string, guard: Promise<unknown>): Promise<void> {
-  guard.catch(() => undefined);
-  let off: () => void = () => {};
-  try {
-    await Promise.race([
-      new Promise<void>((resolve) => {
-        off = events.on('run.started', (e) => {
-          if (e.session.id === sessionId) resolve();
-        });
-      }),
-      guard,
-    ]);
-  } finally {
-    off();
-  }
-}
-
 async function respondAfterRunStarted(
   res: ServerResponse,
   deps: ApiServerDeps,
   id: string,
   guard: Promise<unknown>,
 ): Promise<void> {
-  await raceRunStarted(deps.events, id, guard);
+  // The HTTP response goes out once the run has *started*, not once the full
+  // agent turn has finished; the turn keeps running in the background.
+  await awaitRunStart(deps.events, id, guard);
   const session = await deps.sessionStore.load(id);
   sendJson(res, 202, { session });
 }

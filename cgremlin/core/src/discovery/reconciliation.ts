@@ -9,6 +9,7 @@ import type { DiscoveryConfig } from './discovery-config';
 import type { ReviewSession, Session } from '../schema/session';
 import { canTransition, type DevelopmentPhase, type ReviewPhase } from '../schema/pipeline';
 import { TERMINAL_PHASES_BY_MODE } from '../workspace/workspace-in-use';
+import { awaitRunStart } from '../pipeline/run-start';
 
 export type ReconcileAction =
   | { type: 'transition'; sessionId: string; to: string; reason: string }
@@ -126,10 +127,6 @@ export interface TickReport {
   errors: { where: string; error: string }[];
 }
 
-function flush(): Promise<void> {
-  return new Promise((resolve) => setImmediate(resolve));
-}
-
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
@@ -172,18 +169,10 @@ export class ReconciliationTick {
           if (action.type === 'transition') {
             await this.deps.pipeline.transition(action.sessionId, action.to);
           } else if (action.type === 'rereview') {
-            let rereviewError: unknown;
-            void this.deps.pipeline.runRereview(action.sessionId).catch((err) => {
-              rereviewError = err;
-            });
-            // This flush only catches errors from the run's pre-run phase (git
-            // fetch, the transition to 'reviewing'). The run's real outcome —
-            // success, failure, the new REVIEW.md — lives on the session
-            // (lastRun, stageStatus) and in run.finished events, not here;
-            // same parked class as F5, owned by the Phase 4 event design.
-            await flush();
-            if (rereviewError !== undefined) {
-              report.errors.push({ where: review.id, error: errorMessage(rereviewError) });
+            try {
+              await awaitRunStart(this.deps.events, action.sessionId, this.deps.pipeline.runRereview(action.sessionId));
+            } catch (err) {
+              report.errors.push({ where: review.id, error: errorMessage(err) });
             }
           }
         }
