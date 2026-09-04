@@ -152,6 +152,10 @@ describe('PipelineService — investigation', () => {
   it('runPlan approved with driveToCompletion true chains straight through promotion into a running development session', async () => {
     const h = createHarness();
     const inv = await createInvestigation(h.service, { intent: 'development', driveToCompletion: true });
+    const invTransitions: Array<{ from: string; to: string }> = [];
+    h.events.on('session.transitioned', (e) => {
+      if (e.session.id === inv.id) invTransitions.push({ from: e.from, to: e.to });
+    });
 
     const p = h.service.runFindings(inv.id);
     await h.finishRun({ 'FINDINGS.md': '# Findings\nroot cause found' }, { code: 0, signal: null }); // findings
@@ -163,6 +167,16 @@ describe('PipelineService — investigation', () => {
     h.runner.emitExit(devHandle, { code: 0, signal: null }); // develop run
     const session = await p;
     expect(session.stageStatus).toBe('promoted_to_development');
+
+    // drive-to-completion promotes straight from plan_ready via the schema's
+    // direct edge — no synthetic 'approved' hop; the audit trail must not
+    // claim a human approved a plan that was auto-promoted.
+    expect(invTransitions).toEqual([
+      { from: 'findings', to: 'planning' },
+      { from: 'planning', to: 'plan_ready' },
+      { from: 'plan_ready', to: 'promoted_to_development' },
+    ]);
+    expect(invTransitions.some((t) => t.to === 'approved')).toBe(false);
 
     const dev = await h.store.load(devId);
     expect(dev.stageStatus).toBe('active');

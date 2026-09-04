@@ -74,11 +74,11 @@ export class PipelineService {
   }
 
   repoSlug(repoUrl: string): string {
-    return repoSlug(repoUrl);
+    return repoSlugFromUrl(repoUrl);
   }
 
   async createInvestigationSession(input: CreateInvestigationInput): Promise<InvestigationSession> {
-    const slug = repoSlug(input.repoUrl);
+    const slug = repoSlugFromUrl(input.repoUrl);
     const id = this.newId('inv', slug, input.ticket ?? 'no-ticket');
     const branch = `investigate/${input.ticket ?? id}`;
     const worktreePath = `${this.deps.config.worktreesDir}/${id}`;
@@ -190,17 +190,12 @@ export class PipelineService {
   async promote(id: string): Promise<{ investigation: Session; development: Session }> {
     const inv = await this.deps.store.load(id);
     assertCanPromote(inv);
-    if (inv.stageStatus === 'plan_ready') {
-      // The gate allows promoting straight from plan_ready when
-      // driveToCompletion is set, but the schema's transition table only
-      // has plan_ready -> approved -> promoted_to_development as legal
-      // edges. Auto-approve on the plan's behalf as an intermediate hop so
-      // every stageStatus change still goes through a legal transition.
-      await this.transition(id, 'approved');
-    }
+    // Legal from either 'approved' (a human approved it) or 'plan_ready'
+    // (drive-to-completion) directly — the schema has both edges so this
+    // never has to synthesize an 'approved' step nobody actually took.
     const investigation = await this.transition(id, 'promoted_to_development');
 
-    const slug = repoSlug(inv.workspace.repoUrl);
+    const slug = repoSlugFromUrl(inv.workspace.repoUrl);
     const devId = this.newId('dev', slug, inv.lineage.ticket ?? inv.id);
     const development: Session = {
       schemaVersion: 2,
@@ -280,7 +275,8 @@ export function stamp(d: Date): string {
   return `${d.getUTCFullYear()}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}-${p(d.getUTCHours())}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())}`;
 }
 
-export function repoSlug(repoUrl: string): string {
+export function repoSlugFromUrl(repoUrl: string): string {
   const m = repoUrl.match(/[:/]([^/:]+\/[^/]+?)(?:\.git)?\/?$/);
   return m ? m[1] : repoUrl.replace(/[^a-zA-Z0-9._-]/g, '-');
 }
+export { repoSlugFromUrl as repoSlug };
