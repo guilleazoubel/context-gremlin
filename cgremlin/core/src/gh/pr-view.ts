@@ -103,7 +103,14 @@ export function ciStatus(checks: readonly StatusCheck[]): CiStatus {
 export function mapPrView(
   slug: string,
   view: PrView,
-): { pr: PrInfo; state: PrView['state']; isDraft: boolean; reviewDecision: ReviewDecision; ci: CiStatus } {
+): {
+  pr: PrInfo;
+  state: PrView['state'];
+  isDraft: boolean;
+  reviewDecision: ReviewDecision;
+  ci: CiStatus;
+  headRefName: string;
+} {
   const checks = view.statusCheckRollup ?? [];
   return {
     pr: {
@@ -119,6 +126,7 @@ export function mapPrView(
     isDraft: view.isDraft,
     reviewDecision: view.reviewDecision,
     ci: ciStatus(checks),
+    headRefName: view.headRefName,
   };
 }
 

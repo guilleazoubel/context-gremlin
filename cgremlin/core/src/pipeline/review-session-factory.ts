@@ -8,6 +8,7 @@ import type { WorkspaceManager } from '../workspace/workspace-manager';
 import type { EngineEvents } from '../engine/events';
 import type { ReviewSession } from '../schema/session';
 import { stamp } from './pipeline-service';
+import { extractTicketKey } from '../gh/ticket-key';
 
 export interface ReviewSessionFactoryDeps {
   gh: GhRunner;
@@ -58,7 +59,7 @@ export class ReviewSessionFactory {
       mode: 'review',
       createdAt: nowDate.toISOString(),
       workspace: { repoUrl, worktreePath, branch: branchName },
-      lineage: { pipelineId: id, parentSessionId: null, ticket: null },
+      lineage: { pipelineId: id, parentSessionId: null, ticket: extractTicketKey(mapped.headRefName) },
       agent: null,
       lastRun: null,
       pr: mapped.pr,

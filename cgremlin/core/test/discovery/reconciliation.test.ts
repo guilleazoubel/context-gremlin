@@ -28,6 +28,7 @@ function view(overrides: Partial<ReturnType<typeof mapPrView>> = {}): ReturnType
     isDraft: false,
     reviewDecision: '',
     ci: 'success',
+    headRefName: 'fix/x',
     ...overrides,
   };
 }
@@ -395,5 +396,46 @@ describe('ReconciliationTick', () => {
     expect(report.errors).toEqual([
       { where: expect.stringContaining('acme/app'), error: expect.stringContaining('network unreachable') },
     ]);
+  });
+
+  it('links a discovered candidate to its development source via the ticket key in the branch name, then merges that source once the PR merges (proves source lookup is not always null)', async () => {
+    const { h, gh, strategy, factory } = tickHarness();
+    const source = developmentSession('dev-1', 'pr_opened', 'acme/app', 999); // a different PR number: pass-1 (repo+number) must NOT match
+    await h.store.save({ ...source, lineage: { ...source.lineage, ticket: 'APP-1' } });
+
+    gh.queueResponse({
+      stdout: JSON.stringify([{
+        number: 42, url: 'https://github.com/acme/app/pull/42',
+        author: { login: 'bob', is_bot: false }, isDraft: false, reviewDecision: '',
+        headRefOid: 'f'.repeat(40), headRefName: 'feature/APP-1-x', baseRefName: 'main',
+        title: 'linked PR', updatedAt: '2026-09-04T00:00:00.000Z',
+      }]),
+    });
+    gh.queueResponse({
+      stdout: viewJson({ number: 42, url: 'https://github.com/acme/app/pull/42', headRefName: 'feature/APP-1-x' }),
+    });
+
+    const tick = new ReconciliationTick({
+      gh, store: h.store, strategy, factory, pipeline: h.service, events: h.events,
+      config: discoveryConfig({ repos: ['acme/app'] }),
+    });
+    const discoveryReport = await tick.run();
+    expect(discoveryReport.created.length).toBe(1);
+    const createdId = discoveryReport.created[0];
+    const created = await h.store.load(createdId);
+    expect(created.lineage.parentSessionId).toBe('dev-1');
+    expect((await h.store.load('dev-1')).stageStatus).toBe('superseded'); // supersede fired: source was pr_opened
+
+    gh.queueResponse({
+      stdout: viewJson({
+        number: 42, url: 'https://github.com/acme/app/pull/42', headRefName: 'feature/APP-1-x',
+        state: 'MERGED', mergedAt: '2026-09-04T01:00:00Z',
+      }),
+    });
+    gh.queueResponse({ stdout: '[]' });
+    await tick.run();
+
+    expect((await h.store.load('dev-1')).stageStatus).toBe('merged');
+    expect((await h.store.load(createdId)).stageStatus).toBe('dismissed');
   });
 });

@@ -129,5 +129,6 @@ describe('mapPrView', () => {
     expect(mapped.state).toBe('OPEN');
     expect(mapped.isDraft).toBe(false);
     expect(mapped.reviewDecision).toBe('APPROVED');
+    expect(mapped.headRefName).toBe(view.headRefName);
   });
 });

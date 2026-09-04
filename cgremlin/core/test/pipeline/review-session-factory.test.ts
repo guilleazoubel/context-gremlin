@@ -138,6 +138,15 @@ describe('ReviewSessionFactory.createFromPrUrl', () => {
     expect(await store.list()).toEqual([session]);
   });
 
+  it('extracts the ticket key from the PR head branch name, legacy-style', async () => {
+    const { gh, factory } = harness();
+    const raw = JSON.parse(fixture('pr-view-open-approved.json'));
+    raw.headRefName = 'feature/APP-1-x';
+    gh.queueResponse({ stdout: JSON.stringify(raw) });
+    const session = await factory.createFromPrUrl(PR_URL);
+    expect(session.lineage.ticket).toBe('APP-1');
+  });
+
   it('saves nothing and transitions nothing when createWorkspace fails', async () => {
     const { gh, git, store, factory } = harness();
     const source = developmentSession('dev-1', 'aplaceformom/grace-frontend', 1614);
