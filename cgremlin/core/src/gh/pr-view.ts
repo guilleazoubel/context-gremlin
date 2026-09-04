@@ -40,6 +40,7 @@ export const PrReviewSchema = z
     submittedAt: z.string(),
   })
   .passthrough();
+export type PrReview = z.infer<typeof PrReviewSchema>;
 
 export const PrCommentSchema = z
   .object({
@@ -47,13 +48,25 @@ export const PrCommentSchema = z
     createdAt: z.string(),
   })
   .passthrough();
+export type PrComment = z.infer<typeof PrCommentSchema>;
 
 export const PrInventoryItemSchema = PrListItemSchema.extend({
   latestReviews: z.array(PrReviewSchema).nullable().default([]),
   reviews: z.array(PrReviewSchema).nullable().default([]),
   comments: z.array(PrCommentSchema).nullable().default([]),
 });
-export type PrInventoryItem = z.infer<typeof PrInventoryItemSchema>;
+// The schema stays nullable so it can parse gh's raw JSON (which may omit
+// these keys or emit an explicit null), but parsePrInventoryList always
+// normalizes them to [] before returning — this narrowed type lets callers
+// use these arrays directly, without repeating that normalization.
+export type PrInventoryItem = Omit<
+  z.infer<typeof PrInventoryItemSchema>,
+  'latestReviews' | 'reviews' | 'comments'
+> & {
+  latestReviews: PrReview[];
+  reviews: PrReview[];
+  comments: PrComment[];
+};
 
 export const PrInventoryListSchema = z.array(PrInventoryItemSchema);
 

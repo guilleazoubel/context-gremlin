@@ -74,7 +74,7 @@ describe('parsePrInventoryList', () => {
 
   it('parses a review with state COMMENTED', () => {
     const items = parsePrInventoryList(fullListJson);
-    const states = new Set(items.flatMap((item) => (item.reviews ?? []).map((review) => review.state)));
+    const states = new Set(items.flatMap((item) => item.reviews.map((review) => review.state)));
     expect(states.has('COMMENTED')).toBe(true);
   });
 
