@@ -12,6 +12,7 @@ import { RunInProgressError, WorkspaceMissingError } from '../../src/pipeline/st
 import { UnsupportedStageError } from '../../src/pipeline/pipeline-service';
 import { WorkspaceInUseError } from '../../src/workspace/workspace-in-use';
 import { ArtifactNotFoundError } from '../../src/api/artifacts';
+import { TickInProgressError } from '../../src/discovery/scheduler';
 
 describe('mapErrorToHttp', () => {
   it('maps SessionNotFoundError to 404', () => {
@@ -75,5 +76,9 @@ describe('mapErrorToHttp', () => {
 
   it('maps ArtifactNotFoundError to 404', () => {
     expect(mapErrorToHttp(new ArtifactNotFoundError('inv-1', 'PLAN.md')).status).toBe(404);
+  });
+
+  it('maps TickInProgressError to 409', () => {
+    expect(mapErrorToHttp(new TickInProgressError()).status).toBe(409);
   });
 });

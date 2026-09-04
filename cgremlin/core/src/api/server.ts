@@ -17,6 +17,8 @@ import {
 } from './validation';
 import { assertWorktreeNotInUse } from '../workspace/workspace-in-use';
 import { ArtifactNotFoundError } from './artifacts';
+import type { DiscoveryScheduler } from '../discovery/scheduler';
+import type { DiscoveryConfig } from '../discovery/discovery-config';
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
@@ -50,6 +52,7 @@ export interface ApiServerDeps {
   fs: SessionFileSystem;
   sessionsDir: string;
   events: EngineEvents;
+  discovery?: { scheduler: DiscoveryScheduler; config: DiscoveryConfig };
 }
 
 export function createApiServer(deps: ApiServerDeps): http.Server {
@@ -256,6 +259,34 @@ async function handleRequest(
       await deps.workspaceManager.removeWorkspace(params.repoUrl, params.worktreePath, params.branchName);
       sendJson(res, 204, undefined);
       return;
+    }
+
+    if (parts.length === 2 && parts[0] === 'discovery' && ['tick', 'config', 'status'].includes(parts[1])) {
+      if (!deps.discovery) {
+        sendJson(res, 404, { error: 'discovery not configured' });
+        return;
+      }
+      const { scheduler, config } = deps.discovery;
+
+      if (method === 'POST' && parts[1] === 'tick') {
+        const report = await scheduler.runNow();
+        sendJson(res, 200, report);
+        return;
+      }
+
+      if (method === 'GET' && parts[1] === 'config') {
+        sendJson(res, 200, config);
+        return;
+      }
+
+      if (method === 'GET' && parts[1] === 'status') {
+        sendJson(res, 200, {
+          running: scheduler.isRunning(),
+          lastReport: scheduler.lastReport,
+          skippedBeats: scheduler.skippedBeats,
+        });
+        return;
+      }
     }
 
     sendJson(res, 404, { error: 'not found' });

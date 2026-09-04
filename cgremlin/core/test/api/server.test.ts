@@ -15,6 +15,9 @@ import { FakeAgentRunner } from '../support/fake-agent-runner';
 import { migrateV1ToV2, type Session, type SessionV1 } from '../../src/schema/session';
 import type { SessionFileSystem } from '../../src/fs/session-file-system';
 import { createHarness, flush, SESSIONS_DIR, type PipelineHarness } from '../support/pipeline-harness';
+import { createDiscoveryHarness } from '../support/discovery-harness';
+import { DiscoveryScheduler } from '../../src/discovery/scheduler';
+import type { GhRunner } from '../../src/gh/gh-runner';
 
 const APPROVED_PLAN = `## Review Status
 - PM: ✅ Approved — solves exactly the ticket
@@ -673,5 +676,105 @@ describe('API server', () => {
     const res = await request('POST', `/sessions/${session.id}/transition`, { to: 'planning' });
     expect(res.status).toBe(200);
     expect(emitted).toEqual([{ from: 'findings', to: 'planning' }]);
+  });
+
+  it('POST /discovery/tick 404s when discovery is not configured', async () => {
+    const res = await request('POST', '/discovery/tick');
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: 'discovery not configured' });
+  });
+
+  it('GET /discovery/config 404s when discovery is not configured', async () => {
+    const res = await request('GET', '/discovery/config');
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: 'discovery not configured' });
+  });
+
+  it('GET /discovery/status 404s when discovery is not configured', async () => {
+    const res = await request('GET', '/discovery/status');
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: 'discovery not configured' });
+  });
+});
+
+describe('discovery routes (configured)', () => {
+  let discSocketPath: string;
+  let discServer: http.Server;
+  let dh: ReturnType<typeof createDiscoveryHarness>;
+
+  function discRequest(method: string, urlPath: string, body?: unknown) {
+    return requestOn(discSocketPath, method, urlPath, body);
+  }
+
+  beforeEach(async () => {
+    dh = createDiscoveryHarness();
+    discSocketPath = path.join(dir, 'api-discovery.sock');
+    discServer = createApiServer({
+      sessionStore: dh.h.store,
+      workspaceManager: dh.h.workspace,
+      pipeline: dh.h.service,
+      fs: dh.h.fs,
+      sessionsDir: SESSIONS_DIR,
+      events: dh.h.events,
+      discovery: { scheduler: new DiscoveryScheduler(dh.tick, 60_000), config: dh.config },
+    });
+    await new Promise<void>((resolve) => discServer.listen(discSocketPath, resolve));
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => discServer.close(() => resolve()));
+    await rm(discSocketPath, { force: true });
+  });
+
+  it('POST /discovery/tick runs one tick now and returns the TickReport', async () => {
+    dh.gh.queueResponse({ stdout: '[]' }); // strategy.poll's pr list for acme/app
+    const res = await discRequest('POST', '/discovery/tick');
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ reconciled: 0, created: [], ignoredOwn: 0, errors: [] });
+  });
+
+  it('GET /discovery/config returns the configured DiscoveryConfig', async () => {
+    const res = await discRequest('GET', '/discovery/config');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(dh.config);
+  });
+
+  it('GET /discovery/status returns running/lastReport/skippedBeats', async () => {
+    const res = await discRequest('GET', '/discovery/status');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ running: false, lastReport: null, skippedBeats: 0 });
+  });
+
+  it('POST /discovery/tick returns 409 when a tick is already running', async () => {
+    class SlowGhRunner implements GhRunner {
+      constructor(private readonly inner: GhRunner, private readonly delayMs: number) {}
+      async run(args: string[]): Promise<{ stdout: string; stderr: string }> {
+        await new Promise((resolve) => setTimeout(resolve, this.delayMs));
+        return this.inner.run(args);
+      }
+    }
+    const slow = createDiscoveryHarness({}, (gh) => new SlowGhRunner(gh, 30));
+    slow.gh.queueResponse({ stdout: '[]' });
+    const slowSocketPath = path.join(dir, 'api-discovery-slow.sock');
+    const slowServer = createApiServer({
+      sessionStore: slow.h.store,
+      workspaceManager: slow.h.workspace,
+      pipeline: slow.h.service,
+      fs: slow.h.fs,
+      sessionsDir: SESSIONS_DIR,
+      events: slow.h.events,
+      discovery: { scheduler: new DiscoveryScheduler(slow.tick, 60_000), config: slow.config },
+    });
+    await new Promise<void>((resolve) => slowServer.listen(slowSocketPath, resolve));
+    try {
+      const first = requestOn(slowSocketPath, 'POST', '/discovery/tick');
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      const second = await requestOn(slowSocketPath, 'POST', '/discovery/tick');
+      expect(second.status).toBe(409);
+      expect((await first).status).toBe(200);
+    } finally {
+      await new Promise<void>((resolve) => slowServer.close(() => resolve()));
+      await rm(slowSocketPath, { force: true });
+    }
   });
 });
