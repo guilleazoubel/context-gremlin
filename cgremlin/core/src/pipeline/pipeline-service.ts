@@ -262,6 +262,9 @@ export class PipelineService {
     if (!session.pr) {
       throw new UnsupportedStageError(`Session '${id}': review session has no pr`);
     }
+    if (!session.workspace.worktreePath) {
+      throw new WorkspaceMissingError(id);
+    }
     await this.transition(id, 'reviewing');
 
     const sessionDir = this.sessionDir(id);
@@ -270,7 +273,13 @@ export class PipelineService {
       reviewSkillCommand: this.deps.config.reviewSkillCommand,
       includeLiveUiCheck: this.deps.config.includeLiveUiCheck,
     });
-    const result = await this.deps.stageRunner.run({ sessionId: id, stage: 'review', brief: null, prompt });
+    let result;
+    try {
+      result = await this.deps.stageRunner.run({ sessionId: id, stage: 'review', brief: null, prompt });
+    } catch (err) {
+      await this.transition(id, 'failed');
+      throw err;
+    }
 
     // evaluateReview already treats a non-clean exit (including a stopped
     // run's signal) as 'failed' — no separate stopped-run special case needed.
@@ -344,7 +353,13 @@ export class PipelineService {
     await this.transition(id, 'reviewing');
 
     const prompt = renderRereviewPrompt({ sessionDir, commitCount, reviewSkillCommand: this.deps.config.reviewSkillCommand });
-    const result = await this.deps.stageRunner.run({ sessionId: id, stage: 'rereview', brief: null, prompt });
+    let result;
+    try {
+      result = await this.deps.stageRunner.run({ sessionId: id, stage: 'rereview', brief: null, prompt });
+    } catch (err) {
+      await this.transition(id, 'failed');
+      throw err;
+    }
 
     const { outcome } = await evaluateRereview(result.exit, this.deps.fs, sessionDir);
     if (outcome === 'ready') {

@@ -1,19 +1,28 @@
 import { describe, expect, it } from 'vitest';
 import { createHarness, flush, SESSIONS_DIR, type PipelineHarness } from '../support/pipeline-harness';
 import { UnsupportedStageError } from '../../src/pipeline/pipeline-service';
+import { WorkspaceMissingError } from '../../src/pipeline/stage-runner';
 import { renderReviewPrompt } from '../../src/pipeline/prompts';
 import { migrateV1ToV2, type ReviewSession } from '../../src/schema/session';
 import type { ReviewPhase } from '../../src/schema/pipeline';
 import type { PrInfo } from '../../src/schema/stage';
 
-function makeReviewSession(overrides: { id?: string; stageStatus?: ReviewPhase; pr?: PrInfo | null } = {}): ReviewSession {
+interface ReviewSessionOverrides {
+  id?: string;
+  stageStatus?: ReviewPhase;
+  pr?: PrInfo | null;
+  worktreePath?: string | undefined;
+}
+
+function makeReviewSession(overrides: ReviewSessionOverrides = {}): ReviewSession {
   const id = overrides.id ?? 'pr-app-12-x';
+  const worktreePath = 'worktreePath' in overrides ? overrides.worktreePath : `/worktrees/${id}`;
   const v1 = {
     schemaVersion: 1 as const,
     id,
     mode: 'review' as const,
     createdAt: '2026-09-04T10:00:00.000Z',
-    workspace: { repoUrl: 'git@github.com:acme/app.git', worktreePath: `/worktrees/${id}`, branch: 'pr-12' },
+    workspace: { repoUrl: 'git@github.com:acme/app.git', ...(worktreePath ? { worktreePath } : {}), branch: 'pr-12' },
     lineage: { pipelineId: id, parentSessionId: null, ticket: null },
     stageStatus: overrides.stageStatus ?? 'queued',
   };
@@ -28,7 +37,7 @@ function makeReviewSession(overrides: { id?: string; stageStatus?: ReviewPhase; 
 
 async function saveReviewSession(
   h: PipelineHarness,
-  overrides: { id?: string; stageStatus?: ReviewPhase; pr?: PrInfo | null } = {},
+  overrides: ReviewSessionOverrides = {},
 ): Promise<ReviewSession> {
   const review = makeReviewSession(overrides);
   await h.store.save(review);
@@ -249,5 +258,41 @@ describe('PipelineService — review', () => {
     const session = await p;
     if (session.mode !== 'review') throw new Error('mode changed');
     expect(session.pr?.headSha).toBe('bbb');
+  });
+
+  it('runReview rejects WorkspaceMissingError without transitioning when the session has no worktreePath', async () => {
+    const h = createHarness();
+    const review = await saveReviewSession(h, { worktreePath: undefined });
+    await expect(h.service.runReview(review.id)).rejects.toThrow(WorkspaceMissingError);
+    const after = await h.store.load(review.id);
+    expect(after.stageStatus).toBe('queued');
+  });
+
+  it('runReview transitions to failed and rethrows if stageRunner.run itself throws after the reviewing transition', async () => {
+    const h = createHarness();
+    const review = await saveReviewSession(h);
+    h.stageRunner.run = async () => {
+      throw new Error('boom');
+    };
+    await expect(h.service.runReview(review.id)).rejects.toThrow('boom');
+    const after = await h.store.load(review.id);
+    expect(after.stageStatus).toBe('failed');
+  });
+
+  it('runRereview transitions to failed and rethrows if stageRunner.run itself throws after the reviewing transition', async () => {
+    const h = createHarness();
+    const review = await saveReviewSession(h, { stageStatus: 'changes_requested' });
+    h.git.queueResponse({ stdout: 'aaa', stderr: '' }); // rev-parse HEAD
+    h.git.queueResponse({ stdout: '', stderr: '' }); // fetch
+    h.git.queueResponse({ stdout: 'bbb', stderr: '' }); // rev-parse FETCH_HEAD
+    h.git.queueResponse({ stdout: '', stderr: '' }); // reset --hard
+    h.git.queueResponse({ stdout: '', stderr: '' }); // log
+    h.git.queueResponse({ stdout: '', stderr: '' }); // diff --stat
+    h.stageRunner.run = async () => {
+      throw new Error('boom');
+    };
+    await expect(h.service.runRereview(review.id)).rejects.toThrow('boom');
+    const after = await h.store.load(review.id);
+    expect(after.stageStatus).toBe('failed');
   });
 });
