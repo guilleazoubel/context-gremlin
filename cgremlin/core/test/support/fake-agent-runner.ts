@@ -25,6 +25,7 @@ export class UnknownAgentHandleError extends Error {
 export class FakeAgentRunner implements AgentRunner {
   private nextId = 1;
   private readonly handles = new Map<string, FakeAgentState>();
+  private lastHandleId: string | null = null;
 
   async start(ctx: SessionContext): Promise<AgentHandle> {
     const id = `fake-agent-${this.nextId++}`;
@@ -36,7 +37,15 @@ export class FakeAgentRunner implements AgentRunner {
       stopped: false,
       resumeId: ctx.resumeId,
     });
+    this.lastHandleId = id;
     return { id };
+  }
+
+  lastHandle(): AgentHandle {
+    if (this.lastHandleId === null) {
+      throw new Error('FakeAgentRunner: no handle has been started yet');
+    }
+    return { id: this.lastHandleId };
   }
 
   async sendPrompt(handle: AgentHandle, prompt: string): Promise<void> {

@@ -103,4 +103,13 @@ describe('FakeAgentRunner', () => {
     runner.setResumeId(handle, 'next');
     expect(runner.getResumeId(handle)).toBe('next');
   });
+
+  it('lastHandle() returns the most recently started handle, and throws when none has started', async () => {
+    const runner = new FakeAgentRunner();
+    expect(() => runner.lastHandle()).toThrow();
+    const a = await runner.start(makeContext());
+    expect(runner.lastHandle()).toEqual(a);
+    const b = await runner.start(makeContext());
+    expect(runner.lastHandle()).toEqual(b);
+  });
 });
