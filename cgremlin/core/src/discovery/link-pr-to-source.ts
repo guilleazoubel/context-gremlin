@@ -1,4 +1,5 @@
 import type { ReviewSession, Session } from '../schema/session';
+import { TERMINAL_PHASES_BY_MODE } from '../workspace/workspace-in-use';
 
 export interface LinkResult {
   source: Session | null;
@@ -8,17 +9,10 @@ export interface LinkResult {
 
 type CandidateSession = Extract<Session, { mode: 'development' | 'investigation' }>;
 
-// Not importing TERMINAL_PHASES_BY_MODE from src/workspace/workspace-in-use.ts here: that
-// module lives on the other stream and hasn't landed in this worktree yet.
-const CANDIDATE_TERMINAL_PHASES: Record<'investigation' | 'development', ReadonlySet<string>> = {
-  investigation: new Set(['promoted_to_development', 'abandoned']),
-  development: new Set(['merged', 'abandoned']),
-};
-
 function isNonTerminalCandidate(s: Session): s is CandidateSession {
   return (
     (s.mode === 'development' || s.mode === 'investigation') &&
-    !CANDIDATE_TERMINAL_PHASES[s.mode].has(s.stageStatus)
+    !TERMINAL_PHASES_BY_MODE[s.mode].has(s.stageStatus)
   );
 }
 

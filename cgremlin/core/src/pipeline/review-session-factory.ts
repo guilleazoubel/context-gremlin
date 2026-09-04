@@ -7,6 +7,7 @@ import type { SessionStore } from '../engine/session-store';
 import type { WorkspaceManager } from '../workspace/workspace-manager';
 import type { EngineEvents } from '../engine/events';
 import type { ReviewSession } from '../schema/session';
+import { stamp } from './pipeline-service';
 
 export interface ReviewSessionFactoryDeps {
   gh: GhRunner;
@@ -17,20 +18,6 @@ export interface ReviewSessionFactoryDeps {
   worktreesDir: string;
   now?: () => Date;
   newId?: (slug: string, number: number) => string;
-}
-
-function pad(n: number): string {
-  return String(n).padStart(2, '0');
-}
-
-// Reuses the 3a plan's session-id stamp format (yyyymmdd-HHMMSS UTC).
-// PipelineService (which owns this format in Phase 3a) is not in this
-// worktree's stream — duplicated here deliberately; dedupe at merge time.
-function stamp(date: Date): string {
-  return (
-    `${date.getUTCFullYear()}${pad(date.getUTCMonth() + 1)}${pad(date.getUTCDate())}` +
-    `-${pad(date.getUTCHours())}${pad(date.getUTCMinutes())}${pad(date.getUTCSeconds())}`
-  );
 }
 
 function repoName(slug: string): string {
