@@ -4,6 +4,7 @@ import { InMemoryFileSystem } from '../support/in-memory-file-system';
 import { SessionStore } from '../../src/engine/session-store';
 import { EngineEvents } from '../../src/engine/events';
 import { RunInProgressError, StageRunner, WorkspaceMissingError } from '../../src/pipeline/stage-runner';
+import { KeyedLock } from '../../src/api/keyed-lock';
 import { migrateV1ToV2 } from '../../src/schema/session';
 
 const sessionsDir = '/sessions';
@@ -37,8 +38,9 @@ async function setup(session = inv()) {
   const runner = new FakeAgentRunner();
   const events = new EngineEvents();
   const now = () => new Date('2026-09-04T12:00:00.000Z');
-  const sr = new StageRunner({ runner, store, fs, events, sessionsDir, runnerKind: 'claude-code', now });
-  return { fs, store, runner, events, sr };
+  const lock = new KeyedLock();
+  const sr = new StageRunner({ runner, store, fs, events, sessionsDir, runnerKind: 'claude-code', now, lock });
+  return { fs, store, runner, events, sr, lock };
 }
 
 describe('StageRunner.run', () => {

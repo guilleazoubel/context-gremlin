@@ -6,6 +6,7 @@ import { WorkspaceManager } from '../../src/workspace/workspace-manager';
 import { EngineEvents } from '../../src/engine/events';
 import { StageRunner } from '../../src/pipeline/stage-runner';
 import { PipelineService, type CreateInvestigationInput, type PipelineConfig } from '../../src/pipeline/pipeline-service';
+import { KeyedLock } from '../../src/api/keyed-lock';
 import type { AgentExitResult } from '../../src/agent/agent-runner';
 import type { InvestigationSession } from '../../src/schema/session';
 
@@ -24,6 +25,7 @@ export interface PipelineHarness {
   events: EngineEvents;
   stageRunner: StageRunner;
   service: PipelineService;
+  lock: KeyedLock;
   finishRun: (files: Record<string, string>, exit: AgentExitResult) => Promise<void>;
 }
 
@@ -44,6 +46,7 @@ export function createHarness(): PipelineHarness {
   const workspace = new WorkspaceManager(git, fs, MIRRORS_DIR);
   const runner = new FakeAgentRunner();
   const events = new EngineEvents();
+  const lock = new KeyedLock();
   const stageRunner = new StageRunner({
     runner,
     store,
@@ -52,6 +55,7 @@ export function createHarness(): PipelineHarness {
     sessionsDir: SESSIONS_DIR,
     runnerKind: 'claude-code',
     now: FIXED_NOW,
+    lock,
   });
   const config: PipelineConfig = {
     sessionsDir: SESSIONS_DIR,
@@ -67,6 +71,7 @@ export function createHarness(): PipelineHarness {
     events,
     config,
     now: FIXED_NOW,
+    lock,
   });
 
   async function finishRun(files: Record<string, string>, exit: AgentExitResult): Promise<void> {
@@ -80,7 +85,7 @@ export function createHarness(): PipelineHarness {
     runner.emitExit(handle, exit);
   }
 
-  return { fs, git, store, workspace, runner, events, stageRunner, service, finishRun };
+  return { fs, git, store, workspace, runner, events, stageRunner, service, lock, finishRun };
 }
 
 export async function createInvestigation(

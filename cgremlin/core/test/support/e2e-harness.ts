@@ -170,6 +170,7 @@ export async function startEngine(root: string, fakes: EngineFakes = {}): Promis
     events,
     sessionsDir,
     runnerKind: 'claude-code',
+    lock,
   });
   const pipeline = new PipelineService({
     store,
@@ -179,6 +180,7 @@ export async function startEngine(root: string, fakes: EngineFakes = {}): Promis
     git,
     events,
     config: { sessionsDir, worktreesDir, defaultBaseRef: 'origin/main' },
+    lock,
   });
   const server = createApiServer({
     sessionStore: store,

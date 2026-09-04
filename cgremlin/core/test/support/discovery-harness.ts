@@ -31,9 +31,14 @@ export interface DiscoveryHarness {
 export function createDiscoveryHarness(
   configOverrides: Partial<DiscoveryConfig> = {},
   wrapGh: (gh: FakeGhRunner) => GhRunner = (gh) => gh,
-  lock: KeyedLock = new KeyedLock(),
+  lock?: KeyedLock,
 ): DiscoveryHarness {
   const h = createHarness();
+  // Share h's own lock by default — StageRunner/PipelineService (inside h)
+  // and ReconciliationTick must use the SAME KeyedLock instance for the
+  // per-session locking invariant (pipeline-service.ts) to actually
+  // serialize anything between a tick and h.service's own calls.
+  const sharedLock = lock ?? h.lock;
   const gh = new FakeGhRunner();
   const effectiveGh = wrapGh(gh);
   const strategy = new DefaultPRDiscoveryStrategy(effectiveGh);
@@ -43,7 +48,7 @@ export function createDiscoveryHarness(
   });
   const config = discoveryConfig(configOverrides);
   const tick = new ReconciliationTick({
-    gh: effectiveGh, store: h.store, strategy, factory, pipeline: h.service, events: h.events, config, lock,
+    gh: effectiveGh, store: h.store, strategy, factory, pipeline: h.service, events: h.events, config, lock: sharedLock,
   });
-  return { h, gh, strategy, factory, tick, config, lock };
+  return { h, gh, strategy, factory, tick, config, lock: sharedLock };
 }
