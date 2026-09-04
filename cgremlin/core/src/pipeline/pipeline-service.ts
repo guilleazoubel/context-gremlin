@@ -5,10 +5,19 @@ import type { SessionFileSystem } from '../fs/session-file-system';
 import type { GitRunner } from '../git/git-runner';
 import type { EngineEvents } from '../engine/events';
 import type { InvestigationSession, Session } from '../schema/session';
+import type { ReviewPhase } from '../schema/pipeline';
 import type { LastRun, StageName } from '../schema/stage';
-import { renderDevelopBrief, renderFindingsBrief, renderPlanBrief, STAGE_ENTRY_PROMPT } from './prompts';
-import { evaluateFindings, evaluatePlan } from './artifacts';
+import {
+  renderDevelopBrief,
+  renderFindingsBrief,
+  renderPlanBrief,
+  renderRereviewPrompt,
+  renderReviewPrompt,
+  STAGE_ENTRY_PROMPT,
+} from './prompts';
+import { evaluateFindings, evaluatePlan, evaluateRereview, evaluateReview, nextReviewVersion, readNonEmpty } from './artifacts';
 import { assertCanPromote } from './plan-gate';
+import { WorkspaceMissingError } from './stage-runner';
 
 export interface PipelineConfig {
   sessionsDir: string; // absolute
@@ -242,6 +251,108 @@ export class PipelineService {
     return result.session;
   }
 
+  async runReview(id: string): Promise<Session> {
+    const session = await this.deps.store.load(id);
+    const REVIEW_RUNNABLE_FROM: readonly ReviewPhase[] = ['queued', 'changes_requested', 'ready', 'failed'];
+    if (session.mode !== 'review' || !REVIEW_RUNNABLE_FROM.includes(session.stageStatus)) {
+      throw new UnsupportedStageError(
+        `Session '${id}' cannot run review (mode=${session.mode}, stage=${session.stageStatus})`,
+      );
+    }
+    if (!session.pr) {
+      throw new UnsupportedStageError(`Session '${id}': review session has no pr`);
+    }
+    await this.transition(id, 'reviewing');
+
+    const sessionDir = this.sessionDir(id);
+    const prompt = renderReviewPrompt({
+      sessionDir,
+      reviewSkillCommand: this.deps.config.reviewSkillCommand,
+      includeLiveUiCheck: this.deps.config.includeLiveUiCheck,
+    });
+    const result = await this.deps.stageRunner.run({ sessionId: id, stage: 'review', brief: null, prompt });
+
+    // evaluateReview already treats a non-clean exit (including a stopped
+    // run's signal) as 'failed' — no separate stopped-run special case needed.
+    const outcome = await evaluateReview(result.exit, this.deps.fs, sessionDir);
+    const updated = await this.transition(id, outcome === 'ready' ? 'ready' : 'failed');
+    if (outcome === 'ready' && updated.mode === 'review' && updated.pr) {
+      const withSha: Session = { ...updated, pr: { ...updated.pr, reviewedSha: updated.pr.headSha } };
+      await this.deps.store.save(withSha);
+      return withSha;
+    }
+    return updated;
+  }
+
+  async runRereview(id: string): Promise<Session> {
+    const session = await this.deps.store.load(id);
+    const REREVIEW_RUNNABLE_FROM: readonly ReviewPhase[] = ['ready', 'changes_requested', 'failed'];
+    if (session.mode !== 'review' || !REREVIEW_RUNNABLE_FROM.includes(session.stageStatus)) {
+      throw new UnsupportedStageError(
+        `Session '${id}' cannot run rereview (mode=${session.mode}, stage=${session.stageStatus})`,
+      );
+    }
+    if (!session.pr) {
+      throw new UnsupportedStageError(`Session '${id}': review session has no pr`);
+    }
+    const worktreePath = session.workspace.worktreePath;
+    if (!worktreePath) {
+      throw new WorkspaceMissingError(id);
+    }
+
+    const oldCommit = (await this.deps.git.run(['rev-parse', 'HEAD'], { cwd: worktreePath })).stdout.trim();
+    await this.deps.git.run(['fetch', 'origin', `pull/${session.pr.number}/head`], { cwd: worktreePath });
+    const newCommit = (await this.deps.git.run(['rev-parse', 'FETCH_HEAD'], { cwd: worktreePath })).stdout.trim();
+    await this.deps.git.run(['reset', '--hard', 'FETCH_HEAD'], { cwd: worktreePath });
+    const newCommitsText = (
+      await this.deps.git.run(['log', '--oneline', `${oldCommit}..${newCommit}`], { cwd: worktreePath })
+    ).stdout;
+    const commitCount = newCommitsText.split('\n').filter((line) => line.trim().length > 0).length;
+    const changesSince = (
+      await this.deps.git.run(['diff', '--stat', `${oldCommit}...HEAD`], { cwd: worktreePath })
+    ).stdout;
+
+    const sessionDir = this.sessionDir(id);
+    const version = await nextReviewVersion(this.deps.fs, sessionDir);
+    const existingReview = await readNonEmpty(this.deps.fs, `${sessionDir}/REVIEW.md`);
+    if (existingReview !== null) {
+      await this.deps.fs.writeFile(`${sessionDir}/REVIEW-v${version}.md`, existingReview);
+    }
+    const reReviewContent = [
+      `# RE-REVIEW — PR #${session.pr.number}`,
+      ``,
+      `Previous review: REVIEW-v${version}.md`,
+      `Reviewed commit: ${oldCommit}`,
+      `New head: ${newCommit}`,
+      ``,
+      `## New commits (${commitCount})`,
+      newCommitsText || '(none listed)',
+      ``,
+      `## Changes since last review`,
+      changesSince || '(no diffstat)',
+      ``,
+    ].join('\n');
+    await this.deps.fs.writeFile(`${sessionDir}/RE-REVIEW.md`, reReviewContent);
+
+    await this.deps.store.save({ ...session, reviewVersion: version });
+    await this.transition(id, 'reviewing');
+
+    const prompt = renderRereviewPrompt({ sessionDir, commitCount, reviewSkillCommand: this.deps.config.reviewSkillCommand });
+    const result = await this.deps.stageRunner.run({ sessionId: id, stage: 'rereview', brief: null, prompt });
+
+    const { outcome } = await evaluateRereview(result.exit, this.deps.fs, sessionDir);
+    if (outcome === 'ready') {
+      const updated = await this.transition(id, 'ready');
+      if (updated.mode === 'review' && updated.pr) {
+        const withSha: Session = { ...updated, pr: { ...updated.pr, reviewedSha: newCommit, headSha: newCommit } };
+        await this.deps.store.save(withSha);
+        return withSha;
+      }
+      return updated;
+    }
+    return await this.transition(id, 'failed');
+  }
+
   async runStage(id: string, stage: StageName): Promise<Session> {
     switch (stage) {
       case 'findings':
@@ -251,9 +362,9 @@ export class PipelineService {
       case 'develop':
         return this.runDevelop(id);
       case 'review':
+        return this.runReview(id);
       case 'rereview':
-        // Implemented in Task 9.
-        throw new UnsupportedStageError(`Stage '${stage}' is not yet supported`);
+        return this.runRereview(id);
     }
   }
 
