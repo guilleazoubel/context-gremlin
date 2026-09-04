@@ -6,11 +6,11 @@ import {
   SessionCorruptError,
   InvalidSessionIdError,
 } from '../../src/engine/session-store';
-import type { Session } from '../../src/schema/session';
+import { migrateV1ToV2, type Session, type SessionV1 } from '../../src/schema/session';
 import { IllegalTransitionError } from '../../src/schema/pipeline';
 
-function makeSession(overrides: Partial<Session> = {}): Session {
-  return {
+function makeSession(overrides: Record<string, unknown> = {}): Session {
+  const v1 = {
     schemaVersion: 1,
     id: 'inv-test-1',
     mode: 'investigation',
@@ -19,7 +19,8 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     lineage: { pipelineId: 'pl-1', parentSessionId: null, ticket: null },
     stageStatus: 'findings',
     ...overrides,
-  } as Session;
+  } as SessionV1;
+  return migrateV1ToV2(v1);
 }
 
 describe('SessionStore', () => {
@@ -30,6 +31,26 @@ describe('SessionStore', () => {
     await store.save(session);
     const loaded = await store.load(session.id);
     expect(loaded).toEqual(session);
+  });
+
+  it('save() of a v1 document persists a v2 document on disk', async () => {
+    const fs = new InMemoryFileSystem();
+    const store = new SessionStore(fs, '/sessions');
+    const v1: SessionV1 = {
+      schemaVersion: 1,
+      id: 'inv-v1-persist',
+      mode: 'investigation',
+      createdAt: '2026-08-28T10:00:00.000Z',
+      workspace: { repoUrl: 'git@example.com:x/y.git' },
+      lineage: { pipelineId: 'pl-1', parentSessionId: null, ticket: null },
+      stageStatus: 'findings',
+    };
+    await store.save(v1 as unknown as Session);
+    const raw = await fs.readFile('/sessions/inv-v1-persist/session.json');
+    const onDisk = JSON.parse(raw);
+    expect(onDisk.schemaVersion).toBe(2);
+    expect(onDisk.intent).toBe('investigate_only');
+    expect(onDisk.driveToCompletion).toBe(false);
   });
 
   it('load throws SessionNotFoundError for an unknown id', async () => {

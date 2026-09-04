@@ -12,6 +12,7 @@ interface FakeAgentState {
   exitCallbacks: Array<(result: AgentExitResult) => void>;
   prompts: string[];
   stopped: boolean;
+  resumeId?: string;
 }
 
 export class UnknownAgentHandleError extends Error {
@@ -24,6 +25,7 @@ export class UnknownAgentHandleError extends Error {
 export class FakeAgentRunner implements AgentRunner {
   private nextId = 1;
   private readonly handles = new Map<string, FakeAgentState>();
+  private lastHandleId: string | null = null;
 
   async start(ctx: SessionContext): Promise<AgentHandle> {
     const id = `fake-agent-${this.nextId++}`;
@@ -33,8 +35,17 @@ export class FakeAgentRunner implements AgentRunner {
       exitCallbacks: [],
       prompts: [],
       stopped: false,
+      resumeId: ctx.resumeId,
     });
+    this.lastHandleId = id;
     return { id };
+  }
+
+  lastHandle(): AgentHandle {
+    if (this.lastHandleId === null) {
+      throw new Error('FakeAgentRunner: no handle has been started yet');
+    }
+    return { id: this.lastHandleId };
   }
 
   async sendPrompt(handle: AgentHandle, prompt: string): Promise<void> {
@@ -75,6 +86,14 @@ export class FakeAgentRunner implements AgentRunner {
 
   getContext(handle: AgentHandle): SessionContext {
     return this.requireState(handle).ctx;
+  }
+
+  getResumeId(handle: AgentHandle): string | undefined {
+    return this.requireState(handle).resumeId;
+  }
+
+  setResumeId(handle: AgentHandle, id: string): void {
+    this.requireState(handle).resumeId = id;
   }
 
   private requireState(handle: AgentHandle): FakeAgentState {

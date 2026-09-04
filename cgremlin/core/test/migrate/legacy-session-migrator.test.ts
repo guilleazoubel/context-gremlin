@@ -21,7 +21,7 @@ describe('migrateLegacySession', () => {
   it('maps a legacy investigation session.json to the new Session shape', () => {
     const migrated = migrateLegacySession(legacyInvestigationSession);
     expect(migrated).toMatchObject({
-      schemaVersion: 1,
+      schemaVersion: 2,
       id: 'inv-grace-frontend-20260710-143000',
       mode: 'investigation',
       workspace: { repoUrl: 'git@github.com:aplaceformom/grace-frontend.git' },
@@ -89,5 +89,35 @@ describe('migrateLegacySession', () => {
     };
     const migrated = migrateLegacySession(legacyMergedDev);
     expect(migrated.stageStatus).toBe('merged');
+  });
+
+  it('maps plan_review.drive_to_completion (string "true"), intent, pr and reviewed_sha into v2 fields', () => {
+    const s = migrateLegacySession({
+      id: 'inv-app-APP-1-20260901',
+      mode: 'investigation',
+      project: 'git@github.com:acme/app.git',
+      created: '2026-09-01T10:00:00Z',
+      stage_status: 'findings',
+      intent: 'development',
+      plan_review: { drive_to_completion: 'true' },
+    });
+    expect(s.schemaVersion).toBe(2);
+    if (s.mode !== 'investigation') throw new Error('mode changed');
+    expect(s.intent).toBe('development');
+    expect(s.driveToCompletion).toBe(true);
+
+    const r = migrateLegacySession({
+      id: 'pr-app-12-20260901',
+      mode: 'review',
+      project: 'git@github.com:acme/app.git',
+      created: '2026-09-01T10:00:00Z',
+      stage_status: 'queued',
+      pr: { number: 12, url: 'https://github.com/acme/app/pull/12', repo: 'acme/app' },
+      reviewed_sha: 'deadbeef',
+    });
+    expect(r.pr).toEqual({
+      repo: 'acme/app', number: 12, url: 'https://github.com/acme/app/pull/12',
+      headSha: null, reviewedSha: 'deadbeef', title: null, author: null,
+    });
   });
 });

@@ -121,4 +121,35 @@ describe('ClaudeCodeRunner', () => {
       await rm(argvLogPath, { force: true });
     }
   });
+
+  it('passes --add-dir per additional directory and seeds --resume from ctx.resumeId, in a pinned argv order', async () => {
+    const argvLogPath = path.join(tmpdir(), `claude-code-runner-argv-adddir-${Date.now()}.json`);
+    process.env.FAKE_CLI_ARGV_LOG = argvLogPath;
+    try {
+      const runner = new ClaudeCodeRunner({ claudeBinary: FIXTURE, model: 'opus' });
+      const handle = await runner.start({
+        sessionId: 's1',
+        workingDirectory: tmpdir(),
+        additionalDirs: ['/sessions/s1', '/extra'],
+        resumeId: 'seed-123',
+      });
+      await runner.sendPrompt(handle, 'hello');
+      const argv = JSON.parse(await readFile(argvLogPath, 'utf8'));
+      expect(argv).toEqual([
+        '-p', 'hello',
+        '--output-format', 'stream-json',
+        '--verbose',
+        '--permission-mode', 'bypassPermissions',
+        '--add-dir', '/sessions/s1',
+        '--add-dir', '/extra',
+        '--model', 'opus',
+        '--resume', 'seed-123',
+      ]);
+      // the fixture echoes `resumed:<id>` as the new session id
+      expect(runner.getResumeId(handle)).toBe('resumed:seed-123');
+    } finally {
+      delete process.env.FAKE_CLI_ARGV_LOG;
+      await rm(argvLogPath, { force: true });
+    }
+  });
 });

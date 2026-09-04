@@ -33,7 +33,7 @@ describe('WorkspaceManager', () => {
       },
     ]);
     const settings = await fs.readFile('/work/inv-1/.claude/settings.local.json');
-    expect(JSON.parse(settings).permissions.allow).toContain('Bash(cgremlin --plan-start *)');
+    expect(JSON.parse(settings)).toEqual({ permissions: {} });
   });
 
   it('removeWorkspace runs worktree remove/prune/branch-delete against the derived mirror path', async () => {

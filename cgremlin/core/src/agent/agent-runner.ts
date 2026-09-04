@@ -5,6 +5,10 @@ export interface AgentHandle {
 export interface SessionContext {
   readonly sessionId: string;
   readonly workingDirectory: string;
+  /** Extra directories the agent may read/write (e.g. the session dir holding BRIEF.md). */
+  readonly additionalDirs?: readonly string[];
+  /** Adapter-specific conversation id to continue from (Claude: `--resume`). */
+  readonly resumeId?: string;
 }
 
 export interface AgentOutput {
@@ -23,4 +27,6 @@ export interface AgentRunner {
   onOutput(handle: AgentHandle, callback: (chunk: AgentOutput) => void): void;
   onExit(handle: AgentHandle, callback: (result: AgentExitResult) => void): void;
   stop(handle: AgentHandle): Promise<void>;
+  /** The id a later `start({ resumeId })` should pass to continue this conversation, if the adapter has one. */
+  getResumeId?(handle: AgentHandle): string | undefined;
 }
