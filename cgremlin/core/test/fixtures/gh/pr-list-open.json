@@ -1,0 +1,70 @@
+[
+  {
+    "author": {
+      "id": "U_kgDOCx-kSg",
+      "is_bot": false,
+      "login": "austinbrownapfm",
+      "name": "Austin Brown"
+    },
+    "baseRefName": "main",
+    "headRefName": "poc/user-segment-router",
+    "headRefOid": "2b6d4ed40c3788eefe3ee1e6e6bcad5a4cfea040",
+    "isDraft": true,
+    "number": 2019,
+    "reviewDecision": "REVIEW_REQUIRED",
+    "title": "feat: UserSegmentRouter platform \u2014 segment-driven experiences (PoC)",
+    "updatedAt": "2026-09-04T00:12:06Z",
+    "url": "https://github.com/aplaceformom/grace-frontend/pull/2019"
+  },
+  {
+    "author": {
+      "id": "U_kgDOEPjCXQ",
+      "is_bot": false,
+      "login": "dbeacham-afpm",
+      "name": ""
+    },
+    "baseRefName": "main",
+    "headRefName": "codex/gs-68-consumer-workspace",
+    "headRefOid": "7f9c5e8f9e0de7b594ed1b30a76d91d9ea29a19f",
+    "isDraft": false,
+    "number": 2011,
+    "reviewDecision": "REVIEW_REQUIRED",
+    "title": "refactor(GS-68): move Consumer into workspace app",
+    "updatedAt": "2026-09-04T00:37:05Z",
+    "url": "https://github.com/aplaceformom/grace-frontend/pull/2011"
+  },
+  {
+    "author": {
+      "id": "U_kgDOEPjCXQ",
+      "is_bot": false,
+      "login": "dbeacham-afpm",
+      "name": ""
+    },
+    "baseRefName": "main",
+    "headRefName": "chore/triage-portal-storybook-alerting",
+    "headRefOid": "d5535d8094877fc91b803b03a5222b317cbe15fd",
+    "isDraft": false,
+    "number": 2008,
+    "reviewDecision": "REVIEW_REQUIRED",
+    "title": "fix(alerts): restore PagerDuty paging for QStash failures; fix NR level filter; load NR agent in portal/ops",
+    "updatedAt": "2026-09-03T19:08:31Z",
+    "url": "https://github.com/aplaceformom/grace-frontend/pull/2008"
+  },
+  {
+    "author": {
+      "id": "MDQ6VXNlcjM3OTk5MDc=",
+      "is_bot": false,
+      "login": "ebubae",
+      "name": "Ebube Chuba"
+    },
+    "baseRefName": "main",
+    "headRefName": "hb-1245-total-opt-out",
+    "headRefOid": "e63fdac98e8027c07bf0ac0c2570962425b4bc64",
+    "isDraft": false,
+    "number": 1974,
+    "reviewDecision": "CHANGES_REQUESTED",
+    "title": "feat(consent): total opt-out and phone-call toggle in Account Settings (HB-1245)",
+    "updatedAt": "2026-09-03T19:27:21Z",
+    "url": "https://github.com/aplaceformom/grace-frontend/pull/1974"
+  }
+]

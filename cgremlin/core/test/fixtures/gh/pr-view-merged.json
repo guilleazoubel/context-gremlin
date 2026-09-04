@@ -1,0 +1,426 @@
+{
+  "author": {
+    "id": "U_kgDOBnyoNw",
+    "is_bot": false,
+    "login": "apfm-yunid",
+    "name": "Yunid"
+  },
+  "baseRefName": "main",
+  "closedAt": "2026-09-03T22:08:45Z",
+  "headRefName": "worktree-feat+grac-1490-claim-reason-wrap",
+  "headRefOid": "e56ef87b13167abc14e9415f662b23511d1f6846",
+  "isDraft": false,
+  "latestReviews": [
+    {
+      "id": "",
+      "author": {
+        "login": "github-actions"
+      },
+      "authorAssociation": "NONE",
+      "body": "[BLANKED]",
+      "submittedAt": "2026-09-03T21:52:58Z",
+      "includesCreatedEdit": false,
+      "reactionGroups": [],
+      "state": "COMMENTED",
+      "commit": {
+        "oid": ""
+      }
+    },
+    {
+      "id": "",
+      "author": {
+        "login": "gitstream-cm"
+      },
+      "authorAssociation": "NONE",
+      "body": "[BLANKED]",
+      "submittedAt": "2026-09-03T21:37:57Z",
+      "includesCreatedEdit": false,
+      "reactionGroups": [],
+      "state": "COMMENTED",
+      "commit": {
+        "oid": ""
+      }
+    },
+    {
+      "id": "",
+      "author": {
+        "login": "aplaceformom-bot"
+      },
+      "authorAssociation": "NONE",
+      "body": "[BLANKED]",
+      "submittedAt": "2026-09-03T21:53:25Z",
+      "includesCreatedEdit": false,
+      "reactionGroups": [],
+      "state": "APPROVED",
+      "commit": {
+        "oid": ""
+      }
+    }
+  ],
+  "mergedAt": "2026-09-03T22:08:45Z",
+  "number": 2017,
+  "reviewDecision": "APPROVED",
+  "state": "MERGED",
+  "statusCheckRollup": [
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-03T21:47:09Z",
+      "conclusion": "SKIPPED",
+      "detailsUrl": "https://github.com/aplaceformom/grace-frontend/actions/runs/33809790801/job/100828684353",
+      "name": "pr-review",
+      "startedAt": "2026-09-03T21:47:10Z",
+      "status": "COMPLETED",
+      "workflowName": "Agentic PR Review"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-03T21:47:19Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/aplaceformom/grace-frontend/actions/runs/33809791678/job/100828685333",
+      "name": "pr-review / Check skip labels",
+      "startedAt": "2026-09-03T21:47:14Z",
+      "status": "COMPLETED",
+      "workflowName": "Agentic PR Review"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-03T21:50:30Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/aplaceformom/grace-frontend/actions/runs/33809790121/job/100828796256",
+      "name": "Lint & Format",
+      "startedAt": "2026-09-03T21:47:38Z",
+      "status": "COMPLETED",
+      "workflowName": "PR Request"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-03T21:47:20Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/aplaceformom/grace-frontend/actions/runs/33809791723/job/100828685176",
+      "name": "Notify Slack / notify",
+      "startedAt": "2026-09-03T21:47:14Z",
+      "status": "COMPLETED",
+      "workflowName": "Slack PR Notifications"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-03T22:09:24Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/aplaceformom/grace-frontend/actions/runs/33811624612/job/100834519535",
+      "name": "Remove Storybook preview deployments",
+      "startedAt": "2026-09-03T22:08:52Z",
+      "status": "COMPLETED",
+      "workflowName": "Storybook Preview Teardown"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-03T21:53:09Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/aplaceformom/grace-frontend/actions/runs/33809791678/job/100828727485",
+      "name": "pr-review / AI Code Review (Claude Opus)",
+      "startedAt": "2026-09-03T21:47:22Z",
+      "status": "COMPLETED",
+      "workflowName": "Agentic PR Review"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-03T21:48:54Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/aplaceformom/grace-frontend/actions/runs/33809790121/job/100828796390",
+      "name": "Build Storybook",
+      "startedAt": "2026-09-03T21:47:38Z",
+      "status": "COMPLETED",
+      "workflowName": "PR Request"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-03T21:53:29Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/aplaceformom/grace-frontend/actions/runs/33809791678/job/100830339854",
+      "name": "pr-review / Auto-approve if in policy",
+      "startedAt": "2026-09-03T21:53:13Z",
+      "status": "COMPLETED",
+      "workflowName": "Agentic PR Review"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-03T22:06:58Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/aplaceformom/grace-frontend/actions/runs/33809790121/job/100828796456",
+      "name": "Portal App (boundaries, type-check & tests)",
+      "startedAt": "2026-09-03T21:47:37Z",
+      "status": "COMPLETED",
+      "workflowName": "PR Request"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-03T21:48:51Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/aplaceformom/grace-frontend/actions/runs/33809790121/job/100828796430",
+      "name": "Workspace Packages (tests)",
+      "startedAt": "2026-09-03T21:47:38Z",
+      "status": "COMPLETED",
+      "workflowName": "PR Request"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-03T21:49:19Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/aplaceformom/grace-frontend/actions/runs/33809790121/job/100828796403",
+      "name": "Portal Storybook (type-check & build)",
+      "startedAt": "2026-09-03T21:47:37Z",
+      "status": "COMPLETED",
+      "workflowName": "PR Request"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-03T21:49:19Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/aplaceformom/grace-frontend/actions/runs/33809790121/job/100828796542",
+      "name": "Unit Tests (1/4)",
+      "startedAt": "2026-09-03T21:47:38Z",
+      "status": "COMPLETED",
+      "workflowName": "PR Request"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-03T21:49:09Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/aplaceformom/grace-frontend/actions/runs/33809790121/job/100828796407",
+      "name": "Unit Tests (2/4)",
+      "startedAt": "2026-09-03T21:47:38Z",
+      "status": "COMPLETED",
+      "workflowName": "PR Request"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-03T21:48:59Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/aplaceformom/grace-frontend/actions/runs/33809790121/job/100828796421",
+      "name": "Unit Tests (3/4)",
+      "startedAt": "2026-09-03T21:47:37Z",
+      "status": "COMPLETED",
+      "workflowName": "PR Request"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-03T21:49:05Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/aplaceformom/grace-frontend/actions/runs/33809790121/job/100828796422",
+      "name": "Unit Tests (4/4)",
+      "startedAt": "2026-09-03T21:47:38Z",
+      "status": "COMPLETED",
+      "workflowName": "PR Request"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-03T21:50:10Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/aplaceformom/grace-frontend/actions/runs/33809790121/job/100828796554",
+      "name": "wait-for-preview",
+      "startedAt": "2026-09-03T21:47:38Z",
+      "status": "COMPLETED",
+      "workflowName": "PR Request"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-03T21:47:47Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/aplaceformom/grace-frontend/actions/runs/33809790121/job/100828796335",
+      "name": "Wait for grace-portal preview",
+      "startedAt": "2026-09-03T21:47:38Z",
+      "status": "COMPLETED",
+      "workflowName": "PR Request"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-03T21:52:56Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/aplaceformom/grace-frontend/actions/runs/33809790121/job/100828796481",
+      "name": "Storybook Preview URL",
+      "startedAt": "2026-09-03T21:47:38Z",
+      "status": "COMPLETED",
+      "workflowName": "PR Request"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-03T21:49:32Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/aplaceformom/grace-frontend/actions/runs/33809790121/job/100829287448",
+      "name": "Unit Tests",
+      "startedAt": "2026-09-03T21:49:28Z",
+      "status": "COMPLETED",
+      "workflowName": "PR Request"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-03T21:54:44Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/aplaceformom/grace-frontend/actions/runs/33809790121/job/100829525812",
+      "name": "e2e-tests (1)",
+      "startedAt": "2026-09-03T21:50:14Z",
+      "status": "COMPLETED",
+      "workflowName": "PR Request"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-03T21:58:17Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/aplaceformom/grace-frontend/actions/runs/33809790121/job/100829525780",
+      "name": "e2e-tests (2)",
+      "startedAt": "2026-09-03T21:50:21Z",
+      "status": "COMPLETED",
+      "workflowName": "PR Request"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-03T21:57:05Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/aplaceformom/grace-frontend/actions/runs/33809790121/job/100829525884",
+      "name": "e2e-tests (3)",
+      "startedAt": "2026-09-03T21:50:14Z",
+      "status": "COMPLETED",
+      "workflowName": "PR Request"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-03T21:57:12Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/aplaceformom/grace-frontend/actions/runs/33809790121/job/100829525858",
+      "name": "e2e-tests (4)",
+      "startedAt": "2026-09-03T21:50:13Z",
+      "status": "COMPLETED",
+      "workflowName": "PR Request"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-03T21:54:20Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/aplaceformom/grace-frontend/actions/runs/33809790121/job/100829525771",
+      "name": "Visual Regression Tests",
+      "startedAt": "2026-09-03T21:50:15Z",
+      "status": "COMPLETED",
+      "workflowName": "PR Request"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-03T21:47:47Z",
+      "conclusion": "SKIPPED",
+      "detailsUrl": "https://github.com/aplaceformom/grace-frontend/actions/runs/33809790121/job/100828859210",
+      "name": "Portal Playwright Smoke",
+      "startedAt": "2026-09-03T21:47:47Z",
+      "status": "COMPLETED",
+      "workflowName": "PR Request"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-03T22:08:22Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/aplaceformom/grace-frontend/actions/runs/33809790121/job/100834033676",
+      "name": "sonarqube",
+      "startedAt": "2026-09-03T22:07:02Z",
+      "status": "COMPLETED",
+      "workflowName": "PR Request"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-03T21:58:23Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/aplaceformom/grace-frontend/actions/runs/33809790121/job/100831692562",
+      "name": "Preview E2E & Visual",
+      "startedAt": "2026-09-03T21:58:21Z",
+      "status": "COMPLETED",
+      "workflowName": "PR Request"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-03T21:48:07Z",
+      "conclusion": "SKIPPED",
+      "detailsUrl": "https://docs.gitstream.cm/examples/",
+      "name": "gitstream/linearb_ai_description",
+      "startedAt": "2026-09-03T21:48:05Z",
+      "status": "COMPLETED",
+      "workflowName": ""
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-03T21:48:09Z",
+      "conclusion": "SKIPPED",
+      "detailsUrl": "https://docs.gitstream.cm/examples/",
+      "name": "gitstream/linearb_ai_review",
+      "startedAt": "2026-09-03T21:48:08Z",
+      "status": "COMPLETED",
+      "workflowName": ""
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-03T22:08:14Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://sonarqube.us-west-2.dev.apfmtech.com/dashboard?id=grace-frontend&pullRequest=2017",
+      "name": "SonarQube Code Analysis",
+      "startedAt": "2026-09-03T22:07:42Z",
+      "status": "COMPLETED",
+      "workflowName": ""
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-03T21:49:58Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://vercel.com/github",
+      "name": "Vercel Preview Comments",
+      "startedAt": "2026-09-03T21:49:58Z",
+      "status": "COMPLETED",
+      "workflowName": ""
+    },
+    {
+      "__typename": "StatusContext",
+      "context": "Vercel \u2013 grace-frontend-dev",
+      "startedAt": "2026-09-03T21:49:57Z",
+      "state": "SUCCESS",
+      "targetUrl": "https://vercel.com/grace-0118bc61/grace-frontend-dev/Gn4iQ3j86dZJm5gkjeYxnbWqGMvp"
+    },
+    {
+      "__typename": "StatusContext",
+      "context": "Vercel \u2013 grace-frontend-storybook",
+      "startedAt": "2026-09-03T21:47:13Z",
+      "state": "SUCCESS",
+      "targetUrl": "https://vercel.com/grace-0118bc61/grace-frontend-storybook/6qyK6K668QaW3ES4p8qyqP7YP42u"
+    },
+    {
+      "__typename": "StatusContext",
+      "context": "Vercel \u2013 grace-ops",
+      "startedAt": "2026-09-03T21:48:28Z",
+      "state": "SUCCESS",
+      "targetUrl": "https://vercel.com/grace-0118bc61/grace-ops/AFsjGKPSBzfQLQqaP3G147Wrrmaj"
+    },
+    {
+      "__typename": "StatusContext",
+      "context": "Vercel \u2013 grace-portal",
+      "startedAt": "2026-09-03T21:47:08Z",
+      "state": "SUCCESS",
+      "targetUrl": "https://vercel.com/grace-0118bc61/grace-portal/F4tQu1ByXH69LdeFZm836UpoPWxW"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-03T22:09:08Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://docs.gitstream.cm/examples/",
+      "name": "gitStream.cm",
+      "startedAt": "2026-09-03T22:08:22Z",
+      "status": "COMPLETED",
+      "workflowName": ""
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-09-03T22:09:05Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://docs.gitstream.cm/examples/",
+      "name": "gitstream/estimated_time_to_review",
+      "startedAt": "2026-09-03T22:09:02Z",
+      "status": "COMPLETED",
+      "workflowName": ""
+    }
+  ],
+  "title": "fix(GRAC-1490): wrap unbroken text in the claim-link Reason field",
+  "url": "https://github.com/aplaceformom/grace-frontend/pull/2017"
+}
