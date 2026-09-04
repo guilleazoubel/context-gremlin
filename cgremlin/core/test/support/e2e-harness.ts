@@ -18,6 +18,7 @@ import { FakeAgentRunner } from './fake-agent-runner';
 import { FakeGhRunner } from './fake-gh-runner';
 import type { AgentExitResult, AgentHandle } from '../../src/agent/agent-runner';
 import type { Session } from '../../src/schema/session';
+import { mirrorDirName } from '../../src/workspace/repo-mirror';
 
 // execFileSync passes args as a real argv array (no shell), so a multi-word
 // value (like a commit message) can never be split into stray arguments —
@@ -66,8 +67,23 @@ export async function pushPrCommit(originPath: string, number: number): Promise<
     gitRun(['update-ref', `refs/pull/${number}/head`, sha], originPath);
     return sha;
   } finally {
-    gitRun(['worktree', 'remove', '-q', '--force', worktree], originPath);
+    gitRun(['worktree', 'remove', '--force', worktree], originPath);
   }
+}
+
+/**
+ * ReviewSessionFactory hard-codes `https://github.com/<slug>.git` as the
+ * repo URL to mirror, which can't resolve offline. This pre-creates a bare
+ * mirror at the exact path `ensureMirror` would compute for that URL, by
+ * cloning the local origin directly — so `ensureMirror` finds a valid
+ * mirror already on disk (its "already exists" branch) and `fetch --prune
+ * origin` (using whatever refspec is configured) hits the local origin.
+ */
+export function createMirrorFor(mirrorsDir: string, repoUrl: string, originPath: string): string {
+  const mirrorPath = path.join(mirrorsDir, mirrorDirName(repoUrl));
+  gitRun(['clone', '--bare', '-q', originPath, mirrorPath], mirrorsDir);
+  gitRun(['config', 'remote.origin.url', originPath], mirrorPath);
+  return mirrorPath;
 }
 
 function requestOnSocket(
