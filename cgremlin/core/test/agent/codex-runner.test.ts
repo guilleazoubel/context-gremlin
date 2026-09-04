@@ -3,6 +3,7 @@ import { readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import { CodexRunner, UnknownAgentHandleError } from '../../src/agent/codex-runner';
+import { describeAgentRunnerContract } from '../support/agent-runner-contract';
 
 const FIXTURE = path.join(__dirname, '../fixtures/fake-codex-cli.js');
 const DEFAULT_THREAD_ID = '01a06cfe-46c0-7800-99fa-83b3a2cbfc6b';
@@ -186,4 +187,12 @@ describe('CodexRunner', () => {
     await runner.sendPrompt(handle, 'READ_STDIN');
     expect(exits).toEqual([{ code: 0, signal: null }]);
   });
+});
+
+describeAgentRunnerContract('CodexRunner', {
+  makeRunner: () => new CodexRunner({ codexBinary: FIXTURE }),
+  echoPrompt: 'hello',
+  expectedEcho: (prompt) => `echo: ${prompt}`,
+  hangPrompt: 'HANG_FOREVER',
+  failPrompt: 'FAIL_LOUDLY',
 });

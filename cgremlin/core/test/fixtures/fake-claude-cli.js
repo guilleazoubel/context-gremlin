@@ -27,6 +27,11 @@ if (prompt === 'HANG_FOREVER') {
   // Never exits on its own; only terminated by a signal from the caller
   // under test, used to verify stop() actually kills the process.
   setInterval(() => {}, 1000);
+} else if (prompt === 'READ_STDIN') {
+  // Exits as soon as stdin is closed — proves the CLI is spawned with
+  // stdin 'ignore' (not an open pipe); the Phase 2a hang regression check.
+  process.stdin.on('end', () => process.exit(0));
+  process.stdin.resume();
 } else if (prompt === 'FAIL_LOUDLY') {
   process.stderr.write('simulated failure on stderr\n');
   process.exitCode = 1;
