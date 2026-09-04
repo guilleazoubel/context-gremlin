@@ -7,9 +7,10 @@ export interface RereviewPromptParams { sessionDir: string; commitCount: number;
 
 const DEFAULT_REVIEW_SKILL = '/APFM:apfm-review';
 
-function bareSkillName(command: string): string {
-  const idx = Math.max(command.lastIndexOf('/'), command.lastIndexOf(':'));
-  return idx === -1 ? command : command.slice(idx + 1);
+export function bareSkillName(command: string): string {
+  const trimmed = command.trim();
+  const idx = Math.max(trimmed.lastIndexOf('/'), trimmed.lastIndexOf(':'));
+  return idx === -1 ? trimmed : trimmed.slice(idx + 1);
 }
 
 export const STAGE_ENTRY_PROMPT = (sessionDir: string): string =>

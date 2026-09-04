@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  renderDevelopBrief, renderFindingsBrief, renderPlanBrief,
+  bareSkillName, renderDevelopBrief, renderFindingsBrief, renderPlanBrief,
   renderRereviewPrompt, renderReviewPrompt, STAGE_ENTRY_PROMPT,
 } from '../../src/pipeline/prompts';
 
@@ -74,5 +74,13 @@ describe('prompt templates', () => {
 
   it('stage entry prompt points at BRIEF.md', () => {
     expect(STAGE_ENTRY_PROMPT(sessionDir)).toBe(`Read ${sessionDir}/BRIEF.md and follow it exactly. BEGIN NOW.`);
+  });
+
+  it('bareSkillName strips everything up to the last / or :, and trims whitespace', () => {
+    expect(bareSkillName('/APFM:apfm-review')).toBe('apfm-review');
+    expect(bareSkillName('/noop-review')).toBe('noop-review');
+    expect(bareSkillName('apfm-review')).toBe('apfm-review');
+    expect(bareSkillName('')).toBe('');
+    expect(bareSkillName('/APFM:apfm-review ')).toBe('apfm-review');
   });
 });

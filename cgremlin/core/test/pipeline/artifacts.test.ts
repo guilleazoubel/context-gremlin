@@ -39,6 +39,40 @@ describe('parsePlanReviewStatus', () => {
   it('is unresolved when the disagreement section exists, even if a stale approved block is also present', () => {
     expect(parsePlanReviewStatus(`## Unresolved Review Disagreement\n- PM: ...\n${approved}`)).toBe('unresolved');
   });
+  it('fails safe to missing when a second Review Status block exists (never trusts a stale one)', () => {
+    const staleAfter = `${approved}
+
+## Review Status
+- PM: ❌ Changes requested — scope creep
+- Principal Engineer: ❌ Changes requested — inconsistent
+`;
+    expect(parsePlanReviewStatus(staleAfter)).toBe('missing');
+    expect(parsePlanReviewStatus(`${approved}\n\n${approved}`)).toBe('missing');
+  });
+  it('tolerates heading variants (## or ###, optional trailing colon) and indented/parenthetical bullets', () => {
+    expect(parsePlanReviewStatus(`### Review Status
+- PM: ✅ Approved — x
+- Principal Engineer: ✅ Approved — y
+`)).toBe('approved');
+    expect(parsePlanReviewStatus(`## Review Status:
+- PM: ✅ Approved — x
+- Principal Engineer: ✅ Approved — y
+`)).toBe('approved');
+    expect(parsePlanReviewStatus(`## Review Status
+  - PM: ✅ Approved — x
+  - Principal Engineer: ✅ Approved — y
+`)).toBe('approved');
+    expect(parsePlanReviewStatus(`## Review Status
+- PM (subagent): ✅ Approved — x
+- Principal Engineer (subagent): ✅ Approved — y
+`)).toBe('approved');
+  });
+  it('never accepts APPROVED without the checkmark', () => {
+    expect(parsePlanReviewStatus(`## Review Status
+- PM: APPROVED
+- Principal Engineer: ✅ Approved — y
+`)).toBe('missing');
+  });
 });
 
 describe('evaluatePlan', () => {
@@ -47,6 +81,13 @@ describe('evaluatePlan', () => {
   });
   it('reports approved for an approved PLAN.md', async () => {
     const fs = await fsWith({ 'PLAN.md': '## Review Status\n- PM: ✅ Approved — x\n- Principal Engineer: ✅ Approved — y\n' });
+    expect(await evaluatePlan(fs, dir)).toEqual({ hasPlan: true, reviewStatus: 'approved' });
+  });
+  it('strips a leading BOM before parsing', async () => {
+    const bom = '\u{FEFF}';
+    const fs = await fsWith({
+      'PLAN.md': `${bom}## Review Status\n- PM: ✅ Approved — a\n- Principal Engineer: ✅ Approved — b\n`,
+    });
     expect(await evaluatePlan(fs, dir)).toEqual({ hasPlan: true, reviewStatus: 'approved' });
   });
 });
@@ -73,6 +114,10 @@ describe('parseRereviewSummary', () => {
     expect(parseRereviewSummary('⚠️ 2/5 resolved, 1 new\n')).toEqual({ resolved: 2, total: 5, newFindings: 1 });
     expect(parseRereviewSummary('garbage')).toBeNull();
   });
+  it('accepts the bare warning glyph without the U+FE0F variation selector', () => {
+    const bareWarning = '⚠';
+    expect(parseRereviewSummary(`${bareWarning} 1/4 resolved, 2 new`)).toEqual({ resolved: 1, total: 4, newFindings: 2 });
+  });
 });
 
 describe('evaluateRereview', () => {
@@ -80,6 +125,10 @@ describe('evaluateRereview', () => {
     const fs = await fsWith({ 'REVIEW.md': '# r', rereview_summary: '⚠️ 1/3 resolved, 2 new' });
     expect(await evaluateRereview(ok, fs, dir)).toEqual({ outcome: 'ready', summary: { resolved: 1, total: 3, newFindings: 2 } });
     expect(await evaluateRereview(bad, fs, dir)).toEqual({ outcome: 'failed', summary: null });
+  });
+  it('is ready with a null summary when rereview_summary exists but is unparseable', async () => {
+    const fs = await fsWith({ 'REVIEW.md': '# r', rereview_summary: 'done!' });
+    expect(await evaluateRereview(ok, fs, dir)).toEqual({ outcome: 'ready', summary: null });
   });
 });
 

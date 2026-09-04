@@ -6,7 +6,8 @@ export interface RereviewSummary { resolved: number; total: number; newFindings:
 
 export async function readNonEmpty(fs: SessionFileSystem, path: string): Promise<string | null> {
   if (!(await fs.exists(path))) return null;
-  const text = await fs.readFile(path);
+  const raw = await fs.readFile(path);
+  const text = raw.startsWith('﻿') ? raw.slice(1) : raw;
   return text.trim().length > 0 ? text : null;
 }
 
@@ -14,15 +15,24 @@ export async function evaluateFindings(fs: SessionFileSystem, sessionDir: string
   return { hasFindings: (await readNonEmpty(fs, `${sessionDir}/FINDINGS.md`)) !== null };
 }
 
+const REVIEW_STATUS_HEADING = /^#{2,3} Review Status:?\s*$/gm;
+const SECTION_END = /^#{1,3} /;
+const PM_APPROVED = /^\s*-\s*PM(?: \([^)\n]*\))?:\s*✅/m;
+const PRINCIPAL_ENGINEER_APPROVED = /^\s*-\s*Principal Engineer(?: \([^)\n]*\))?:\s*✅/m;
+
 export function parsePlanReviewStatus(planText: string): PlanReviewStatus {
   if (/^## Unresolved Review Disagreement\s*$/m.test(planText)) return 'unresolved';
-  const start = planText.search(/^## Review Status\s*$/m);
+  const headings = [...planText.matchAll(REVIEW_STATUS_HEADING)];
+  // A second Review Status heading means a stale block from an earlier review round is
+  // present; never trust either one — fail safe to 'missing' rather than risk approving on stale text.
+  if (headings.length !== 1) return 'missing';
+  const start = headings[0].index ?? -1;
   if (start < 0) return 'missing';
   const rest = planText.slice(start).split('\n').slice(1);
-  const end = rest.findIndex((l) => /^#{1,2} /.test(l));
+  const end = rest.findIndex((l) => SECTION_END.test(l));
   const section = (end < 0 ? rest : rest.slice(0, end)).join('\n');
-  const pm = /^- PM: ✅/m.test(section);
-  const pe = /^- Principal Engineer: ✅/m.test(section);
+  const pm = PM_APPROVED.test(section);
+  const pe = PRINCIPAL_ENGINEER_APPROVED.test(section);
   return pm && pe ? 'approved' : 'missing';
 }
 
@@ -42,7 +52,7 @@ export async function evaluateReview(exit: AgentExitResult, fs: SessionFileSyste
 }
 
 export function parseRereviewSummary(line: string): RereviewSummary | null {
-  const m = line.trim().match(/^(?:✅|⚠️)\s*(\d+)\/(\d+) resolved(?:,\s*(\d+) new)?$/u);
+  const m = line.trim().match(/^(?:✅|⚠️?)\s*(\d+)\/(\d+) resolved(?:,\s*(\d+) new)?$/u);
   if (!m) return null;
   return { resolved: Number(m[1]), total: Number(m[2]), newFindings: m[3] ? Number(m[3]) : 0 };
 }
