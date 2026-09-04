@@ -162,6 +162,12 @@ describe('InventoryScanner', () => {
       expect.objectContaining({ type: 'rereview', sessionId: review.id }),
     );
     expect((await h.store.load(review.id)).stageStatus).toBe('reviewing');
+
+    // F5/M2: the scan's own store.list() must happen AFTER reconcile, so
+    // this SAME tick's inventory reflects the fresh 'reviewing' phase — not
+    // the stale 'ready' snapshot taken before the rereview transitioned it.
+    const entry2010 = report.inventory.entries.find((e) => e.number === 2010);
+    expect(entry2010?.ours.status).toBe('reviewing');
   });
 
   it('never throws when the fresh store.list() call rejects; the error lands in inventory.errors', async () => {
