@@ -236,6 +236,20 @@ describe('serve', () => {
     }
   });
 
+  it('logs an inventory.updated line after a scan', async () => {
+    const lines: string[] = [];
+    const gh = new FakeGhRunner();
+    gh.queueResponse({ stdout: '[]' }); // empty pr-list for the one configured repo
+    const handle = await serve(testConfig(), testAdapters({ gh }), { log: (l) => lines.push(l) });
+    try {
+      await handle.engine.scheduler.runNow();
+      const parsed = lines.map((l) => JSON.parse(l) as { type: string; entries?: number; errors?: number });
+      expect(parsed.some((e) => e.type === 'inventory.updated' && e.entries === 0 && e.errors === 0)).toBe(true);
+    } finally {
+      await handle.close();
+    }
+  });
+
   it('logs one JSON line per engine event, including session.created and run.started', async () => {
     const lines: string[] = [];
     const handle = await serve(testConfig(), testAdapters(), { log: (line) => lines.push(line) });

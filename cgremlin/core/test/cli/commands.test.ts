@@ -108,6 +108,16 @@ describe('prs command', () => {
     );
   });
 
+  it('prints "No PRs in the inventory." when a scan found nothing', async () => {
+    ih.gh.queueResponse({ stdout: '[]' });
+    await ih.scanner.run();
+
+    const { io, out } = testIo();
+    const code = await prsCommand([], io);
+    expect(code).toBe(0);
+    expect(out()).toBe('No PRs in the inventory.\n');
+  });
+
   it('--json prints the raw inventory/groups payload', async () => {
     ih.gh.queueResponse({ stdout: JSON.stringify([teamPrItem()]) });
     await ih.scanner.run();

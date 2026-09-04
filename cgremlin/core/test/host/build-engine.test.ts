@@ -12,6 +12,7 @@ import { FakeGitRunner } from '../support/fake-git-runner';
 import { FakeGhRunner } from '../support/fake-gh-runner';
 import { FakeAgentRunner } from '../support/fake-agent-runner';
 import { FakeClock } from '../support/fake-clock';
+import { migrateV1ToV2 } from '../../src/schema/session';
 
 function testConfig(): CoreConfig {
   return resolveCoreConfig(
@@ -146,4 +147,48 @@ describe('buildEngine', () => {
     const report = await engine.scheduler.runNow();
     expect(report).toBe(fakeReport);
   });
+
+  it(
+    "the default reconciler wired into the scanner is a REAL ReconciliationTick — a 'ready' review session with a " +
+      'new head sha on gh becomes reviewing after scheduler.runNow()',
+    async () => {
+      const gh = new FakeGhRunner();
+      const engine = buildEngine(testConfig(), testAdapters({ gh }));
+
+      const reviewId = 'pr-app-1-x';
+      const oldSha = 'a'.repeat(40);
+      const newSha = 'b'.repeat(40);
+      const review = migrateV1ToV2({
+        schemaVersion: 1,
+        id: reviewId,
+        mode: 'review',
+        createdAt: '2026-09-04T10:00:00.000Z',
+        workspace: { repoUrl: 'u', worktreePath: `/worktrees/${reviewId}`, branch: 'pr-1' },
+        lineage: { pipelineId: reviewId, parentSessionId: null, ticket: null },
+        stageStatus: 'ready',
+      });
+      if (review.mode !== 'review') throw new Error('mode changed');
+      review.pr = {
+        repo: 'acme/app', number: 1, url: 'https://github.com/acme/app/pull/1',
+        headSha: oldSha, reviewedSha: oldSha, title: 't', author: 'bob',
+      };
+      await engine.store.save(review);
+
+      // Consumed in order: the tick's own `gh pr view` (reconciler.reconcile()
+      // runs before the inventory's `pr list` scan — see InventoryScanner.run()).
+      gh.queueResponse({ stdout: JSON.stringify({
+        number: 1, title: 't', author: { login: 'bob' }, headRefName: 'pr-1', headRefOid: newSha,
+        baseRefName: 'main', url: 'https://github.com/acme/app/pull/1', state: 'OPEN', isDraft: false,
+        reviewDecision: '', mergedAt: null, closedAt: null, latestReviews: [], statusCheckRollup: [],
+      }) });
+      gh.queueResponse({ stdout: '[]' }); // the inventory scan's own pr-list call for acme/app
+
+      const report = await engine.scheduler.runNow();
+      expect(report.reconciliation.actions).toContainEqual(
+        expect.objectContaining({ type: 'rereview', sessionId: reviewId }),
+      );
+      const updated = await engine.store.load(reviewId);
+      expect(updated.stageStatus).toBe('reviewing');
+    },
+  );
 });
