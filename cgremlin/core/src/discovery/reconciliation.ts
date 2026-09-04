@@ -10,6 +10,7 @@ import type { ReviewSession, Session } from '../schema/session';
 import { canTransition, type DevelopmentPhase, type ReviewPhase } from '../schema/pipeline';
 import { TERMINAL_PHASES_BY_MODE } from '../workspace/workspace-in-use';
 import { awaitRunStart } from '../pipeline/run-start';
+import type { KeyedLock } from '../api/keyed-lock';
 
 export type ReconcileAction =
   | { type: 'transition'; sessionId: string; to: string; reason: string }
@@ -116,6 +117,7 @@ export interface ReconciliationTickDeps {
   pipeline: PipelineService;
   events: EngineEvents;
   config: DiscoveryConfig;
+  lock: KeyedLock;
 }
 
 export interface TickReport {
@@ -123,6 +125,7 @@ export interface TickReport {
   actions: ReconcileAction[];
   skipped: SkippedTransition[];
   created: string[];
+  started: string[];
   ignoredOwn: number;
   errors: { where: string; error: string }[];
 }
@@ -134,12 +137,22 @@ function errorMessage(err: unknown): string {
 export class ReconciliationTick {
   constructor(private readonly deps: ReconciliationTickDeps) {}
 
+  private async startReview(sessionId: string, report: TickReport): Promise<void> {
+    try {
+      await awaitRunStart(this.deps.events, sessionId, this.deps.pipeline.runReview(sessionId));
+      report.started.push(sessionId);
+    } catch (err) {
+      report.errors.push({ where: sessionId, error: errorMessage(err) });
+    }
+  }
+
   async run(): Promise<TickReport> {
     const report: TickReport = {
       reconciled: 0,
       actions: [],
       skipped: [],
       created: [],
+      started: [],
       ignoredOwn: 0,
       errors: [],
     };
@@ -152,30 +165,52 @@ export class ReconciliationTick {
 
     for (const review of reviewSessions) {
       try {
-        const pr = review.pr;
-        if (!pr) continue;
-        const { stdout } = await this.deps.gh.run([
-          'pr', 'view', String(pr.number), '--repo', pr.repo, '--json', PR_VIEW_FIELDS,
-        ]);
-        const view = mapPrView(pr.repo, parsePrView(stdout));
-        const source = sessions.find((s) => s.id === review.lineage.parentSessionId) ?? null;
+        await this.deps.lock.withLock(review.id, async () => {
+          // Re-load under the lock: an API request may have already acted on
+          // this session while it sat in our snapshot from above, and we must
+          // plan off the current truth, not the stale copy — the lock is
+          // shared with the API server for exactly this reason.
+          const fresh = await this.deps.store.load(review.id);
+          if (fresh.mode !== 'review' || TERMINAL_PHASES_BY_MODE.review.has(fresh.stageStatus) || !fresh.pr) {
+            return;
+          }
+          const pr = fresh.pr;
+          const { stdout } = await this.deps.gh.run([
+            'pr', 'view', String(pr.number), '--repo', pr.repo, '--json', PR_VIEW_FIELDS,
+          ]);
+          const view = mapPrView(pr.repo, parsePrView(stdout));
+          const source = sessions.find((s) => s.id === fresh.lineage.parentSessionId) ?? null;
 
-        const { actions, skipped } = planReconciliation({ review, view, source });
-        report.actions.push(...actions);
-        report.skipped.push(...skipped);
-        report.reconciled += 1;
+          const { actions, skipped } = planReconciliation({ review: fresh, view, source });
+          report.actions.push(...actions);
+          report.skipped.push(...skipped);
+          report.reconciled += 1;
 
-        for (const action of actions) {
-          if (action.type === 'transition') {
-            await this.deps.pipeline.transition(action.sessionId, action.to);
-          } else if (action.type === 'rereview') {
-            try {
-              await awaitRunStart(this.deps.events, action.sessionId, this.deps.pipeline.runRereview(action.sessionId));
-            } catch (err) {
-              report.errors.push({ where: review.id, error: errorMessage(err) });
+          for (const action of actions) {
+            if (action.type === 'transition') {
+              if (action.sessionId === fresh.id && action.to === 'dismissed' && fresh.stageStatus === 'reviewing') {
+                // Don't leave the agent running against a PR we're about to
+                // dismiss out from under it.
+                await this.deps.pipeline.stop(action.sessionId);
+              }
+              await this.deps.pipeline.transition(action.sessionId, action.to);
+            } else if (action.type === 'rereview') {
+              try {
+                await awaitRunStart(this.deps.events, action.sessionId, this.deps.pipeline.runRereview(action.sessionId));
+              } catch (err) {
+                report.errors.push({ where: review.id, error: errorMessage(err) });
+              }
             }
           }
-        }
+
+          // Recovery: a queued session that has never been run — whether just
+          // created this tick's discovery pass on an earlier run, or left over
+          // across an engine restart — needs its review started.
+          const final = await this.deps.store.load(fresh.id);
+          if (final.mode === 'review' && final.stageStatus === 'queued' && final.lastRun === null) {
+            await this.startReview(final.id, report);
+          }
+        });
       } catch (err) {
         report.errors.push({ where: review.id, error: errorMessage(err) });
       }
@@ -195,6 +230,7 @@ export class ReconciliationTick {
         try {
           const created = await this.deps.factory.createFromCandidate(candidate);
           report.created.push(created.id);
+          await this.startReview(created.id, report);
         } catch (err) {
           report.errors.push({
             where: `${candidate.repo}#${candidate.number}`,

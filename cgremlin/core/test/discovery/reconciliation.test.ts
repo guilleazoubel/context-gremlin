@@ -1,12 +1,13 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { createHarness, SESSIONS_DIR, WORKTREES_DIR, FIXED_NOW } from '../support/pipeline-harness';
+import { createHarness, flush, SESSIONS_DIR, WORKTREES_DIR, FIXED_NOW } from '../support/pipeline-harness';
 import { FakeGhRunner } from '../support/fake-gh-runner';
 import { mapPrView } from '../../src/gh/pr-view';
 import { DefaultPRDiscoveryStrategy } from '../../src/discovery/pr-discovery-strategy';
 import { ReviewSessionFactory } from '../../src/pipeline/review-session-factory';
 import { planReconciliation, ReconciliationTick } from '../../src/discovery/reconciliation';
+import { KeyedLock } from '../../src/api/keyed-lock';
 import { migrateV1ToV2, type ReviewSession, type Session } from '../../src/schema/session';
 import type { DevelopmentPhase, InvestigationPhase, ReviewPhase } from '../../src/schema/pipeline';
 import type { DiscoveryConfig } from '../../src/discovery/discovery-config';
@@ -250,19 +251,20 @@ function tickHarness() {
     gh, store: h.store, workspace: h.workspace, events: h.events,
     sessionsDir: SESSIONS_DIR, worktreesDir: WORKTREES_DIR, now: FIXED_NOW,
   });
-  return { h, gh, strategy, factory };
+  const lock = new KeyedLock();
+  return { h, gh, strategy, factory, lock };
 }
 
 describe('ReconciliationTick', () => {
   it('applies a MERGED transition to a real review session on disk', async () => {
-    const { h, gh, strategy, factory } = tickHarness();
+    const { h, gh, strategy, factory, lock } = tickHarness();
     const review = reviewSession({ stageStatus: 'ready', repo: 'acme/app', number: 5 });
     await h.store.save(review);
     gh.queueResponse({ stdout: viewJson({ state: 'MERGED', mergedAt: '2026-09-04T00:00:00Z' }) });
     gh.queueResponse({ stdout: '[]' }); // strategy.poll's pr list for acme/app
 
     const tick = new ReconciliationTick({
-      gh, store: h.store, strategy, factory, pipeline: h.service, events: h.events,
+      gh, store: h.store, strategy, factory, pipeline: h.service, events: h.events, lock,
       config: discoveryConfig({ repos: ['acme/app'] }),
     });
     const report = await tick.run();
@@ -273,8 +275,35 @@ describe('ReconciliationTick', () => {
     expect(reloaded.stageStatus).toBe('dismissed');
   });
 
+  it('stops the agent before dismissing a review session that is mid-run (reviewing), so it does not leak', async () => {
+    const { h, gh, strategy, factory, lock } = tickHarness();
+    const review = reviewSession({ stageStatus: 'ready', repo: 'acme/app', number: 5 });
+    await h.store.save(review);
+
+    // Start a real run so the session is genuinely 'reviewing' with an active agent handle.
+    const runPromise = h.service.runReview(review.id);
+    await flush();
+    const handle = h.runner.lastHandle();
+    expect((await h.store.load(review.id)).stageStatus).toBe('reviewing');
+    expect(h.runner.isStopped(handle)).toBe(false);
+
+    gh.queueResponse({ stdout: viewJson({ state: 'MERGED', mergedAt: '2026-09-04T00:00:00Z' }) });
+    gh.queueResponse({ stdout: '[]' });
+
+    const tick = new ReconciliationTick({
+      gh, store: h.store, strategy, factory, pipeline: h.service, events: h.events, lock,
+      config: discoveryConfig({ repos: ['acme/app'] }),
+    });
+    const report = await tick.run();
+
+    expect(report.errors).toEqual([]);
+    expect(h.runner.isStopped(handle)).toBe(true);
+    expect((await h.store.load(review.id)).stageStatus).toBe('dismissed');
+    void runPromise; // left pending deliberately: the fake never emits exit on its own after stop()
+  });
+
   it('invokes runRereview for the new-commit case, seen as the review session moving to reviewing', async () => {
-    const { h, gh, strategy, factory } = tickHarness();
+    const { h, gh, strategy, factory, lock } = tickHarness();
     const review = reviewSession({ stageStatus: 'ready', reviewedSha: 'a'.repeat(40), repo: 'acme/app', number: 5 });
     await h.store.save(review);
     await h.workspace.createWorkspace({
@@ -286,7 +315,7 @@ describe('ReconciliationTick', () => {
     h.git.queueResponse({ stdout: 'aaa', stderr: '' }); // runRereview's rev-parse HEAD
 
     const tick = new ReconciliationTick({
-      gh, store: h.store, strategy, factory, pipeline: h.service, events: h.events,
+      gh, store: h.store, strategy, factory, pipeline: h.service, events: h.events, lock,
       config: discoveryConfig({ repos: ['acme/app'] }),
     });
     const report = await tick.run();
@@ -296,26 +325,70 @@ describe('ReconciliationTick', () => {
     expect(reloaded.stageStatus).toBe('reviewing');
   });
 
-  it('mutation guard: does not start a rereview for a queued review session even with a new head sha', async () => {
-    const { h, gh, strategy, factory } = tickHarness();
+  it('mutation guard: does not start a REREVIEW for a queued review session even with a new head sha (rereview needs a completed prior review)', async () => {
+    const { h, gh, strategy, factory, lock } = tickHarness();
     const review = reviewSession({ stageStatus: 'queued', reviewedSha: 'a'.repeat(40), repo: 'acme/app', number: 5 });
     await h.store.save(review);
     gh.queueResponse({ stdout: viewJson({ state: 'OPEN', reviewDecision: 'CHANGES_REQUESTED', headRefOid: 'c'.repeat(40) }) });
     gh.queueResponse({ stdout: '[]' });
 
     const tick = new ReconciliationTick({
-      gh, store: h.store, strategy, factory, pipeline: h.service, events: h.events,
+      gh, store: h.store, strategy, factory, pipeline: h.service, events: h.events, lock,
       config: discoveryConfig({ repos: ['acme/app'] }),
     });
     const report = await tick.run();
 
+    // No rereview/transition action was proposed by planReconciliation for a
+    // queued phase — but the recovery path (W2) still starts a first,
+    // ordinary review for it, since it has never been run at all.
     expect(report.actions).toEqual([]);
+    expect(report.started).toEqual([review.id]);
     const reloaded = await h.store.load(review.id);
-    expect(reloaded.stageStatus).toBe('queued');
+    expect(reloaded.stageStatus).toBe('reviewing');
+  });
+
+  it('recovery: a pre-existing queued session with lastRun null is started (engine-restart recovery)', async () => {
+    const { h, gh, strategy, factory, lock } = tickHarness();
+    const review = reviewSession({ stageStatus: 'queued', reviewedSha: 'a'.repeat(40), repo: 'acme/app', number: 5 });
+    await h.store.save(review);
+    gh.queueResponse({ stdout: viewJson({ state: 'OPEN', reviewDecision: '', headRefOid: 'a'.repeat(40) }) });
+    gh.queueResponse({ stdout: '[]' });
+
+    const tick = new ReconciliationTick({
+      gh, store: h.store, strategy, factory, pipeline: h.service, events: h.events, lock,
+      config: discoveryConfig({ repos: ['acme/app'] }),
+    });
+    const report = await tick.run();
+
+    expect(report.started).toEqual([review.id]);
+    expect((await h.store.load(review.id)).stageStatus).toBe('reviewing');
+  });
+
+  it('recovery guard: a queued session with a non-null lastRun (a stopped/failed earlier attempt) is NOT auto-started — that is a human decision', async () => {
+    const { h, gh, strategy, factory, lock } = tickHarness();
+    const review = reviewSession({ stageStatus: 'queued', reviewedSha: 'a'.repeat(40), repo: 'acme/app', number: 5 });
+    await h.store.save({
+      ...review,
+      lastRun: {
+        stage: 'review', startedAt: '2026-09-04T00:00:00.000Z', finishedAt: '2026-09-04T00:05:00.000Z',
+        exitCode: null, signal: 'SIGTERM', outcome: 'stopped', error: 'stopped by user',
+      },
+    });
+    gh.queueResponse({ stdout: viewJson({ state: 'OPEN', reviewDecision: '', headRefOid: 'a'.repeat(40) }) });
+    gh.queueResponse({ stdout: '[]' });
+
+    const tick = new ReconciliationTick({
+      gh, store: h.store, strategy, factory, pipeline: h.service, events: h.events, lock,
+      config: discoveryConfig({ repos: ['acme/app'] }),
+    });
+    const report = await tick.run();
+
+    expect(report.started).toEqual([]);
+    expect((await h.store.load(review.id)).stageStatus).toBe('queued');
   });
 
   it('a gh pr view rejection for one review session does not stop the others, and lands in errors', async () => {
-    const { h, gh, strategy, factory } = tickHarness();
+    const { h, gh, strategy, factory, lock } = tickHarness();
     const broken = reviewSession({ id: 'pr-app-4-x', stageStatus: 'ready', repo: 'acme/app', number: 4 });
     const healthy = reviewSession({ id: 'pr-app-5-x', stageStatus: 'ready', repo: 'acme/app', number: 5 });
     await h.store.save(broken);
@@ -326,7 +399,7 @@ describe('ReconciliationTick', () => {
     gh.queueResponse({ stdout: '[]' });
 
     const tick = new ReconciliationTick({
-      gh, store: h.store, strategy, factory, pipeline: h.service, events: h.events,
+      gh, store: h.store, strategy, factory, pipeline: h.service, events: h.events, lock,
       config: discoveryConfig({ repos: ['acme/app'] }),
     });
     const report = await tick.run();
@@ -335,8 +408,8 @@ describe('ReconciliationTick', () => {
     expect((await h.store.load('pr-app-5-x')).stageStatus).toBe('dismissed');
   });
 
-  it('discovers a review candidate via the strategy and creates a session for it', async () => {
-    const { h, gh, strategy, factory } = tickHarness();
+  it('discovers a review candidate via the strategy, creates a session for it, and starts its review within the same tick', async () => {
+    const { h, gh, strategy, factory, lock } = tickHarness();
     gh.queueResponse({
       stdout: JSON.stringify([{
         number: 9, url: 'https://github.com/acme/app/pull/9',
@@ -348,19 +421,23 @@ describe('ReconciliationTick', () => {
     gh.queueResponse({ stdout: viewJson({ number: 9, url: 'https://github.com/acme/app/pull/9' }) });
 
     const tick = new ReconciliationTick({
-      gh, store: h.store, strategy, factory, pipeline: h.service, events: h.events,
+      gh, store: h.store, strategy, factory, pipeline: h.service, events: h.events, lock,
       config: discoveryConfig({ repos: ['acme/app'], watchAuthors: ['bob'], me: 'me-user' }),
     });
     const report = await tick.run();
 
     expect(report.created.length).toBe(1);
     expect(report.ignoredOwn).toBe(0);
+    const createdId = report.created[0];
+    expect(report.started).toEqual([createdId]);
     const sessions = await h.store.list();
     expect(sessions.some((s) => s.mode === 'review' && s.pr?.number === 9)).toBe(true);
+    const created = await h.store.load(createdId);
+    expect(created.stageStatus).toBe('reviewing');
   });
 
   it('counts an own candidate but does not create a session for it', async () => {
-    const { h, gh, strategy, factory } = tickHarness();
+    const { h, gh, strategy, factory, lock } = tickHarness();
     gh.queueResponse({
       stdout: JSON.stringify([{
         number: 10, url: 'https://github.com/acme/app/pull/10',
@@ -371,7 +448,7 @@ describe('ReconciliationTick', () => {
     });
 
     const tick = new ReconciliationTick({
-      gh, store: h.store, strategy, factory, pipeline: h.service, events: h.events,
+      gh, store: h.store, strategy, factory, pipeline: h.service, events: h.events, lock,
       config: discoveryConfig({ repos: ['acme/app'], watchAuthors: ['me-user'], me: 'me-user' }),
     });
     const report = await tick.run();
@@ -382,11 +459,11 @@ describe('ReconciliationTick', () => {
   });
 
   it('never throws — a strategy-level gh failure for one repo lands in errors and the tick still returns a report', async () => {
-    const { h, gh, strategy, factory } = tickHarness();
+    const { h, gh, strategy, factory, lock } = tickHarness();
     gh.queueResponse(new Error('gh: network unreachable'));
 
     const tick = new ReconciliationTick({
-      gh, store: h.store, strategy, factory, pipeline: h.service, events: h.events,
+      gh, store: h.store, strategy, factory, pipeline: h.service, events: h.events, lock,
       config: discoveryConfig({ repos: ['acme/app'] }),
     });
     const report = await tick.run();
@@ -399,7 +476,7 @@ describe('ReconciliationTick', () => {
   });
 
   it('links a discovered candidate to its development source via the ticket key in the branch name, then merges that source once the PR merges (proves source lookup is not always null)', async () => {
-    const { h, gh, strategy, factory } = tickHarness();
+    const { h, gh, strategy, factory, lock } = tickHarness();
     const source = developmentSession('dev-1', 'pr_opened', 'acme/app', 999); // a different PR number: pass-1 (repo+number) must NOT match
     await h.store.save({ ...source, lineage: { ...source.lineage, ticket: 'APP-1' } });
 
@@ -416,7 +493,7 @@ describe('ReconciliationTick', () => {
     });
 
     const tick = new ReconciliationTick({
-      gh, store: h.store, strategy, factory, pipeline: h.service, events: h.events,
+      gh, store: h.store, strategy, factory, pipeline: h.service, events: h.events, lock,
       config: discoveryConfig({ repos: ['acme/app'] }),
     });
     const discoveryReport = await tick.run();

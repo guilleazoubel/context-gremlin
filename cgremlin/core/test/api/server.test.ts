@@ -15,9 +15,14 @@ import { FakeAgentRunner } from '../support/fake-agent-runner';
 import { migrateV1ToV2, type Session, type SessionV1 } from '../../src/schema/session';
 import type { SessionFileSystem } from '../../src/fs/session-file-system';
 import { createHarness, flush, SESSIONS_DIR, type PipelineHarness } from '../support/pipeline-harness';
-import { createDiscoveryHarness } from '../support/discovery-harness';
+import { createDiscoveryHarness, discoveryConfig } from '../support/discovery-harness';
 import { DiscoveryScheduler } from '../../src/discovery/scheduler';
 import type { GhRunner } from '../../src/gh/gh-runner';
+import { KeyedLock } from '../../src/api/keyed-lock';
+import { ReconciliationTick } from '../../src/discovery/reconciliation';
+import { DefaultPRDiscoveryStrategy } from '../../src/discovery/pr-discovery-strategy';
+import { ReviewSessionFactory } from '../../src/pipeline/review-session-factory';
+import { FakeGhRunner } from '../support/fake-gh-runner';
 
 const APPROVED_PLAN = `## Review Status
 - PM: ✅ Approved — solves exactly the ticket
@@ -140,6 +145,7 @@ async function createDelayedServer(socketFileName: string) {
   const workspace = new WorkspaceManager(git, delayedFs, '/mirrors');
   const events = new EngineEvents();
   const runner = new FakeAgentRunner();
+  const lock = new KeyedLock();
   const stageRunner = new StageRunner({
     runner,
     store,
@@ -164,6 +170,7 @@ async function createDelayedServer(socketFileName: string) {
     fs: delayedFs,
     sessionsDir: '/sessions',
     events,
+    lock,
   });
   const sock = path.join(dir, socketFileName);
   await new Promise<void>((resolve) => srv.listen(sock, resolve));
@@ -173,6 +180,11 @@ async function createDelayedServer(socketFileName: string) {
     store,
     pipeline,
     runner,
+    lock,
+    events,
+    workspace,
+    git,
+    fs: delayedFs,
   };
 }
 
@@ -573,6 +585,66 @@ describe('API server', () => {
       expect(bodyB.investigation.id).toBe(invB.id);
       expect(bodyA.development.lineage.parentSessionId).toBe(invA.id);
       expect(bodyB.development.lineage.parentSessionId).toBe(invB.id);
+    } finally {
+      await d.close();
+      await rm(d.sock, { force: true });
+    }
+  });
+
+  it('a ReconciliationTick sharing the server\'s lock waits for an in-flight API rereview on the same session, then re-plans from the fresh state instead of starting a second rereview', async () => {
+    const d = await createDelayedServer('shared-lock.sock');
+    try {
+      const reviewId = 'pr-app-5-x';
+      const v1: SessionV1 = {
+        schemaVersion: 1, id: reviewId, mode: 'review', createdAt: '2026-09-04T10:00:00.000Z',
+        workspace: { repoUrl: 'git@github.com:acme/app.git', worktreePath: '/worktrees/pr-app-5-x', branch: 'pr-5' },
+        lineage: { pipelineId: reviewId, parentSessionId: null, ticket: null },
+        stageStatus: 'ready',
+      };
+      const review = migrateV1ToV2(v1);
+      if (review.mode !== 'review') throw new Error('mode changed');
+      review.pr = {
+        repo: 'acme/app', number: 5, url: 'https://github.com/acme/app/pull/5',
+        headSha: 'a'.repeat(40), reviewedSha: 'a'.repeat(40), title: 't', author: 'bob',
+      };
+      await d.store.save(review);
+
+      const gh = new FakeGhRunner();
+      // A head sha mismatch is only a rereview trigger from 'ready'/'changes_requested' —
+      // if the tick used the stale 'ready' snapshot instead of waiting on the shared lock
+      // and re-reading fresh, it would see this mismatch as eligible and try a second,
+      // concurrent rereview on the session the API call is already running.
+      gh.queueResponse({ stdout: JSON.stringify({
+        number: 5, title: 't', author: { login: 'bob' }, headRefName: 'pr-5', headRefOid: 'b'.repeat(40),
+        baseRefName: 'main', url: 'https://github.com/acme/app/pull/5', state: 'OPEN', isDraft: false,
+        reviewDecision: '', mergedAt: null, closedAt: null, latestReviews: [], statusCheckRollup: [],
+      }) });
+      gh.queueResponse({ stdout: '[]' }); // strategy.poll's pr list for acme/app
+
+      const strategy = new DefaultPRDiscoveryStrategy(gh);
+      const factory = new ReviewSessionFactory({
+        gh, store: d.store, workspace: d.workspace, events: d.events,
+        sessionsDir: '/sessions', worktreesDir: '/worktrees',
+      });
+      const tick = new ReconciliationTick({
+        gh, store: d.store, strategy, factory, pipeline: d.pipeline, events: d.events, lock: d.lock,
+        config: discoveryConfig({ repos: ['acme/app'] }),
+      });
+
+      const apiRequest = requestOn(d.sock, 'POST', `/sessions/${reviewId}/rereview`);
+      // Give the API request a head start acquiring the lock before the tick races in —
+      // the delayed fs makes its own path slow enough that this margin is generous.
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      const report = await tick.run();
+      const apiRes = await apiRequest;
+
+      expect(apiRes.status).toBe(202);
+      expect(report.errors).toEqual([]);
+      // No rereview or transition action was planned: the tick's fresh, lock-protected
+      // read saw 'reviewing' (not rereview-eligible), not the stale 'ready' snapshot.
+      expect(report.actions).toEqual([]);
+      expect(report.skipped).toEqual([]);
+      expect((await d.store.load(reviewId)).stageStatus).toBe('reviewing');
     } finally {
       await d.close();
       await rm(d.sock, { force: true });

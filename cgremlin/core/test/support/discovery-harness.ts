@@ -5,6 +5,7 @@ import { ReviewSessionFactory } from '../../src/pipeline/review-session-factory'
 import { ReconciliationTick } from '../../src/discovery/reconciliation';
 import type { DiscoveryConfig } from '../../src/discovery/discovery-config';
 import type { GhRunner } from '../../src/gh/gh-runner';
+import { KeyedLock } from '../../src/api/keyed-lock';
 
 export function discoveryConfig(overrides: Partial<DiscoveryConfig> = {}): DiscoveryConfig {
   return {
@@ -24,11 +25,13 @@ export interface DiscoveryHarness {
   factory: ReviewSessionFactory;
   tick: ReconciliationTick;
   config: DiscoveryConfig;
+  lock: KeyedLock;
 }
 
 export function createDiscoveryHarness(
   configOverrides: Partial<DiscoveryConfig> = {},
   wrapGh: (gh: FakeGhRunner) => GhRunner = (gh) => gh,
+  lock: KeyedLock = new KeyedLock(),
 ): DiscoveryHarness {
   const h = createHarness();
   const gh = new FakeGhRunner();
@@ -40,7 +43,7 @@ export function createDiscoveryHarness(
   });
   const config = discoveryConfig(configOverrides);
   const tick = new ReconciliationTick({
-    gh: effectiveGh, store: h.store, strategy, factory, pipeline: h.service, events: h.events, config,
+    gh: effectiveGh, store: h.store, strategy, factory, pipeline: h.service, events: h.events, config, lock,
   });
-  return { h, gh, strategy, factory, tick, config };
+  return { h, gh, strategy, factory, tick, config, lock };
 }

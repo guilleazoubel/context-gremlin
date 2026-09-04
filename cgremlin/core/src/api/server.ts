@@ -54,10 +54,11 @@ export interface ApiServerDeps {
   sessionsDir: string;
   events: EngineEvents;
   discovery?: { scheduler: DiscoveryScheduler; config: DiscoveryConfig };
+  lock?: KeyedLock;
 }
 
 export function createApiServer(deps: ApiServerDeps): http.Server {
-  const lock = new KeyedLock();
+  const lock = deps.lock ?? new KeyedLock();
   return http.createServer((req, res) => {
     void handleRequest(req, res, deps, lock);
   });
