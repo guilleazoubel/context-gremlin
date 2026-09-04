@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Session } from '../../src/schema/session';
+import { migrateV1ToV2, type Session } from '../../src/schema/session';
 import type { DevelopmentPhase, InvestigationPhase, ReviewPhase } from '../../src/schema/pipeline';
 import {
   assertWorktreeNotInUse,
@@ -19,15 +19,15 @@ function baseSession(id: string, worktreePath: string | undefined) {
 }
 
 function investigationSession(id: string, stageStatus: InvestigationPhase, worktreePath?: string): Session {
-  return { ...baseSession(id, worktreePath), mode: 'investigation', stageStatus };
+  return migrateV1ToV2({ ...baseSession(id, worktreePath), mode: 'investigation', stageStatus });
 }
 
 function developmentSession(id: string, stageStatus: DevelopmentPhase, worktreePath?: string): Session {
-  return { ...baseSession(id, worktreePath), mode: 'development', stageStatus };
+  return migrateV1ToV2({ ...baseSession(id, worktreePath), mode: 'development', stageStatus });
 }
 
 function reviewSession(id: string, stageStatus: ReviewPhase, worktreePath?: string): Session {
-  return { ...baseSession(id, worktreePath), mode: 'review', stageStatus };
+  return migrateV1ToV2({ ...baseSession(id, worktreePath), mode: 'review', stageStatus });
 }
 
 const wt = '/worktrees/app-1';
