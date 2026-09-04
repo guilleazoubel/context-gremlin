@@ -7,6 +7,11 @@ import {
 } from '../../src/engine/session-store';
 import { IllegalTransitionError } from '../../src/schema/pipeline';
 import { ValidationError } from '../../src/api/validation';
+import { PlanGateError } from '../../src/pipeline/plan-gate';
+import { RunInProgressError, WorkspaceMissingError } from '../../src/pipeline/stage-runner';
+import { UnsupportedStageError } from '../../src/pipeline/pipeline-service';
+import { WorkspaceInUseError } from '../../src/workspace/workspace-in-use';
+import { ArtifactNotFoundError } from '../../src/api/artifacts';
 
 describe('mapErrorToHttp', () => {
   it('maps SessionNotFoundError to 404', () => {
@@ -46,5 +51,29 @@ describe('mapErrorToHttp', () => {
   it('maps a non-Error thrown value to 500', () => {
     const result = mapErrorToHttp('a string error');
     expect(result.status).toBe(500);
+  });
+
+  it('maps PlanGateError to 409', () => {
+    expect(mapErrorToHttp(new PlanGateError('cannot promote')).status).toBe(409);
+  });
+
+  it('maps RunInProgressError to 409', () => {
+    expect(mapErrorToHttp(new RunInProgressError('inv-1')).status).toBe(409);
+  });
+
+  it('maps WorkspaceInUseError to 409', () => {
+    expect(mapErrorToHttp(new WorkspaceInUseError('/w', ['inv-1'])).status).toBe(409);
+  });
+
+  it('maps UnsupportedStageError to 409', () => {
+    expect(mapErrorToHttp(new UnsupportedStageError('cannot run')).status).toBe(409);
+  });
+
+  it('maps WorkspaceMissingError to 409', () => {
+    expect(mapErrorToHttp(new WorkspaceMissingError('inv-1')).status).toBe(409);
+  });
+
+  it('maps ArtifactNotFoundError to 404', () => {
+    expect(mapErrorToHttp(new ArtifactNotFoundError('inv-1', 'PLAN.md')).status).toBe(404);
   });
 });

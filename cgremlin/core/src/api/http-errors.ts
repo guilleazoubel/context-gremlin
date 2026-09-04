@@ -17,6 +17,14 @@ export function mapErrorToHttp(err: unknown): HttpError {
       return { status: 500, body: { error: message } };
     case 'ValidationError':
       return { status: 400, body: { error: message } };
+    case 'PlanGateError':
+    case 'RunInProgressError':
+    case 'WorkspaceInUseError':
+    case 'UnsupportedStageError':
+    case 'WorkspaceMissingError':
+      return { status: 409, body: { error: message } };
+    case 'ArtifactNotFoundError':
+      return { status: 404, body: { error: message } };
     default:
       return { status: 500, body: { error: message } };
   }
