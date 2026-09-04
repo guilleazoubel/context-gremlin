@@ -6,11 +6,17 @@
 // "Verified Ground Truth" section).
 'use strict';
 
+const fs = require('node:fs');
+
 const args = process.argv.slice(2);
 
 function argValue(flag) {
   const idx = args.indexOf(flag);
   return idx >= 0 ? args[idx + 1] : undefined;
+}
+
+if (process.env.FAKE_CLI_ARGV_LOG) {
+  fs.writeFileSync(process.env.FAKE_CLI_ARGV_LOG, JSON.stringify(args));
 }
 
 const prompt = args[args.indexOf('-p') + 1] ?? '';

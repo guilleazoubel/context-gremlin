@@ -1,4 +1,5 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { spawn, type ChildProcessByStdio } from 'node:child_process';
+import type { Readable } from 'node:stream';
 import type {
   AgentExitResult,
   AgentHandle,
@@ -12,7 +13,7 @@ interface ClaudeAgentState {
   outputCallbacks: Array<(chunk: AgentOutput) => void>;
   exitCallbacks: Array<(result: AgentExitResult) => void>;
   claudeSessionId?: string;
-  currentProcess?: ChildProcessWithoutNullStreams;
+  currentProcess?: ChildProcessByStdio<null, Readable, Readable>;
 }
 
 export class UnknownAgentHandleError extends Error {
@@ -47,6 +48,11 @@ export class ClaudeCodeRunner implements AgentRunner {
     return { id };
   }
 
+  /**
+   * Do not call sendPrompt again on the same handle before the previous
+   * call's promise resolves — overlapping calls are not supported and
+   * may orphan the earlier process.
+   */
   async sendPrompt(handle: AgentHandle, prompt: string): Promise<void> {
     const state = this.requireState(handle);
     const args = [
@@ -66,7 +72,10 @@ export class ClaudeCodeRunner implements AgentRunner {
     }
 
     return new Promise((resolve, reject) => {
-      const child = spawn(this.claudeBinary, args, { cwd: state.ctx.workingDirectory });
+      const child = spawn(this.claudeBinary, args, {
+        cwd: state.ctx.workingDirectory,
+        stdio: ['ignore', 'pipe', 'pipe'] as const,
+      });
       state.currentProcess = child;
 
       let buffer = '';
@@ -88,10 +97,21 @@ export class ClaudeCodeRunner implements AgentRunner {
         }
       });
 
-      child.on('error', reject);
+      child.on('error', (err) => {
+        if (state.currentProcess === child) {
+          state.currentProcess = undefined;
+        }
+        reject(err);
+      });
 
-      child.on('exit', (code, signal) => {
-        state.currentProcess = undefined;
+      child.on('close', (code, signal) => {
+        if (buffer.trim()) {
+          this.handleLine(state, buffer);
+          buffer = '';
+        }
+        if (state.currentProcess === child) {
+          state.currentProcess = undefined;
+        }
         for (const callback of state.exitCallbacks) {
           callback({ code, signal });
         }

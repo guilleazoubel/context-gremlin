@@ -1,4 +1,6 @@
 import path from 'node:path';
+import { readFile, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import { ClaudeCodeRunner, UnknownAgentHandleError } from '../../src/agent/claude-code-runner';
 
@@ -63,5 +65,60 @@ describe('ClaudeCodeRunner', () => {
   it('throws UnknownAgentHandleError for a fabricated handle', async () => {
     const runner = new ClaudeCodeRunner({ claudeBinary: FIXTURE });
     await expect(runner.sendPrompt({ id: 'nope' }, 'x')).rejects.toThrow(UnknownAgentHandleError);
+  });
+
+  it('constructs the exact expected CLI arguments, including model and permission mode', async () => {
+    const argvLogPath = path.join(tmpdir(), `claude-code-runner-argv-${Date.now()}.json`);
+    process.env.FAKE_CLI_ARGV_LOG = argvLogPath;
+    try {
+      const runner = new ClaudeCodeRunner({
+        claudeBinary: FIXTURE,
+        model: 'claude-sonnet-5',
+        permissionMode: 'acceptEdits',
+      });
+      const handle = await runner.start({ sessionId: 'inv-1', workingDirectory: process.cwd() });
+      await runner.sendPrompt(handle, 'hello');
+      const argv = JSON.parse(await readFile(argvLogPath, 'utf8'));
+      expect(argv).toEqual([
+        '-p',
+        'hello',
+        '--output-format',
+        'stream-json',
+        '--verbose',
+        '--permission-mode',
+        'acceptEdits',
+        '--model',
+        'claude-sonnet-5',
+      ]);
+    } finally {
+      delete process.env.FAKE_CLI_ARGV_LOG;
+      await rm(argvLogPath, { force: true });
+    }
+  });
+
+  it('includes --resume with the previously captured session id on the second call', async () => {
+    const argvLogPath = path.join(tmpdir(), `claude-code-runner-argv-resume-${Date.now()}.json`);
+    const runner = new ClaudeCodeRunner({ claudeBinary: FIXTURE });
+    const handle = await runner.start({ sessionId: 'inv-1', workingDirectory: process.cwd() });
+    await runner.sendPrompt(handle, 'first');
+    process.env.FAKE_CLI_ARGV_LOG = argvLogPath;
+    try {
+      await runner.sendPrompt(handle, 'second');
+      const argv = JSON.parse(await readFile(argvLogPath, 'utf8'));
+      expect(argv).toEqual([
+        '-p',
+        'second',
+        '--output-format',
+        'stream-json',
+        '--verbose',
+        '--permission-mode',
+        'bypassPermissions',
+        '--resume',
+        'fresh-session-1',
+      ]);
+    } finally {
+      delete process.env.FAKE_CLI_ARGV_LOG;
+      await rm(argvLogPath, { force: true });
+    }
   });
 });
