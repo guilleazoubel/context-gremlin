@@ -15,13 +15,11 @@ import { FakeAgentRunner } from '../support/fake-agent-runner';
 import { migrateV1ToV2, type Session, type SessionV1 } from '../../src/schema/session';
 import type { SessionFileSystem } from '../../src/fs/session-file-system';
 import { createHarness, flush, SESSIONS_DIR, type PipelineHarness } from '../support/pipeline-harness';
-import { createDiscoveryHarness, discoveryConfig } from '../support/discovery-harness';
+import { createDiscoveryHarness } from '../support/discovery-harness';
 import { DiscoveryScheduler } from '../../src/discovery/scheduler';
 import type { GhRunner } from '../../src/gh/gh-runner';
 import { KeyedLock } from '../../src/api/keyed-lock';
 import { ReconciliationTick } from '../../src/discovery/reconciliation';
-import { DefaultPRDiscoveryStrategy } from '../../src/discovery/pr-discovery-strategy';
-import { ReviewSessionFactory } from '../../src/pipeline/review-session-factory';
 import { FakeGhRunner } from '../support/fake-gh-runner';
 
 const APPROVED_PLAN = `## Review Status
@@ -619,16 +617,9 @@ describe('API server', () => {
         baseRefName: 'main', url: 'https://github.com/acme/app/pull/5', state: 'OPEN', isDraft: false,
         reviewDecision: '', mergedAt: null, closedAt: null, latestReviews: [], statusCheckRollup: [],
       }) });
-      gh.queueResponse({ stdout: '[]' }); // strategy.poll's pr list for acme/app
 
-      const strategy = new DefaultPRDiscoveryStrategy(gh);
-      const factory = new ReviewSessionFactory({
-        gh, store: d.store, workspace: d.workspace, events: d.events,
-        sessionsDir: '/sessions', worktreesDir: '/worktrees',
-      });
       const tick = new ReconciliationTick({
-        gh, store: d.store, strategy, factory, pipeline: d.pipeline, events: d.events, lock: d.lock,
-        config: discoveryConfig({ repos: ['acme/app'] }),
+        gh, store: d.store, pipeline: d.pipeline, events: d.events, lock: d.lock,
       });
 
       const apiRequest = requestOn(d.sock, 'POST', `/sessions/${reviewId}/rereview`);
@@ -799,10 +790,9 @@ describe('discovery routes (configured)', () => {
   });
 
   it('POST /discovery/tick runs one tick now and returns the TickReport', async () => {
-    dh.gh.queueResponse({ stdout: '[]' }); // strategy.poll's pr list for acme/app
     const res = await discRequest('POST', '/discovery/tick');
     expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ reconciled: 0, created: [], ignoredOwn: 0, errors: [] });
+    expect(res.body).toMatchObject({ reconciled: 0, errors: [] });
   });
 
   it('GET /discovery/config returns the configured DiscoveryConfig', async () => {
@@ -851,7 +841,29 @@ describe('discovery routes (configured)', () => {
       }
     }
     const slow = createDiscoveryHarness({}, (gh) => new SlowGhRunner(gh, 30));
-    slow.gh.queueResponse({ stdout: '[]' });
+    // With no discovery poll left, a tick over zero review sessions would
+    // complete instantly (no gh call at all) — give it one real review
+    // session so the tick's own `gh pr view` call is the thing SlowGhRunner
+    // delays, making a genuinely slow, in-progress tick to race against.
+    const reviewId = 'pr-app-9-x';
+    const v1: SessionV1 = {
+      schemaVersion: 1, id: reviewId, mode: 'review', createdAt: '2026-09-04T10:00:00.000Z',
+      workspace: { repoUrl: 'git@github.com:acme/app.git', worktreePath: '/worktrees/pr-app-9-x', branch: 'pr-9' },
+      lineage: { pipelineId: reviewId, parentSessionId: null, ticket: null },
+      stageStatus: 'ready',
+    };
+    const review = migrateV1ToV2(v1);
+    if (review.mode !== 'review') throw new Error('mode changed');
+    review.pr = {
+      repo: 'acme/app', number: 9, url: 'https://github.com/acme/app/pull/9',
+      headSha: 'a'.repeat(40), reviewedSha: 'a'.repeat(40), title: 't', author: 'bob',
+    };
+    await slow.h.store.save(review);
+    slow.gh.queueResponse({ stdout: JSON.stringify({
+      number: 9, title: 't', author: { login: 'bob' }, headRefName: 'pr-9', headRefOid: 'a'.repeat(40),
+      baseRefName: 'main', url: 'https://github.com/acme/app/pull/9', state: 'OPEN', isDraft: false,
+      reviewDecision: '', mergedAt: null, closedAt: null, latestReviews: [], statusCheckRollup: [],
+    }) });
     const slowSocketPath = path.join(dir, 'api-discovery-slow.sock');
     const slowServer = createApiServer({
       sessionStore: slow.h.store,

@@ -11,9 +11,7 @@ import {
 import type { Session } from '../../src/schema/session';
 import { mirrorDirName } from '../../src/workspace/repo-mirror';
 import { ReviewSessionFactory } from '../../src/pipeline/review-session-factory';
-import { DefaultPRDiscoveryStrategy } from '../../src/discovery/pr-discovery-strategy';
 import { ReconciliationTick } from '../../src/discovery/reconciliation';
-import type { DiscoveryConfig } from '../../src/discovery/discovery-config';
 
 function hasGit(): boolean {
   try {
@@ -279,15 +277,10 @@ describe.skipIf(!hasGit())('Phase 3 engine end-to-end: review / re-review / reco
       // --- Step 3: a new commit lands, a tick picks it up as a rereview ---
       const newSha = await pushPrCommit(originPath, 12);
       engine.gh.queueResponse({ stdout: viewJson({ headRefOid: newSha }) });
-      engine.gh.queueResponse({ stdout: '[]' }); // strategy.poll's pr list
 
-      const strategy = new DefaultPRDiscoveryStrategy(engine.gh);
-      const config: DiscoveryConfig = {
-        repos: ['acme/app'], watchAuthors: [], me: 'nobody', pollIntervalMs: 60_000, prListLimit: 50,
-      };
       const tick = new ReconciliationTick({
-        gh: engine.gh, store: engine.store, strategy, factory, pipeline: engine.pipeline,
-        events: engine.events, lock: engine.lock, config,
+        gh: engine.gh, store: engine.store, pipeline: engine.pipeline,
+        events: engine.events, lock: engine.lock,
       });
       const report1 = await tick.run();
       expect(report1.actions).toContainEqual(
@@ -318,7 +311,6 @@ describe.skipIf(!hasGit())('Phase 3 engine end-to-end: review / re-review / reco
       engine.gh.queueResponse({
         stdout: viewJson({ headRefOid: newSha, state: 'MERGED', mergedAt: '2026-09-04T00:00:00Z' }),
       });
-      engine.gh.queueResponse({ stdout: '[]' });
       await tick.run();
       await waitFor(engine, review.id, (s) => s.stageStatus === 'dismissed');
 

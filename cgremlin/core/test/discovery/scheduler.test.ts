@@ -17,7 +17,7 @@ function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void; reject: 
 }
 
 function makeReport(overrides: Partial<TickReport> = {}): TickReport {
-  return { reconciled: 0, actions: [], skipped: [], created: [], started: [], ignoredOwn: 0, errors: [], ...overrides };
+  return { reconciled: 0, actions: [], skipped: [], errors: [], ...overrides };
 }
 
 class FakeClock implements Clock {
