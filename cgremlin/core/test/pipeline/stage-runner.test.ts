@@ -191,4 +191,20 @@ describe('StageRunner.run', () => {
     expect(finished).toEqual(['failed']);
     expect(sr.isRunning('inv-1')).toBe(false);
   });
+
+  it('a stageStatus transition applied while a run is pending is preserved by the final save (the post-exit re-read must not clobber it)', async () => {
+    const { store, runner, sr } = await setup();
+    const p = sr.run({ sessionId: 'inv-1', stage: 'findings', brief: null, prompt: 'go' });
+    await flush();
+    // An external change lands on disk after the "running" lastRun was
+    // persisted, but before the agent exits.
+    await store.transition('inv-1', 'planning');
+    runner.emitExit(runner.lastHandle(), { code: 0, signal: null });
+    const result = await p;
+    expect(result.session.stageStatus).toBe('planning');
+    expect(result.session.lastRun).toMatchObject({ outcome: 'succeeded' });
+    const persisted = await store.load('inv-1');
+    expect(persisted.stageStatus).toBe('planning');
+    expect(persisted.lastRun).toMatchObject({ outcome: 'succeeded' });
+  });
 });
