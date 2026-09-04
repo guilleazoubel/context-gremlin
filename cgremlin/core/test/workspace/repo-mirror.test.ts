@@ -79,6 +79,64 @@ describe('ensureMirror', () => {
     ]);
   });
 
+  it('adds the heads refspec once when an existing mirror only has the pulls refspec', async () => {
+    const git = new FakeGitRunner();
+    const fs = new InMemoryFileSystem();
+    await fs.mkdir('/mirrors/github.com-org-repo.git', { recursive: true });
+    await fs.writeFile('/mirrors/github.com-org-repo.git/HEAD', 'ref: refs/heads/master\n');
+    git.queueResponse({ stdout: '+refs/pull/*/head:refs/remotes/origin/pr/*\n', stderr: '' });
+    const mirrorPath = await ensureMirror(git, fs, '/mirrors', 'git@github.com:org/repo.git');
+    expect(mirrorPath).toBe('/mirrors/github.com-org-repo.git');
+    expect(git.calls).toEqual([
+      { args: ['config', '--get-all', 'remote.origin.fetch'], cwd: '/mirrors/github.com-org-repo.git' },
+      {
+        args: ['config', '--add', 'remote.origin.fetch', '+refs/heads/*:refs/remotes/origin/*'],
+        cwd: '/mirrors/github.com-org-repo.git',
+      },
+      { args: ['fetch', '--prune', 'origin'], cwd: '/mirrors/github.com-org-repo.git' },
+    ]);
+  });
+
+  it('tolerates an existing mirror with no fetch refspec configured at all, and adds both refspecs', async () => {
+    const git = new FakeGitRunner();
+    const fs = new InMemoryFileSystem();
+    await fs.mkdir('/mirrors/github.com-org-repo.git', { recursive: true });
+    await fs.writeFile('/mirrors/github.com-org-repo.git/HEAD', 'ref: refs/heads/master\n');
+    const keyNotSetError = Object.assign(
+      new Error('Command failed: git config --get-all remote.origin.fetch\n'),
+      { code: 1, stderr: '' },
+    );
+    git.queueResponse(keyNotSetError);
+    const mirrorPath = await ensureMirror(git, fs, '/mirrors', 'git@github.com:org/repo.git');
+    expect(mirrorPath).toBe('/mirrors/github.com-org-repo.git');
+    expect(git.calls).toEqual([
+      { args: ['config', '--get-all', 'remote.origin.fetch'], cwd: '/mirrors/github.com-org-repo.git' },
+      {
+        args: ['config', '--add', 'remote.origin.fetch', '+refs/heads/*:refs/remotes/origin/*'],
+        cwd: '/mirrors/github.com-org-repo.git',
+      },
+      {
+        args: ['config', '--add', 'remote.origin.fetch', '+refs/pull/*/head:refs/remotes/origin/pr/*'],
+        cwd: '/mirrors/github.com-org-repo.git',
+      },
+      { args: ['fetch', '--prune', 'origin'], cwd: '/mirrors/github.com-org-repo.git' },
+    ]);
+  });
+
+  it('propagates a config read failure that is not the missing-refspec-key case', async () => {
+    const git = new FakeGitRunner();
+    const fs = new InMemoryFileSystem();
+    await fs.mkdir('/mirrors/github.com-org-repo.git', { recursive: true });
+    await fs.writeFile('/mirrors/github.com-org-repo.git/HEAD', 'ref: refs/heads/master\n');
+    git.queueResponse(new Error('fatal: not a git repository'));
+    await expect(ensureMirror(git, fs, '/mirrors', 'git@github.com:org/repo.git')).rejects.toThrow(
+      'fatal: not a git repository',
+    );
+    expect(git.calls).toEqual([
+      { args: ['config', '--get-all', 'remote.origin.fetch'], cwd: '/mirrors/github.com-org-repo.git' },
+    ]);
+  });
+
   it('treats a directory without a HEAD file as not yet cloned, and attempts to clone', async () => {
     const git = new FakeGitRunner();
     const fs = new InMemoryFileSystem();

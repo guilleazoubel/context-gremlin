@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { NodeGitRunner } from '../../src/git/node-git-runner';
 import { NodeFileSystem } from '../../src/fs/node-file-system';
-import { ensureMirror } from '../../src/workspace/repo-mirror';
+import { ensureMirror, mirrorDirName } from '../../src/workspace/repo-mirror';
 import { createWorktree } from '../../src/workspace/worktree';
 
 let dir: string;
@@ -58,5 +58,37 @@ describe('ensureMirror + createWorktree against real git', () => {
     });
     expect(refs).toContain('refs/heads/session/one');
     expect(refs).toContain('refs/heads/session/two');
+  });
+
+  it('adopts a pre-existing plain `--bare` clone that has no fetch refspec configured, adding both', async () => {
+    const git = new NodeGitRunner();
+    const fs = new NodeFileSystem();
+    const mirrorsDir = path.join(dir, 'preexisting-mirrors');
+    const mirrorPath = path.join(mirrorsDir, mirrorDirName(originPath));
+
+    // A plain `git clone --bare` (unlike this module's own "new mirror" path,
+    // and unlike `clone --mirror`) sets no remote.origin.fetch at all — this
+    // reproduces a mirror created before ensureMirror existed, or by any
+    // other means.
+    await git.run(['clone', '--bare', '-q', originPath, mirrorPath], { cwd: dir });
+    await expect(
+      git.run(['config', '--get-all', 'remote.origin.fetch'], { cwd: mirrorPath }),
+    ).rejects.toThrow();
+
+    const resolvedPath = await ensureMirror(git, fs, mirrorsDir, originPath);
+    expect(resolvedPath).toBe(mirrorPath);
+
+    const { stdout: refspecs } = await git.run(['config', '--get-all', 'remote.origin.fetch'], {
+      cwd: mirrorPath,
+    });
+    expect(refspecs).toContain('+refs/heads/*:refs/remotes/origin/*');
+    expect(refspecs).toContain('+refs/pull/*/head:refs/remotes/origin/pr/*');
+
+    const { stdout: branchOut } = await git.run(['branch', '--show-current'], { cwd: originPath });
+    const defaultBranch = branchOut.trim();
+    const { stdout: revParseOut } = await git.run(['rev-parse', `origin/${defaultBranch}`], {
+      cwd: mirrorPath,
+    });
+    expect(revParseOut.trim()).toMatch(/^[0-9a-f]{40}$/);
   });
 });
