@@ -3,6 +3,7 @@ import { readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import { ClaudeCodeRunner, UnknownAgentHandleError } from '../../src/agent/claude-code-runner';
+import { describeAgentRunnerContract } from '../support/agent-runner-contract';
 
 const FIXTURE = path.join(__dirname, '../fixtures/fake-claude-cli.js');
 
@@ -152,4 +153,13 @@ describe('ClaudeCodeRunner', () => {
       await rm(argvLogPath, { force: true });
     }
   });
+});
+
+describeAgentRunnerContract('ClaudeCodeRunner', {
+  makeRunner: () => new ClaudeCodeRunner({ claudeBinary: FIXTURE }),
+  makeUnspawnableRunner: () => new ClaudeCodeRunner({ claudeBinary: '/nonexistent/agent-binary' }),
+  echoPrompt: 'hello',
+  expectedEcho: (prompt) => `echo: ${prompt}`,
+  hangPrompt: 'HANG_FOREVER',
+  failPrompt: 'FAIL_LOUDLY',
 });
