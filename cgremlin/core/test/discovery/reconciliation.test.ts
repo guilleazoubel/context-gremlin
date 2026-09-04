@@ -5,7 +5,6 @@ import { createHarness, flush, SESSIONS_DIR, WORKTREES_DIR } from '../support/pi
 import { FakeGhRunner } from '../support/fake-gh-runner';
 import { mapPrView } from '../../src/gh/pr-view';
 import { planReconciliation, ReconciliationTick } from '../../src/discovery/reconciliation';
-import { KeyedLock } from '../../src/api/keyed-lock';
 import { SessionStore } from '../../src/engine/session-store';
 import { migrateV1ToV2, type ReviewSession, type Session } from '../../src/schema/session';
 import type { DevelopmentPhase, InvestigationPhase, ReviewPhase } from '../../src/schema/pipeline';
@@ -235,7 +234,11 @@ describe('planReconciliation', () => {
 function tickHarness() {
   const h = createHarness();
   const gh = new FakeGhRunner();
-  const lock = new KeyedLock();
+  // Share h's own lock — StageRunner/PipelineService (inside h) and
+  // ReconciliationTick must use the SAME KeyedLock instance for the
+  // per-session locking invariant (pipeline-service.ts) to actually
+  // serialize anything between a tick and h.service's own calls.
+  const lock = h.lock;
   return { h, gh, lock };
 }
 

@@ -267,10 +267,17 @@ async function handleRequest(
       return;
     }
 
+    // /transition, /run, /promote, /rereview, /retry, and /approve-plan are
+    // NOT wrapped in lock.withLock here — PipelineService now owns per-session
+    // locking for all of these itself (see the invariant documented atop
+    // pipeline-service.ts). Wrapping them here too would nest a second
+    // lock.withLock for the same session id inside the first and deadlock,
+    // since KeyedLock is not re-entrant. Only /artifacts (a pure read) and
+    // /stop (StageRunner.stop never touches the store) still lock here.
     if (method === 'POST' && parts.length === 3 && parts[0] === 'sessions' && parts[2] === 'transition') {
       const id = parts[1];
       const body = (await readJsonBody(req)) as { to: string };
-      const updated = await lock.withLock(id, () => deps.pipeline.transition(id, body.to));
+      const updated = await deps.pipeline.transition(id, body.to);
       sendJson(res, 200, { session: updated });
       return;
     }
@@ -278,26 +285,26 @@ async function handleRequest(
     if (method === 'POST' && parts.length === 3 && parts[0] === 'sessions' && parts[2] === 'run') {
       const id = parts[1];
       const { stage } = parseRunStageRequest(await readJsonBody(req));
-      await lock.withLock(id, () => respondAfterRunStarted(res, deps, id, deps.pipeline.runStage(id, stage)));
+      await respondAfterRunStarted(res, deps, id, deps.pipeline.runStage(id, stage));
       return;
     }
 
     if (method === 'POST' && parts.length === 3 && parts[0] === 'sessions' && parts[2] === 'approve-plan') {
       const id = parts[1];
-      const session: Session = await lock.withLock(id, () => deps.pipeline.approvePlan(id));
+      const session: Session = await deps.pipeline.approvePlan(id);
       sendJson(res, 200, { session });
       return;
     }
 
     if (method === 'POST' && parts.length === 3 && parts[0] === 'sessions' && parts[2] === 'promote') {
       const id = parts[1];
-      await lock.withLock(id, () => handlePromote(res, deps, id));
+      await handlePromote(res, deps, id);
       return;
     }
 
     if (method === 'POST' && parts.length === 3 && parts[0] === 'sessions' && parts[2] === 'rereview') {
       const id = parts[1];
-      await lock.withLock(id, () => respondAfterRunStarted(res, deps, id, deps.pipeline.runRereview(id)));
+      await respondAfterRunStarted(res, deps, id, deps.pipeline.runRereview(id));
       return;
     }
 
@@ -310,7 +317,7 @@ async function handleRequest(
 
     if (method === 'POST' && parts.length === 3 && parts[0] === 'sessions' && parts[2] === 'retry') {
       const id = parts[1];
-      await lock.withLock(id, () => respondAfterRunStarted(res, deps, id, deps.pipeline.retry(id)));
+      await respondAfterRunStarted(res, deps, id, deps.pipeline.retry(id));
       return;
     }
 

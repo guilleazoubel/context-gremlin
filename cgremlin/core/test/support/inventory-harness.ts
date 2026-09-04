@@ -28,14 +28,19 @@ export interface InventoryHarness {
 export function createInventoryHarness(
   configOverrides: Partial<InventoryScannerDeps['config']> = {},
   wrapGh: (gh: FakeGhRunner) => GhRunner = (gh) => gh,
-  lock: KeyedLock = new KeyedLock(),
+  lock?: KeyedLock,
 ): InventoryHarness {
   const h = createHarness();
+  // Share h's own lock — StageRunner/PipelineService (inside h), the
+  // ReconciliationTick, and the API server must all use the SAME KeyedLock
+  // instance for the per-session locking invariant (pipeline-service.ts) to
+  // actually serialize anything between a scan and h.service's own calls.
+  const sharedLock = lock ?? h.lock;
   const gh = new FakeGhRunner();
   const effectiveGh = wrapGh(gh);
   const config = inventoryScanConfig(configOverrides);
   const reconciliationTick = new ReconciliationTick({
-    gh: effectiveGh, store: h.store, pipeline: h.service, events: h.events, lock,
+    gh: effectiveGh, store: h.store, pipeline: h.service, events: h.events, lock: sharedLock,
   });
   const inventoryStore = new InventoryStore(h.fs, '/state/inventory.json');
   const scanner = new InventoryScanner({
@@ -52,5 +57,5 @@ export function createInventoryHarness(
     gh: effectiveGh, store: h.store, workspace: h.workspace, events: h.events,
     sessionsDir: SESSIONS_DIR, worktreesDir: WORKTREES_DIR, now: FIXED_NOW,
   });
-  return { h, gh, lock, scanner, scheduler, factory, inventoryStore, config };
+  return { h, gh, lock: sharedLock, scanner, scheduler, factory, inventoryStore, config };
 }
