@@ -49,3 +49,17 @@ describe('pipeline transition table', () => {
     expect(canTransition('review', 'approved', 'reviewing')).toBe(false);
   });
 });
+
+describe('review phase additions (phase 3a)', () => {
+  it('allows reviewing -> failed, failed -> reviewing, failed -> dismissed', () => {
+    expect(canTransition('review', 'reviewing', 'failed')).toBe(true);
+    expect(canTransition('review', 'failed', 'reviewing')).toBe(true);
+    expect(canTransition('review', 'failed', 'dismissed')).toBe(true);
+  });
+  it('allows ready -> reviewing so an updated PR can be re-reviewed before a human acts', () => {
+    expect(canTransition('review', 'ready', 'reviewing')).toBe(true);
+  });
+  it('still rejects failed -> ready (a failed run must be re-run, not declared ready)', () => {
+    expect(canTransition('review', 'failed', 'ready')).toBe(false);
+  });
+});

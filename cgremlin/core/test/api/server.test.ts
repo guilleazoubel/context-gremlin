@@ -8,7 +8,7 @@ import { SessionStore } from '../../src/engine/session-store';
 import { WorkspaceManager } from '../../src/workspace/workspace-manager';
 import { InMemoryFileSystem } from '../support/in-memory-file-system';
 import { FakeGitRunner } from '../support/fake-git-runner';
-import type { Session } from '../../src/schema/session';
+import { migrateV1ToV2, type Session, type SessionV1 } from '../../src/schema/session';
 import type { SessionFileSystem } from '../../src/fs/session-file-system';
 
 let dir: string;
@@ -126,8 +126,8 @@ afterEach(async () => {
   await rm(socketPath, { force: true });
 });
 
-function makeSession(overrides: Partial<Session> = {}): Session {
-  return {
+function makeSession(overrides: Record<string, unknown> = {}): Session {
+  const v1 = {
     schemaVersion: 1,
     id: 'inv-test-1',
     mode: 'investigation',
@@ -136,7 +136,8 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     lineage: { pipelineId: 'pl-1', parentSessionId: null, ticket: null },
     stageStatus: 'findings',
     ...overrides,
-  } as Session;
+  } as SessionV1;
+  return migrateV1ToV2(v1);
 }
 
 describe('API server', () => {

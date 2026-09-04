@@ -26,6 +26,7 @@ export const REVIEW_PHASES = [
   'approved',
   'changes_requested',
   'dismissed',
+  'failed',
 ] as const;
 export type ReviewPhase = (typeof REVIEW_PHASES)[number];
 
@@ -54,9 +55,10 @@ const DEVELOPMENT_TRANSITIONS: Record<DevelopmentPhase, readonly DevelopmentPhas
 
 const REVIEW_TRANSITIONS: Record<ReviewPhase, readonly ReviewPhase[]> = {
   queued: ['reviewing'],
-  reviewing: ['ready', 'dismissed'],
-  ready: ['approved', 'changes_requested', 'dismissed'],
+  reviewing: ['ready', 'failed', 'dismissed'],
+  ready: ['approved', 'changes_requested', 'reviewing', 'dismissed'],
   changes_requested: ['reviewing', 'dismissed'],
+  failed: ['reviewing', 'dismissed'],
   approved: [],
   dismissed: [],
 };
