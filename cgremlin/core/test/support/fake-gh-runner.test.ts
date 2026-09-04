@@ -30,6 +30,13 @@ describe('FakeGhRunner', () => {
     ['api', '-X', 'POST', 'x'],
     ['api', 'x', '-F', 'a=b'],
     ['api', 'x', '-f', 'a=b'],
+    ['pr', 'reopen', '1'],
+    ['pr', 'lock', '1'],
+    ['pr', 'unlock', '1'],
+    ['pr', 'update-branch', '1'],
+    ['repo', 'delete', 'a/b'],
+    ['repo', 'sync'],
+    ['api', 'x', '--input', 'file.json'],
   ])('refuses mutating argv %j before touching the queue', async (...args) => {
     const gh = new FakeGhRunner();
     gh.queueResponse({ stdout: 'should not be consumed' });

@@ -2,6 +2,7 @@ import type { GhRunner } from '../../src/gh/gh-runner';
 
 export const GH_MUTATING_TOKENS = [
   'review', 'comment', 'merge', 'close', 'edit', 'create', 'ready', '--method', '-X', '-F', '-f',
+  'reopen', 'lock', 'unlock', 'update-branch', 'delete', 'sync', '--input',
 ] as const;
 
 const MUTATING_TOKEN_SET = new Set<string>(GH_MUTATING_TOKENS);
