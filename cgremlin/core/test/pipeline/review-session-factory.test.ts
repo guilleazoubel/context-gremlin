@@ -117,10 +117,12 @@ describe('ReviewSessionFactory.createFromPrUrl', () => {
   });
 
   it('links to a development source at pr_opened, supersedes it, and inherits pipelineId/ticket', async () => {
-    const { gh, store, factory } = harness();
+    const { gh, store, events, factory } = harness();
     const source = developmentSession('dev-1', 'aplaceformom/grace-frontend', 1614);
     await store.save(source);
     gh.queueResponse({ stdout: fixture('pr-view-open-approved.json') });
+    const transitioned: Array<{ sessionId: string; from: string; to: string }> = [];
+    events.on('session.transitioned', (e) => transitioned.push({ sessionId: e.session.id, from: e.from, to: e.to }));
 
     const session = await factory.createFromPrUrl(PR_URL);
 
@@ -128,6 +130,7 @@ describe('ReviewSessionFactory.createFromPrUrl', () => {
     const reloadedSource = await store.load('dev-1');
     expect(reloadedSource.mode).toBe('development');
     expect(reloadedSource.stageStatus).toBe('superseded');
+    expect(transitioned).toEqual([{ sessionId: 'dev-1', from: 'pr_opened', to: 'superseded' }]);
   });
 
   it('leaves lineage self-rooted and does not transition anything when there is no matching source', async () => {

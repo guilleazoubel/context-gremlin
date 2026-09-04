@@ -71,7 +71,8 @@ export class ReviewSessionFactory {
     const { linked, source, supersede } = linkPrToSource(session, await store.list());
     await store.save(linked);
     if (supersede && source) {
-      await store.transition(source.id, 'superseded');
+      const updated = await store.transition(source.id, 'superseded');
+      events.emit('session.transitioned', { session: updated, from: 'pr_opened', to: 'superseded' });
     }
     events.emit('session.created', { session: linked });
 
