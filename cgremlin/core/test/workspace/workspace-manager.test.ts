@@ -26,6 +26,10 @@ describe('WorkspaceManager', () => {
         args: ['config', 'remote.origin.fetch', '+refs/heads/*:refs/remotes/origin/*'],
         cwd: '/mirrors/github.com-org-repo.git',
       },
+      {
+        args: ['config', '--add', 'remote.origin.fetch', '+refs/pull/*/head:refs/remotes/origin/pr/*'],
+        cwd: '/mirrors/github.com-org-repo.git',
+      },
       { args: ['fetch', '--prune', 'origin'], cwd: '/mirrors/github.com-org-repo.git' },
       {
         args: ['worktree', 'add', '/work/inv-1', '-b', 'main', 'origin/main'],
