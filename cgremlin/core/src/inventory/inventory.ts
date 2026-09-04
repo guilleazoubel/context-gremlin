@@ -14,7 +14,7 @@ export interface TeamActivity {
 export type OursStatus =
   | { status: 'none' }
   | {
-      status: 'reviewing' | 'reviewed';
+      status: 'reviewing' | 'reviewed' | 'failed';
       sessionId: string;
       reviewedSha: string | null;
       newCommits: boolean;
@@ -91,7 +91,8 @@ function buildOursStatus(repo: string, number: number, headSha: string, sessions
     return { status: 'none' };
   }
   const phase = session.stageStatus;
-  const status = phase === 'queued' || phase === 'reviewing' ? 'reviewing' : 'reviewed';
+  const status =
+    phase === 'queued' || phase === 'reviewing' ? 'reviewing' : phase === 'failed' ? 'failed' : 'reviewed';
   const reviewedSha = session.pr?.reviewedSha ?? null;
   const newCommits = reviewedSha !== null && reviewedSha !== headSha;
   return { status, sessionId: session.id, reviewedSha, newCommits, phase };
@@ -150,7 +151,7 @@ const TeamActivitySchema = z.object({
 const OursStatusSchema = z.union([
   z.object({ status: z.literal('none') }),
   z.object({
-    status: z.enum(['reviewing', 'reviewed']),
+    status: z.enum(['reviewing', 'reviewed', 'failed']),
     sessionId: z.string(),
     reviewedSha: z.string().nullable(),
     newCommits: z.boolean(),

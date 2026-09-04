@@ -177,6 +177,13 @@ describe('buildEntries', () => {
     expect(entry.ours.status !== 'none' && entry.ours.newCommits).toBe(false);
   });
 
+  it('ours is failed (not reviewed) for a failed review session', () => {
+    const item = prItem({ number: 5 });
+    const session = reviewSession({ stageStatus: 'failed', number: 5 });
+    const [entry] = buildEntries('acme/app', [item], [session], { me: 'me-user', watchAuthors: [] }, NOW);
+    expect(entry.ours.status).toBe('failed');
+  });
+
   it('ours is none when no session matches this repo/number', () => {
     const item = prItem({ number: 5 });
     const [entry] = buildEntries('acme/app', [item], [], { me: 'me-user', watchAuthors: [] }, NOW);
@@ -208,12 +215,17 @@ describe('groupInventory', () => {
       },
       { ...baseEntry(3), isMine: false, teamActivity: [{ login: 'x', kind: 'comment', at: NOW }] },
       { ...baseEntry(4), isMine: false },
+      {
+        ...baseEntry(5),
+        isMine: false,
+        ours: { status: 'failed', sessionId: 's2', reviewedSha: null, newCommits: false, phase: 'failed' },
+      },
     ];
     const inv: Inventory = { scannedAt: NOW, repos: ['acme/app'], entries, errors: [] };
     const groups = groupInventory(inv);
 
     expect(groups.mine.map((e) => e.number)).toEqual([1]);
-    expect(groups.ours.map((e) => e.number)).toEqual([2]);
+    expect(groups.ours.map((e) => e.number)).toEqual([2, 5]);
     expect(groups.teamOnIt.map((e) => e.number)).toEqual([3]);
     expect(groups.unreviewed.map((e) => e.number)).toEqual([4]);
 
