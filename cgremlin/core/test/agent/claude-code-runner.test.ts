@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { readFile, rm } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import { ClaudeCodeRunner, UnknownAgentHandleError } from '../../src/agent/claude-code-runner';
@@ -94,6 +95,24 @@ describe('ClaudeCodeRunner', () => {
     } finally {
       delete process.env.FAKE_CLI_ARGV_LOG;
       await rm(argvLogPath, { force: true });
+    }
+  });
+
+  it('spawns the CLI detached into its own process group, so a terminal signal to this process does not also hit the agent child', async () => {
+    const argvLogPath = path.join(tmpdir(), `claude-code-runner-pgrp-${Date.now()}.json`);
+    process.env.FAKE_CLI_ARGV_LOG = argvLogPath;
+    const pgrpLogPath = `${argvLogPath}.pgrp`;
+    try {
+      const runner = new ClaudeCodeRunner({ claudeBinary: FIXTURE });
+      const handle = await runner.start({ sessionId: 'inv-1', workingDirectory: process.cwd() });
+      await runner.sendPrompt(handle, 'hello');
+      const childPgid = (await readFile(pgrpLogPath, 'utf8')).trim();
+      const ownPgid = execFileSync('ps', ['-o', 'pgid=', '-p', String(process.pid)]).toString().trim();
+      expect(childPgid).not.toBe(ownPgid);
+    } finally {
+      delete process.env.FAKE_CLI_ARGV_LOG;
+      await rm(argvLogPath, { force: true });
+      await rm(pgrpLogPath, { force: true });
     }
   });
 

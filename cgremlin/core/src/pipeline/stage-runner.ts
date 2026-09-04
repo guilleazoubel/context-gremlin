@@ -49,6 +49,7 @@ export class StageRunner {
     return this.active.has(sessionId);
   }
 
+  /** The ids of sessions with an in-flight run right now — the source of truth for "what to stop" on shutdown, not any on-disk field. */
   activeSessionIds(): string[] {
     return [...this.active.keys()];
   }
@@ -91,8 +92,15 @@ export class StageRunner {
 
         const startedAt = this.now().toISOString();
         const running: LastRun = { stage, startedAt, finishedAt: null, exitCode: null, signal: null, outcome: 'running', error: null };
-        const previousResumeId = session.agent?.resumeId ?? null;
-        session = { ...session, lastRun: running, agent: { runner: this.deps.runnerKind, resumeId: previousResumeId } };
+        const priorAgent = session.agent ?? null;
+        // A session's agent conversation is tied to the runner that started
+        // it — resuming a claude-code conversation id under codex (or vice
+        // versa) is meaningless to the new runner, so never seed it; start a
+        // fresh conversation instead and note the switch once the run
+        // succeeds (a failed/stopped run keeps its own error text).
+        const runnerMismatch = priorAgent !== null && priorAgent.runner !== this.deps.runnerKind;
+        const seedResumeId = runnerMismatch ? null : (priorAgent?.resumeId ?? null);
+        session = { ...session, lastRun: running, agent: { runner: this.deps.runnerKind, resumeId: seedResumeId } };
         await this.deps.store.save(session);
         this.deps.events.emit('run.started', { session, stage });
         runStarted = true;
@@ -104,7 +112,7 @@ export class StageRunner {
               sessionId,
               workingDirectory: worktreePath,
               additionalDirs: [sessionDir],
-              resumeId: previousResumeId ?? undefined,
+              resumeId: seedResumeId ?? undefined,
             });
             active.handle = handle;
             this.deps.runner.onOutput(handle, (chunk) => this.deps.events.emit('run.output', { sessionId, stage, chunk }));
@@ -131,11 +139,14 @@ export class StageRunner {
         const outcome: StageRunResult['outcome'] = active.stopRequested
           ? 'stopped'
           : exit.code === 0 && exit.signal === null ? 'succeeded' : 'failed';
-        const error =
+        let error =
           outcome === 'stopped' ? 'stopped by user'
           : outcome === 'failed' ? (exit.signal ? `agent killed by ${exit.signal}` : `agent exited with code ${exit.code}`)
           : null;
-        const resumeId = (active.handle && this.deps.runner.getResumeId?.(active.handle)) ?? previousResumeId;
+        if (outcome === 'succeeded' && runnerMismatch) {
+          error = `runner changed from ${priorAgent!.runner} to ${this.deps.runnerKind}; started a fresh conversation`;
+        }
+        const resumeId = (active.handle && this.deps.runner.getResumeId?.(active.handle)) ?? seedResumeId;
         const finishedLastRun: LastRun = {
           ...running,
           finishedAt: this.now().toISOString(),

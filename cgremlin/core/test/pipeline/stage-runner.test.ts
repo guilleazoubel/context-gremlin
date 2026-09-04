@@ -31,7 +31,7 @@ function flush(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
-async function setup(session = inv()) {
+async function setup(session = inv(), opts: { runnerKind?: 'claude-code' | 'codex' } = {}) {
   const fs = new InMemoryFileSystem();
   const store = new SessionStore(fs, sessionsDir);
   await store.save(session);
@@ -39,7 +39,7 @@ async function setup(session = inv()) {
   const events = new EngineEvents();
   const now = () => new Date('2026-09-04T12:00:00.000Z');
   const lock = new KeyedLock();
-  const sr = new StageRunner({ runner, store, fs, events, sessionsDir, runnerKind: 'claude-code', now, lock });
+  const sr = new StageRunner({ runner, store, fs, events, sessionsDir, runnerKind: opts.runnerKind ?? 'claude-code', now, lock });
   return { fs, store, runner, events, sr, lock };
 }
 
@@ -88,6 +88,47 @@ describe('StageRunner.run', () => {
     expect(runner.getContext(h).resumeId).toBe('prev');
     runner.emitExit(h, { code: 0, signal: null });
     await p;
+  });
+
+  it('never seeds a resume id from a different runner; starts fresh, records the new runner/id, and notes the switch without failing the run', async () => {
+    const { store, runner, sr } = await setup(inv({ resumeId: 'claude-sess-1' }), { runnerKind: 'codex' });
+    const p = sr.run({ sessionId: 'inv-1', stage: 'plan', brief: null, prompt: 'plan' });
+    await flush();
+    const h = runner.lastHandle();
+    expect(runner.getContext(h).resumeId).toBeUndefined();
+    runner.setResumeId(h, 'codex-sess-1');
+    runner.emitExit(h, { code: 0, signal: null });
+    const { session, outcome } = await p;
+    expect(outcome).toBe('succeeded');
+    expect(session.agent).toEqual({ runner: 'codex', resumeId: 'codex-sess-1' });
+    expect(session.lastRun).toMatchObject({
+      outcome: 'succeeded',
+      error: 'runner changed from claude-code to codex; started a fresh conversation',
+    });
+    expect((await store.load('inv-1')).agent).toEqual({ runner: 'codex', resumeId: 'codex-sess-1' });
+  });
+
+  it('same-runner resume still seeds and completes with no runner-change note', async () => {
+    const { runner, sr } = await setup(inv({ resumeId: 'prev' }));
+    const p = sr.run({ sessionId: 'inv-1', stage: 'plan', brief: null, prompt: 'plan' });
+    await flush();
+    const h = runner.lastHandle();
+    expect(runner.getContext(h).resumeId).toBe('prev');
+    runner.emitExit(h, { code: 0, signal: null });
+    const { session } = await p;
+    expect(session.agent).toEqual({ runner: 'claude-code', resumeId: 'prev' });
+    expect(session.lastRun).toMatchObject({ outcome: 'succeeded', error: null });
+  });
+
+  it('activeSessionIds reflects sessions with an in-flight run, and is empty once it exits', async () => {
+    const { runner, sr } = await setup();
+    expect(sr.activeSessionIds()).toEqual([]);
+    const p = sr.run({ sessionId: 'inv-1', stage: 'findings', brief: null, prompt: 'go' });
+    await flush();
+    expect(sr.activeSessionIds()).toEqual(['inv-1']);
+    runner.emitExit(runner.lastHandle(), { code: 0, signal: null });
+    await p;
+    expect(sr.activeSessionIds()).toEqual([]);
   });
 
   it('marks failed on non-zero exit and on signal, with a message', async () => {

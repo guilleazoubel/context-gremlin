@@ -99,25 +99,55 @@ describe('DiscoveryScheduler', () => {
     expect(scheduler.lastReport?.reconciled).toBe(3);
   });
 
-  it('stop clears the interval so a later fire has no effect', () => {
+  it('stop clears the interval so a later fire has no effect', async () => {
     const clock = new FakeClock();
     const tick = new FakeTick();
     const scheduler = new DiscoveryScheduler(tick, 1000, clock);
     scheduler.start();
-    scheduler.stop();
+    await scheduler.stop();
     clock.fire();
     expect(tick.calls).toBe(0);
   });
 
-  it('isRunning reflects whether the scheduler has been started', () => {
+  it('isRunning reflects whether the scheduler has been started', async () => {
     const clock = new FakeClock();
     const tick = new FakeTick();
     const scheduler = new DiscoveryScheduler(tick, 1000, clock);
     expect(scheduler.isRunning()).toBe(false);
     scheduler.start();
     expect(scheduler.isRunning()).toBe(true);
-    scheduler.stop();
+    await scheduler.stop();
     expect(scheduler.isRunning()).toBe(false);
+  });
+
+  it('stop() awaits an in-flight tick before resolving, even if that tick rejects', async () => {
+    const clock = new FakeClock();
+    const tick = new FakeTick();
+    const d = deferred<TickReport>();
+    tick.setNext(() => d.promise);
+    const scheduler = new DiscoveryScheduler(tick, 1000, clock);
+    scheduler.start();
+    clock.fire();
+
+    let stopped = false;
+    const stopPromise = scheduler.stop().then(() => {
+      stopped = true;
+    });
+    await flush();
+    expect(stopped).toBe(false); // the tick is still pending
+
+    d.reject(new Error('boom'));
+    await stopPromise;
+    expect(stopped).toBe(true);
+    expect(scheduler.lastError).toContain('boom');
+  });
+
+  it('stop() resolves immediately when no tick is in flight', async () => {
+    const clock = new FakeClock();
+    const tick = new FakeTick();
+    const scheduler = new DiscoveryScheduler(tick, 1000, clock);
+    scheduler.start();
+    await expect(scheduler.stop()).resolves.toBeUndefined();
   });
 
   it('runNow throws TickInProgressError while a tick is pending, without calling tick.run again', async () => {
