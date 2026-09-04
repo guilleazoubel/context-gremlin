@@ -7,6 +7,12 @@ import type {
   AgentRunner,
   SessionContext,
 } from './agent-runner';
+import { UnknownAgentHandleError } from './agent-runner-errors';
+
+// Re-exported so existing `import { UnknownAgentHandleError } from
+// './claude-code-runner'` call sites keep working after the move to
+// ./agent-runner-errors.ts (shared with CodexRunner).
+export { UnknownAgentHandleError };
 
 interface ClaudeAgentState {
   ctx: SessionContext;
@@ -14,13 +20,6 @@ interface ClaudeAgentState {
   exitCallbacks: Array<(result: AgentExitResult) => void>;
   claudeSessionId?: string;
   currentProcess?: ChildProcessByStdio<null, Readable, Readable>;
-}
-
-export class UnknownAgentHandleError extends Error {
-  constructor(id: string) {
-    super(`Unknown agent handle: '${id}'`);
-    this.name = 'UnknownAgentHandleError';
-  }
 }
 
 export interface ClaudeCodeRunnerOptions {
