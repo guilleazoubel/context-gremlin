@@ -1,4 +1,4 @@
-import type { SessionStore } from '../engine/session-store';
+import { assertSafeSessionId, InvalidSessionIdError, type SessionStore } from '../engine/session-store';
 import type { WorkspaceManager } from '../workspace/workspace-manager';
 import type { StageRunner } from './stage-runner';
 import type { SessionFileSystem } from '../fs/session-file-system';
@@ -89,6 +89,16 @@ export class PipelineService {
   async createInvestigationSession(input: CreateInvestigationInput): Promise<InvestigationSession> {
     const slug = repoSlugFromUrl(input.repoUrl);
     const id = this.newId('inv', slug, input.ticket ?? 'no-ticket');
+    // Validate the derived id BEFORE touching git or the filesystem: the
+    // ticket (and, in principle, the repo slug) feed directly into it, and
+    // an id containing '/' or '..' would let the worktree land outside
+    // worktreesDir. assertSafeSessionId only rejects '..' as the WHOLE id;
+    // also reject it as a substring, since a hyphen-joined id can still
+    // smuggle a bare '..' path segment via an embedded '/'.
+    assertSafeSessionId(id);
+    if (id.includes('..')) {
+      throw new InvalidSessionIdError(id);
+    }
     const branch = `investigate/${input.ticket ?? id}`;
     const worktreePath = `${this.deps.config.worktreesDir}/${id}`;
 
@@ -114,7 +124,16 @@ export class PipelineService {
       intent: input.intent,
       driveToCompletion: input.driveToCompletion,
     };
-    await this.deps.store.save(session);
+    try {
+      await this.deps.store.save(session);
+    } catch (err) {
+      // Roll back the workspace we just created so a retry with the same
+      // ticket doesn't fail with "a branch already exists", and so we don't
+      // leave an orphaned worktree/mirror branch behind. Swallow a rollback
+      // failure rather than let it mask the original error.
+      await this.deps.workspace.removeWorkspace(input.repoUrl, worktreePath, branch).catch(() => undefined);
+      throw err;
+    }
     this.deps.events.emit('session.created', { session });
     return session;
   }

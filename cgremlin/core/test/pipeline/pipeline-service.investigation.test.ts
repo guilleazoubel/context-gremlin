@@ -270,4 +270,39 @@ describe('PipelineService — investigation', () => {
     expect(session.lastRun).toMatchObject({ outcome: 'stopped' });
     expect(session.stageStatus).toBe('findings');
   });
+
+  it('createInvestigationSession rejects a ticket that would produce an unsafe derived id, before any git call', async () => {
+    const h = createHarness();
+    await expect(
+      h.service.createInvestigationSession({
+        repoUrl: 'git@github.com:acme/app.git',
+        ticket: '../../x',
+        intent: 'investigate_only',
+        driveToCompletion: false,
+      }),
+    ).rejects.toThrow();
+    expect(h.git.calls).toEqual([]);
+  });
+
+  it('rolls back the created workspace if saving the new investigation session fails', async () => {
+    const h = createHarness();
+    const originalSave = h.store.save.bind(h.store);
+    let calls = 0;
+    h.store.save = async (session) => {
+      calls += 1;
+      if (calls === 1) throw new Error('disk full');
+      return originalSave(session);
+    };
+    let removeWorkspaceCalled = false;
+    const originalRemove = h.workspace.removeWorkspace.bind(h.workspace);
+    h.workspace.removeWorkspace = async (repoUrl, worktreePath, branchName) => {
+      removeWorkspaceCalled = true;
+      return originalRemove(repoUrl, worktreePath, branchName);
+    };
+
+    await expect(createInvestigation(h.service)).rejects.toThrow('disk full');
+    expect(removeWorkspaceCalled).toBe(true);
+    const worktreeRemove = h.git.calls.find((c) => c.args[0] === 'worktree' && c.args[1] === 'remove');
+    expect(worktreeRemove).toBeDefined();
+  });
 });

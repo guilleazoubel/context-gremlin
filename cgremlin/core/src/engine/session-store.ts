@@ -23,7 +23,7 @@ export class InvalidSessionIdError extends Error {
   }
 }
 
-function assertSafeSessionId(id: string): void {
+export function assertSafeSessionId(id: string): void {
   if (id.length === 0 || id.includes('/') || id.includes('\\') || id === '.' || id === '..') {
     throw new InvalidSessionIdError(id);
   }

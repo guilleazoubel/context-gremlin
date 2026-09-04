@@ -80,6 +80,17 @@ describe('parseCreateInvestigationRequest', () => {
     ).toThrow(ValidationError);
   });
 
+  it('throws ValidationError for a ticket containing characters that would produce an unsafe derived id', () => {
+    expect(() =>
+      parseCreateInvestigationRequest({
+        repoUrl: 'git@github.com:acme/app.git',
+        ticket: '../../x',
+        intent: 'investigate_only',
+        driveToCompletion: false,
+      }),
+    ).toThrow(ValidationError);
+  });
+
   it('throws ValidationError for a missing required field', () => {
     expect(() =>
       parseCreateInvestigationRequest({

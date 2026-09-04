@@ -49,7 +49,9 @@ export function parseRemoveWorkspaceRequest(body: unknown): RemoveWorkspaceParam
 
 const CreateInvestigationRequestSchema = z.object({
   repoUrl: z.string().min(1),
-  ticket: z.string().min(1).nullable(),
+  // Feeds directly into the derived session id (and worktree path), so it
+  // must be safe as a single path-segment component: no '/', no '..', etc.
+  ticket: z.string().min(1).regex(/^[A-Za-z0-9._-]+$/).nullable(),
   intent: z.enum(['investigate_only', 'development']),
   driveToCompletion: z.boolean(),
   baseRef: z.string().min(1).optional(),
