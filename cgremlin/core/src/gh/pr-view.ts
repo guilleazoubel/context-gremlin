@@ -3,6 +3,7 @@ import type { PrInfo } from '../schema/stage';
 
 export const PR_LIST_FIELDS =
   'number,url,author,isDraft,reviewDecision,headRefOid,headRefName,baseRefName,title,updatedAt';
+export const PR_INVENTORY_FIELDS = `${PR_LIST_FIELDS},latestReviews,reviews,comments`;
 export const PR_VIEW_FIELDS =
   'number,title,author,headRefName,headRefOid,baseRefName,url,state,isDraft,reviewDecision,mergedAt,closedAt,latestReviews,statusCheckRollup';
 
@@ -29,6 +30,32 @@ export const PrListItemSchema = z.object({
 export type PrListItem = z.infer<typeof PrListItemSchema>;
 
 export const PrListSchema = z.array(PrListItemSchema);
+
+export const ActivityAuthorSchema = z.object({ login: z.string() });
+
+export const PrReviewSchema = z
+  .object({
+    author: ActivityAuthorSchema,
+    state: z.string(),
+    submittedAt: z.string(),
+  })
+  .passthrough();
+
+export const PrCommentSchema = z
+  .object({
+    author: ActivityAuthorSchema,
+    createdAt: z.string(),
+  })
+  .passthrough();
+
+export const PrInventoryItemSchema = PrListItemSchema.extend({
+  latestReviews: z.array(PrReviewSchema).nullable().default([]),
+  reviews: z.array(PrReviewSchema).nullable().default([]),
+  comments: z.array(PrCommentSchema).nullable().default([]),
+});
+export type PrInventoryItem = z.infer<typeof PrInventoryItemSchema>;
+
+export const PrInventoryListSchema = z.array(PrInventoryItemSchema);
 
 export const CheckRunSchema = z.object({
   __typename: z.literal('CheckRun'),
@@ -134,6 +161,18 @@ export function parsePrList(stdout: string): PrListItem[] {
   const trimmed = stdout.trim();
   if (trimmed === '') return [];
   return PrListSchema.parse(JSON.parse(trimmed));
+}
+
+export function parsePrInventoryList(stdout: string): PrInventoryItem[] {
+  const trimmed = stdout.trim();
+  if (trimmed === '') return [];
+  const parsed = PrInventoryListSchema.parse(JSON.parse(trimmed));
+  return parsed.map((item) => ({
+    ...item,
+    latestReviews: item.latestReviews ?? [],
+    reviews: item.reviews ?? [],
+    comments: item.comments ?? [],
+  }));
 }
 
 export function parsePrView(stdout: string): PrView {
