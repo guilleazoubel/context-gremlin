@@ -35,7 +35,10 @@ export interface PlanReconciliationResult {
 
 const APPROVE_ELIGIBLE_REVIEW_PHASES: readonly ReviewPhase[] = ['queued', 'ready', 'changes_requested', 'failed'];
 const REREVIEW_ELIGIBLE_REVIEW_PHASES: readonly ReviewPhase[] = ['ready', 'changes_requested'];
-const MERGE_ELIGIBLE_DEVELOPMENT_PHASES: readonly DevelopmentPhase[] = ['pr_opened', 'superseded'];
+// Phase 3a never records pr_opened (no code path sets it yet), so a
+// development source can still be sitting at 'active' when its PR merges —
+// 'active' must be merge-eligible too, or that session is stranded forever.
+const MERGE_ELIGIBLE_DEVELOPMENT_PHASES: readonly DevelopmentPhase[] = ['active', 'pr_opened', 'superseded'];
 
 function canApplyTransition(mode: 'review' | 'development', from: string, to: string): boolean {
   return mode === 'review'
@@ -98,7 +101,7 @@ export function planReconciliation(input: PlanReconciliationInput): PlanReconcil
     view.pr.headSha !== review.pr?.reviewedSha &&
     REREVIEW_ELIGIBLE_REVIEW_PHASES.includes(review.stageStatus)
   ) {
-    actions.push({ type: 'rereview', sessionId: review.id, reason: 'new commits pushed since last review' });
+    actions.push({ type: 'rereview', sessionId: review.id, reason: 'rereview started — outcome reported on the session' });
   }
 
   return { actions, skipped };
@@ -173,6 +176,11 @@ export class ReconciliationTick {
             void this.deps.pipeline.runRereview(action.sessionId).catch((err) => {
               rereviewError = err;
             });
+            // This flush only catches errors from the run's pre-run phase (git
+            // fetch, the transition to 'reviewing'). The run's real outcome —
+            // success, failure, the new REVIEW.md — lives on the session
+            // (lastRun, stageStatus) and in run.finished events, not here;
+            // same parked class as F5, owned by the Phase 4 event design.
             await flush();
             if (rereviewError !== undefined) {
               report.errors.push({ where: review.id, error: errorMessage(rereviewError) });

@@ -87,6 +87,15 @@ describe('schema v2', () => {
     expect(s.lastRereviewSummary).toEqual({ resolved: 1, total: 3, newFindings: 2 });
   });
 
+  it('forward-compat: a v2 review document written before lastRereviewSummary existed (key missing entirely) still parses, defaulting to null', () => {
+    const base = migrateV1ToV2({ ...v1Investigation, id: 'r1', mode: 'review', stageStatus: 'queued' });
+    if (base.mode !== 'review') throw new Error('mode changed');
+    const { lastRereviewSummary: _omit, ...withoutKey } = base;
+    const s = parseSession(withoutKey);
+    if (s.mode !== 'review') throw new Error('mode changed');
+    expect(s.lastRereviewSummary).toBeNull();
+  });
+
   it('migrateV1ToV2 is idempotent through parseSession (v2 in, same v2 out)', () => {
     const once = parseSession(v1Investigation);
     expect(parseSession(once)).toEqual(once);

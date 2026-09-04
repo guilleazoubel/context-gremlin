@@ -108,11 +108,14 @@ describe('planReconciliation', () => {
     ]);
   });
 
-  it('MERGED with a development source at active leaves the source untouched (not pr_opened/superseded)', () => {
+  it('MERGED with a development source at active also merges it (Phase 3a never records pr_opened, so active must not get stranded)', () => {
     const review = reviewSession({ stageStatus: 'ready', parentSessionId: 'dev-1' });
     const source = developmentSession('dev-1', 'active');
     const { actions, skipped } = planReconciliation({ review, view: view({ state: 'MERGED' }), source });
-    expect(actions).toEqual([{ type: 'transition', sessionId: review.id, to: 'dismissed', reason: expect.any(String) }]);
+    expect(actions).toEqual([
+      { type: 'transition', sessionId: review.id, to: 'dismissed', reason: expect.any(String) },
+      { type: 'transition', sessionId: 'dev-1', to: 'merged', reason: expect.any(String) },
+    ]);
     expect(skipped).toEqual([]);
   });
 
@@ -151,13 +154,38 @@ describe('planReconciliation', () => {
     expect(skipped).toEqual([]);
   });
 
-  it('forbidden transition guard: OPEN + APPROVED from queued is skipped, not emitted (queued cannot go straight to approved)', () => {
+  it('OPEN + APPROVED from queued approves the review (an external approval is a fact regardless of local phase)', () => {
     const review = reviewSession({ stageStatus: 'queued' });
     const { actions, skipped } = planReconciliation({
       review, view: view({ state: 'OPEN', reviewDecision: 'APPROVED' }), source: null,
     });
-    expect(actions).toEqual([]);
-    expect(skipped).toEqual([{ sessionId: review.id, to: 'approved', why: expect.any(String) }]);
+    expect(actions).toEqual([{ type: 'transition', sessionId: review.id, to: 'approved', reason: expect.any(String) }]);
+    expect(skipped).toEqual([]);
+  });
+
+  it('OPEN + APPROVED from changes_requested approves the review', () => {
+    const review = reviewSession({ stageStatus: 'changes_requested' });
+    const { actions, skipped } = planReconciliation({
+      review, view: view({ state: 'OPEN', reviewDecision: 'APPROVED' }), source: null,
+    });
+    expect(actions).toEqual([{ type: 'transition', sessionId: review.id, to: 'approved', reason: expect.any(String) }]);
+    expect(skipped).toEqual([]);
+  });
+
+  it('OPEN + APPROVED from failed approves the review', () => {
+    const review = reviewSession({ stageStatus: 'failed' });
+    const { actions, skipped } = planReconciliation({
+      review, view: view({ state: 'OPEN', reviewDecision: 'APPROVED' }), source: null,
+    });
+    expect(actions).toEqual([{ type: 'transition', sessionId: review.id, to: 'approved', reason: expect.any(String) }]);
+    expect(skipped).toEqual([]);
+  });
+
+  it('MERGED from queued dismisses the review (dismissed is now reachable from queued too)', () => {
+    const review = reviewSession({ stageStatus: 'queued' });
+    const { actions, skipped } = planReconciliation({ review, view: view({ state: 'MERGED' }), source: null });
+    expect(actions).toEqual([{ type: 'transition', sessionId: review.id, to: 'dismissed', reason: expect.any(String) }]);
+    expect(skipped).toEqual([]);
   });
 
   it('forbidden transition guard: an already-approved review with a MERGED view is skipped, not emitted (approved cannot go to dismissed)', () => {

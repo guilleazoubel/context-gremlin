@@ -69,7 +69,7 @@ export const SessionSchema = z.discriminatedUnion('mode', [
     mode: z.literal('review'),
     stageStatus: z.enum(REVIEW_PHASES),
     reviewVersion: z.number().int().nonnegative(),
-    lastRereviewSummary: RereviewSummarySchema.nullable(),
+    lastRereviewSummary: RereviewSummarySchema.nullable().default(null),
   }),
 ]);
 export type Session = z.infer<typeof SessionSchema>;

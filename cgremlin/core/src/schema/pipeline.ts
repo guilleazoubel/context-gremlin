@@ -46,19 +46,23 @@ const INVESTIGATION_TRANSITIONS: Record<InvestigationPhase, readonly Investigati
 };
 
 const DEVELOPMENT_TRANSITIONS: Record<DevelopmentPhase, readonly DevelopmentPhase[]> = {
-  active: ['pr_opened', 'abandoned'],
+  active: ['pr_opened', 'merged', 'abandoned'],
   pr_opened: ['superseded', 'merged', 'abandoned'],
   superseded: ['merged', 'abandoned'],
   merged: [],
   abandoned: [],
 };
 
+// An external approval or a merge/close on GitHub is a fact regardless of
+// our local phase — legacy applied these unconditionally, so 'approved' and
+// 'dismissed' are reachable from every non-terminal review phase, not just
+// the ones our own review loop would naturally pass through.
 const REVIEW_TRANSITIONS: Record<ReviewPhase, readonly ReviewPhase[]> = {
-  queued: ['reviewing'],
+  queued: ['reviewing', 'approved', 'dismissed'],
   reviewing: ['ready', 'failed', 'dismissed'],
   ready: ['approved', 'changes_requested', 'reviewing', 'dismissed'],
-  changes_requested: ['reviewing', 'dismissed'],
-  failed: ['reviewing', 'dismissed'],
+  changes_requested: ['reviewing', 'dismissed', 'approved'],
+  failed: ['reviewing', 'dismissed', 'approved'],
   approved: [],
   dismissed: [],
 };
