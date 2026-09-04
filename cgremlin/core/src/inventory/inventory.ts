@@ -62,16 +62,17 @@ function buildTeamActivity(
   watchSet: ReadonlySet<string>,
   meLower: string,
 ): TeamActivity[] {
+  const authorLower = item.author.login.toLowerCase();
   const activity: TeamActivity[] = [];
   for (const review of item.reviews) {
     const loginLower = review.author.login.toLowerCase();
-    if (watchSet.has(loginLower) && loginLower !== meLower) {
+    if (watchSet.has(loginLower) && loginLower !== meLower && loginLower !== authorLower) {
       activity.push({ login: review.author.login, kind: 'review', state: review.state, at: review.submittedAt });
     }
   }
   for (const comment of item.comments) {
     const loginLower = comment.author.login.toLowerCase();
-    if (watchSet.has(loginLower) && loginLower !== meLower) {
+    if (watchSet.has(loginLower) && loginLower !== meLower && loginLower !== authorLower) {
       activity.push({ login: comment.author.login, kind: 'comment', at: comment.createdAt });
     }
   }

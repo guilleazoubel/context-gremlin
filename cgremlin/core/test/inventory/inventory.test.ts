@@ -96,22 +96,63 @@ describe('buildEntries', () => {
     expect(entry.isMine).toBe(true);
   });
 
-  it('fixture-driven: a vercel comment does not count while a watched teammate\'s COMMENTED review does', () => {
+  it('fixture-driven: a vercel comment and the PR author\'s own reviews do not count, while a different watched teammate\'s review does', () => {
     const items = parsePrInventoryList(fullListJson);
     const pr2010 = items.find((i) => i.number === 2010);
     expect(pr2010).toBeDefined();
+    expect(pr2010!.author.login).toBe('mattsmith-apfm'); // the PR's own author
     const [entry] = buildEntries(
       'aplaceformom/grace-frontend',
       [pr2010!],
       [],
-      { me: 'someone-else', watchAuthors: ['mattsmith-apfm'] },
+      // Watch BOTH the author (mattsmith-apfm, who also reviews their own PR
+      // in this real data) and a genuine teammate (austinbrownapfm, who
+      // approved it) — proves self-activity is excluded even though watched.
+      { me: 'someone-else', watchAuthors: ['mattsmith-apfm', 'austinbrownapfm'] },
       NOW,
     );
     expect(entry.teamActivity.some((a) => a.login === 'vercel')).toBe(false);
+    expect(entry.teamActivity.some((a) => a.login === 'mattsmith-apfm')).toBe(false);
     const reviewActivity = entry.teamActivity.filter((a) => a.kind === 'review');
     expect(reviewActivity.length).toBeGreaterThan(0);
-    expect(reviewActivity.every((a) => a.login === 'mattsmith-apfm')).toBe(true);
-    expect(reviewActivity.some((a) => a.state === 'COMMENTED')).toBe(true);
+    expect(reviewActivity.every((a) => a.login === 'austinbrownapfm')).toBe(true);
+    expect(reviewActivity.some((a) => a.state === 'APPROVED')).toBe(true);
+  });
+
+  it('F2: the PR author\'s own comments do not count as team activity even when the author is a watched login (fixture #2019)', () => {
+    const items = parsePrInventoryList(fullListJson);
+    const pr2019 = items.find((i) => i.number === 2019);
+    expect(pr2019).toBeDefined();
+    expect(pr2019!.author.login).toBe('austinbrownapfm');
+    const [entry] = buildEntries(
+      'aplaceformom/grace-frontend',
+      [pr2019!],
+      [],
+      { me: 'someone-else', watchAuthors: ['austinbrownapfm'] },
+      NOW,
+    );
+    expect(entry.teamActivity).toEqual([]);
+    const groups = groupInventory({ scannedAt: NOW, repos: ['aplaceformom/grace-frontend'], entries: [entry], errors: [] });
+    expect(groups.unreviewed).toEqual([entry]);
+  });
+
+  it('a comment from a different watched teammate on that same PR still counts', () => {
+    const items = parsePrInventoryList(fullListJson);
+    const pr2019 = items.find((i) => i.number === 2019)!;
+    const withTeammateComment: PrInventoryItem = {
+      ...pr2019,
+      comments: [...pr2019.comments, { author: { login: 'carol' }, createdAt: '2026-09-05T00:00:00.000Z' }],
+    };
+    const [entry] = buildEntries(
+      'aplaceformom/grace-frontend',
+      [withTeammateComment],
+      [],
+      { me: 'someone-else', watchAuthors: ['austinbrownapfm', 'carol'] },
+      NOW,
+    );
+    expect(entry.teamActivity).toEqual([
+      { login: 'carol', kind: 'comment', at: '2026-09-05T00:00:00.000Z' },
+    ]);
   });
 
   it("me's own review and comment do not count as team activity, case-insensitively", () => {
