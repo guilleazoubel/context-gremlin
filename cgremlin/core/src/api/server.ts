@@ -100,16 +100,20 @@ async function handlePromote(res: ServerResponse, deps: ApiServerDeps, id: strin
   guard.catch(() => undefined);
   // The development session's id isn't known until promote() creates it, so
   // (unlike the other detached routes) we can't filter run.started by id in
-  // advance — take whatever run.started fires next while this promote() is
-  // the only thing this locked session id is doing.
+  // advance. events is shared server-wide, so another session's promote or
+  // run can legitimately fire run.started while this one is in flight —
+  // filter on shape instead: the development session promote(id) itself
+  // creates, i.e. mode 'development' with lineage.parentSessionId === id.
   let devId: string | undefined;
   let off: () => void = () => {};
   try {
     await Promise.race([
       new Promise<void>((resolve) => {
         off = deps.events.on('run.started', (e) => {
-          devId = e.session.id;
-          resolve();
+          if (e.session.mode === 'development' && e.session.lineage.parentSessionId === id) {
+            devId = e.session.id;
+            resolve();
+          }
         });
       }),
       guard,

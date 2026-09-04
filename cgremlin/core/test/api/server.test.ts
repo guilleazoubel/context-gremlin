@@ -124,6 +124,55 @@ class DelayedFileSystem implements SessionFileSystem {
   }
 }
 
+/**
+ * Builds a full server stack (store/workspace/pipeline/events) on a
+ * DelayedFileSystem and listens on its own socket, so genuinely concurrent
+ * requests actually interleave in the event loop instead of resolving
+ * back-to-back via microtasks (see DelayedFileSystem's own doc comment).
+ */
+async function createDelayedServer(socketFileName: string) {
+  const delayedFs = new DelayedFileSystem(new InMemoryFileSystem());
+  const git = new FakeGitRunner();
+  const store = new SessionStore(delayedFs, '/sessions');
+  const workspace = new WorkspaceManager(git, delayedFs, '/mirrors');
+  const events = new EngineEvents();
+  const runner = new FakeAgentRunner();
+  const stageRunner = new StageRunner({
+    runner,
+    store,
+    fs: delayedFs,
+    events,
+    sessionsDir: '/sessions',
+    runnerKind: 'claude-code',
+  });
+  const pipeline = new PipelineService({
+    store,
+    workspace,
+    stageRunner,
+    fs: delayedFs,
+    git,
+    events,
+    config: { sessionsDir: '/sessions', worktreesDir: '/worktrees', defaultBaseRef: 'origin/main' },
+  });
+  const srv = createApiServer({
+    sessionStore: store,
+    workspaceManager: workspace,
+    pipeline,
+    fs: delayedFs,
+    sessionsDir: '/sessions',
+    events,
+  });
+  const sock = path.join(dir, socketFileName);
+  await new Promise<void>((resolve) => srv.listen(sock, resolve));
+  return {
+    close: () => new Promise<void>((resolve) => srv.close(() => resolve())),
+    sock,
+    store,
+    pipeline,
+    runner,
+  };
+}
+
 beforeAll(async () => {
   dir = await mkdtemp(path.join(tmpdir(), 'cgremlin-core-api-test-'));
   socketPath = path.join(dir, 'api.sock');
@@ -492,5 +541,137 @@ describe('API server', () => {
 
     const idleStopRes = await request('POST', `/sessions/${id}/stop`);
     expect((idleStopRes.body as { stopped: boolean }).stopped).toBe(false);
+  });
+
+  it('POST /sessions/:id/promote filters run.started by the actual development session, so concurrent promotes do not cross-assign', async () => {
+    const d = await createDelayedServer('promote-race.sock');
+    try {
+      const invA = await d.pipeline.createInvestigationSession({
+        repoUrl: 'git@github.com:acme/app.git', ticket: 'A-1', intent: 'investigate_only', driveToCompletion: false,
+      });
+      const invB = await d.pipeline.createInvestigationSession({
+        repoUrl: 'git@github.com:acme/app.git', ticket: 'B-1', intent: 'investigate_only', driveToCompletion: false,
+      });
+      for (const inv of [invA, invB]) {
+        await d.store.transition(inv.id, 'planning');
+        await d.store.transition(inv.id, 'plan_ready');
+        await d.store.transition(inv.id, 'approved');
+      }
+
+      const [resA, resB] = await Promise.all([
+        requestOn(d.sock, 'POST', `/sessions/${invA.id}/promote`),
+        requestOn(d.sock, 'POST', `/sessions/${invB.id}/promote`),
+      ]);
+      expect(resA.status).toBe(202);
+      expect(resB.status).toBe(202);
+      const bodyA = resA.body as { investigation: Session; development: Session };
+      const bodyB = resB.body as { investigation: Session; development: Session };
+      expect(bodyA.investigation.id).toBe(invA.id);
+      expect(bodyB.investigation.id).toBe(invB.id);
+      expect(bodyA.development.lineage.parentSessionId).toBe(invA.id);
+      expect(bodyB.development.lineage.parentSessionId).toBe(invB.id);
+    } finally {
+      await d.close();
+      await rm(d.sock, { force: true });
+    }
+  });
+
+  it('POST /sessions/:id/run filters run.started by session id, so an unrelated pending run does not resolve it early', async () => {
+    const createY = await request('POST', '/sessions/investigations', {
+      repoUrl: 'git@github.com:acme/app.git', ticket: 'Y-1', intent: 'investigate_only', driveToCompletion: false,
+    });
+    const idY = (createY.body as { session: Session }).session.id;
+
+    // StageRunner.run() persists the 'running' lastRun via store.save()
+    // BEFORE it emits run.started (emitting doesn't wait on runner.start()
+    // at all) — so hold store.save open to keep Y's own run.started from
+    // firing until we release it below. Any resolution observed in the
+    // meantime MUST come from the unrelated event if the id filter were
+    // missing — deterministic, unlike trying to win a real timing race
+    // between two live runs.
+    const originalSave = h.store.save.bind(h.store);
+    let releaseSave: (() => void) | undefined;
+    h.store.save = (session) =>
+      new Promise((resolve, reject) => {
+        releaseSave = () => originalSave(session).then(resolve, reject);
+      });
+
+    let settled = false;
+    const pending = request('POST', `/sessions/${idY}/run`, { stage: 'findings' })
+      .then(() => {
+        settled = true;
+      })
+      .catch(() => {
+        settled = true;
+      });
+    // A real socket round-trip is involved (unlike the in-process pipeline
+    // tests), so wait on a real timer rather than a single microtask/
+    // setImmediate flush — that's not enough to guarantee the request has
+    // even been received yet, let alone routed and awaiting run.started.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(settled).toBe(false); // Y's own run.started has not fired yet
+
+    // An unrelated session's run.started fires on the same shared
+    // EngineEvents instance while Y's listener is still registered.
+    h.events.emit('run.started', {
+      session: { id: 'unrelated-id', mode: 'investigation' } as unknown as Session,
+      stage: 'findings',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(settled).toBe(false); // must not have resolved from the unrelated event
+
+    releaseSave?.(); // let Y's own run.started fire for real, so the request (and its socket) can finish cleanly
+    await pending;
+  });
+
+  it('DELETE /workspaces normalizes worktree paths (trailing slash) before the in-use compare, and 400s an absent body', async () => {
+    const session = makeSession({
+      id: 'dev-2',
+      mode: 'development',
+      stageStatus: 'active',
+      workspace: { repoUrl: 'git@github.com:org/repo.git', worktreePath: '/work/inv-2' },
+    });
+    await h.store.save(session);
+
+    const blockedRes = await request('DELETE', '/workspaces', {
+      repoUrl: 'git@github.com:org/repo.git',
+      worktreePath: '/work/inv-2/',
+      branchName: 'main',
+    });
+    expect(blockedRes.status).toBe(409);
+
+    const emptyBodyRes = await request('DELETE', '/workspaces');
+    expect(emptyBodyRes.status).toBe(400);
+  });
+
+  it('POST /sessions/investigations rejects a ticket containing characters that would produce an unsafe id', async () => {
+    const res = await request('POST', '/sessions/investigations', {
+      repoUrl: 'git@github.com:acme/app.git',
+      ticket: '../../x',
+      intent: 'investigate_only',
+      driveToCompletion: false,
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('GET /sessions/:id/artifacts/:name 404s an unknown session id even when a stray file exists at that path', async () => {
+    // A leftover file on disk with no corresponding saved session — the
+    // route must still 404 via sessionStore.load(id), not just check the
+    // file's existence (which would incorrectly succeed).
+    await h.fs.mkdir(`${SESSIONS_DIR}/ghost-1`, { recursive: true });
+    await h.fs.writeFile(`${SESSIONS_DIR}/ghost-1/PLAN.md`, 'leftover file');
+
+    const res = await request('GET', '/sessions/ghost-1/artifacts/PLAN.md');
+    expect(res.status).toBe(404);
+  });
+
+  it('POST /sessions/:id/transition emits a session.transitioned event', async () => {
+    const emitted: Array<{ from: string; to: string }> = [];
+    h.events.on('session.transitioned', (e) => emitted.push({ from: e.from, to: e.to }));
+    const session = makeSession();
+    await request('POST', '/sessions', session);
+    const res = await request('POST', `/sessions/${session.id}/transition`, { to: 'planning' });
+    expect(res.status).toBe(200);
+    expect(emitted).toEqual([{ from: 'findings', to: 'planning' }]);
   });
 });
