@@ -1,3 +1,17 @@
+// Known gaps carried forward (Phase 3a whole-branch review, parked by
+// ruling — do not "fix" without revisiting that ruling):
+// - F5: a PipelineService failure that happens AFTER a detached API route
+//   (run/promote/rereview/retry) has already responded 202 is not pushed
+//   back to the caller. StageRunner persists it to lastRun and emits
+//   run.finished, but there is no channel yet for a client to be notified.
+//   Phase 3b/4's event design adds a 'run.evaluated' event to close this.
+// - F6: drive-to-completion's runPlan -> promote() chain runs outside the
+//   per-session KeyedLock the API server uses, so a human action racing the
+//   very tail of that chain has a narrow window to interleave. Accepted for
+//   a single-user local tool; revisit if this ever serves concurrent users.
+// - F7: runRereview's rereview_summary (a RereviewSummary) is parsed and
+//   used to decide ready/failed, but never persisted onto the session.
+//   Phase 3b persists it.
 import { assertSafeSessionId, InvalidSessionIdError, type SessionStore } from '../engine/session-store';
 import type { WorkspaceManager } from '../workspace/workspace-manager';
 import type { StageRunner } from './stage-runner';
