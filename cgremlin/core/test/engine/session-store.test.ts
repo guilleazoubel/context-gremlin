@@ -33,6 +33,26 @@ describe('SessionStore', () => {
     expect(loaded).toEqual(session);
   });
 
+  it('save() of a v1 document persists a v2 document on disk', async () => {
+    const fs = new InMemoryFileSystem();
+    const store = new SessionStore(fs, '/sessions');
+    const v1: SessionV1 = {
+      schemaVersion: 1,
+      id: 'inv-v1-persist',
+      mode: 'investigation',
+      createdAt: '2026-08-28T10:00:00.000Z',
+      workspace: { repoUrl: 'git@example.com:x/y.git' },
+      lineage: { pipelineId: 'pl-1', parentSessionId: null, ticket: null },
+      stageStatus: 'findings',
+    };
+    await store.save(v1 as unknown as Session);
+    const raw = await fs.readFile('/sessions/inv-v1-persist/session.json');
+    const onDisk = JSON.parse(raw);
+    expect(onDisk.schemaVersion).toBe(2);
+    expect(onDisk.intent).toBe('investigate_only');
+    expect(onDisk.driveToCompletion).toBe(false);
+  });
+
   it('load throws SessionNotFoundError for an unknown id', async () => {
     const fs = new InMemoryFileSystem();
     const store = new SessionStore(fs, '/sessions');
