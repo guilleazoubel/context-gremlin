@@ -4,6 +4,7 @@ import type { DevelopmentPhase, InvestigationPhase, ReviewPhase } from '../../sr
 import {
   assertWorktreeNotInUse,
   findSessionsUsingWorktree,
+  TERMINAL_PHASES_BY_MODE,
   WorkspaceInUseError,
 } from '../../src/workspace/workspace-in-use';
 
@@ -30,6 +31,14 @@ function reviewSession(id: string, stageStatus: ReviewPhase, worktreePath?: stri
 }
 
 const wt = '/worktrees/app-1';
+
+describe('TERMINAL_PHASES_BY_MODE', () => {
+  it('has the exact per-mode terminal phases (approved is terminal for review, not investigation)', () => {
+    expect(TERMINAL_PHASES_BY_MODE.investigation).toEqual(new Set(['promoted_to_development', 'abandoned']));
+    expect(TERMINAL_PHASES_BY_MODE.development).toEqual(new Set(['merged', 'abandoned']));
+    expect(TERMINAL_PHASES_BY_MODE.review).toEqual(new Set(['approved', 'dismissed']));
+  });
+});
 
 describe('findSessionsUsingWorktree', () => {
   it('an active development session sharing the worktree blocks removal', () => {

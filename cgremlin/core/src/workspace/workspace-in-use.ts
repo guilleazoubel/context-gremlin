@@ -1,14 +1,6 @@
 import type { Session } from '../schema/session';
 
-export const TERMINAL_PHASES: ReadonlySet<string> = new Set([
-  'promoted_to_development',
-  'abandoned',
-  'merged',
-  'dismissed',
-  'approved',
-]);
-
-const TERMINAL_PHASES_BY_MODE: Record<Session['mode'], ReadonlySet<string>> = {
+export const TERMINAL_PHASES_BY_MODE: Record<Session['mode'], ReadonlySet<string>> = {
   investigation: new Set(['promoted_to_development', 'abandoned']),
   development: new Set(['merged', 'abandoned']),
   review: new Set(['approved', 'dismissed']),
