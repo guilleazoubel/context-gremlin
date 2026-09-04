@@ -347,6 +347,7 @@ describe('API server', () => {
     const delayedWorkspaceManager = new WorkspaceManager(git, delayedFs, '/mirrors');
     const delayedEvents = new EngineEvents();
     const delayedRunner = new FakeAgentRunner();
+    const delayedLock = new KeyedLock();
     const delayedStageRunner = new StageRunner({
       runner: delayedRunner,
       store: delayedStore,
@@ -354,6 +355,7 @@ describe('API server', () => {
       events: delayedEvents,
       sessionsDir: '/sessions',
       runnerKind: 'claude-code',
+      lock: delayedLock,
     });
     const delayedPipeline = new PipelineService({
       store: delayedStore,
@@ -363,6 +365,7 @@ describe('API server', () => {
       git,
       events: delayedEvents,
       config: { sessionsDir: '/sessions', worktreesDir: '/worktrees', defaultBaseRef: 'origin/main' },
+      lock: delayedLock,
     });
     const delayedServer = createApiServer({
       sessionStore: delayedStore,
@@ -654,6 +657,10 @@ describe('API server', () => {
 
         const final = await d.store.load(devId);
         expect(final.stageStatus).toBe('abandoned');
+        // The transition must not clobber StageRunner's own write either —
+        // lastRun still reflects the agent's real outcome, not wiped by
+        // whichever write landed last.
+        expect(final.lastRun).toMatchObject({ outcome: 'succeeded' });
 
         const removeRes = await requestOn(d.sock, 'DELETE', '/workspaces', {
           repoUrl: 'git@github.com:acme/app.git',
@@ -661,6 +668,48 @@ describe('API server', () => {
           branchName: 'main',
         });
         expect(removeRes.status).toBe(204);
+      }
+    } finally {
+      await d.close();
+      await rm(d.sock, { force: true });
+    }
+  }, 20_000);
+
+  it('POST /run develop racing POST /transition to abandoned: never a running agent on an abandoned session, over 20 iterations', async () => {
+    const d = await createDelayedServer('run-vs-abandon-race.sock');
+    try {
+      for (let i = 0; i < 20; i++) {
+        const devId = `dev-race-b-${i}`;
+        const worktreePath = `/worktrees/${devId}`;
+        const dev = makeSession({
+          id: devId,
+          mode: 'development',
+          stageStatus: 'active',
+          workspace: { repoUrl: 'git@github.com:acme/app.git', worktreePath },
+          lineage: { pipelineId: devId, parentSessionId: null, ticket: null },
+        });
+        await d.store.save(dev);
+
+        // Race the run's pre-run eligibility check + start against the
+        // abandon transition landing at roughly the same moment — either
+        // ordering is acceptable (refused, or started before the abandon
+        // committed), but the two writes must never leave an inconsistent
+        // combination behind.
+        const [runRes, abandonRes] = await Promise.all([
+          requestOn(d.sock, 'POST', `/sessions/${devId}/run`, { stage: 'develop' }),
+          requestOn(d.sock, 'POST', `/sessions/${devId}/transition`, { to: 'abandoned' }),
+        ]);
+        expect([202, 409]).toContain(runRes.status);
+        expect(abandonRes.status).toBe(200);
+
+        const final = await d.store.load(devId);
+        if (final.lastRun?.outcome === 'running') {
+          expect(final.stageStatus).not.toBe('abandoned');
+          // Clean up the still-running agent so it doesn't leak into the
+          // next iteration's shared FakeAgentRunner/DelayedFileSystem state.
+          d.runner.emitExit(d.runner.lastHandle(), { code: 0, signal: null });
+          await new Promise((resolve) => setTimeout(resolve, 60));
+        }
       }
     } finally {
       await d.close();

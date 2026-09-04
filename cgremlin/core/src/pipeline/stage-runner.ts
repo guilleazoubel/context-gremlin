@@ -27,8 +27,8 @@ export interface StageRunnerDeps {
   sessionsDir: string;
   runnerKind: 'claude-code' | 'codex';
   now?: () => Date;
-  /** Shared with PipelineService (and the API server) — see the locking invariant documented atop pipeline-service.ts. */
-  lock?: KeyedLock;
+  /** Shared with PipelineService (and the API server) — see the locking invariant documented atop pipeline-service.ts. Required (not optional): a wiring that forgets to share it is a bug, not a degraded-but-working mode. */
+  lock: KeyedLock;
 }
 export interface StageRunInput { sessionId: string; stage: StageName; brief: string | null; prompt: string }
 export interface StageRunResult { exit: AgentExitResult; outcome: 'succeeded' | 'failed' | 'stopped'; session: Session }
@@ -42,7 +42,7 @@ export class StageRunner {
 
   constructor(private readonly deps: StageRunnerDeps) {
     this.now = deps.now ?? (() => new Date());
-    this.lock = deps.lock ?? new KeyedLock();
+    this.lock = deps.lock;
   }
 
   isRunning(sessionId: string): boolean {
