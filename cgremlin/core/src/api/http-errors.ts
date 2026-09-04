@@ -22,6 +22,7 @@ export function mapErrorToHttp(err: unknown): HttpError {
     case 'WorkspaceInUseError':
     case 'UnsupportedStageError':
     case 'WorkspaceMissingError':
+    case 'TickInProgressError':
       return { status: 409, body: { error: message } };
     case 'ArtifactNotFoundError':
       return { status: 404, body: { error: message } };

@@ -142,6 +142,32 @@ describe('PipelineService — review', () => {
     if (session.mode !== 'review') throw new Error('mode changed');
     expect(session.pr?.reviewedSha).toBe('bbb');
     expect(session.pr?.headSha).toBe('bbb');
+    expect(session.lastRereviewSummary).toEqual({ resolved: 2, total: 2, newFindings: 0 });
+  });
+
+  it('persists lastRereviewSummary parsed from rereview_summary after a successful rereview', async () => {
+    const h = createHarness();
+    const review = await saveReviewSession(h, { stageStatus: 'changes_requested' });
+    const sessionDir = `${SESSIONS_DIR}/${review.id}`;
+    await h.fs.writeFile(`${sessionDir}/REVIEW.md`, 'old review');
+
+    h.git.queueResponse({ stdout: 'aaa', stderr: '' });
+    h.git.queueResponse({ stdout: '', stderr: '' });
+    h.git.queueResponse({ stdout: 'bbb', stderr: '' });
+    h.git.queueResponse({ stdout: '', stderr: '' });
+    h.git.queueResponse({ stdout: 'abc1234 fix the bug', stderr: '' });
+    h.git.queueResponse({ stdout: ' 1 file changed', stderr: '' });
+
+    const p = h.service.runRereview(review.id);
+    await flush();
+    await h.finishRun(
+      { 'REVIEW.md': 'new review', rereview_summary: '⚠️ 1/3 resolved, 2 new' },
+      { code: 0, signal: null },
+    );
+    const session = await p;
+    expect(session.stageStatus).toBe('ready');
+    if (session.mode !== 'review') throw new Error('mode changed');
+    expect(session.lastRereviewSummary).toEqual({ resolved: 1, total: 3, newFindings: 2 });
   });
 
   it('a second runRereview archives the current REVIEW.md to REVIEW-v2.md and bumps reviewVersion to 2', async () => {

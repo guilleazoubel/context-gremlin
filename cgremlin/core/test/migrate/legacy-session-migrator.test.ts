@@ -80,6 +80,18 @@ describe('migrateLegacySession', () => {
     expect(migrated.stageStatus).toBe('queued');
   });
 
+  it('defaults lastRereviewSummary to null for a migrated review-mode legacy session', () => {
+    const legacyReview = {
+      ...legacyInvestigationSession,
+      id: 'pr-grace-frontend-42-20260710-143000',
+      mode: 'review',
+      stage_status: 'queued',
+    };
+    const migrated = migrateLegacySession(legacyReview);
+    if (migrated.mode !== 'review') throw new Error('mode changed');
+    expect(migrated.lastRereviewSummary).toBeNull();
+  });
+
   it('preserves an explicit legacy stage_status value instead of resurrecting a terminal session as active', () => {
     const legacyMergedDev = {
       ...legacyInvestigationSession,

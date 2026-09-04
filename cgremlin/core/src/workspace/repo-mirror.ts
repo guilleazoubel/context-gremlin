@@ -19,7 +19,12 @@ export function mirrorDirName(repoUrl: string): string {
 // explicitly so ordinary remote-tracking refs exist and fetch --prune only
 // ever prunes refs/remotes/origin/*, never the session branches living in
 // refs/heads/*.
-const ORIGIN_FETCH_REFSPEC = '+refs/heads/*:refs/remotes/origin/*';
+const ORIGIN_FETCH_HEADS_REFSPEC = '+refs/heads/*:refs/remotes/origin/*';
+// A second refspec so PR head commits (which live in refs/pull/*/head on
+// GitHub, not refs/heads/*) are fetchable as remote-tracking refs too —
+// review sessions branch from origin/pr/<n> without ever needing a fork
+// remote.
+const ORIGIN_FETCH_PULLS_REFSPEC = '+refs/pull/*/head:refs/remotes/origin/pr/*';
 
 export async function ensureMirror(
   git: GitRunner,
@@ -39,7 +44,17 @@ export async function ensureMirror(
   if (!isValidMirror) {
     await fs.mkdir(mirrorsDir, { recursive: true });
     await git.run(['clone', '--bare', repoUrl, mirrorPath], { cwd: mirrorsDir });
-    await git.run(['config', 'remote.origin.fetch', ORIGIN_FETCH_REFSPEC], { cwd: mirrorPath });
+    await git.run(['config', 'remote.origin.fetch', ORIGIN_FETCH_HEADS_REFSPEC], { cwd: mirrorPath });
+    await git.run(['config', '--add', 'remote.origin.fetch', ORIGIN_FETCH_PULLS_REFSPEC], { cwd: mirrorPath });
+  } else {
+    const { stdout } = await git.run(['config', '--get-all', 'remote.origin.fetch'], { cwd: mirrorPath });
+    const existingRefspecs = stdout
+      .split('\n')
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0);
+    if (!existingRefspecs.includes(ORIGIN_FETCH_PULLS_REFSPEC)) {
+      await git.run(['config', '--add', 'remote.origin.fetch', ORIGIN_FETCH_PULLS_REFSPEC], { cwd: mirrorPath });
+    }
   }
   await git.run(['fetch', '--prune', 'origin'], { cwd: mirrorPath });
   return mirrorPath;

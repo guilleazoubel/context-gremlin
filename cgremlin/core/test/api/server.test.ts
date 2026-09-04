@@ -15,6 +15,14 @@ import { FakeAgentRunner } from '../support/fake-agent-runner';
 import { migrateV1ToV2, type Session, type SessionV1 } from '../../src/schema/session';
 import type { SessionFileSystem } from '../../src/fs/session-file-system';
 import { createHarness, flush, SESSIONS_DIR, type PipelineHarness } from '../support/pipeline-harness';
+import { createDiscoveryHarness, discoveryConfig } from '../support/discovery-harness';
+import { DiscoveryScheduler } from '../../src/discovery/scheduler';
+import type { GhRunner } from '../../src/gh/gh-runner';
+import { KeyedLock } from '../../src/api/keyed-lock';
+import { ReconciliationTick } from '../../src/discovery/reconciliation';
+import { DefaultPRDiscoveryStrategy } from '../../src/discovery/pr-discovery-strategy';
+import { ReviewSessionFactory } from '../../src/pipeline/review-session-factory';
+import { FakeGhRunner } from '../support/fake-gh-runner';
 
 const APPROVED_PLAN = `## Review Status
 - PM: ✅ Approved — solves exactly the ticket
@@ -137,6 +145,7 @@ async function createDelayedServer(socketFileName: string) {
   const workspace = new WorkspaceManager(git, delayedFs, '/mirrors');
   const events = new EngineEvents();
   const runner = new FakeAgentRunner();
+  const lock = new KeyedLock();
   const stageRunner = new StageRunner({
     runner,
     store,
@@ -161,6 +170,7 @@ async function createDelayedServer(socketFileName: string) {
     fs: delayedFs,
     sessionsDir: '/sessions',
     events,
+    lock,
   });
   const sock = path.join(dir, socketFileName);
   await new Promise<void>((resolve) => srv.listen(sock, resolve));
@@ -170,6 +180,11 @@ async function createDelayedServer(socketFileName: string) {
     store,
     pipeline,
     runner,
+    lock,
+    events,
+    workspace,
+    git,
+    fs: delayedFs,
   };
 }
 
@@ -576,6 +591,66 @@ describe('API server', () => {
     }
   });
 
+  it('a ReconciliationTick sharing the server\'s lock waits for an in-flight API rereview on the same session, then re-plans from the fresh state instead of starting a second rereview', async () => {
+    const d = await createDelayedServer('shared-lock.sock');
+    try {
+      const reviewId = 'pr-app-5-x';
+      const v1: SessionV1 = {
+        schemaVersion: 1, id: reviewId, mode: 'review', createdAt: '2026-09-04T10:00:00.000Z',
+        workspace: { repoUrl: 'git@github.com:acme/app.git', worktreePath: '/worktrees/pr-app-5-x', branch: 'pr-5' },
+        lineage: { pipelineId: reviewId, parentSessionId: null, ticket: null },
+        stageStatus: 'ready',
+      };
+      const review = migrateV1ToV2(v1);
+      if (review.mode !== 'review') throw new Error('mode changed');
+      review.pr = {
+        repo: 'acme/app', number: 5, url: 'https://github.com/acme/app/pull/5',
+        headSha: 'a'.repeat(40), reviewedSha: 'a'.repeat(40), title: 't', author: 'bob',
+      };
+      await d.store.save(review);
+
+      const gh = new FakeGhRunner();
+      // A head sha mismatch is only a rereview trigger from 'ready'/'changes_requested' —
+      // if the tick used the stale 'ready' snapshot instead of waiting on the shared lock
+      // and re-reading fresh, it would see this mismatch as eligible and try a second,
+      // concurrent rereview on the session the API call is already running.
+      gh.queueResponse({ stdout: JSON.stringify({
+        number: 5, title: 't', author: { login: 'bob' }, headRefName: 'pr-5', headRefOid: 'b'.repeat(40),
+        baseRefName: 'main', url: 'https://github.com/acme/app/pull/5', state: 'OPEN', isDraft: false,
+        reviewDecision: '', mergedAt: null, closedAt: null, latestReviews: [], statusCheckRollup: [],
+      }) });
+      gh.queueResponse({ stdout: '[]' }); // strategy.poll's pr list for acme/app
+
+      const strategy = new DefaultPRDiscoveryStrategy(gh);
+      const factory = new ReviewSessionFactory({
+        gh, store: d.store, workspace: d.workspace, events: d.events,
+        sessionsDir: '/sessions', worktreesDir: '/worktrees',
+      });
+      const tick = new ReconciliationTick({
+        gh, store: d.store, strategy, factory, pipeline: d.pipeline, events: d.events, lock: d.lock,
+        config: discoveryConfig({ repos: ['acme/app'] }),
+      });
+
+      const apiRequest = requestOn(d.sock, 'POST', `/sessions/${reviewId}/rereview`);
+      // Give the API request a head start acquiring the lock before the tick races in —
+      // the delayed fs makes its own path slow enough that this margin is generous.
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      const report = await tick.run();
+      const apiRes = await apiRequest;
+
+      expect(apiRes.status).toBe(202);
+      expect(report.errors).toEqual([]);
+      // No rereview or transition action was planned: the tick's fresh, lock-protected
+      // read saw 'reviewing' (not rereview-eligible), not the stale 'ready' snapshot.
+      expect(report.actions).toEqual([]);
+      expect(report.skipped).toEqual([]);
+      expect((await d.store.load(reviewId)).stageStatus).toBe('reviewing');
+    } finally {
+      await d.close();
+      await rm(d.sock, { force: true });
+    }
+  });
+
   it('POST /sessions/:id/run filters run.started by session id, so an unrelated pending run does not resolve it early', async () => {
     const createY = await request('POST', '/sessions/investigations', {
       repoUrl: 'git@github.com:acme/app.git', ticket: 'Y-1', intent: 'investigate_only', driveToCompletion: false,
@@ -673,5 +748,130 @@ describe('API server', () => {
     const res = await request('POST', `/sessions/${session.id}/transition`, { to: 'planning' });
     expect(res.status).toBe(200);
     expect(emitted).toEqual([{ from: 'findings', to: 'planning' }]);
+  });
+
+  it('POST /discovery/tick 404s when discovery is not configured', async () => {
+    const res = await request('POST', '/discovery/tick');
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: 'discovery not configured' });
+  });
+
+  it('GET /discovery/config 404s when discovery is not configured', async () => {
+    const res = await request('GET', '/discovery/config');
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: 'discovery not configured' });
+  });
+
+  it('GET /discovery/status 404s when discovery is not configured', async () => {
+    const res = await request('GET', '/discovery/status');
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: 'discovery not configured' });
+  });
+});
+
+describe('discovery routes (configured)', () => {
+  let discSocketPath: string;
+  let discServer: http.Server;
+  let dh: ReturnType<typeof createDiscoveryHarness>;
+
+  function discRequest(method: string, urlPath: string, body?: unknown) {
+    return requestOn(discSocketPath, method, urlPath, body);
+  }
+
+  beforeEach(async () => {
+    dh = createDiscoveryHarness();
+    discSocketPath = path.join(dir, 'api-discovery.sock');
+    discServer = createApiServer({
+      sessionStore: dh.h.store,
+      workspaceManager: dh.h.workspace,
+      pipeline: dh.h.service,
+      fs: dh.h.fs,
+      sessionsDir: SESSIONS_DIR,
+      events: dh.h.events,
+      discovery: { scheduler: new DiscoveryScheduler(dh.tick, 60_000), config: dh.config },
+    });
+    await new Promise<void>((resolve) => discServer.listen(discSocketPath, resolve));
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => discServer.close(() => resolve()));
+    await rm(discSocketPath, { force: true });
+  });
+
+  it('POST /discovery/tick runs one tick now and returns the TickReport', async () => {
+    dh.gh.queueResponse({ stdout: '[]' }); // strategy.poll's pr list for acme/app
+    const res = await discRequest('POST', '/discovery/tick');
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ reconciled: 0, created: [], ignoredOwn: 0, errors: [] });
+  });
+
+  it('GET /discovery/config returns the configured DiscoveryConfig', async () => {
+    const res = await discRequest('GET', '/discovery/config');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(dh.config);
+  });
+
+  it('GET /discovery/status returns running/lastReport/skippedBeats/lastError', async () => {
+    const res = await discRequest('GET', '/discovery/status');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ running: false, lastReport: null, skippedBeats: 0, lastError: null });
+  });
+
+  it('GET /discovery/status reports lastError after a tick that rejects', async () => {
+    const scheduler = new DiscoveryScheduler({ run: () => Promise.reject(new Error('boom')) }, 60_000);
+    const brokenServer = createApiServer({
+      sessionStore: dh.h.store,
+      workspaceManager: dh.h.workspace,
+      pipeline: dh.h.service,
+      fs: dh.h.fs,
+      sessionsDir: SESSIONS_DIR,
+      events: dh.h.events,
+      discovery: { scheduler, config: dh.config },
+    });
+    const brokenSocketPath = path.join(dir, 'api-discovery-broken.sock');
+    await new Promise<void>((resolve) => brokenServer.listen(brokenSocketPath, resolve));
+    try {
+      const tickRes = await requestOn(brokenSocketPath, 'POST', '/discovery/tick');
+      expect(tickRes.status).toBe(500);
+      const statusRes = await requestOn(brokenSocketPath, 'GET', '/discovery/status');
+      expect(statusRes.status).toBe(200);
+      expect(statusRes.body).toEqual({ running: false, lastReport: null, skippedBeats: 0, lastError: 'boom' });
+    } finally {
+      await new Promise<void>((resolve) => brokenServer.close(() => resolve()));
+      await rm(brokenSocketPath, { force: true });
+    }
+  });
+
+  it('POST /discovery/tick returns 409 when a tick is already running', async () => {
+    class SlowGhRunner implements GhRunner {
+      constructor(private readonly inner: GhRunner, private readonly delayMs: number) {}
+      async run(args: string[]): Promise<{ stdout: string; stderr: string }> {
+        await new Promise((resolve) => setTimeout(resolve, this.delayMs));
+        return this.inner.run(args);
+      }
+    }
+    const slow = createDiscoveryHarness({}, (gh) => new SlowGhRunner(gh, 30));
+    slow.gh.queueResponse({ stdout: '[]' });
+    const slowSocketPath = path.join(dir, 'api-discovery-slow.sock');
+    const slowServer = createApiServer({
+      sessionStore: slow.h.store,
+      workspaceManager: slow.h.workspace,
+      pipeline: slow.h.service,
+      fs: slow.h.fs,
+      sessionsDir: SESSIONS_DIR,
+      events: slow.h.events,
+      discovery: { scheduler: new DiscoveryScheduler(slow.tick, 60_000), config: slow.config },
+    });
+    await new Promise<void>((resolve) => slowServer.listen(slowSocketPath, resolve));
+    try {
+      const first = requestOn(slowSocketPath, 'POST', '/discovery/tick');
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      const second = await requestOn(slowSocketPath, 'POST', '/discovery/tick');
+      expect(second.status).toBe(409);
+      expect((await first).status).toBe(200);
+    } finally {
+      await new Promise<void>((resolve) => slowServer.close(() => resolve()));
+      await rm(slowSocketPath, { force: true });
+    }
   });
 });

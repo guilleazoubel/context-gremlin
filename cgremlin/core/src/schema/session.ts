@@ -48,6 +48,12 @@ const V2Base = z.object({
 export const IntentSchema = z.enum(['investigate_only', 'development']);
 export type Intent = z.infer<typeof IntentSchema>;
 
+const RereviewSummarySchema = z.object({
+  resolved: z.number().int(),
+  total: z.number().int(),
+  newFindings: z.number().int(),
+});
+
 export const SessionSchema = z.discriminatedUnion('mode', [
   V2Base.extend({
     mode: z.literal('investigation'),
@@ -63,6 +69,7 @@ export const SessionSchema = z.discriminatedUnion('mode', [
     mode: z.literal('review'),
     stageStatus: z.enum(REVIEW_PHASES),
     reviewVersion: z.number().int().nonnegative(),
+    lastRereviewSummary: RereviewSummarySchema.nullable().default(null),
   }),
 ]);
 export type Session = z.infer<typeof SessionSchema>;
@@ -84,7 +91,7 @@ export function migrateV1ToV2(v1: SessionV1): Session {
     case 'development':
       return SessionSchema.parse(base);
     case 'review':
-      return SessionSchema.parse({ ...base, reviewVersion: 0 });
+      return SessionSchema.parse({ ...base, reviewVersion: 0, lastRereviewSummary: null });
   }
 }
 

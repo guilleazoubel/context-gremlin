@@ -9,9 +9,6 @@
 //   per-session KeyedLock the API server uses, so a human action racing the
 //   very tail of that chain has a narrow window to interleave. Accepted for
 //   a single-user local tool; revisit if this ever serves concurrent users.
-// - F7: runRereview's rereview_summary (a RereviewSummary) is parsed and
-//   used to decide ready/failed, but never persisted onto the session.
-//   Phase 3b persists it.
 import { assertSafeSessionId, InvalidSessionIdError, type SessionStore } from '../engine/session-store';
 import type { WorkspaceManager } from '../workspace/workspace-manager';
 import type { StageRunner } from './stage-runner';
@@ -394,11 +391,15 @@ export class PipelineService {
       throw err;
     }
 
-    const { outcome } = await evaluateRereview(result.exit, this.deps.fs, sessionDir);
+    const { outcome, summary } = await evaluateRereview(result.exit, this.deps.fs, sessionDir);
     if (outcome === 'ready') {
       const updated = await this.transition(id, 'ready');
       if (updated.mode === 'review' && updated.pr) {
-        const withSha: Session = { ...updated, pr: { ...updated.pr, reviewedSha: newCommit, headSha: newCommit } };
+        const withSha: Session = {
+          ...updated,
+          pr: { ...updated.pr, reviewedSha: newCommit, headSha: newCommit },
+          lastRereviewSummary: summary,
+        };
         await this.deps.store.save(withSha);
         return withSha;
       }

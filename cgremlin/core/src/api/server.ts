@@ -17,6 +17,9 @@ import {
 } from './validation';
 import { assertWorktreeNotInUse } from '../workspace/workspace-in-use';
 import { ArtifactNotFoundError } from './artifacts';
+import type { DiscoveryScheduler } from '../discovery/scheduler';
+import type { DiscoveryConfig } from '../discovery/discovery-config';
+import { awaitRunStart } from '../pipeline/run-start';
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
@@ -50,39 +53,15 @@ export interface ApiServerDeps {
   fs: SessionFileSystem;
   sessionsDir: string;
   events: EngineEvents;
+  discovery?: { scheduler: DiscoveryScheduler; config: DiscoveryConfig };
+  lock?: KeyedLock;
 }
 
 export function createApiServer(deps: ApiServerDeps): http.Server {
-  const lock = new KeyedLock();
+  const lock = deps.lock ?? new KeyedLock();
   return http.createServer((req, res) => {
     void handleRequest(req, res, deps, lock);
   });
-}
-
-/**
- * Waits until either `guard` (the pipeline call already in flight) rejects,
- * or a 'run.started' event fires for `sessionId` — whichever comes first.
- * The HTTP response goes out once the run has *started*, not once the full
- * agent turn has finished; the turn keeps running in the background.
- * `guard` is deliberately never awaited by the caller beyond this race, so
- * it always gets a `.catch` here — StageRunner/PipelineService already
- * persist a failure and emit `run.finished` for it, so nothing is lost.
- */
-async function raceRunStarted(events: EngineEvents, sessionId: string, guard: Promise<unknown>): Promise<void> {
-  guard.catch(() => undefined);
-  let off: () => void = () => {};
-  try {
-    await Promise.race([
-      new Promise<void>((resolve) => {
-        off = events.on('run.started', (e) => {
-          if (e.session.id === sessionId) resolve();
-        });
-      }),
-      guard,
-    ]);
-  } finally {
-    off();
-  }
 }
 
 async function respondAfterRunStarted(
@@ -91,7 +70,9 @@ async function respondAfterRunStarted(
   id: string,
   guard: Promise<unknown>,
 ): Promise<void> {
-  await raceRunStarted(deps.events, id, guard);
+  // The HTTP response goes out once the run has *started*, not once the full
+  // agent turn has finished; the turn keeps running in the background.
+  await awaitRunStart(deps.events, id, guard);
   const session = await deps.sessionStore.load(id);
   sendJson(res, 202, { session });
 }
@@ -256,6 +237,35 @@ async function handleRequest(
       await deps.workspaceManager.removeWorkspace(params.repoUrl, params.worktreePath, params.branchName);
       sendJson(res, 204, undefined);
       return;
+    }
+
+    if (parts.length === 2 && parts[0] === 'discovery' && ['tick', 'config', 'status'].includes(parts[1])) {
+      if (!deps.discovery) {
+        sendJson(res, 404, { error: 'discovery not configured' });
+        return;
+      }
+      const { scheduler, config } = deps.discovery;
+
+      if (method === 'POST' && parts[1] === 'tick') {
+        const report = await scheduler.runNow();
+        sendJson(res, 200, report);
+        return;
+      }
+
+      if (method === 'GET' && parts[1] === 'config') {
+        sendJson(res, 200, config);
+        return;
+      }
+
+      if (method === 'GET' && parts[1] === 'status') {
+        sendJson(res, 200, {
+          running: scheduler.isRunning(),
+          lastReport: scheduler.lastReport,
+          skippedBeats: scheduler.skippedBeats,
+          lastError: scheduler.lastError,
+        });
+        return;
+      }
     }
 
     sendJson(res, 404, { error: 'not found' });
