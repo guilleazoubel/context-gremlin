@@ -6,10 +6,20 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from
 import { createApiServer } from '../../src/api/server';
 import { SessionStore } from '../../src/engine/session-store';
 import { WorkspaceManager } from '../../src/workspace/workspace-manager';
+import { StageRunner } from '../../src/pipeline/stage-runner';
+import { PipelineService } from '../../src/pipeline/pipeline-service';
+import { EngineEvents } from '../../src/engine/events';
 import { InMemoryFileSystem } from '../support/in-memory-file-system';
 import { FakeGitRunner } from '../support/fake-git-runner';
+import { FakeAgentRunner } from '../support/fake-agent-runner';
 import { migrateV1ToV2, type Session, type SessionV1 } from '../../src/schema/session';
 import type { SessionFileSystem } from '../../src/fs/session-file-system';
+import { createHarness, flush, SESSIONS_DIR, type PipelineHarness } from '../support/pipeline-harness';
+
+const APPROVED_PLAN = `## Review Status
+- PM: ✅ Approved — solves exactly the ticket
+- Principal Engineer: ✅ Approved — mechanism checks out
+`;
 
 let dir: string;
 let socketPath: string;
@@ -37,7 +47,18 @@ function requestOn(
         res.on('data', (c) => chunks.push(c));
         res.on('end', () => {
           const raw = Buffer.concat(chunks).toString('utf8');
-          resolve({ status: res.statusCode ?? 0, body: raw ? JSON.parse(raw) : undefined });
+          let body: unknown;
+          if (raw) {
+            // Most routes return JSON; the artifact-read route returns
+            // text/plain. Fall back to the raw string rather than failing
+            // the request when the body isn't valid JSON.
+            try {
+              body = JSON.parse(raw);
+            } catch {
+              body = raw;
+            }
+          }
+          resolve({ status: res.statusCode ?? 0, body });
         });
       },
     );
@@ -112,12 +133,18 @@ afterAll(async () => {
   await rm(dir, { recursive: true, force: true });
 });
 
+let h: PipelineHarness;
+
 beforeEach(async () => {
-  const fs = new InMemoryFileSystem();
-  const git = new FakeGitRunner();
-  const sessionStore = new SessionStore(fs, '/sessions');
-  const workspaceManager = new WorkspaceManager(git, fs, '/mirrors');
-  server = createApiServer({ sessionStore, workspaceManager });
+  h = createHarness();
+  server = createApiServer({
+    sessionStore: h.store,
+    workspaceManager: h.workspace,
+    pipeline: h.service,
+    fs: h.fs,
+    sessionsDir: SESSIONS_DIR,
+    events: h.events,
+  });
   await new Promise<void>((resolve) => server.listen(socketPath, resolve));
 });
 
@@ -251,9 +278,32 @@ describe('API server', () => {
     const git = new FakeGitRunner();
     const delayedStore = new SessionStore(delayedFs, '/sessions');
     const delayedWorkspaceManager = new WorkspaceManager(git, delayedFs, '/mirrors');
+    const delayedEvents = new EngineEvents();
+    const delayedRunner = new FakeAgentRunner();
+    const delayedStageRunner = new StageRunner({
+      runner: delayedRunner,
+      store: delayedStore,
+      fs: delayedFs,
+      events: delayedEvents,
+      sessionsDir: '/sessions',
+      runnerKind: 'claude-code',
+    });
+    const delayedPipeline = new PipelineService({
+      store: delayedStore,
+      workspace: delayedWorkspaceManager,
+      stageRunner: delayedStageRunner,
+      fs: delayedFs,
+      git,
+      events: delayedEvents,
+      config: { sessionsDir: '/sessions', worktreesDir: '/worktrees', defaultBaseRef: 'origin/main' },
+    });
     const delayedServer = createApiServer({
       sessionStore: delayedStore,
       workspaceManager: delayedWorkspaceManager,
+      pipeline: delayedPipeline,
+      fs: delayedFs,
+      sessionsDir: '/sessions',
+      events: delayedEvents,
     });
     const delayedSocketPath = path.join(dir, 'concurrency.sock');
     await new Promise<void>((resolve) => delayedServer.listen(delayedSocketPath, resolve));
@@ -271,5 +321,176 @@ describe('API server', () => {
       await new Promise<void>((resolve) => delayedServer.close(() => resolve()));
       await rm(delayedSocketPath, { force: true });
     }
+  });
+
+  it('POST /sessions/investigations creates a session at findings and creates the worktree', async () => {
+    const res = await request('POST', '/sessions/investigations', {
+      repoUrl: 'git@github.com:acme/app.git',
+      ticket: 'APP-1',
+      intent: 'investigate_only',
+      driveToCompletion: false,
+    });
+    expect(res.status).toBe(201);
+    const body = res.body as { session: Session };
+    expect(body.session.stageStatus).toBe('findings');
+    const worktreeAdd = h.git.calls.find((c) => c.args[0] === 'worktree' && c.args[1] === 'add');
+    expect(worktreeAdd).toBeDefined();
+  });
+
+  it('POST /sessions/:id/run starts a stage run (202, lastRun running), and the run completes in the background', async () => {
+    const createRes = await request('POST', '/sessions/investigations', {
+      repoUrl: 'git@github.com:acme/app.git',
+      ticket: 'APP-2',
+      intent: 'investigate_only',
+      driveToCompletion: false,
+    });
+    const id = (createRes.body as { session: Session }).session.id;
+
+    const runRes = await request('POST', `/sessions/${id}/run`, { stage: 'findings' });
+    expect(runRes.status).toBe(202);
+    expect((runRes.body as { session: Session }).session.lastRun?.outcome).toBe('running');
+
+    await h.finishRun({ 'FINDINGS.md': '# Findings\nroot cause found' }, { code: 0, signal: null });
+
+    const getRes = await request('GET', `/sessions/${id}`);
+    expect((getRes.body as { session: Session }).session.lastRun?.outcome).toBe('succeeded');
+  });
+
+  it('POST /sessions/:id/run while a run is still pending returns 409 RunInProgressError for the second request', async () => {
+    const createRes = await request('POST', '/sessions/investigations', {
+      repoUrl: 'git@github.com:acme/app.git',
+      ticket: 'APP-3',
+      intent: 'investigate_only',
+      driveToCompletion: false,
+    });
+    const id = (createRes.body as { session: Session }).session.id;
+
+    const firstRes = await request('POST', `/sessions/${id}/run`, { stage: 'findings' });
+    expect(firstRes.status).toBe(202);
+
+    // No exit has been emitted yet: the first run is genuinely still pending.
+    const secondRes = await request('POST', `/sessions/${id}/run`, { stage: 'findings' });
+    expect(secondRes.status).toBe(409);
+  });
+
+  it('POST /sessions/:id/run rejects a stage the session mode does not own (409) and an unknown stage (400)', async () => {
+    const createRes = await request('POST', '/sessions/investigations', {
+      repoUrl: 'git@github.com:acme/app.git',
+      ticket: 'APP-4',
+      intent: 'investigate_only',
+      driveToCompletion: false,
+    });
+    const id = (createRes.body as { session: Session }).session.id;
+
+    const reviewRes = await request('POST', `/sessions/${id}/run`, { stage: 'review' });
+    expect(reviewRes.status).toBe(409);
+
+    const bogusRes = await request('POST', `/sessions/${id}/run`, { stage: 'bogus' });
+    expect(bogusRes.status).toBe(400);
+  });
+
+  it('POST /sessions/:id/promote rejects with 409 PlanGateError before approve-plan, then succeeds with both sessions after', async () => {
+    const createRes = await request('POST', '/sessions/investigations', {
+      repoUrl: 'git@github.com:acme/app.git',
+      ticket: 'APP-5',
+      intent: 'development',
+      driveToCompletion: false,
+    });
+    const id = (createRes.body as { session: Session }).session.id;
+
+    await request('POST', `/sessions/${id}/run`, { stage: 'findings' });
+    await h.finishRun({ 'FINDINGS.md': '# Findings\nroot cause found' }, { code: 0, signal: null });
+    await h.finishRun({ 'PLAN.md': APPROVED_PLAN }, { code: 0, signal: null });
+
+    const afterPlanRes = await request('GET', `/sessions/${id}`);
+    expect((afterPlanRes.body as { session: Session }).session.stageStatus).toBe('plan_ready');
+
+    const promoteRejectRes = await request('POST', `/sessions/${id}/promote`);
+    expect(promoteRejectRes.status).toBe(409);
+
+    const approveRes = await request('POST', `/sessions/${id}/approve-plan`);
+    expect(approveRes.status).toBe(200);
+
+    const promoteRes = await request('POST', `/sessions/${id}/promote`);
+    expect(promoteRes.status).toBe(202);
+    const promoteBody = promoteRes.body as { investigation: Session; development: Session };
+    expect(promoteBody.investigation.stageStatus).toBe('promoted_to_development');
+    expect(promoteBody.development.stageStatus).toBe('active');
+  });
+
+  it('GET /sessions/:id/artifacts/:name reads an artifact, 404s when missing, 400s a disallowed name, and allows a versioned REVIEW-vN.md', async () => {
+    const createRes = await request('POST', '/sessions/investigations', {
+      repoUrl: 'git@github.com:acme/app.git',
+      ticket: 'APP-6',
+      intent: 'investigate_only',
+      driveToCompletion: false,
+    });
+    const id = (createRes.body as { session: Session }).session.id;
+    await h.fs.writeFile(`${SESSIONS_DIR}/${id}/PLAN.md`, '# Plan text');
+    await h.fs.writeFile(`${SESSIONS_DIR}/${id}/REVIEW-v2.md`, 'archived review');
+
+    const planRes = await request('GET', `/sessions/${id}/artifacts/PLAN.md`);
+    expect(planRes.status).toBe(200);
+    expect(planRes.body).toBe('# Plan text');
+
+    const missingRes = await request('GET', `/sessions/${id}/artifacts/DEVELOPMENT.md`);
+    expect(missingRes.status).toBe(404);
+
+    // Not a path-traversal payload (the URL parser normalizes literal '..'
+    // segments before the route ever sees them) but a disallowed name —
+    // exactly the class of request the artifact allow-list exists to reject.
+    const invalidRes = await request('GET', `/sessions/${id}/artifacts/session.json`);
+    expect(invalidRes.status).toBe(400);
+
+    const versionedRes = await request('GET', `/sessions/${id}/artifacts/REVIEW-v2.md`);
+    expect(versionedRes.status).toBe(200);
+    expect(versionedRes.body).toBe('archived review');
+  });
+
+  it('DELETE /workspaces refuses removal while an active development session shares the worktree, then allows it once abandoned', async () => {
+    const session = makeSession({
+      id: 'dev-1',
+      mode: 'development',
+      stageStatus: 'active',
+      workspace: { repoUrl: 'git@github.com:org/repo.git', worktreePath: '/work/inv-1' },
+    });
+    await h.store.save(session);
+
+    const blockedRes = await request('DELETE', '/workspaces', {
+      repoUrl: 'git@github.com:org/repo.git',
+      worktreePath: '/work/inv-1',
+      branchName: 'main',
+    });
+    expect(blockedRes.status).toBe(409);
+
+    await h.store.transition('dev-1', 'abandoned');
+
+    const allowedRes = await request('DELETE', '/workspaces', {
+      repoUrl: 'git@github.com:org/repo.git',
+      worktreePath: '/work/inv-1',
+      branchName: 'main',
+    });
+    expect(allowedRes.status).toBe(204);
+  });
+
+  it('POST /sessions/:id/stop stops a running run (true) and reports false when idle', async () => {
+    const createRes = await request('POST', '/sessions/investigations', {
+      repoUrl: 'git@github.com:acme/app.git',
+      ticket: 'APP-7',
+      intent: 'investigate_only',
+      driveToCompletion: false,
+    });
+    const id = (createRes.body as { session: Session }).session.id;
+
+    await request('POST', `/sessions/${id}/run`, { stage: 'findings' });
+    const stopRes = await request('POST', `/sessions/${id}/stop`);
+    expect(stopRes.status).toBe(200);
+    expect((stopRes.body as { stopped: boolean }).stopped).toBe(true);
+
+    h.runner.emitExit(h.runner.lastHandle(), { code: null, signal: 'SIGTERM' });
+    await flush();
+
+    const idleStopRes = await request('POST', `/sessions/${id}/stop`);
+    expect((idleStopRes.body as { stopped: boolean }).stopped).toBe(false);
   });
 });
