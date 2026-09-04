@@ -3,7 +3,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createHarness, flush, SESSIONS_DIR, WORKTREES_DIR, FIXED_NOW } from '../support/pipeline-harness';
 import { FakeGhRunner } from '../support/fake-gh-runner';
-import { mapPrView } from '../../src/gh/pr-view';
+import { mapPrView, PR_LIST_FIELDS } from '../../src/gh/pr-view';
 import { DefaultPRDiscoveryStrategy } from '../../src/discovery/pr-discovery-strategy';
 import { ReviewSessionFactory } from '../../src/pipeline/review-session-factory';
 import { planReconciliation, ReconciliationTick } from '../../src/discovery/reconciliation';
@@ -256,6 +256,26 @@ function tickHarness() {
 }
 
 describe('ReconciliationTick', () => {
+  it('never calls gh pr view for terminal (approved/dismissed) review sessions', async () => {
+    const { h, gh, strategy, factory, lock } = tickHarness();
+    const approved = reviewSession({ id: 'pr-app-6-x', stageStatus: 'approved', repo: 'acme/app', number: 6 });
+    const dismissed = reviewSession({ id: 'pr-app-7-x', stageStatus: 'dismissed', repo: 'acme/app', number: 7 });
+    await h.store.save(approved);
+    await h.store.save(dismissed);
+    gh.queueResponse({ stdout: '[]' }); // strategy.poll's pr list for acme/app — the only gh call expected
+
+    const tick = new ReconciliationTick({
+      gh, store: h.store, strategy, factory, pipeline: h.service, events: h.events, lock,
+      config: discoveryConfig({ repos: ['acme/app'] }),
+    });
+    const report = await tick.run();
+
+    expect(report.reconciled).toBe(0);
+    expect(gh.calls).toEqual([['pr', 'list', '--repo', 'acme/app', '--state', 'open', '--limit', '50', '--json', PR_LIST_FIELDS]]);
+    expect((await h.store.load('pr-app-6-x')).stageStatus).toBe('approved');
+    expect((await h.store.load('pr-app-7-x')).stageStatus).toBe('dismissed');
+  });
+
   it('applies a MERGED transition to a real review session on disk', async () => {
     const { h, gh, strategy, factory, lock } = tickHarness();
     const review = reviewSession({ stageStatus: 'ready', repo: 'acme/app', number: 5 });
