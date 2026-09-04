@@ -77,6 +77,7 @@ export class ClaudeCodeRunner implements AgentRunner {
       const child = spawn(this.claudeBinary, args, {
         cwd: state.ctx.workingDirectory,
         stdio: ['ignore', 'pipe', 'pipe'] as const,
+        detached: true,
       });
       state.currentProcess = child;
 

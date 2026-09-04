@@ -1,5 +1,6 @@
 import path from 'node:path';
 import { readFile, rm } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
 import { CodexRunner, UnknownAgentHandleError } from '../../src/agent/codex-runner';
@@ -201,6 +202,17 @@ describe('CodexRunner', () => {
     runner.onExit(handle, (result) => exits.push(result));
     await runner.sendPrompt(handle, 'READ_STDIN');
     expect(exits).toEqual([{ code: 0, signal: null }]);
+  });
+
+  it('spawns the CLI detached into its own process group, so a terminal signal to this process does not also hit the agent child', async () => {
+    await withArgvLog('pgrp', async (argvLogPath) => {
+      const runner = new CodexRunner({ codexBinary: FIXTURE });
+      const handle = await runner.start({ sessionId: 'inv-1', workingDirectory: process.cwd() });
+      await runner.sendPrompt(handle, 'hello');
+      const childPgid = (await readFile(`${argvLogPath}.pgrp`, 'utf8')).trim();
+      const ownPgid = execFileSync('ps', ['-o', 'pgid=', '-p', String(process.pid)]).toString().trim();
+      expect(childPgid).not.toBe(ownPgid);
+    });
   });
 });
 

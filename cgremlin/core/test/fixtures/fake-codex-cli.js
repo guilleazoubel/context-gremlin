@@ -6,8 +6,20 @@
 // Truth" section).
 'use strict';
 const fs = require('node:fs');
+const { execFileSync } = require('node:child_process');
 const args = process.argv.slice(2);
-if (process.env.FAKE_CLI_ARGV_LOG) fs.writeFileSync(process.env.FAKE_CLI_ARGV_LOG, JSON.stringify(args));
+if (process.env.FAKE_CLI_ARGV_LOG) {
+  fs.writeFileSync(process.env.FAKE_CLI_ARGV_LOG, JSON.stringify(args));
+  // Node has no process.getpgrp() — `ps` is the portable (POSIX) way to read
+  // this process's own process group id, used by tests to prove the runner
+  // spawned this CLI detached into its OWN group rather than the caller's.
+  try {
+    const pgid = execFileSync('ps', ['-o', 'pgid=', '-p', String(process.pid)]).toString().trim();
+    fs.writeFileSync(`${process.env.FAKE_CLI_ARGV_LOG}.pgrp`, pgid);
+  } catch {
+    // `ps` isn't available on every platform — best effort only.
+  }
+}
 
 // The prompt is always the last positional argument (both `exec …` and `exec resume <id> …`).
 const prompt = args[args.length - 1] ?? '';

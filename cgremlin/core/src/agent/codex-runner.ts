@@ -65,6 +65,7 @@ export class CodexRunner implements AgentRunner {
       const child = spawn(this.codexBinary, args, {
         cwd: state.ctx.workingDirectory,
         stdio: ['ignore', 'pipe', 'pipe'] as const,
+        detached: true,
       });
       state.currentProcess = child;
 
