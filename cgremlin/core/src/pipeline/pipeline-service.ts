@@ -67,7 +67,7 @@ export class PipelineService {
     return `${this.deps.config.sessionsDir}/${id}`;
   }
 
-  private async transition(id: string, to: string): Promise<Session> {
+  async transition(id: string, to: string): Promise<Session> {
     const before = await this.deps.store.load(id);
     const after = await this.deps.store.transition(id, to);
     this.deps.events.emit('session.transitioned', { session: after, from: before.stageStatus, to });

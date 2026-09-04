@@ -197,7 +197,7 @@ async function handleRequest(
     if (method === 'POST' && parts.length === 3 && parts[0] === 'sessions' && parts[2] === 'transition') {
       const id = parts[1];
       const body = (await readJsonBody(req)) as { to: string };
-      const updated = await lock.withLock(id, () => deps.sessionStore.transition(id, body.to));
+      const updated = await lock.withLock(id, () => deps.pipeline.transition(id, body.to));
       sendJson(res, 200, { session: updated });
       return;
     }

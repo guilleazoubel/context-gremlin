@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createHarness, createInvestigation, flush, SESSIONS_DIR, WORKTREES_DIR } from '../support/pipeline-harness';
 import { UnsupportedStageError } from '../../src/pipeline/pipeline-service';
 import { PlanGateError } from '../../src/pipeline/plan-gate';
+import type { Session } from '../../src/schema/session';
 
 const APPROVED_PLAN = `## Review Status
 - PM: ✅ Approved — solves exactly the ticket
@@ -136,6 +137,8 @@ describe('PipelineService — investigation', () => {
   it('runPlan approved with driveToCompletion false stops at plan_ready; promote requires approvePlan first, then creates and starts development', async () => {
     const h = createHarness();
     const inv = await createInvestigation(h.service, { intent: 'development', driveToCompletion: false });
+    const created: Session[] = [];
+    h.events.on('session.created', (e) => created.push(e.session));
 
     const p1 = h.service.runFindings(inv.id);
     await h.finishRun({ 'FINDINGS.md': '# Findings\nroot cause found' }, { code: 0, signal: null }); // findings run
@@ -165,6 +168,10 @@ describe('PipelineService — investigation', () => {
     expect(development.lineage.parentSessionId).toBe(inv.id);
     expect(development.lineage.pipelineId).toBe(inv.lineage.pipelineId);
     expect(development.workspace).toEqual(inv.workspace);
+
+    expect(created).toHaveLength(1);
+    expect(created[0].id).toBe(devId);
+    expect(created[0].mode).toBe('development');
   });
 
   it('runPlan approved with driveToCompletion true chains straight through promotion into a running development session', async () => {
