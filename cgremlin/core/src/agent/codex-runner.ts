@@ -115,8 +115,18 @@ export class CodexRunner implements AgentRunner {
     if (state.threadId) {
       // Resumed turn: `-s/--sandbox` and `--add-dir` are rejected by `codex
       // exec resume` (the first turn already established them for the
-      // thread), so they are deliberately omitted here.
-      args.push('resume', state.threadId, '--json');
+      // thread), so they are deliberately omitted here. But the writable
+      // roots a resumed thread actually honors are bound to the invoking
+      // process's cwd, not just carried by the thread id: resuming from a
+      // *different* cwd than the thread's first turn silently falls back to
+      // a read-only sandbox even though the first turn used workspace-write
+      // (verified live 2026-09-04 against codex-cli 0.149.1 — see the
+      // Phase 2b round-2 grounding notes). Re-asserting `-c sandbox_mode=…`
+      // on every resumed turn is the verified fix and costs nothing when
+      // cwd hasn't changed. This only matters if `SessionContext.workingDirectory`
+      // is stable across a session's turns, which it must be for the first
+      // turn's `--add-dir` root to be honored on resume at all.
+      args.push('resume', state.threadId, '--json', '-c', `sandbox_mode="${this.sandbox}"`);
     } else {
       args.push('--json', '-s', this.sandbox);
     }

@@ -80,7 +80,7 @@ describe('CodexRunner', () => {
     await withArgvLog('resume', async (argvLogPath) => {
       await runner.sendPrompt(handle, 'again');
       const argv = JSON.parse(await readFile(argvLogPath, 'utf8'));
-      expect(argv).toEqual(['exec', 'resume', DEFAULT_THREAD_ID, '--json', 'again']);
+      expect(argv).toEqual(['exec', 'resume', DEFAULT_THREAD_ID, '--json', '-c', 'sandbox_mode="read-only"', 'again']);
     });
   });
 
@@ -92,7 +92,10 @@ describe('CodexRunner', () => {
     await withArgvLog('resume-model', async (argvLogPath) => {
       await runner.sendPrompt(handle, 'again');
       const argv = JSON.parse(await readFile(argvLogPath, 'utf8'));
-      expect(argv).toEqual(['exec', 'resume', DEFAULT_THREAD_ID, '--json', '-m', 'gpt-5-codex', 'again']);
+      expect(argv).toEqual([
+        'exec', 'resume', DEFAULT_THREAD_ID, '--json', '-c', 'sandbox_mode="workspace-write"',
+        '-m', 'gpt-5-codex', 'again',
+      ]);
     });
   });
 
@@ -107,9 +110,21 @@ describe('CodexRunner', () => {
       expect(runner.getResumeId(handle)).toBe('seed-thread');
       await runner.sendPrompt(handle, 'hello');
       const argv = JSON.parse(await readFile(argvLogPath, 'utf8'));
-      expect(argv).toEqual(['exec', 'resume', 'seed-thread', '--json', 'hello']);
+      expect(argv).toEqual(['exec', 'resume', 'seed-thread', '--json', '-c', 'sandbox_mode="workspace-write"', 'hello']);
       // The fixture echoes the resumed id verbatim in thread.started.
       expect(runner.getResumeId(handle)).toBe('seed-thread');
+    });
+  });
+
+  it('carries -c sandbox_mode="read-only" on a resumed turn when the runner is configured with sandbox read-only', async () => {
+    const runner = new CodexRunner({ codexBinary: FIXTURE, sandbox: 'read-only' });
+    const handle = await runner.start({ sessionId: 'inv-1', workingDirectory: process.cwd() });
+    await runner.sendPrompt(handle, 'first');
+
+    await withArgvLog('resume-readonly-mode', async (argvLogPath) => {
+      await runner.sendPrompt(handle, 'again');
+      const argv = JSON.parse(await readFile(argvLogPath, 'utf8'));
+      expect(argv).toEqual(['exec', 'resume', DEFAULT_THREAD_ID, '--json', '-c', 'sandbox_mode="read-only"', 'again']);
     });
   });
 
