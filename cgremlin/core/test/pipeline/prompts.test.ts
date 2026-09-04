@@ -12,6 +12,7 @@ describe('prompt templates', () => {
       renderFindingsBrief({ sessionDir, ticket: 'APP-1', intent: 'development' }),
       renderPlanBrief({ sessionDir, ticket: 'APP-1', driveToCompletion: true }),
       renderDevelopBrief({ sessionDir, ticket: 'APP-1', hasPlan: true }),
+      renderDevelopBrief({ sessionDir, ticket: 'APP-1', hasPlan: false }),
       renderReviewPrompt({ sessionDir }),
       renderRereviewPrompt({ sessionDir, commitCount: 2 }),
     ];
@@ -43,6 +44,18 @@ describe('prompt templates', () => {
     expect(t).toContain("run the '## LIVE UI CHECK' section");
     expect(t).toContain('Do NOT post to GitHub');
     expect(t).toContain(`Write the output to ${sessionDir}/REVIEW.md`);
+  });
+
+  it('develop brief without a plan requires the plan gate and DEVELOPMENT.md', () => {
+    const t = renderDevelopBrief({ sessionDir, ticket: 'APP-1', hasPlan: false });
+    expect(t).toContain('PLAN GATE — pause');
+    expect(t).toContain(`${sessionDir}/DEVELOPMENT.md`);
+  });
+
+  it('review prompt live-UI sentence uses the bare skill name, not the full command', () => {
+    const t = renderReviewPrompt({ sessionDir });
+    expect(t).toContain('even when apfm-review handled the code review');
+    expect(t).not.toContain('even when /APFM:apfm-review');
   });
 
   it('review prompt can swap the skill command and omit the live UI check', () => {

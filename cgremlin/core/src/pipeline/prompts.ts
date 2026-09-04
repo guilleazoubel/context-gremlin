@@ -7,6 +7,11 @@ export interface RereviewPromptParams { sessionDir: string; commitCount: number;
 
 const DEFAULT_REVIEW_SKILL = '/APFM:apfm-review';
 
+function bareSkillName(command: string): string {
+  const idx = Math.max(command.lastIndexOf('/'), command.lastIndexOf(':'));
+  return idx === -1 ? command : command.slice(idx + 1);
+}
+
 export const STAGE_ENTRY_PROMPT = (sessionDir: string): string =>
   `Read ${sessionDir}/BRIEF.md and follow it exactly. BEGIN NOW.`;
 
@@ -123,7 +128,7 @@ export function renderReviewPrompt(p: ReviewPromptParams): string {
   const skill = p.reviewSkillCommand ?? DEFAULT_REVIEW_SKILL;
   const ui =
     (p.includeLiveUiCheck ?? true)
-      ? ` Then ALWAYS run the '## LIVE UI CHECK' section in CLAUDE.md (PM + Designer subagents) and merge its 📋/🎨 findings into REVIEW.md — this is required even when ${skill} handled the code review.`
+      ? ` Then ALWAYS run the '## LIVE UI CHECK' section in CLAUDE.md (PM + Designer subagents) and merge its 📋/🎨 findings into REVIEW.md — this is required even when ${bareSkillName(skill)} handled the code review.`
       : '';
   return `Run ${skill} and write the findings to REVIEW.md following CLAUDE.md.${ui} Proceed autonomously; do NOT ask for confirmation or a verdict. Read the PR with git (the branch is checked out) or gh pr view/diff as needed. If Jira/Atlassian MCP is unavailable, skip Jira context and proceed with the diff alone. Do NOT post to GitHub. Write the output to ${p.sessionDir}/REVIEW.md.`;
 }
