@@ -11,6 +11,7 @@ import {
   parseArtifactName,
   parseCreateInvestigationRequest,
   parseCreateWorkspaceRequest,
+  parseRemoveWorkspaceRequest,
   parseRunStageRequest,
   ValidationError,
 } from './validation';
@@ -249,14 +250,10 @@ async function handleRequest(
     }
 
     if (method === 'DELETE' && parts.length === 1 && parts[0] === 'workspaces') {
-      const body = (await readJsonBody(req)) as {
-        repoUrl: string;
-        worktreePath: string;
-        branchName: string;
-      };
+      const params = parseRemoveWorkspaceRequest(await readJsonBody(req));
       const sessions = await deps.sessionStore.list();
-      assertWorktreeNotInUse(sessions, body.worktreePath);
-      await deps.workspaceManager.removeWorkspace(body.repoUrl, body.worktreePath, body.branchName);
+      assertWorktreeNotInUse(sessions, params.worktreePath);
+      await deps.workspaceManager.removeWorkspace(params.repoUrl, params.worktreePath, params.branchName);
       sendJson(res, 204, undefined);
       return;
     }

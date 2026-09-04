@@ -27,6 +27,26 @@ export function parseCreateWorkspaceRequest(body: unknown): CreateWorkspaceParam
   return result.data;
 }
 
+const RemoveWorkspaceRequestSchema = z.object({
+  repoUrl: z.string().min(1),
+  worktreePath: z.string().min(1),
+  branchName: z.string().min(1),
+});
+
+export interface RemoveWorkspaceParams {
+  repoUrl: string;
+  worktreePath: string;
+  branchName: string;
+}
+
+export function parseRemoveWorkspaceRequest(body: unknown): RemoveWorkspaceParams {
+  const result = RemoveWorkspaceRequestSchema.safeParse(body);
+  if (!result.success) {
+    throw new ValidationError(`Invalid workspace removal request: ${result.error.message}`);
+  }
+  return result.data;
+}
+
 const CreateInvestigationRequestSchema = z.object({
   repoUrl: z.string().min(1),
   ticket: z.string().min(1).nullable(),

@@ -83,6 +83,11 @@ describe('findSessionsUsingWorktree', () => {
     const done = reviewSession('rev-4', 'dismissed', wt);
     expect(findSessionsUsingWorktree([dev, inv, rev, done], wt)).toEqual([dev, inv, rev]);
   });
+
+  it('normalizes worktree paths before comparing, so a trailing slash still matches', () => {
+    const dev = developmentSession('dev-1', 'active', wt);
+    expect(findSessionsUsingWorktree([dev], `${wt}/`)).toEqual([dev]);
+  });
 });
 
 describe('assertWorktreeNotInUse', () => {

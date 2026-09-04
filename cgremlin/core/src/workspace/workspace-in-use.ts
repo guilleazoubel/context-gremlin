@@ -1,3 +1,4 @@
+import path from 'node:path';
 import type { Session } from '../schema/session';
 
 export const TERMINAL_PHASES_BY_MODE: Record<Session['mode'], ReadonlySet<string>> = {
@@ -22,8 +23,13 @@ export function findSessionsUsingWorktree(
   worktreePath: string,
   excludeSessionId?: string,
 ): Session[] {
+  const target = path.resolve(worktreePath);
   return sessions.filter(
-    (s) => s.workspace.worktreePath === worktreePath && s.id !== excludeSessionId && !isTerminal(s),
+    (s) =>
+      s.workspace.worktreePath !== undefined &&
+      path.resolve(s.workspace.worktreePath) === target &&
+      s.id !== excludeSessionId &&
+      !isTerminal(s),
   );
 }
 
