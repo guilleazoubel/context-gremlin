@@ -24,13 +24,18 @@ import type { LastRun, StageName } from '../schema/stage';
 import { KeyedLock } from '../api/keyed-lock';
 import { awaitRunStart } from './run-start';
 import {
+  EMPTY_ENVIRONMENT,
   renderDevelopBrief,
   renderFindingsBrief,
   renderPlanBrief,
+  renderRereviewBrief,
   renderRereviewPrompt,
+  renderReviewBrief,
   renderReviewPrompt,
   STAGE_ENTRY_PROMPT,
+  type EnvironmentBriefContext,
 } from './prompts';
+import type { EnvironmentService } from '../env/environment-service';
 import { evaluateFindings, evaluatePlan, evaluateRereview, evaluateReview, nextReviewVersion, readNonEmpty } from './artifacts';
 import { assertCanPromote } from './plan-gate';
 import { WorkspaceMissingError, type StageRunResult } from './stage-runner';
@@ -56,6 +61,15 @@ export interface PipelineServiceDeps {
   newId?: (prefix: string, repoSlug: string, key: string) => string;
   /** Shared with StageRunner (and the API server) — see the locking invariant above. Required (not optional): a wiring that forgets to share it is a bug, not a degraded-but-working mode. */
   lock: KeyedLock;
+  /** Optional: a wiring with no local-app adapter has no environment at all, and every stage then behaves exactly as it did before Phase 5 (R14). */
+  environment?: EnvironmentService;
+}
+
+/** What `prepareEnvironment` hands back: the brief context, whether THIS call started the app, and the teardown that undoes both. */
+interface PreparedEnvironment {
+  ctx: EnvironmentBriefContext;
+  startedHere: boolean;
+  teardown: () => Promise<void>;
 }
 
 export interface CreateInvestigationInput {
@@ -65,6 +79,9 @@ export interface CreateInvestigationInput {
   driveToCompletion: boolean;
   baseRef?: string;
 }
+
+/** The heading `renderUiCheckProtocol` emits — the R14 gate reads it back out of the rendered brief. */
+const LIVE_UI_CHECK_HEADING = '## LIVE UI CHECK';
 
 export class UnsupportedStageError extends Error {
   constructor(message: string) {
@@ -136,6 +153,62 @@ export class PipelineService {
     return start;
   }
 
+  /**
+   * Prepares the stage's environment — R4 AMENDED. Runs BEFORE
+   * `runStageLocked`, so it holds NO session lock and writes NO session state
+   * (no store.save, no transition, no session artifact other than the 0600
+   * `.bypass-secret` file): starting a dev server can take up to
+   * `healthTimeoutMs` plus a cold setup, and holding the per-session lock for
+   * that long would block `stop` and every other action on the session.
+   * The brief is rendered from the returned context, which is why
+   * `runStageLocked` still takes a plain `brief: string | null`.
+   */
+  private async prepareEnvironment(id: string, stage: StageName, session: Session): Promise<PreparedEnvironment> {
+    const environment = this.deps.environment;
+    if (!environment) {
+      return { ctx: { ...EMPTY_ENVIRONMENT }, startedHere: false, teardown: async () => undefined };
+    }
+    const repoUrl = session.workspace.repoUrl;
+    const sessionDir = this.sessionDir(id);
+    let startedHere = false;
+    const teardown = async (): Promise<void> => {
+      // Never throws: a teardown failure must not mask the stage's own error
+      // and must not fail an otherwise successful run. Takes no session lock.
+      try {
+        await environment.clearBypassSecret(sessionDir);
+      } catch {
+        // best effort
+      }
+      if (startedHere) {
+        try {
+          await environment.stop(id);
+        } catch {
+          // best effort
+        }
+      }
+    };
+    try {
+      if (environment.wantsLocalApp(repoUrl, stage)) {
+        // A failed start degrades (R5): `start` reports it as 'unavailable'
+        // rather than throwing, and the brief says so.
+        const status = await environment.start(session);
+        startedHere = status.state === 'running';
+      }
+      // The context is read AFTER the start, so the brief reflects what
+      // actually came up (or why it did not), and resolves the preview URL.
+      const ctx = await environment.briefContext(session, stage);
+      if (ctx.bypassSecretPath !== null) {
+        await environment.writeBypassSecret(sessionDir, repoUrl);
+      }
+      return { ctx, startedHere, teardown };
+    } catch (err) {
+      // Something unexpected blew up after we may already have started the
+      // app — do not leave it (or the secret file) behind.
+      await teardown();
+      throw err;
+    }
+  }
+
   repoSlug(repoUrl: string): string {
     return repoSlugFromUrl(repoUrl);
   }
@@ -202,27 +275,32 @@ export class PipelineService {
       throw new UnsupportedStageError(`Session '${id}' cannot run findings (mode=${session.mode})`);
     }
     const sessionDir = this.sessionDir(id);
-    const brief = renderFindingsBrief({ sessionDir, ticket: session.lineage.ticket, intent: session.intent });
+    const prep = await this.prepareEnvironment(id, 'findings', session);
+    const brief = renderFindingsBrief({ sessionDir, ticket: session.lineage.ticket, intent: session.intent, env: prep.ctx });
     const prompt = STAGE_ENTRY_PROMPT(sessionDir);
-    const result = await this.runStageLocked(id, 'findings', brief, prompt, async () => {
-      const fresh = await this.deps.store.load(id);
-      if (fresh.mode !== 'investigation' || fresh.stageStatus !== 'findings') {
-        throw new UnsupportedStageError(`Session '${id}' cannot run findings (mode=${fresh.mode}, stage=${fresh.stageStatus})`);
-      }
-    });
-    if (result.outcome !== 'succeeded') return result.session;
-
-    const { hasFindings } = await evaluateFindings(this.deps.fs, sessionDir);
-    if (!hasFindings) {
-      return await this.patchLastRun(id, {
-        outcome: 'failed',
-        error: 'run succeeded but FINDINGS.md is missing or empty',
+    try {
+      const result = await this.runStageLocked(id, 'findings', brief, prompt, async () => {
+        const fresh = await this.deps.store.load(id);
+        if (fresh.mode !== 'investigation' || fresh.stageStatus !== 'findings') {
+          throw new UnsupportedStageError(`Session '${id}' cannot run findings (mode=${fresh.mode}, stage=${fresh.stageStatus})`);
+        }
       });
+      if (result.outcome !== 'succeeded') return result.session;
+
+      const { hasFindings } = await evaluateFindings(this.deps.fs, sessionDir);
+      if (!hasFindings) {
+        return await this.patchLastRun(id, {
+          outcome: 'failed',
+          error: 'run succeeded but FINDINGS.md is missing or empty',
+        });
+      }
+      if (session.intent === 'development') {
+        return await this.runPlan(id);
+      }
+      return result.session;
+    } finally {
+      await prep.teardown();
     }
-    if (session.intent === 'development') {
-      return await this.runPlan(id);
-    }
-    return result.session;
   }
 
   async runPlan(id: string): Promise<Session> {
@@ -327,19 +405,24 @@ export class PipelineService {
     }
     const sessionDir = this.sessionDir(id);
     const hasPlan = await this.deps.fs.exists(`${sessionDir}/PLAN.md`);
-    const brief = renderDevelopBrief({ sessionDir, ticket: session.lineage.ticket, hasPlan });
+    const prep = await this.prepareEnvironment(id, 'develop', session);
+    const brief = renderDevelopBrief({ sessionDir, ticket: session.lineage.ticket, hasPlan, env: prep.ctx });
     const prompt = STAGE_ENTRY_PROMPT(sessionDir);
-    // No transition on success: PR detection (which drives active -> pr_opened) is Phase 3b.
-    // The stageStatus check is race-sensitive and must run on a FRESH load
-    // inside the lock — starting on a session a human just abandoned is
-    // exactly the hole this closes.
-    const result = await this.runStageLocked(id, 'develop', brief, prompt, async () => {
-      const fresh = await this.deps.store.load(id);
-      if (fresh.mode !== 'development' || fresh.stageStatus !== 'active') {
-        throw new UnsupportedStageError(`Session '${id}' cannot run develop (mode=${fresh.mode}, stage=${fresh.stageStatus})`);
-      }
-    });
-    return result.session;
+    try {
+      // No transition on success: PR detection (which drives active -> pr_opened) is Phase 3b.
+      // The stageStatus check is race-sensitive and must run on a FRESH load
+      // inside the lock — starting on a session a human just abandoned is
+      // exactly the hole this closes.
+      const result = await this.runStageLocked(id, 'develop', brief, prompt, async () => {
+        const fresh = await this.deps.store.load(id);
+        if (fresh.mode !== 'development' || fresh.stageStatus !== 'active') {
+          throw new UnsupportedStageError(`Session '${id}' cannot run develop (mode=${fresh.mode}, stage=${fresh.stageStatus})`);
+        }
+      });
+      return result.session;
+    } finally {
+      await prep.teardown();
+    }
   }
 
   async runReview(id: string): Promise<Session> {
@@ -352,57 +435,68 @@ export class PipelineService {
     }
 
     const sessionDir = this.sessionDir(id);
+    const prep = await this.prepareEnvironment(id, 'review', session);
+    // A review session with no pr is rejected by the locked preRun below
+    // before this brief is ever written, so the fallback number is dead.
+    const brief = renderReviewBrief({ sessionDir, prNumber: session.pr?.number ?? 0, env: prep.ctx });
     const prompt = renderReviewPrompt({
       sessionDir,
       reviewSkillCommand: this.deps.config.reviewSkillCommand,
       includeLiveUiCheck: this.deps.config.includeLiveUiCheck,
-      // Task C2 replaces this with the value derived from EnvironmentService (whether a
-      // LIVE UI CHECK section was actually rendered into BRIEF.md)
-      uiCheckRendered: false,
+      // R14: the gate is whether the section really made it into BRIEF.md,
+      // not a separate config flag.
+      uiCheckRendered: brief.includes(LIVE_UI_CHECK_HEADING),
     });
-    const REVIEW_RUNNABLE_FROM: readonly ReviewPhase[] = ['queued', 'changes_requested', 'ready', 'failed'];
-    // Only mark the session 'failed' in the catch below if OUR preRun
-    // actually committed the reviewing transition — a lost-race rejection
-    // (someone else already moved this session on) must never mask itself
-    // as this session's own failure while a DIFFERENT run may be live.
-    let preRunCommitted = false;
-    let result: StageRunResult;
     try {
-      result = await this.runStageLocked(id, 'review', null, prompt, async () => {
-        const fresh = await this.deps.store.load(id);
-        if (fresh.mode !== 'review' || !REVIEW_RUNNABLE_FROM.includes(fresh.stageStatus)) {
-          throw new UnsupportedStageError(`Session '${id}' cannot run review (mode=${fresh.mode}, stage=${fresh.stageStatus})`);
+      const REVIEW_RUNNABLE_FROM: readonly ReviewPhase[] = ['queued', 'changes_requested', 'ready', 'failed'];
+      // Only mark the session 'failed' in the catch below if OUR preRun
+      // actually committed the reviewing transition — a lost-race rejection
+      // (someone else already moved this session on) must never mask itself
+      // as this session's own failure while a DIFFERENT run may be live.
+      let preRunCommitted = false;
+      let result: StageRunResult;
+      try {
+        result = await this.runStageLocked(id, 'review', brief, prompt, async () => {
+          const fresh = await this.deps.store.load(id);
+          if (fresh.mode !== 'review' || !REVIEW_RUNNABLE_FROM.includes(fresh.stageStatus)) {
+            throw new UnsupportedStageError(`Session '${id}' cannot run review (mode=${fresh.mode}, stage=${fresh.stageStatus})`);
+          }
+          if (!fresh.pr) {
+            throw new UnsupportedStageError(`Session '${id}': review session has no pr`);
+          }
+          if (!fresh.workspace.worktreePath) {
+            throw new WorkspaceMissingError(id);
+          }
+          await this.transitionUnlocked(id, 'reviewing');
+          preRunCommitted = true;
+        });
+      } catch (err) {
+        if (preRunCommitted) {
+          await this.transition(id, 'failed');
         }
-        if (!fresh.pr) {
-          throw new UnsupportedStageError(`Session '${id}': review session has no pr`);
-        }
-        if (!fresh.workspace.worktreePath) {
-          throw new WorkspaceMissingError(id);
-        }
-        await this.transitionUnlocked(id, 'reviewing');
-        preRunCommitted = true;
-      });
-    } catch (err) {
-      if (preRunCommitted) {
-        await this.transition(id, 'failed');
+        throw err;
       }
-      throw err;
-    }
 
-    // evaluateReview already treats a non-clean exit (including a stopped
-    // run's signal) as 'failed' — no separate stopped-run special case needed.
-    const outcome = await evaluateReview(result.exit, this.deps.fs, sessionDir);
-    return await this.lock.withLock(id, async () => {
-      const before = await this.deps.store.load(id);
-      const to = outcome === 'ready' ? 'ready' : 'failed';
-      let after = await this.deps.store.transition(id, to);
-      this.deps.events.emit('session.transitioned', { session: after, from: before.stageStatus, to });
-      if (outcome === 'ready' && after.mode === 'review' && after.pr) {
-        after = { ...after, pr: { ...after.pr, reviewedSha: after.pr.headSha } };
-        await this.deps.store.save(after);
-      }
-      return after;
-    });
+      // evaluateReview already treats a non-clean exit (including a stopped
+      // run's signal) as 'failed' — no separate stopped-run special case needed.
+      const outcome = await evaluateReview(result.exit, this.deps.fs, sessionDir);
+      return await this.lock.withLock(id, async () => {
+        const before = await this.deps.store.load(id);
+        const to = outcome === 'ready' ? 'ready' : 'failed';
+        let after = await this.deps.store.transition(id, to);
+        this.deps.events.emit('session.transitioned', { session: after, from: before.stageStatus, to });
+        if (outcome === 'ready' && after.mode === 'review' && after.pr) {
+          after = { ...after, pr: { ...after.pr, reviewedSha: after.pr.headSha } };
+          await this.deps.store.save(after);
+        }
+        return after;
+      });
+    } finally {
+      // OUTSIDE the preRunCommitted try/catch (R4 AMENDED) and holding no
+      // session lock, so it can neither deadlock against the transition
+      // block above nor mask the lost-race classification.
+      await prep.teardown();
+    }
   }
 
   async runRereview(id: string): Promise<Session> {
@@ -467,57 +561,65 @@ export class PipelineService {
 
     const REREVIEW_RUNNABLE_FROM: readonly ReviewPhase[] = ['ready', 'changes_requested', 'failed'];
     const prompt = renderRereviewPrompt({ sessionDir, commitCount, reviewSkillCommand: this.deps.config.reviewSkillCommand });
-    // Only mark the session 'failed' in the catch below if OUR preRun
-    // actually committed the reviewing transition — a lost-race rejection
-    // must never mask itself as this session's own failure.
-    let preRunCommitted = false;
-    let result: StageRunResult;
+    // After the git work, so a fetch/reset failure never leaves a started app behind.
+    const prep = await this.prepareEnvironment(id, 'rereview', session);
+    const brief = renderRereviewBrief({ sessionDir, prNumber: session.pr.number, commitCount, env: prep.ctx });
     try {
-      result = await this.runStageLocked(id, 'rereview', null, prompt, async () => {
-        const fresh = await this.deps.store.load(id);
-        if (fresh.mode !== 'review' || !REREVIEW_RUNNABLE_FROM.includes(fresh.stageStatus)) {
-          throw new UnsupportedStageError(`Session '${id}' cannot run rereview (mode=${fresh.mode}, stage=${fresh.stageStatus})`);
-        }
-        if (!fresh.pr) {
-          throw new UnsupportedStageError(`Session '${id}': review session has no pr`);
-        }
-        // Transition FIRST, then the reviewVersion/archive patch: if a
-        // concurrent action already moved this session past eligibility,
-        // fail here before ever bumping reviewVersion — a stale plan must
-        // not leave an orphaned archived REVIEW-vN.md/reviewVersion bump
-        // behind for a session it turns out it was never allowed to touch.
-        await this.transitionUnlocked(id, 'reviewing');
-        if (archivedVersion !== null) {
-          const afterTransition = await this.deps.store.load(id);
-          if (afterTransition.mode === 'review') {
-            await this.deps.store.save({ ...afterTransition, reviewVersion: archivedVersion });
+      // Only mark the session 'failed' in the catch below if OUR preRun
+      // actually committed the reviewing transition — a lost-race rejection
+      // must never mask itself as this session's own failure.
+      let preRunCommitted = false;
+      let result: StageRunResult;
+      try {
+        result = await this.runStageLocked(id, 'rereview', brief, prompt, async () => {
+          const fresh = await this.deps.store.load(id);
+          if (fresh.mode !== 'review' || !REREVIEW_RUNNABLE_FROM.includes(fresh.stageStatus)) {
+            throw new UnsupportedStageError(`Session '${id}' cannot run rereview (mode=${fresh.mode}, stage=${fresh.stageStatus})`);
           }
+          if (!fresh.pr) {
+            throw new UnsupportedStageError(`Session '${id}': review session has no pr`);
+          }
+          // Transition FIRST, then the reviewVersion/archive patch: if a
+          // concurrent action already moved this session past eligibility,
+          // fail here before ever bumping reviewVersion — a stale plan must
+          // not leave an orphaned archived REVIEW-vN.md/reviewVersion bump
+          // behind for a session it turns out it was never allowed to touch.
+          await this.transitionUnlocked(id, 'reviewing');
+          if (archivedVersion !== null) {
+            const afterTransition = await this.deps.store.load(id);
+            if (afterTransition.mode === 'review') {
+              await this.deps.store.save({ ...afterTransition, reviewVersion: archivedVersion });
+            }
+          }
+          preRunCommitted = true;
+        });
+      } catch (err) {
+        if (preRunCommitted) {
+          await this.transition(id, 'failed');
         }
-        preRunCommitted = true;
-      });
-    } catch (err) {
-      if (preRunCommitted) {
-        await this.transition(id, 'failed');
+        throw err;
       }
-      throw err;
-    }
 
-    const { outcome, summary } = await evaluateRereview(result.exit, this.deps.fs, sessionDir);
-    return await this.lock.withLock(id, async () => {
-      const before = await this.deps.store.load(id);
-      const to = outcome === 'ready' ? 'ready' : 'failed';
-      let after = await this.deps.store.transition(id, to);
-      this.deps.events.emit('session.transitioned', { session: after, from: before.stageStatus, to });
-      if (outcome === 'ready' && after.mode === 'review' && after.pr) {
-        after = {
-          ...after,
-          pr: { ...after.pr, reviewedSha: newCommit, headSha: newCommit },
-          lastRereviewSummary: summary,
-        };
-        await this.deps.store.save(after);
-      }
-      return after;
-    });
+      const { outcome, summary } = await evaluateRereview(result.exit, this.deps.fs, sessionDir);
+      return await this.lock.withLock(id, async () => {
+        const before = await this.deps.store.load(id);
+        const to = outcome === 'ready' ? 'ready' : 'failed';
+        let after = await this.deps.store.transition(id, to);
+        this.deps.events.emit('session.transitioned', { session: after, from: before.stageStatus, to });
+        if (outcome === 'ready' && after.mode === 'review' && after.pr) {
+          after = {
+            ...after,
+            pr: { ...after.pr, reviewedSha: newCommit, headSha: newCommit },
+            lastRereviewSummary: summary,
+          };
+          await this.deps.store.save(after);
+        }
+        return after;
+      });
+    } finally {
+      // OUTSIDE the preRunCommitted try/catch (R4 AMENDED); takes no session lock.
+      await prep.teardown();
+    }
   }
 
   async runStage(id: string, stage: StageName): Promise<Session> {
