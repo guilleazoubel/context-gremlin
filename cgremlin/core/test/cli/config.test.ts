@@ -35,6 +35,28 @@ describe('config import-legacy command', () => {
     expect(written.watchAuthors).toEqual(['bob', 'carol']);
     expect(written.me).toBe('me-user');
     expect(written.runnerOptions.model).toBe('opus');
+    expect(Object.keys(written.environments)).toEqual(['acme/app']);
+  });
+
+  it('reports which repo the legacy environment settings were attached to', async () => {
+    const fs = new InMemoryFileSystem();
+    await fs.mkdir(`${HOME}/.cgremlin`, { recursive: true });
+    await fs.writeFile(`${HOME}/.cgremlin/config`, LEGACY_TEXT);
+
+    const { io, out } = testIo(fs);
+    expect(await configCommand(['import-legacy'], io)).toBe(0);
+    expect(out()).toContain('acme/app');
+    expect(out()).toContain('environment settings');
+  });
+
+  it('writes core.json at mode 0600', async () => {
+    const fs = new InMemoryFileSystem();
+    await fs.mkdir(`${HOME}/.cgremlin`, { recursive: true });
+    await fs.writeFile(`${HOME}/.cgremlin/config`, `${LEGACY_TEXT}VERCEL_AUTOMATION_BYPASS_SECRET="shh"\n`);
+
+    const { io } = testIo(fs);
+    expect(await configCommand(['import-legacy'], io)).toBe(0);
+    expect(await fs.statMode(`${HOME}/.cgremlin/core.json`)).toBe(0o600);
   });
 
   it('refuses to overwrite an existing core.json without --force', async () => {

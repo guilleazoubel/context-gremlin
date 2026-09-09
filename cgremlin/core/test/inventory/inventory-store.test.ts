@@ -46,7 +46,9 @@ describe('InventoryStore', () => {
     const spied: SessionFileSystem = {
       ...inner,
       readFile: (p) => inner.readFile(p),
-      writeFile: (p, c) => inner.writeFile(p, c),
+      writeFile: (p, c, o) => inner.writeFile(p, c, o),
+      statMode: (p) => inner.statMode(p),
+      remove: (p) => inner.remove(p),
       rename: (from, to) => {
         renameCalls.push({ from, to });
         return inner.rename(from, to);

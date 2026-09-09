@@ -1,8 +1,16 @@
 import type { SessionFileSystem } from '../../src/fs/session-file-system';
 
+const DEFAULT_FILE_MODE = 0o644;
+const DEFAULT_DIR_MODE = 0o755;
+
+interface MemFile {
+  content: string;
+  mode: number;
+}
+
 export class InMemoryFileSystem implements SessionFileSystem {
-  private files = new Map<string, string>();
-  private dirs = new Set<string>();
+  private files = new Map<string, MemFile>();
+  private dirs = new Map<string, number>();
 
   private parentOf(path: string): string {
     const idx = path.lastIndexOf('/');
@@ -15,7 +23,7 @@ export class InMemoryFileSystem implements SessionFileSystem {
       let current = '';
       for (const segment of segments) {
         current += `/${segment}`;
-        this.dirs.add(current);
+        if (!this.dirs.has(current)) this.dirs.set(current, DEFAULT_DIR_MODE);
       }
       return;
     }
@@ -23,36 +31,49 @@ export class InMemoryFileSystem implements SessionFileSystem {
     if (!this.dirs.has(parent)) {
       throw new Error(`ENOENT: no such directory: ${parent}`);
     }
-    this.dirs.add(path);
+    if (!this.dirs.has(path)) this.dirs.set(path, DEFAULT_DIR_MODE);
   }
 
   async exists(path: string): Promise<boolean> {
     return this.files.has(path) || this.dirs.has(path);
   }
 
-  async writeFile(path: string, content: string): Promise<void> {
+  async writeFile(path: string, content: string, options?: { mode?: number }): Promise<void> {
     const parent = this.parentOf(path);
     if (!this.dirs.has(parent)) {
       throw new Error(`ENOENT: no such directory: ${parent}`);
     }
-    this.files.set(path, content);
+    const mode = options?.mode ?? this.files.get(path)?.mode ?? DEFAULT_FILE_MODE;
+    this.files.set(path, { content, mode });
   }
 
   async readFile(path: string): Promise<string> {
-    const content = this.files.get(path);
-    if (content === undefined) {
+    const file = this.files.get(path);
+    if (file === undefined) {
       throw new Error(`ENOENT: no such file: ${path}`);
     }
-    return content;
+    return file.content;
+  }
+
+  async statMode(path: string): Promise<number | null> {
+    const file = this.files.get(path);
+    if (file !== undefined) return file.mode & 0o777;
+    const dirMode = this.dirs.get(path);
+    if (dirMode !== undefined) return dirMode & 0o777;
+    return null;
+  }
+
+  async remove(path: string): Promise<void> {
+    this.files.delete(path);
   }
 
   async rename(from: string, to: string): Promise<void> {
-    const content = this.files.get(from);
-    if (content === undefined) {
+    const file = this.files.get(from);
+    if (file === undefined) {
       throw new Error(`ENOENT: no such file: ${from}`);
     }
     this.files.delete(from);
-    this.files.set(to, content);
+    this.files.set(to, file);
   }
 
   async readdir(path: string): Promise<string[]> {
@@ -68,7 +89,7 @@ export class InMemoryFileSystem implements SessionFileSystem {
         if (firstSegment) names.add(firstSegment);
       }
     }
-    for (const dirPath of this.dirs) {
+    for (const dirPath of this.dirs.keys()) {
       if (dirPath.startsWith(prefix) && dirPath !== path) {
         const rest = dirPath.slice(prefix.length);
         const [firstSegment] = rest.split('/');
