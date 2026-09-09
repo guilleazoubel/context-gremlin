@@ -118,6 +118,60 @@ describe('prs command', () => {
     expect(out()).toBe('No PRs in the inventory.\n');
   });
 
+  it('prefixes rows with the repo name when the inventory spans more than one repo', async () => {
+    const dir2 = await mkdtemp(path.join(tmpdir(), 'cgremlin-core-cli-test-'));
+    const socketPath2 = path.join(dir2, 'engine.sock');
+    const ih2 = createInventoryHarness({ repos: ['acme/app', 'acme/grace-frontend'] });
+    const server2 = createApiServer({
+      sessionStore: ih2.h.store,
+      workspaceManager: ih2.h.workspace,
+      pipeline: ih2.h.service,
+      fs: ih2.h.fs,
+      sessionsDir: SESSIONS_DIR,
+      events: ih2.h.events,
+      inventory: {
+        scanner: ih2.scanner,
+        scheduler: ih2.scheduler,
+        factory: ih2.factory,
+        inventoryStore: ih2.inventoryStore,
+        config: { me: ih2.config.me },
+      },
+      lock: ih2.lock,
+    });
+    await new Promise<void>((resolve) => server2.listen(socketPath2, resolve));
+    try {
+      const cliFs2 = new InMemoryFileSystem();
+      const config2 = resolveCoreConfig(
+        {
+          repos: ['acme/app', 'acme/grace-frontend'], me: 'me-user', socketPath: socketPath2,
+          sessionsDir: '/x', worktreesDir: '/y', mirrorsDir: '/z', inventoryPath: '/inv.json',
+        },
+        HOME,
+      );
+      await writeCoreConfig(cliFs2, defaultConfigPath(HOME), config2, { force: true });
+
+      ih2.gh.queueResponse({ stdout: JSON.stringify([ownPrItem()]) });
+      ih2.gh.queueResponse({ stdout: JSON.stringify([teamPrItem()]) });
+      await ih2.scanner.run();
+
+      const stdout = makeWriter();
+      const stderr = makeWriter();
+      const io: CommandIO = { stdout, stderr, home: HOME, fs: cliFs2 };
+      const code = await prsCommand([], io);
+      expect(code).toBe(0);
+      expect(stdout.text()).toBe(
+        'UNREVIEWED (1)\n' +
+          "  grace-frontend#7  Bob's PR  bob  []\n" +
+          '\n' +
+          'MINE (1)\n' +
+          '  app#5  My own PR  me-user  []\n',
+      );
+    } finally {
+      await new Promise<void>((resolve) => server2.close(() => resolve()));
+      await rm(dir2, { recursive: true, force: true });
+    }
+  });
+
   it('--json prints the raw inventory/groups payload', async () => {
     ih.gh.queueResponse({ stdout: JSON.stringify([teamPrItem()]) });
     await ih.scanner.run();

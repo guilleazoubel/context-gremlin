@@ -13,9 +13,15 @@ function flagsFor(entry: InventoryEntry): string {
   return flags.join(',');
 }
 
-function renderSection(title: string, entries: readonly InventoryEntry[]): string {
+function prNumber(entry: InventoryEntry, showRepo: boolean): string {
+  if (!showRepo) return `#${entry.number}`;
+  const repoName = entry.repo.slice(entry.repo.lastIndexOf('/') + 1);
+  return `${repoName}#${entry.number}`;
+}
+
+function renderSection(title: string, entries: readonly InventoryEntry[], showRepo: boolean): string {
   if (entries.length === 0) return '';
-  const rows = entries.map((e) => `  #${e.number}  ${e.title}  ${e.author}  [${flagsFor(e)}]`);
+  const rows = entries.map((e) => `  ${prNumber(e, showRepo)}  ${e.title}  ${e.author}  [${flagsFor(e)}]`);
   return [`${title} (${entries.length})`, ...rows].join('\n');
 }
 
@@ -23,11 +29,12 @@ export function renderPrsTable(inventory: Inventory, groups: InventoryGroups): s
   if (inventory.entries.length === 0) {
     return 'No PRs in the inventory.\n';
   }
+  const showRepo = new Set(inventory.entries.map((e) => e.repo)).size > 1;
   const sections = [
-    renderSection('UNREVIEWED', groups.unreviewed),
-    renderSection('TEAM ON IT', groups.teamOnIt),
-    renderSection('OURS', groups.ours),
-    renderSection('MINE', groups.mine),
+    renderSection('UNREVIEWED', groups.unreviewed, showRepo),
+    renderSection('TEAM ON IT', groups.teamOnIt, showRepo),
+    renderSection('OURS', groups.ours, showRepo),
+    renderSection('MINE', groups.mine, showRepo),
   ].filter((s) => s.length > 0);
   return `${sections.join('\n\n')}\n`;
 }
