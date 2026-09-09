@@ -1,10 +1,35 @@
 import { describe, expect, it } from 'vitest';
 import {
-  bareSkillName, renderDevelopBrief, renderFindingsBrief, renderPlanBrief,
-  renderRereviewPrompt, renderReviewPrompt, STAGE_ENTRY_PROMPT,
+  bareSkillName, EMPTY_ENVIRONMENT, renderDevelopBrief, renderFindingsBrief, renderPlanBrief,
+  renderRereviewBrief, renderRereviewPrompt, renderReviewBrief, renderReviewContract,
+  renderReviewPrompt, renderUiCheckProtocol, renderEnvironmentSection, STAGE_ENTRY_PROMPT,
+  type EnvironmentBriefContext,
 } from '../../src/pipeline/prompts';
 
 const sessionDir = '/s/inv-1';
+
+const localCtx: EnvironmentBriefContext = {
+  ...EMPTY_ENVIRONMENT,
+  localUrl: 'https://local.example.com',
+  localLogPath: '/s/logs/dev-server.log',
+};
+
+const previewCtx: EnvironmentBriefContext = {
+  ...EMPTY_ENVIRONMENT,
+  previewUrl: 'https://preview.example.com',
+  bypassSecretPath: '/s/.bypass-secret',
+};
+
+// Both the local-app fields AND the preview fields set simultaneously, set directly
+// (not via a later spread that would null one half out) — this is what actually
+// exercises the LOCAL-APP line of renderEnvironmentSection alongside the preview line.
+const bothCtx: EnvironmentBriefContext = {
+  ...EMPTY_ENVIRONMENT,
+  localUrl: 'https://local.example.com',
+  localLogPath: '/s/logs/dev-server.log',
+  previewUrl: 'https://preview.example.com',
+  bypassSecretPath: '/s/.bypass-secret',
+};
 
 describe('prompt templates', () => {
   it('never instruct the agent to call back into cgremlin', () => {
@@ -39,7 +64,7 @@ describe('prompt templates', () => {
   });
 
   it('review prompt reproduces the legacy contract with the skill command and REVIEW.md path', () => {
-    const t = renderReviewPrompt({ sessionDir });
+    const t = renderReviewPrompt({ sessionDir, uiCheckRendered: true });
     expect(t).toContain('Run /APFM:apfm-review and write the findings to REVIEW.md');
     expect(t).toContain("run the '## LIVE UI CHECK' section");
     expect(t).toContain('Do NOT post to GitHub');
@@ -53,7 +78,7 @@ describe('prompt templates', () => {
   });
 
   it('review prompt live-UI sentence uses the bare skill name, not the full command', () => {
-    const t = renderReviewPrompt({ sessionDir });
+    const t = renderReviewPrompt({ sessionDir, uiCheckRendered: true });
     expect(t).toContain('even when apfm-review handled the code review');
     expect(t).not.toContain('even when /APFM:apfm-review');
   });
@@ -82,5 +107,227 @@ describe('prompt templates', () => {
     expect(bareSkillName('apfm-review')).toBe('apfm-review');
     expect(bareSkillName('')).toBe('');
     expect(bareSkillName('/APFM:apfm-review ')).toBe('apfm-review');
+  });
+
+  it('renderFindingsBrief and renderDevelopBrief are byte-identical to pre-Phase-5 output when env is omitted (regression pin)', () => {
+    expect(renderFindingsBrief({ sessionDir, ticket: 'APP-1', intent: 'development' })).toMatchSnapshot();
+    expect(renderFindingsBrief({ sessionDir, ticket: 'APP-1', intent: 'investigate_only' })).toMatchSnapshot();
+    expect(renderDevelopBrief({ sessionDir, ticket: 'APP-1', hasPlan: true })).toMatchSnapshot();
+    expect(renderDevelopBrief({ sessionDir, ticket: 'APP-1', hasPlan: false })).toMatchSnapshot();
+  });
+});
+
+describe('renderEnvironmentSection', () => {
+  it('is empty when the context has no non-null field', () => {
+    expect(renderEnvironmentSection(EMPTY_ENVIRONMENT)).toBe('');
+  });
+
+  it('renders only the local app when only localUrl+localLogPath are set', () => {
+    const t = renderEnvironmentSection(localCtx);
+    expect(t).toContain('https://local.example.com');
+    expect(t).toContain('/s/logs/dev-server.log');
+    expect(t).not.toContain('Vercel preview');
+    expect(t).not.toContain('Clerk');
+  });
+
+  it('renders the local-unavailable line with the reason and the do-not-start warning', () => {
+    const t = renderEnvironmentSection({ ...EMPTY_ENVIRONMENT, localUnavailableReason: 'port 8080 is held by pid 4242' });
+    expect(t).toContain('Local app: UNAVAILABLE — port 8080 is held by pid 4242');
+    expect(t).toContain('Do not attempt to start it yourself');
+  });
+
+  it('renders the preview URL and the bypass-secret sentence pointing at the session .bypass-secret file', () => {
+    const t = renderEnvironmentSection(previewCtx);
+    expect(t).toContain('https://preview.example.com');
+    expect(t).toContain('/s/.bypass-secret');
+  });
+
+  it('renders the Clerk test-user template and code', () => {
+    const t = renderEnvironmentSection({ ...EMPTY_ENVIRONMENT, clerk: { emailTemplate: 'uicheck-{key}+clerk_test@example.com', verificationCode: '424242' } });
+    expect(t).toContain('uicheck-{key}+clerk_test@example.com');
+    expect(t).toContain('424242');
+  });
+
+  it('MG-1 secret-never-in-brief (type pin): none of the five briefs can contain the raw secret value, because the renderers never receive it — only a path (the behavioural guard is C2, EnvironmentService.writeBypassSecret)', () => {
+    const ctx: EnvironmentBriefContext = { ...previewCtx, bypassSecretPath: '/s/.bypass-secret' };
+    const briefs = [
+      renderFindingsBrief({ sessionDir, ticket: 'APP-1', intent: 'investigate_only', env: ctx }),
+      renderDevelopBrief({ sessionDir, ticket: 'APP-1', hasPlan: true, env: ctx }),
+      renderReviewBrief({ sessionDir, prNumber: 123, env: ctx }),
+      renderRereviewBrief({ sessionDir, prNumber: 123, commitCount: 2, env: ctx }),
+    ];
+    for (const b of briefs) expect(b).not.toContain('S3CRET-VALUE');
+  });
+
+  it('MG-7 no-agent-callback: none of the briefs/prompts instruct calling back into the engine', () => {
+    // bothCtx has BOTH localUrl/localLogPath AND previewUrl/bypassSecretPath set
+    // simultaneously (see fixture above) — unlike the old `{ ...localCtx, ...previewCtx }`
+    // merge, this actually exercises the LOCAL-APP line of renderEnvironmentSection in
+    // every renderer below that emits the '## Environment' section (develop/review/rereview).
+    const ctx = bothCtx;
+    const findings = renderFindingsBrief({ sessionDir, ticket: 'APP-1', intent: 'investigate_only', env: ctx });
+    const plan = renderPlanBrief({ sessionDir, ticket: 'APP-1', driveToCompletion: false });
+    const develop = renderDevelopBrief({ sessionDir, ticket: 'APP-1', hasPlan: true, env: ctx });
+    const review = renderReviewBrief({ sessionDir, prNumber: 123, env: ctx });
+    const rereview = renderRereviewBrief({ sessionDir, prNumber: 123, commitCount: 2, env: ctx });
+    const all = [findings, plan, develop, review, rereview];
+    for (const b of all) {
+      expect(b).not.toContain('cgremlin --run-local');
+      expect(b).not.toContain('cgremlin --stop-local');
+      expect(b).not.toContain('engine.sock');
+      expect(b).not.toContain('POST /sessions/');
+      expect(b).not.toContain('curl ');
+    }
+    // Positive control: prove the local-app line (and the preview line) actually
+    // rendered in each of the three renderers that emit '## Environment', so the
+    // negative assertions above are known to have exercised that code path.
+    for (const b of [develop, review, rereview]) {
+      expect(b).toContain(`Local app: ${ctx.localUrl}`);
+      expect(b).toContain(`Vercel preview: ${ctx.previewUrl}`);
+    }
+    // positive control: the bare '/sessions/'-shaped session path is fine — the guard
+    // only outlaws the callback patterns above, not legitimate session-dir paths.
+    expect(STAGE_ENTRY_PROMPT('/s')).toContain('/s/BRIEF.md');
+  });
+});
+
+describe('renderUiCheckProtocol', () => {
+  it('renders the OBSERVE mode marker and not FIX, and vice versa', () => {
+    const observe = renderUiCheckProtocol('observe', 'the target', previewCtx);
+    const fix = renderUiCheckProtocol('fix', 'the target', previewCtx);
+    expect(observe).toContain('**Mode — OBSERVE:**');
+    expect(observe).not.toContain('**Mode — FIX:**');
+    expect(fix).toContain('**Mode — FIX:**');
+    expect(fix).not.toContain('**Mode — OBSERVE:**');
+    for (const t of [observe, fix]) {
+      expect(t).toContain('## LIVE UI CHECK — PM + Designer lenses (dedicated subagents)');
+      expect(t).toContain('**PM subagent (product manager verifying the ticket):**');
+      expect(t).toContain('**Designer subagent (designer checking pixel fidelity):**');
+      expect(t).toContain('finding-N-figma.png');
+      expect(t).toContain('**Degradation:**');
+      expect(t).toContain('+clerk_test@example.com');
+    }
+  });
+
+  it('is empty when neither localUrl nor previewUrl is set (R14)', () => {
+    expect(renderUiCheckProtocol('observe', 'the target', EMPTY_ENVIRONMENT)).toBe('');
+    expect(renderUiCheckProtocol('fix', 'the target', EMPTY_ENVIRONMENT)).toBe('');
+  });
+
+  it('uses the custom clerk.verificationCode when given, and 424242 when clerk is null but a URL exists', () => {
+    const custom = renderUiCheckProtocol('fix', 't', { ...previewCtx, clerk: { emailTemplate: 'x', verificationCode: '999999' } });
+    expect(custom).toContain('999999');
+    expect(custom).not.toContain('424242');
+    const fallback = renderUiCheckProtocol('fix', 't', previewCtx);
+    expect(fallback).toContain('424242');
+  });
+});
+
+describe('renderReviewContract (verbatim legacy REVIEW.md contract, R9)', () => {
+  it('contains the required headings, table header, legend glyphs, and section markers', () => {
+    const t = renderReviewContract();
+    expect(t).toContain('## Output — write `REVIEW.md` in this directory, EXACTLY this structure');
+    expect(t).toContain('# PR Review: #<number> — <title>');
+    expect(t).toContain('**Does it do what the ticket asked?**');
+    expect(t).toContain('**How deep did I look?**');
+    expect(t).toContain('## Summary');
+    expect(t).toContain('## What I found');
+    expect(t).toContain('| # | Severity | Where | Issue | Status |');
+    expect(t).toContain('## Details');
+    expect(t).toContain('## Verdict');
+    expect(t).toContain('## Review History');
+    expect(t).toContain('| Version | Date | Commit | Action |');
+  });
+
+  it('all six legend glyphs appear across a rendered review brief (severity list + contract)', () => {
+    const t = renderReviewBrief({ sessionDir, prNumber: 123 });
+    for (const glyph of ['🔴', '🟠', '🟡', '🔧', '📋', '🎨']) expect(t).toContain(glyph);
+  });
+
+  it('anchor rule: every <a id="fN"> has a matching [N](#fN) table link', () => {
+    const t = renderReviewContract();
+    expect(t).toContain('<a id="f1"></a>');
+    expect(t).toContain('<a id="f2"></a>');
+    expect(t).toContain('<a id="f4"></a>');
+    expect(t).toContain('[1](#f1)');
+    expect(t).toContain('[4](#f4)');
+    expect(t).toContain('Anchor ids never change across re-reviews (finding 1 is always `f1`)');
+    const anchorIds = [...t.matchAll(/<a id="f(\d+)"><\/a>/g)].map((m) => m[1]);
+    const linkIds = [...t.matchAll(/\[(\d+)\]\(#f\1\)/g)].map((m) => m[1]);
+    for (const id of anchorIds) expect(linkIds).toContain(id);
+  });
+
+  it('renderReviewBrief and renderRereviewBrief both embed the full contract', () => {
+    const review = renderReviewBrief({ sessionDir, prNumber: 123 });
+    const rereview = renderRereviewBrief({ sessionDir, prNumber: 123, commitCount: 2 });
+    for (const t of [review, rereview]) {
+      expect(t).toContain('## Output — write `REVIEW.md` in this directory, EXACTLY this structure');
+      expect(t).toContain('## Review History');
+    }
+  });
+});
+
+describe('renderReviewBrief / renderRereviewBrief', () => {
+  it('review brief contains the Link rule and the Tier-0 intent line', () => {
+    const t = renderReviewBrief({ sessionDir, prNumber: 123 });
+    expect(t).toContain('https://github.com/<owner>/<repo>/blob/<full-sha>/');
+    expect(t).toContain('FULL 40-char SHA');
+    expect(t).toContain('Intent alignment:');
+    expect(t).toContain('✅ satisfies / ⚠️ partial / ❌ diverges');
+  });
+
+  it('review brief contains the header, environment section and OBSERVE protocol when env is given; contains neither heading when env is omitted, but still the full contract', () => {
+    const withEnv = renderReviewBrief({ sessionDir, prNumber: 123, env: previewCtx });
+    expect(withEnv).toContain('# REVIEW — PR #123');
+    expect(withEnv).toContain('## Environment');
+    expect(withEnv).toContain('**Mode — OBSERVE:**');
+
+    const withoutEnv = renderReviewBrief({ sessionDir, prNumber: 123 });
+    expect(withoutEnv).not.toContain('## Environment');
+    expect(withoutEnv).not.toContain('## LIVE UI CHECK');
+    expect(withoutEnv).toContain('## Output — write `REVIEW.md` in this directory, EXACTLY this structure');
+  });
+
+  it('rereview brief contains the header and the commit count', () => {
+    const t = renderRereviewBrief({ sessionDir, prNumber: 123, commitCount: 2 });
+    expect(t).toContain('# RE-REVIEW — PR #123');
+    expect(t).toContain('2 new commit(s)');
+  });
+});
+
+describe('renderDevelopBrief environment-aware step 5', () => {
+  it('contains the local URL and the log path when the context has them', () => {
+    const t = renderDevelopBrief({ sessionDir, ticket: 'APP-1', hasPlan: true, env: localCtx });
+    expect(t).toContain('The local app is already running at https://local.example.com');
+    expect(t).toContain('Watch /s/logs/dev-server.log');
+  });
+
+  it('omits step 5\'s local half entirely when localUrl is null', () => {
+    const t = renderDevelopBrief({ sessionDir, ticket: 'APP-1', hasPlan: true });
+    expect(t).not.toContain('The local app is already running at');
+    expect(t).toContain("5. **Verify.**");
+  });
+});
+
+describe('renderReviewPrompt gating (R14)', () => {
+  it('omits the LIVE UI CHECK sentence when uiCheckRendered is omitted (fail-closed default)', () => {
+    const t = renderReviewPrompt({ sessionDir });
+    expect(t).not.toContain('LIVE UI CHECK');
+  });
+
+  it('with uiCheckRendered true, the sentence points at BRIEF.md, not CLAUDE.md', () => {
+    const t = renderReviewPrompt({ sessionDir, uiCheckRendered: true });
+    expect(t).toContain(`'## LIVE UI CHECK' section in ${sessionDir}/BRIEF.md`);
+    expect(t).not.toContain('CLAUDE.md');
+  });
+
+  it('with uiCheckRendered false, no LIVE UI CHECK sentence at all', () => {
+    const t = renderReviewPrompt({ sessionDir, uiCheckRendered: false });
+    expect(t).not.toContain('LIVE UI CHECK');
+  });
+
+  it('renderRereviewPrompt does not contain CLAUDE.md', () => {
+    const t = renderRereviewPrompt({ sessionDir, commitCount: 3 });
+    expect(t).not.toContain('CLAUDE.md');
   });
 });

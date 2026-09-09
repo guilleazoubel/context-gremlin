@@ -356,6 +356,9 @@ export class PipelineService {
       sessionDir,
       reviewSkillCommand: this.deps.config.reviewSkillCommand,
       includeLiveUiCheck: this.deps.config.includeLiveUiCheck,
+      // Task C2 replaces this with the value derived from EnvironmentService (whether a
+      // LIVE UI CHECK section was actually rendered into BRIEF.md)
+      uiCheckRendered: false,
     });
     const REVIEW_RUNNABLE_FROM: readonly ReviewPhase[] = ['queued', 'changes_requested', 'ready', 'failed'];
     // Only mark the session 'failed' in the catch below if OUR preRun

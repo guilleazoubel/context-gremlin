@@ -1,0 +1,109 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`prompt templates > renderFindingsBrief and renderDevelopBrief are byte-identical to pre-Phase-5 output when env is omitted (regression pin) 1`] = `
+"# INVESTIGATION — APP-1
+
+You are running in an isolated git worktree of the repository (the current working directory). Work autonomously. Your first deliverable is a complete, self-contained \`/s/inv-1/FINDINGS.md\` — no code changes.
+
+## Source of truth: the Jira ticket
+The ticket is APP-1. Fetch it now via the Atlassian MCP (getJiraIssue) to read the summary, description, and acceptance criteria. If the ticket is unavailable or absent, use whatever task description you were given. The ticket defines scope — investigate ONLY what it asks about.
+
+## Status files (the engine reads these; you never call any CLI)
+- Progress note: overwrite \`/s/inv-1/AGENT_NOTE\` with ONE line at each milestone (e.g. "tracing checkout path", "root cause found").
+- State: overwrite \`/s/inv-1/AGENT_STATE\` with exactly one of \`working\`, \`ready\`, \`needs-input\`, \`blocked\` whenever it changes.
+
+## What to do (autonomously — do not ask for routine steps)
+1. Understand the request from the ticket. As your first action write \`/s/inv-1/AGENT_NOTE\` = "APP-1: <one-line goal>".
+2. Explore the repository: trace the relevant code paths, reproduce/understand the issue, find the ROOT CAUSE.
+3. Write \`/s/inv-1/FINDINGS.md\` as a COMPLETE HANDOFF a fresh developer could execute from alone:
+   - **What's happening** (the observed problem/behavior)
+   - **Root cause** (the specific code and why)
+   - **Affected files/paths**
+   - **Risks / splash zone** (what a fix could plausibly affect)
+   - **Direction / plan** to fix the ticket (concrete steps, scoped to the ticket)
+4. Do NOT change code in this step. Investigation produces understanding only.
+
+## Scope discipline
+Cover ONLY what the ticket asks. If you find necessary out-of-scope work, note it under a "Tech debt (proposed)" section in FINDINGS.md — do not act on it.
+
+## After FINDINGS.md is complete
+This investigation is development-bound. When FINDINGS.md is complete, write \`/s/inv-1/AGENT_NOTE\` = "findings complete — ready for planning" and \`/s/inv-1/AGENT_STATE\` = \`ready\`, then STOP. The engine will start the planning turn.
+"
+`;
+
+exports[`prompt templates > renderFindingsBrief and renderDevelopBrief are byte-identical to pre-Phase-5 output when env is omitted (regression pin) 2`] = `
+"# INVESTIGATION — APP-1
+
+You are running in an isolated git worktree of the repository (the current working directory). Work autonomously. Your first deliverable is a complete, self-contained \`/s/inv-1/FINDINGS.md\` — no code changes.
+
+## Source of truth: the Jira ticket
+The ticket is APP-1. Fetch it now via the Atlassian MCP (getJiraIssue) to read the summary, description, and acceptance criteria. If the ticket is unavailable or absent, use whatever task description you were given. The ticket defines scope — investigate ONLY what it asks about.
+
+## Status files (the engine reads these; you never call any CLI)
+- Progress note: overwrite \`/s/inv-1/AGENT_NOTE\` with ONE line at each milestone (e.g. "tracing checkout path", "root cause found").
+- State: overwrite \`/s/inv-1/AGENT_STATE\` with exactly one of \`working\`, \`ready\`, \`needs-input\`, \`blocked\` whenever it changes.
+
+## What to do (autonomously — do not ask for routine steps)
+1. Understand the request from the ticket. As your first action write \`/s/inv-1/AGENT_NOTE\` = "APP-1: <one-line goal>".
+2. Explore the repository: trace the relevant code paths, reproduce/understand the issue, find the ROOT CAUSE.
+3. Write \`/s/inv-1/FINDINGS.md\` as a COMPLETE HANDOFF a fresh developer could execute from alone:
+   - **What's happening** (the observed problem/behavior)
+   - **Root cause** (the specific code and why)
+   - **Affected files/paths**
+   - **Risks / splash zone** (what a fix could plausibly affect)
+   - **Direction / plan** to fix the ticket (concrete steps, scoped to the ticket)
+4. Do NOT change code in this step. Investigation produces understanding only.
+
+## Scope discipline
+Cover ONLY what the ticket asks. If you find necessary out-of-scope work, note it under a "Tech debt (proposed)" section in FINDINGS.md — do not act on it.
+
+## After FINDINGS.md is complete
+When FINDINGS.md is complete, write \`/s/inv-1/AGENT_STATE\` = \`ready\` and \`/s/inv-1/AGENT_NOTE\` = "FINDINGS.md ready — review it", present a short summary, and STOP. This investigation was NOT started as development-bound — do not draft a plan.
+"
+`;
+
+exports[`prompt templates > renderFindingsBrief and renderDevelopBrief are byte-identical to pre-Phase-5 output when env is omitted (regression pin) 3`] = `
+"# DEVELOP — APP-1
+
+You are running in an isolated git worktree on the session branch. Keep a running plan/progress log in \`/s/inv-1/DEVELOPMENT.md\`.
+
+## Status files (the engine reads these; you never call any CLI)
+- Progress note: overwrite \`/s/inv-1/AGENT_NOTE\` with ONE line at each milestone (e.g. "tracing checkout path", "root cause found").
+- State: overwrite \`/s/inv-1/AGENT_STATE\` with exactly one of \`working\`, \`ready\`, \`needs-input\`, \`blocked\` whenever it changes.
+
+## What to do
+1. **Read \`/s/inv-1/PLAN.md\` (your approved plan), then \`/s/inv-1/FINDINGS.md\` (and \`/s/inv-1/REVIEW.md\` if present) + the ticket.** PLAN.md was already reviewed and approved (PM + Principal Engineer) — implement from it. Copy/adapt PLAN.md into \`/s/inv-1/DEVELOPMENT.md\` as your starting point; adapt only if something in PLAN.md is factually wrong against the real code — in that case note the discrepancy in DEVELOPMENT.md, do NOT silently deviate.
+2. **No plan re-gate — proceed to implementation.** Promotion into development was explicitly authorized. Do NOT pause for plan approval.
+3. **Implement with TDD.** For each unit: write the failing test, run it (confirm it fails), write minimal code, run to green, commit. Stay strictly in ticket scope.
+4. **Open a draft PR** on the pushed branch: \`git push -u origin HEAD\` then \`gh pr create --draft\`, body summarizing the change and linking APP-1. Record the PR URL as the first line of \`/s/inv-1/PR_URL\`.
+5. **Verify.** Run the project's focused tests for the change (prove the ticket's issue is fixed plus a smoke pass of the feature's likely splash zone — NOT the full suite unless it is fast).
+6. **Finish.** When tested, write \`/s/inv-1/AGENT_STATE\` = \`ready\` and \`/s/inv-1/AGENT_NOTE\` = "tested — draft PR open", and STOP. Marking the PR ready for review is a human decision.
+
+## Rules
+- Never post reviews/comments or merge/close PRs from this session (the guard denies them). \`git push\`, \`gh pr create --draft\`, \`gh pr view\` are fine.
+- If you hit something you cannot pass (environment broken), write \`/s/inv-1/AGENT_STATE\` = \`blocked\` and explain in AGENT_NOTE.
+"
+`;
+
+exports[`prompt templates > renderFindingsBrief and renderDevelopBrief are byte-identical to pre-Phase-5 output when env is omitted (regression pin) 4`] = `
+"# DEVELOP — APP-1
+
+You are running in an isolated git worktree on the session branch. Keep a running plan/progress log in \`/s/inv-1/DEVELOPMENT.md\`.
+
+## Status files (the engine reads these; you never call any CLI)
+- Progress note: overwrite \`/s/inv-1/AGENT_NOTE\` with ONE line at each milestone (e.g. "tracing checkout path", "root cause found").
+- State: overwrite \`/s/inv-1/AGENT_STATE\` with exactly one of \`working\`, \`ready\`, \`needs-input\`, \`blocked\` whenever it changes.
+
+## What to do
+1. **Read \`/s/inv-1/FINDINGS.md\` (and \`/s/inv-1/REVIEW.md\` if present) + the ticket.** Refine into a concrete implementation plan; capture it in \`/s/inv-1/DEVELOPMENT.md\`.
+2. **PLAN GATE — pause.** Write \`/s/inv-1/AGENT_STATE\` = \`needs-input\` and STOP so a human can read DEVELOPMENT.md. Do NOT implement until a new turn tells you to proceed.
+3. **Implement with TDD.** For each unit: write the failing test, run it (confirm it fails), write minimal code, run to green, commit. Stay strictly in ticket scope.
+4. **Open a draft PR** on the pushed branch: \`git push -u origin HEAD\` then \`gh pr create --draft\`, body summarizing the change and linking APP-1. Record the PR URL as the first line of \`/s/inv-1/PR_URL\`.
+5. **Verify.** Run the project's focused tests for the change (prove the ticket's issue is fixed plus a smoke pass of the feature's likely splash zone — NOT the full suite unless it is fast).
+6. **Finish.** When tested, write \`/s/inv-1/AGENT_STATE\` = \`ready\` and \`/s/inv-1/AGENT_NOTE\` = "tested — draft PR open", and STOP. Marking the PR ready for review is a human decision.
+
+## Rules
+- Never post reviews/comments or merge/close PRs from this session (the guard denies them). \`git push\`, \`gh pr create --draft\`, \`gh pr view\` are fine.
+- If you hit something you cannot pass (environment broken), write \`/s/inv-1/AGENT_STATE\` = \`blocked\` and explain in AGENT_NOTE.
+"
+`;
