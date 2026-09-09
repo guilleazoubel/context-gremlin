@@ -9,13 +9,18 @@ import type { Session } from '../schema/session';
 import type { StageName } from '../schema/stage';
 import { PR_COMMENTS_FIELDS, parsePrComments } from '../gh/pr-view';
 import { parseVercelPreviewComment, pickPreviewProject } from './vercel-preview';
+import { EMPTY_ENVIRONMENT, type EnvironmentBriefContext } from '../pipeline/prompts';
 import {
   LocalAppPortBusyError,
   LocalAppPrereqError,
+  LocalAppSetupError,
   LocalAppUnhealthyError,
   type LocalAppProcess,
   type LocalAppRunner,
+  type LocalAppSetupStep,
 } from './local-app-runner';
+
+export { EMPTY_ENVIRONMENT, type EnvironmentBriefContext };
 
 export interface LocalAppState {
   sessionId: string;
@@ -39,26 +44,6 @@ export interface LocalAppStatus {
   /** Redacted (R3). */
   logTail: string | null;
 }
-
-export interface EnvironmentBriefContext {
-  localUrl: string | null;
-  localLogPath: string | null;
-  localUnavailableReason: string | null;
-  previewUrl: string | null;
-  previewUnavailableReason: string | null;
-  bypassSecretPath: string | null;
-  clerk: { emailTemplate: string; verificationCode: string } | null;
-}
-
-export const EMPTY_ENVIRONMENT: EnvironmentBriefContext = Object.freeze({
-  localUrl: null,
-  localLogPath: null,
-  localUnavailableReason: null,
-  previewUrl: null,
-  previewUnavailableReason: null,
-  bypassSecretPath: null,
-  clerk: null,
-});
 
 export interface EnvironmentServiceDeps {
   fs: SessionFileSystem;
@@ -205,6 +190,7 @@ export class EnvironmentService {
     command: string,
     opts: { cwd: string; nodeVersion?: string; logPath?: string },
     onFailure: (code: number | null) => string,
+    step: LocalAppSetupStep,
   ): Promise<void> {
     const result = await this.deps.local.exec(command, opts);
     if (result.code === NVM_WRAPPER_EXIT) {
@@ -212,7 +198,7 @@ export class EnvironmentService {
         `PREREQ: could not select Node ${opts.nodeVersion ?? '?'} via nvm (the dev-shell wrapper exited ${NVM_WRAPPER_EXIT}).`,
       );
     }
-    if (result.code !== 0) throw new Error(onFailure(result.code));
+    if (result.code !== 0) throw new LocalAppSetupError(onFailure(result.code), step);
   }
 
   /** After `vercel env pull`, make sure the pulled secrets can never be committed. */
@@ -253,11 +239,13 @@ export class EnvironmentService {
         `vercel link --yes --scope ${scope} --project ${project}`,
         { cwd, nodeVersion },
         () => `ERROR: vercel link failed (scope ${scope} / project ${project})`,
+        'vercel link',
       );
       await this.runSetupExec(
         `vercel env pull ${envFile}`,
         { cwd, nodeVersion },
         () => 'ERROR: vercel env pull failed',
+        'vercel env pull',
       );
       let pulled = '';
       try {
@@ -266,7 +254,7 @@ export class EnvironmentService {
         pulled = '';
       }
       if (!pulled.split('\n').some((line) => line.includes('='))) {
-        throw new Error(`ERROR: ${envFile} came back empty`);
+        throw new LocalAppSetupError(`ERROR: ${envFile} came back empty`, 'env file');
       }
       await this.ensureGitignored(cwd, envFile);
     }
@@ -276,11 +264,13 @@ export class EnvironmentService {
       installCommand,
       { cwd, nodeVersion, logPath: `${logPath}.install` },
       () => `ERROR: ${installCommand} failed — see ${logPath}.install`,
+      'pnpm install',
     );
     for (const dir of env.localApp?.postInstallNonEmptyDirs ?? []) {
       if (!(await this.isNonEmptyDir(`${cwd}/${dir}`))) {
-        throw new Error(
+        throw new LocalAppSetupError(
           `ERROR: dev backend unreachable — API types not generated (${dir} is empty); the app won't run correctly. See ${logPath}.install`,
+          'generated dir',
         );
       }
     }
@@ -331,9 +321,17 @@ export class EnvironmentService {
   // ---- start (legacy `run_local`, `bin/cgremlin:560-633`) ----
 
   async start(session: Session, opts: { fresh?: boolean } = {}): Promise<LocalAppStatus> {
-    const status = await this.startInner(session, opts).catch((err: unknown) =>
-      unavailable(err instanceof Error ? err.message : String(err)),
-    );
+    const status = await this.startInner(session, opts).catch((err: unknown) => {
+      if (
+        err instanceof LocalAppPortBusyError ||
+        err instanceof LocalAppPrereqError ||
+        err instanceof LocalAppUnhealthyError ||
+        err instanceof LocalAppSetupError
+      ) {
+        return unavailable(err.message);
+      }
+      throw err;
+    });
     this.lastStart = { sessionId: session.id, status };
     return status;
   }

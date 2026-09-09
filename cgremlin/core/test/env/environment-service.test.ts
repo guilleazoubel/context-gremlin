@@ -364,6 +364,27 @@ describe('EnvironmentService — ensureSetup', () => {
 });
 
 describe('EnvironmentService — start, single instance', () => {
+  it('F2: an unexpected error from the runner rejects start() instead of degrading to unavailable', async () => {
+    class ThrowingRunner extends FakeLocalAppRunner {
+      async start(): Promise<never> {
+        throw new TypeError('boom');
+      }
+    }
+    const h = await harness({ local: new ThrowingRunner() });
+    await expect(h.service.start(devSession())).rejects.toThrow(TypeError);
+    await expect(h.service.start(devSession())).rejects.toThrow('boom');
+  });
+
+  it('F2: a plain Error (not one of the expected local-app error classes) also rejects start()', async () => {
+    class ThrowingRunner extends FakeLocalAppRunner {
+      async start(): Promise<never> {
+        throw new Error('x');
+      }
+    }
+    const h = await harness({ local: new ThrowingRunner() });
+    await expect(h.service.start(devSession())).rejects.toThrow('x');
+  });
+
   it('MG-6 no-port-steal: a foreign listener is reported and never killed', async () => {
     const h = await harness();
     h.local.setPortListener(9999);
