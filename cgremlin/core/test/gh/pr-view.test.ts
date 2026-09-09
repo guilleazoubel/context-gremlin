@@ -3,7 +3,8 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import {
-  ciStatus, CheckRunSchema, mapPrView, parsePrInventoryList, parsePrList, parsePrView, StatusCheckSchema,
+  ciStatus, CheckRunSchema, mapPrView, parsePrComments, parsePrInventoryList, parsePrList, parsePrView,
+  PR_COMMENTS_FIELDS, StatusCheckSchema,
 } from '../../src/gh/pr-view';
 
 const fixturesDir = path.join(__dirname, '../fixtures/gh');
@@ -174,5 +175,26 @@ describe('mapPrView', () => {
     expect(mapped.isDraft).toBe(false);
     expect(mapped.reviewDecision).toBe('APPROVED');
     expect(mapped.headRefName).toBe(view.headRefName);
+  });
+});
+
+describe('parsePrComments', () => {
+  it('parses the real captured fixture into typed comments', () => {
+    const comments = parsePrComments(fixture('pr-comments-vercel.json'));
+    expect(comments.length).toBe(2);
+    expect(comments.map((c) => c.author.login)).toEqual(['vercel', 'apfm-sonar']);
+    expect(typeof comments[0].body).toBe('string');
+  });
+
+  it('empty stdout parses to []', () => {
+    expect(parsePrComments('')).toEqual([]);
+  });
+
+  it('rejects a comment lacking author.login', () => {
+    expect(() => parsePrComments(JSON.stringify({ comments: [{ body: 'x' }] }))).toThrow();
+  });
+
+  it('exposes the gh --json field name', () => {
+    expect(PR_COMMENTS_FIELDS).toBe('comments');
   });
 });

@@ -34,6 +34,7 @@ import {
 import { evaluateFindings, evaluatePlan, evaluateRereview, evaluateReview, nextReviewVersion, readNonEmpty } from './artifacts';
 import { assertCanPromote } from './plan-gate';
 import { WorkspaceMissingError, type StageRunResult } from './stage-runner';
+import { repoSlugFromUrl } from '../gh/repo-slug';
 
 export interface PipelineConfig {
   sessionsDir: string; // absolute
@@ -554,8 +555,4 @@ export function stamp(d: Date): string {
   return `${d.getUTCFullYear()}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}-${p(d.getUTCHours())}${p(d.getUTCMinutes())}${p(d.getUTCSeconds())}`;
 }
 
-export function repoSlugFromUrl(repoUrl: string): string {
-  const m = repoUrl.match(/[:/]([^/:]+\/[^/]+?)(?:\.git)?\/?$/);
-  return m ? m[1] : repoUrl.replace(/[^a-zA-Z0-9._-]/g, '-');
-}
-export { repoSlugFromUrl as repoSlug };
+export { repoSlugFromUrl, repoSlugFromUrl as repoSlug } from '../gh/repo-slug';
