@@ -1,8 +1,30 @@
+export interface EnvironmentBriefContext {
+  localUrl: string | null;
+  localLogPath: string | null;
+  localUnavailableReason: string | null;
+  previewUrl: string | null;
+  previewUnavailableReason: string | null;
+  bypassSecretPath: string | null;
+  clerk: { emailTemplate: string; verificationCode: string } | null;
+}
+
+export const EMPTY_ENVIRONMENT: EnvironmentBriefContext = {
+  localUrl: null,
+  localLogPath: null,
+  localUnavailableReason: null,
+  previewUrl: null,
+  previewUnavailableReason: null,
+  bypassSecretPath: null,
+  clerk: null,
+};
+
 export interface BriefCommon { sessionDir: string; ticket: string | null }
-export interface FindingsBriefParams extends BriefCommon { intent: 'investigate_only' | 'development' }
+export interface FindingsBriefParams extends BriefCommon { intent: 'investigate_only' | 'development'; env?: EnvironmentBriefContext }
 export interface PlanBriefParams extends BriefCommon { driveToCompletion: boolean }
-export interface DevelopBriefParams extends BriefCommon { hasPlan: boolean }
-export interface ReviewPromptParams { sessionDir: string; reviewSkillCommand?: string; includeLiveUiCheck?: boolean }
+export interface DevelopBriefParams extends BriefCommon { hasPlan: boolean; env?: EnvironmentBriefContext }
+export interface ReviewBriefParams { sessionDir: string; prNumber: number; env?: EnvironmentBriefContext }
+export interface RereviewBriefParams { sessionDir: string; prNumber: number; commitCount: number; env?: EnvironmentBriefContext }
+export interface ReviewPromptParams { sessionDir: string; reviewSkillCommand?: string; includeLiveUiCheck?: boolean; uiCheckRendered?: boolean }
 export interface RereviewPromptParams { sessionDir: string; commitCount: number; reviewSkillCommand?: string }
 
 const DEFAULT_REVIEW_SKILL = '/APFM:apfm-review';
@@ -22,7 +44,197 @@ function notes(sessionDir: string): string {
 - State: overwrite \`${sessionDir}/AGENT_STATE\` with exactly one of \`working\`, \`ready\`, \`needs-input\`, \`blocked\` whenever it changes.`;
 }
 
+// Renders the '## Environment' block for a brief. Every line is conditional on the
+// corresponding EnvironmentBriefContext field; '' when nothing is set (R14).
+export function renderEnvironmentSection(ctx: EnvironmentBriefContext): string {
+  const lines: string[] = [];
+  if (ctx.localUrl) {
+    const log = ctx.localLogPath
+      ? `  (dev-server log: ${ctx.localLogPath} — read it when something fails)`
+      : '';
+    lines.push(`- Local app: ${ctx.localUrl}${log}`);
+  } else if (ctx.localUnavailableReason) {
+    lines.push(`- Local app: UNAVAILABLE — ${ctx.localUnavailableReason}. Do not attempt to start it yourself; verify what you can statically and say so in your output.`);
+  }
+  if (ctx.previewUrl) {
+    lines.push(`- Vercel preview: ${ctx.previewUrl}`);
+  } else if (ctx.previewUnavailableReason) {
+    lines.push(`- Vercel preview: UNAVAILABLE — ${ctx.previewUnavailableReason}. Fall back to a Storybook preview link in the PR checks/comments if one exists; otherwise note it and continue.`);
+  }
+  if (ctx.bypassSecretPath) {
+    lines.push(`- Deployment-protection bypass secret: read the single line in \`${ctx.bypassSecretPath}\`.`);
+  }
+  if (ctx.clerk) {
+    lines.push(`- Clerk test user: sign in with \`${ctx.clerk.emailTemplate}\` and the email verification code \`${ctx.clerk.verificationCode}\`.`);
+  }
+  if (lines.length === 0) return '';
+  return `## Environment (started for you by the engine — do NOT start or stop anything yourself)\n${lines.join('\n')}`;
+}
+
+// Reproduces bin/cgremlin:1436-1483 verbatim except the "Reaching the target" bullets,
+// which point at the engine-provided URL/.bypass-secret instead of ~/.cgremlin/config (R10).
+// Returns '' when neither a local nor a preview URL is available (R14).
+export function renderUiCheckProtocol(mode: 'observe' | 'fix', target: string, ctx: EnvironmentBriefContext): string {
+  if (!ctx.localUrl && !ctx.previewUrl) return '';
+  const code = ctx.clerk?.verificationCode ?? '424242';
+  const bypassPath = ctx.bypassSecretPath ?? '<sessionDir>/.bypass-secret';
+  const modeBlock = mode === 'fix'
+    ? `**Mode — FIX:** feed every confirmed PM/Designer finding into your fix loop — fix the root cause (correct patterns, no hacks, no over-engineering), then re-run this check until both lenses pass.`
+    : `**Mode — OBSERVE:** make NO code changes. Merge PM findings as 📋 PM/AC and Designer findings as 🎨 Design into REVIEW.md (same table + detail shape, adding Expected/Actual lines and an Evidence link for design findings). These are additive — they inform the reviewer and do NOT block approval.`;
+  return `## LIVE UI CHECK — PM + Designer lenses (dedicated subagents)
+
+After the code tiers, dispatch TWO focused subagents IN PARALLEL (Task tool). They inherit your MCP servers (atlassian, figma, chrome-devtools). Do NOT do their work inline.
+
+**Target:** ${target}
+
+**Reaching the target (both subagents):**
+- **Vercel preview behind a login wall:** do NOT attempt an interactive Vercel login. The preview URL is in the \`## Environment\` section above. Bypass deployment protection with the automation secret — read the single line from \`${bypassPath}\` and append \`?x-vercel-protection-bypass=<secret>&x-vercel-set-bypass-cookie=true\` to the preview URL on first navigation (or send it as the \`x-vercel-protection-bypass\` request header).
+- **Page behind Clerk auth (dev):** sign in with a Clerk test user — use an email of the form \`<test-specific-name>+clerk_test@example.com\` (the \`+clerk_test\` suffix is what makes it a test account; pick a name specific to this check, e.g. \`uicheck-<ticket>\`) and the email verification code \`${code}\`.
+- chrome-devtools runs with an isolated (fresh) profile, so there is no saved session — do the bypass/login on every run.
+
+**PM subagent (product manager verifying the ticket):**
+1. Read the Jira ticket (getJiraIssue; fall back to the PR description if Atlassian MCP is unavailable) and extract the acceptance criteria / intended behavior.
+2. Open the target in chrome-devtools and navigate to the changed feature.
+3. For each acceptance criterion, exercise it and record holds / broken / missing, with a one-line observation and a screenshot for anything not holding.
+4. Return findings only (schema below); make NO code changes.
+
+**Designer subagent (designer checking pixel fidelity):**
+1. Find a Figma link in the Jira ticket (scan the getJiraIssue description + remote links for a figma.com URL; capture any node-id).
+2. IF a link exists: read the design via Figma MCP — get_variable_defs (color/spacing/typography tokens), get_design_context, and get_screenshot of the relevant node. In chrome-devtools, read the rendered values with evaluate_script (getComputedStyle: font-family, font-size, font-weight, color, background-color, padding, margin, width, height, border-radius). Compare against the design and flag each mismatch as design-value vs rendered-value.
+3. IF no link exists: do a general visual sanity pass — alignment, spacing consistency, responsive breakpoints (resize via chrome-devtools), obvious visual bugs — and note "no Figma link found in Jira."
+4. Produce SIDE-BY-SIDE evidence for each visual discrepancy (below).
+5. Return findings only; make NO code changes.
+
+**Side-by-side evidence (per visual discrepancy)** — create a ui-findings/ directory alongside REVIEW.md and write:
+- finding-N-figma.png — Figma reference crop (figma get_screenshot); omit on the no-link sanity path.
+- finding-N-rendered.png — the screenshot of the same component from the target (chrome-devtools take_screenshot).
+- finding-N.html — a self-contained page showing the two images side by side, captioned with the exact mismatch (example: "Figma #1A73E8 / rendered #1B74E9; font-size Figma 16px / rendered 14px").
+- finding-N.png — load finding-N.html in chrome-devtools and screenshot it to get one composed image to paste into the PR.
+(No image compositor is installed; the HTML page + chrome-devtools screenshot IS the composition mechanism.)
+
+**Findings each subagent returns (merge these into REVIEW.md):** lens (pm | designer), title, severity (Critical / High / Minor), criterion (the AC or design property checked), expected (design/AC value), actual (rendered value), location (URL/route + component/selector), evidence (relative path to ui-findings/finding-N.html plus .png — designer only).
+
+**Degradation:** if a needed MCP tool is unavailable, or no target/preview is ready, NOTE it plainly in REVIEW.md and continue — never fail over unavailable tooling.
+
+${modeBlock}`;
+}
+
+const TIER0_INTENT_GATE = `## TIER 0 — Intent gate (Jira is the source of truth) — ALWAYS, FIRST
+The ticket defines what this PR is supposed to do. Solving the wrong thing correctly is still a failure.
+1. Find the Jira ticket key from the branch name / PR title / context above (e.g. \`HB-627\`, \`GRAC-123\`).
+2. Fetch it: if an Atlassian MCP tool is available (e.g. getJiraIssue), use it to read the ticket's summary, description, and acceptance criteria. If not available, fall back to the PR description as the intent.
+3. Judge: **does this PR actually satisfy that intent / those acceptance criteria?**
+4. Write an \`Intent alignment:\` line at the top of REVIEW.md — ✅ satisfies / ⚠️ partial / ❌ diverges (+ one sentence).
+5. If ⚠️ or ❌, create a 🔴 finding: Expected = the ticket criterion, Actual = what the PR does. If no ticket is found, write "No ticket found — reviewed against PR description" and continue.`;
+
+const EVIDENCE_BAR = `When escalating, dispatch parallel sub-agents (Task tool) for the deeper lenses you need (e.g. performance, cross-file data-flow, extra tracing). On a normal PR, SKIP Tier 2. Record in REVIEW.md whether Tier 2 ran.
+
+## THE EVIDENCE BAR — your internal test before writing a finding (do NOT print these labels)
+This is how you decide whether something is real enough to write down. Think it through privately; the finding you actually write uses the plain format further below.
+
+**For a bug or performance issue, you must be able to answer:**
+- When does it happen? (the exact input, state, or sequence)
+- What does the code do in that case?
+- What should it do instead?
+(Performance: point to the exact repeated work / N+1 / unbounded growth — no hunches.)
+
+**For a maintainability issue, you must be able to answer:**
+- What two things are mixed together that shouldn't be? (e.g. business logic sitting inside a UI component, or data-fetching baked into display code)
+- What does that concretely cost — what can't be tested on its own, changed without touching unrelated code, or reused?
+- How would you separate them?`;
+
+const SEVERITY_LIST = `## Severity (exactly four)
+- 🔴 **Critical** — correctness/security bug with concrete impact, OR the PR does not satisfy the ticket. Blocks merge.
+- 🟠 **High** — real bug, narrower impact. Should fix; reviewer decides.
+- 🟡 **Perf** — provable performance issue. Does not block.
+- 🔧 **Maintainability** — concrete separation-of-concerns / coupling violation. Does not block.`;
+
+const LINK_RULE = `- Every finding includes a **Link:** — a clickable GitHub permalink to the exact line, so the reviewer can open it and post a comment there manually. Build it ONCE up front: run \`git config --get remote.origin.url\` to get owner/repo (strip \`https://github.com/\`, \`git@github.com:\`, and \`.git\`) and \`git rev-parse HEAD\` for the full commit SHA (the PR branch is checked out here). The link is: \`https://github.com/<owner>/<repo>/blob/<full-sha>/<path>#L<startLine>\` (or \`#L<start>-L<end>\` for a range). Use the FULL 40-char SHA (a permalink), not \`HEAD\`.`;
+
+// The verbatim legacy REVIEW.md output contract, bin/cgremlin:1596-1660 (R9). This is the
+// contract the review agent used to get from CLAUDE.md; evaluateReview and every downstream
+// consumer depend on this exact shape.
+export function renderReviewContract(): string {
+  return `## Output — write \`REVIEW.md\` in this directory, EXACTLY this structure
+
+\`\`\`
+# PR Review: #<number> — <title>
+
+**Does it do what the ticket asked?** ✅ Yes / ⚠️ Mostly / ❌ No — <one plain sentence, name the ticket>
+**How deep did I look?** Quick pass / Deep pass (<one-line why>)
+
+## Summary
+<2-3 plain sentences: what this PR changes, and your overall take. A teammate should understand the gist from this alone.>
+
+## What I found
+| # | Severity | Where | Issue | Status |
+|---|----------|-------|-------|--------|
+| [1](#f1) | 🔴 Critical | \`file.ts:88\` | one plain-English line | open |
+| [2](#f2) | 🔧 Maintainability | \`ui/list.tsx:40\` | one plain-English line | open |
+| [3](#f3) | 📋 PM/AC | \`/search\` behavior | acceptance criterion not met — <one line> | open |
+| [4](#f4) | 🎨 Design | \`PrimaryButton\` on \`/search\` | colour/size differ from Figma — <one line> | open |
+
+📋 PM/AC findings come from the acceptance-criteria check; 🎨 Design findings come from the Figma-fidelity check. Design findings additionally carry Expected vs Actual and an Evidence link (see the detail shape below).
+
+The \`#\` links jump to the full detail below. Keep the \`Status\` column current — it's how the reviewer sees at a glance what's still open.
+
+(If nothing: write "Nothing worth flagging — looks good to me." and set the verdict to Approve.)
+
+## Details
+
+<a id="f1"></a>
+### 1. <plain-English title of the problem>
+**Severity:** 🔴 Critical   **Where:** \`path/to/file.ext:LN-LN\`   **Status:** open
+**Link:** https://github.com/<owner>/<repo>/blob/<full-sha>/path/to/file.ext#L<start>-L<end>
+
+**What's wrong:** <2-4 plain sentences. Describe when it happens, what the code does, and what it should do instead — in normal language, no jargon.>
+
+**Why it matters:** <1-2 sentences on the real-world impact: who is affected and how.>
+
+**Suggested fix:** <plain description; add a short code snippet only if it makes it clearer.>
+
+<a id="f2"></a>
+### 2. <plain-English title>
+**Severity:** 🔧 Maintainability   **Where:** \`path/to/file.ext:LN-LN\`   **Status:** open
+**Link:** https://github.com/<owner>/<repo>/blob/<full-sha>/ui/list.tsx#L40
+
+**What's wrong:** <same shape — for a maintainability issue, explain in plain words what's mixed together that shouldn't be.>
+
+**Why it matters:** <the concrete cost: what becomes hard to test, change, or reuse.>
+
+**Suggested fix:** <how to separate the concerns.>
+
+<a id="f4"></a>
+### 4. Button colour and size don't match the Figma design
+**Severity:** 🎨 Design   **Where:** \`/search\` — \`PrimaryButton\`   **Status:** open
+**Expected (design):** background \`#1A73E8\`, font-size \`16px\`
+**Actual (rendered):** background \`#1B74E9\`, font-size \`14px\`
+**Evidence:** ui-findings/finding-4.html (composed image: ui-findings/finding-4.png)
+
+**What's wrong:** <plain sentence: which property differs, on which element/route.>
+
+**Why it matters:** <impact on brand consistency / usability.>
+
+**Suggested fix:** <the design token or style to apply.>
+
+## Verdict
+✅ Approve / 🔄 Request Changes / 💬 Comment — <one plain sentence explaining the call>
+
+## Review History
+| Version | Date | Commit | Action |
+|---------|------|--------|--------|
+| v1 | <date> | <sha> | Initial review |
+\`\`\`
+
+Rules for the file:
+- Follow this structure EXACTLY, every time. Same headings, same order, same finding shape.
+- Every finding has a stable anchor \`<a id="fN"></a>\` right before its heading, and the table's \`#\` cell links to it as \`[N](#fN)\`. Anchor ids never change across re-reviews (finding 1 is always \`f1\`).
+- \`Status\` appears in TWO places per finding — the table row and the detail heading — and they must always match. Values: \`open\` (new), \`held\` (queued to post), \`posted\` (sent), \`resolved\` (fixed, confirmed on re-review), \`🔇 dismissed\` (skip in re-reviews). Set everything to \`open\`; the triage and re-review agents change it later.
+- Keep it tight. The reviewer reads this to get the picture in under a minute, then talks through anything unclear with the agent.`;
+}
+
 export function renderFindingsBrief(p: FindingsBriefParams): string {
+  const env = p.env ?? EMPTY_ENVIRONMENT;
   const key = p.ticket ?? '(no ticket)';
   const ticketLine = p.ticket
     ? `The ticket is ${p.ticket}. Fetch it now via the Atlassian MCP (getJiraIssue) to read the summary, description, and acceptance criteria.`
@@ -31,6 +243,8 @@ export function renderFindingsBrief(p: FindingsBriefParams): string {
     p.intent === 'development'
       ? `This investigation is development-bound. When FINDINGS.md is complete, write \`${p.sessionDir}/AGENT_NOTE\` = "findings complete — ready for planning" and \`${p.sessionDir}/AGENT_STATE\` = \`ready\`, then STOP. The engine will start the planning turn.`
       : `When FINDINGS.md is complete, write \`${p.sessionDir}/AGENT_STATE\` = \`ready\` and \`${p.sessionDir}/AGENT_NOTE\` = "FINDINGS.md ready — review it", present a short summary, and STOP. This investigation was NOT started as development-bound — do not draft a plan.`;
+  const uiCheck = renderUiCheckProtocol('fix', `the LOCAL url ${env.localUrl}`, env);
+  const uiCheckBlock = uiCheck ? `\n${uiCheck}\n` : '';
   return `# INVESTIGATION — ${key}
 
 You are running in an isolated git worktree of the repository (the current working directory). Work autonomously. Your first deliverable is a complete, self-contained \`${p.sessionDir}/FINDINGS.md\` — no code changes.
@@ -50,7 +264,7 @@ ${notes(p.sessionDir)}
    - **Risks / splash zone** (what a fix could plausibly affect)
    - **Direction / plan** to fix the ticket (concrete steps, scoped to the ticket)
 4. Do NOT change code in this step. Investigation produces understanding only.
-
+${uiCheckBlock}
 ## Scope discipline
 Cover ONLY what the ticket asks. If you find necessary out-of-scope work, note it under a "Tech debt (proposed)" section in FINDINGS.md — do not act on it.
 
@@ -100,23 +314,34 @@ ${tail}
 }
 
 export function renderDevelopBrief(p: DevelopBriefParams): string {
+  const env = p.env ?? EMPTY_ENVIRONMENT;
   const key = p.ticket ?? '(no ticket)';
   const planStep = p.hasPlan
     ? `1. **Read \`${p.sessionDir}/PLAN.md\` (your approved plan), then \`${p.sessionDir}/FINDINGS.md\` (and \`${p.sessionDir}/REVIEW.md\` if present) + the ticket.** PLAN.md was already reviewed and approved (PM + Principal Engineer) — implement from it. Copy/adapt PLAN.md into \`${p.sessionDir}/DEVELOPMENT.md\` as your starting point; adapt only if something in PLAN.md is factually wrong against the real code — in that case note the discrepancy in DEVELOPMENT.md, do NOT silently deviate.
 2. **No plan re-gate — proceed to implementation.** Promotion into development was explicitly authorized. Do NOT pause for plan approval.`
     : `1. **Read \`${p.sessionDir}/FINDINGS.md\` (and \`${p.sessionDir}/REVIEW.md\` if present) + the ticket.** Refine into a concrete implementation plan; capture it in \`${p.sessionDir}/DEVELOPMENT.md\`.
 2. **PLAN GATE — pause.** Write \`${p.sessionDir}/AGENT_STATE\` = \`needs-input\` and STOP so a human can read DEVELOPMENT.md. Do NOT implement until a new turn tells you to proceed.`;
+  const step5 = env.localUrl
+    ? `5. **Verify (local during dev; preview after the PR).** The local app is already running at ${env.localUrl} — drive chrome-devtools against it. Once the draft PR (step 4) is open, ALSO verify against its Vercel preview URL. Run a FOCUSED functional smoke (prove the ticket's issue is fixed, plus a smoke pass of the feature and its likely splash-zone regressions — NOT the full e2e suite) AND the PM + Designer UI check below. Watch ${env.localLogPath ?? 'the dev-server log'}; iterate to green.`
+    : `5. **Verify.** Run the project's focused tests for the change (prove the ticket's issue is fixed plus a smoke pass of the feature's likely splash zone — NOT the full suite unless it is fast).`;
+  const uiCheckTarget = env.localUrl
+    ? `the LOCAL url ${env.localUrl} during development, and the draft PR's Vercel preview URL once the PR is open`
+    : `the draft PR's Vercel preview URL once the PR is open`;
+  const uiCheck = renderUiCheckProtocol('fix', uiCheckTarget, env);
+  const uiCheckBlock = uiCheck ? `\n\n${uiCheck}` : '';
+  const envSection = renderEnvironmentSection(env);
+  const envBlock = envSection ? `\n\n${envSection}` : '';
   return `# DEVELOP — ${key}
 
 You are running in an isolated git worktree on the session branch. Keep a running plan/progress log in \`${p.sessionDir}/DEVELOPMENT.md\`.
 
-${notes(p.sessionDir)}
+${notes(p.sessionDir)}${envBlock}
 
 ## What to do
 ${planStep}
 3. **Implement with TDD.** For each unit: write the failing test, run it (confirm it fails), write minimal code, run to green, commit. Stay strictly in ticket scope.
 4. **Open a draft PR** on the pushed branch: \`git push -u origin HEAD\` then \`gh pr create --draft\`, body summarizing the change and linking ${key}. Record the PR URL as the first line of \`${p.sessionDir}/PR_URL\`.
-5. **Verify.** Run the project's focused tests for the change (prove the ticket's issue is fixed plus a smoke pass of the feature's likely splash zone — NOT the full suite unless it is fast).
+${step5}${uiCheckBlock}
 6. **Finish.** When tested, write \`${p.sessionDir}/AGENT_STATE\` = \`ready\` and \`${p.sessionDir}/AGENT_NOTE\` = "tested — draft PR open", and STOP. Marking the PR ready for review is a human decision.
 
 ## Rules
@@ -125,16 +350,50 @@ ${planStep}
 `;
 }
 
+export function renderReviewBrief(p: ReviewBriefParams): string {
+  const env = p.env ?? EMPTY_ENVIRONMENT;
+  const envSection = renderEnvironmentSection(env);
+  const uiCheck = renderUiCheckProtocol('observe', "the PR's Vercel preview URL shown in the ## Environment section above", env);
+  const parts = [
+    `# REVIEW — PR #${p.prNumber}`,
+    TIER0_INTENT_GATE,
+    EVIDENCE_BAR,
+    SEVERITY_LIST,
+    LINK_RULE,
+    envSection,
+    uiCheck,
+    renderReviewContract(),
+  ].filter((part) => part !== '');
+  return `${parts.join('\n\n')}\n`;
+}
+
+export function renderRereviewBrief(p: RereviewBriefParams): string {
+  const env = p.env ?? EMPTY_ENVIRONMENT;
+  const envSection = renderEnvironmentSection(env);
+  const uiCheck = renderUiCheckProtocol('observe', "the PR's Vercel preview URL shown in the ## Environment section above", env);
+  const parts = [
+    `# RE-REVIEW — PR #${p.prNumber}`,
+    `${p.commitCount} new commit(s).`,
+    EVIDENCE_BAR,
+    LINK_RULE,
+    envSection,
+    uiCheck,
+    renderReviewContract(),
+  ].filter((part) => part !== '');
+  return `${parts.join('\n\n')}\n`;
+}
+
 export function renderReviewPrompt(p: ReviewPromptParams): string {
   const skill = p.reviewSkillCommand ?? DEFAULT_REVIEW_SKILL;
+  const uiCheckRendered = p.uiCheckRendered ?? true;
   const ui =
-    (p.includeLiveUiCheck ?? true)
-      ? ` Then ALWAYS run the '## LIVE UI CHECK' section in CLAUDE.md (PM + Designer subagents) and merge its 📋/🎨 findings into REVIEW.md — this is required even when ${bareSkillName(skill)} handled the code review.`
+    (p.includeLiveUiCheck ?? true) && uiCheckRendered
+      ? ` Then ALWAYS run the '## LIVE UI CHECK' section in ${p.sessionDir}/BRIEF.md (PM + Designer subagents) and merge its 📋/🎨 findings into REVIEW.md — this is required even when ${bareSkillName(skill)} handled the code review.`
       : '';
-  return `Run ${skill} and write the findings to REVIEW.md following CLAUDE.md.${ui} Proceed autonomously; do NOT ask for confirmation or a verdict. Read the PR with git (the branch is checked out) or gh pr view/diff as needed. If Jira/Atlassian MCP is unavailable, skip Jira context and proceed with the diff alone. Do NOT post to GitHub. Write the output to ${p.sessionDir}/REVIEW.md.`;
+  return `Run ${skill} and write the findings to REVIEW.md following ${p.sessionDir}/BRIEF.md.${ui} Proceed autonomously; do NOT ask for confirmation or a verdict. Read the PR with git (the branch is checked out) or gh pr view/diff as needed. If Jira/Atlassian MCP is unavailable, skip Jira context and proceed with the diff alone. Do NOT post to GitHub. Write the output to ${p.sessionDir}/REVIEW.md.`;
 }
 
 export function renderRereviewPrompt(p: RereviewPromptParams): string {
   const skill = p.reviewSkillCommand ?? DEFAULT_REVIEW_SKILL;
-  return `STEP 1: Check if ${skill} skill is available. If yes, run it for re-review and follow its output — skip everything else. STEP 2 (only if skill unavailable): RE-REVIEW MODE — PR updated with ${p.commitCount} new commit(s). Read ${p.sessionDir}/RE-REVIEW.md and follow it. Update ${p.sessionDir}/REVIEW.md in-place. FIRST verify each prior finding was properly addressed: re-check whether the problem it describes still happens in the new code and classify ✅ resolved / ⚠️ partial (keep open) / ❌ still open / 🔁 regressed, with evidence — 🔇 dismissed stay untouched. THEN add NEW findings only if they pass the evidence bar in CLAUDE.md, written in the file's plain format (What's wrong / Why it matters / Suggested fix), and re-check the PR still satisfies its Jira ticket. Severity is 🔴 Critical / 🟠 High / 🟡 Perf / 🔧 Maintainability. Scope: ONLY files in the PR diff. Add a new row to Review History. Self-check: verify every finding references a changed file. As the very last action, write a single line to the file ${p.sessionDir}/rereview_summary. Format: '✅ N/N resolved' if all prior findings are resolved, or '⚠️ K/N resolved, M new' otherwise. Write only that line — no other content.`;
+  return `STEP 1: Check if ${skill} skill is available. If yes, run it for re-review and follow its output — skip everything else. STEP 2 (only if skill unavailable): RE-REVIEW MODE — PR updated with ${p.commitCount} new commit(s). Read ${p.sessionDir}/RE-REVIEW.md and follow it. Update ${p.sessionDir}/REVIEW.md in-place. FIRST verify each prior finding was properly addressed: re-check whether the problem it describes still happens in the new code and classify ✅ resolved / ⚠️ partial (keep open) / ❌ still open / 🔁 regressed, with evidence — 🔇 dismissed stay untouched. THEN add NEW findings only if they pass the evidence bar in ${p.sessionDir}/BRIEF.md, written in the file's plain format (What's wrong / Why it matters / Suggested fix), and re-check the PR still satisfies its Jira ticket. Severity is 🔴 Critical / 🟠 High / 🟡 Perf / 🔧 Maintainability. Scope: ONLY files in the PR diff. Add a new row to Review History. Self-check: verify every finding references a changed file. As the very last action, write a single line to the file ${p.sessionDir}/rereview_summary. Format: '✅ N/N resolved' if all prior findings are resolved, or '⚠️ K/N resolved, M new' otherwise. Write only that line — no other content.`;
 }
