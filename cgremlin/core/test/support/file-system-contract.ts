@@ -71,5 +71,67 @@ export function testFileSystemContract(
       const fs = await createFs();
       await expect(fs.readdir(makePath('does-not-exist'))).rejects.toThrow();
     });
+
+    it('writeFile with an explicit mode reports that mode back from statMode', async () => {
+      const fs = await createFs();
+      const path = makePath('secret-mode.txt');
+      await fs.writeFile(path, 'x', { mode: 0o600 });
+      expect(await fs.statMode(path)).toBe(0o600);
+    });
+
+    it('writeFile with an explicit mode applies it even when the file already exists', async () => {
+      const fs = await createFs();
+      const path = makePath('secret-mode-existing.txt');
+      await fs.writeFile(path, 'first');
+      await fs.writeFile(path, 'second', { mode: 0o600 });
+      expect(await fs.statMode(path)).toBe(0o600);
+      expect(await fs.readFile(path)).toBe('second');
+    });
+
+    it('writeFile with no options leaves a default owner-readable/writable mode', async () => {
+      const fs = await createFs();
+      const path = makePath('default-mode.txt');
+      await fs.writeFile(path, 'x');
+      const mode = await fs.statMode(path);
+      expect(mode).not.toBeNull();
+      expect(mode! & ~0o777).toBe(0);
+      expect(mode! & 0o600).toBe(0o600);
+    });
+
+    it('statMode of a missing path is null', async () => {
+      const fs = await createFs();
+      expect(await fs.statMode(makePath('no-such-mode.txt'))).toBeNull();
+    });
+
+    it('statMode of a directory returns its permission bits', async () => {
+      const fs = await createFs();
+      const dir = makePath('mode-dir');
+      await fs.mkdir(dir, { recursive: true });
+      const mode = await fs.statMode(dir);
+      expect(mode).not.toBeNull();
+      expect(mode! & ~0o777).toBe(0);
+      expect(mode! & 0o700).toBe(0o700);
+    });
+
+    it('remove deletes a file so exists() is false', async () => {
+      const fs = await createFs();
+      const path = makePath('to-remove.txt');
+      await fs.writeFile(path, 'x');
+      await fs.remove(path);
+      expect(await fs.exists(path)).toBe(false);
+    });
+
+    it('remove of a missing path resolves without throwing', async () => {
+      const fs = await createFs();
+      await expect(fs.remove(makePath('never-existed.txt'))).resolves.toBeUndefined();
+    });
+
+    it('readFile after remove rejects', async () => {
+      const fs = await createFs();
+      const path = makePath('removed-then-read.txt');
+      await fs.writeFile(path, 'x');
+      await fs.remove(path);
+      await expect(fs.readFile(path)).rejects.toThrow();
+    });
   });
 }

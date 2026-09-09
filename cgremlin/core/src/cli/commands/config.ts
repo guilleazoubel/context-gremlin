@@ -17,8 +17,10 @@ async function importLegacyCommand(args: readonly string[], io: CommandIO): Prom
   }
 
   const outPath = configPathFor(io);
+  let attachedTo: string | undefined;
   try {
     const partial = importLegacyConfig(legacyText);
+    attachedTo = Object.keys(partial.environments)[0];
     const config = resolveCoreConfig(partial, io.home);
     await writeCoreConfig(io.fs, outPath, config, { force });
   } catch (err) {
@@ -26,6 +28,9 @@ async function importLegacyCommand(args: readonly string[], io: CommandIO): Prom
     return 1;
   }
   io.stdout.write(`Wrote ${outPath}\n`);
+  if (attachedTo !== undefined) {
+    io.stdout.write(`Attached the legacy local/Vercel environment settings to ${attachedTo}\n`);
+  }
   return 0;
 }
 

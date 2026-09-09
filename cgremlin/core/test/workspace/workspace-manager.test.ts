@@ -60,6 +60,8 @@ describe('WorkspaceManager', () => {
       writeFile: async () => {
         throw new Error('disk full');
       },
+      statMode: (p) => fs.statMode(p),
+      remove: (p) => fs.remove(p),
       rename: (a, b) => fs.rename(a, b),
       readdir: (p) => fs.readdir(p),
       mkdir: (p, o) => fs.mkdir(p, o),

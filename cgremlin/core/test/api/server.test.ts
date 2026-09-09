@@ -108,9 +108,19 @@ class DelayedFileSystem implements SessionFileSystem {
     return this.inner.readFile(path);
   }
 
-  async writeFile(path: string, content: string): Promise<void> {
+  async writeFile(path: string, content: string, options?: { mode?: number }): Promise<void> {
     await this.delay();
-    return this.inner.writeFile(path, content);
+    return this.inner.writeFile(path, content, options);
+  }
+
+  async statMode(path: string): Promise<number | null> {
+    await this.delay();
+    return this.inner.statMode(path);
+  }
+
+  async remove(path: string): Promise<void> {
+    await this.delay();
+    return this.inner.remove(path);
   }
 
   async rename(from: string, to: string): Promise<void> {
