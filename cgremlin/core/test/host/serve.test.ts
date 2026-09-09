@@ -324,7 +324,13 @@ describe('serve — local app wiring', () => {
     const localApp = new FakeLocalAppRunner();
     const config = envConfig();
     await seedWorktree(fs);
-    localApp.setLogTail(`open https://h/?x-vercel-protection-bypass=${SECRET}&x-vercel-set-bypass-cookie=true\n`);
+    // W1: all three shapes the secret can take in free text — URL param, curl
+    // request header, and a JSON headers object.
+    localApp.setLogTail(
+      `open https://h/?x-vercel-protection-bypass=${SECRET}&x-vercel-set-bypass-cookie=true\n` +
+        `curl -H "x-vercel-protection-bypass: ${SECRET}" https://h/\n` +
+        `{"headers":{"x-vercel-protection-bypass":"${SECRET}"}}\n`,
+    );
 
     const handle = await serve(config, testAdapters({ fs, runner, localApp }), {
       log: (l) => lines.push(l),
@@ -339,9 +345,11 @@ describe('serve — local app wiring', () => {
 
       const status = await requestOn(handle.socketPath, 'GET', '/sessions/dev-1/local');
       bodies.push(JSON.stringify(status.body));
-      expect((status.body as { status: { logTail: string } }).status.logTail).toContain(
-        'x-vercel-protection-bypass=<redacted>',
-      );
+      const logTail = (status.body as { status: { logTail: string } }).status.logTail;
+      expect(logTail).toContain('x-vercel-protection-bypass=<redacted>');
+      expect(logTail).toContain('x-vercel-protection-bypass: <redacted>');
+      expect(logTail).toContain('"x-vercel-protection-bypass":"<redacted>"');
+      expect(logTail).not.toContain(SECRET);
 
       // A stage run whose agent prints a live bypass URL to stdout.
       const id = await createInvestigation(handle.socketPath);
@@ -349,7 +357,10 @@ describe('serve — local app wiring', () => {
       await new Promise((r) => setTimeout(r, 20));
       runner.emitOutput(runner.lastHandle(), {
         stream: 'stdout',
-        data: `visit https://h/?x-vercel-protection-bypass=${SECRET}&x-vercel-set-bypass-cookie=true\n`,
+        data:
+          `visit https://h/?x-vercel-protection-bypass=${SECRET}&x-vercel-set-bypass-cookie=true\n` +
+          `curl -H "x-vercel-protection-bypass: ${SECRET}" https://h/\n` +
+          `{"headers":{"x-vercel-protection-bypass":"${SECRET}"}}\n`,
       });
       await new Promise((r) => setTimeout(r, 20));
 
@@ -359,6 +370,11 @@ describe('serve — local app wiring', () => {
       const everything = [...lines, ...bodies];
       expect(everything.some((t) => t.includes(SECRET))).toBe(false);
       expect(everything.some((t) => t.includes('x-vercel-protection-bypass=<redacted>'))).toBe(true);
+      // W1: the run.output logger redacts the header and JSON forms too. The
+      // log line is JSON, so the inner quotes come back escaped.
+      const outputLines = lines.filter((l) => l.includes('run.output'));
+      expect(outputLines.some((t) => t.includes('x-vercel-protection-bypass: <redacted>'))).toBe(true);
+      expect(outputLines.some((t) => t.includes('x-vercel-protection-bypass\\":\\"<redacted>'))).toBe(true);
       expect(JSON.stringify(redactCoreConfig(config))).toContain('[redacted]');
     } finally {
       await handle.close();

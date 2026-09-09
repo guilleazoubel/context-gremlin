@@ -426,6 +426,32 @@ describe('redactBypassUrls', () => {
     );
   });
 
+  it('W1 redacts the curl request-header form', () => {
+    expect(redactBypassUrls('curl -H "x-vercel-protection-bypass: SENTINEL" https://h/')).toBe(
+      'curl -H "x-vercel-protection-bypass: <redacted>" https://h/',
+    );
+  });
+
+  it('W1 redacts the JSON header form', () => {
+    const out = redactBypassUrls('{"headers":{"x-vercel-protection-bypass":"SENTINEL"}}');
+    expect(out).toBe('{"headers":{"x-vercel-protection-bypass":"<redacted>"}}');
+    expect(out).not.toContain('SENTINEL');
+  });
+
+  it('W1 redacts the header form with no space after the colon and an unquoted value', () => {
+    expect(redactBypassUrls('x-vercel-protection-bypass:SENTINEL\n')).toBe(
+      'x-vercel-protection-bypass:<redacted>\n',
+    );
+  });
+
+  it('W1 redaction is idempotent across all three forms', () => {
+    const text =
+      'https://h/?x-vercel-protection-bypass=S\ncurl -H "x-vercel-protection-bypass: S"\n{"x-vercel-protection-bypass":"S"}\n';
+    const once = redactBypassUrls(text);
+    expect(redactBypassUrls(once)).toBe(once);
+    expect(once).not.toMatch(/bypass["']?\s*[:=]\s*["']?S\b/);
+  });
+
   it('leaves text with no match byte-identical', () => {
     const text = 'nothing to see here\nhttps://example.com/?q=1\n';
     expect(redactBypassUrls(text)).toBe(text);

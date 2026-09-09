@@ -121,11 +121,20 @@ export function redactCoreConfig(cfg: CoreConfig): CoreConfig {
   return clone;
 }
 
-const BYPASS_URL_PARAM = /x-vercel-protection-bypass=[^&\s]+/g;
+/**
+ * Every shape the bypass secret takes in free text: the URL query parameter
+ * (`?x-vercel-protection-bypass=<v>`), the request header a brief also
+ * suggests (`-H "x-vercel-protection-bypass: <v>"`) and the JSON headers
+ * object an agent may echo (`{"x-vercel-protection-bypass":"<v>"}`). Group 1
+ * keeps the name and separator (quotes included) so the replacement stays
+ * shaped like the input; group 2 is the value, which stops at whatever could
+ * close it.
+ */
+const BYPASS_SECRET_REF = /(x-vercel-protection-bypass"?\s*[:=]\s*"?)([^"'\s&,}]+)/gi;
 
-/** Rewrites every `x-vercel-protection-bypass=<value>` occurrence in free text to `=<redacted>`. */
+/** Rewrites every `x-vercel-protection-bypass` value in free text to `<redacted>` (idempotent). */
 export function redactBypassUrls(text: string): string {
-  return text.replace(BYPASS_URL_PARAM, 'x-vercel-protection-bypass=<redacted>');
+  return text.replace(BYPASS_SECRET_REF, (_match, prefix: string) => `${prefix}<redacted>`);
 }
 
 export async function loadCoreConfig(fs: SessionFileSystem, path: string, home: string): Promise<CoreConfig> {
