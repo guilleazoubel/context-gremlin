@@ -102,11 +102,17 @@ export async function serve(config: CoreConfig, adapters: EngineAdapters, opts: 
   }
 
   // R13: before anything can reach us, reap the process group a previous
-  // engine recorded and then died without stopping — and only that one.
-  const reap = await environment?.reconcileOrphans();
-  if (reap?.reaped) {
-    const { sessionId, pid, pgid, port } = reap.reaped;
-    logLine(opts.log, 'local.reaped', { sessionId, pid, pgid, port, alreadyDead: reap.alreadyDead });
+  // engine recorded and then died without stopping — and only that one. A
+  // failure here (e.g. a stuck `ps`/kill call) must not abort boot — the
+  // engine should still come up and serve, just without having reaped.
+  try {
+    const reap = await environment?.reconcileOrphans();
+    if (reap?.reaped) {
+      const { sessionId, pid, pgid, port } = reap.reaped;
+      logLine(opts.log, 'local.reaped', { sessionId, pid, pgid, port, alreadyDead: reap.alreadyDead });
+    }
+  } catch (err) {
+    logLine(opts.log, 'local.reap_failed', { error: err instanceof Error ? err.message : String(err) });
   }
 
   await listenOnSocket(server, socketPath);
@@ -143,17 +149,26 @@ export async function serve(config: CoreConfig, adapters: EngineAdapters, opts: 
       // rereview/agent after we've already begun tearing everything down,
       // leaving it running forever with nothing left to stop it.
       await scheduler.stop();
-      // StageRunner's in-memory active map is the only trustworthy source
-      // of "what's actually running" — an on-disk lastRun.outcome==='running'
-      // can be stale (a crashed engine, a session nobody ever resumed) and
-      // stopping by that alone would be a no-op at best, misleading at worst.
-      for (const id of pipeline.activeSessionIds()) {
-        await pipeline.stop(id);
+      try {
+        // StageRunner's in-memory active map is the only trustworthy source
+        // of "what's actually running" — an on-disk lastRun.outcome==='running'
+        // can be stale (a crashed engine, a session nobody ever resumed) and
+        // stopping by that alone would be a no-op at best, misleading at worst.
+        for (const id of pipeline.activeSessionIds()) {
+          await pipeline.stop(id);
+        }
+      } finally {
+        // R16: sessions first, local app second — an agent still mid-turn may
+        // be talking to the dev server, so pulling it out from under a
+        // running stage would look like an app crash rather than a shutdown.
+        // environment.stop() must run even if a pipeline.stop() above threw,
+        // or a failed session stop would leave the local app running forever.
+        try {
+          await environment?.stop();
+        } catch (err) {
+          firstError ??= err;
+        }
       }
-      // R16: sessions first, local app second — an agent still mid-turn may
-      // be talking to the dev server, so pulling it out from under a running
-      // stage would look like an app crash rather than a shutdown.
-      await environment?.stop();
     } catch (err) {
       firstError = err;
     } finally {

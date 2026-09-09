@@ -224,6 +224,29 @@ describe('serve — local app wiring', () => {
     }
   });
 
+  it('boots and serves even when reconcileOrphans() rejects, logging local.reap_failed', async () => {
+    const lines: string[] = [];
+    const fs = new InMemoryFileSystem();
+    const localApp = new FakeLocalAppRunner();
+    const config = envConfig();
+    await seedLocalAppState(fs, config);
+    vi.spyOn(localApp, 'isAlive').mockRejectedValue(new Error('reap boom'));
+
+    const handle = await serve(config, testAdapters({ fs, localApp }), { log: (l) => lines.push(l) });
+    try {
+      expect(existsSync(config.socketPath!)).toBe(true);
+      const parsed = lines.map((l) => JSON.parse(l) as Record<string, unknown>);
+      const failed = parsed.filter((e) => e.type === 'local.reap_failed');
+      expect(failed).toHaveLength(1);
+      expect(failed[0]).toMatchObject({ error: 'reap boom' });
+
+      const res = await requestOn(handle.socketPath, 'GET', '/sessions');
+      expect(res.status).toBe(200);
+    } finally {
+      await handle.close();
+    }
+  });
+
   it('with no recorded state at boot it logs no local.reaped line and kills nothing', async () => {
     const lines: string[] = [];
     const localApp = new FakeLocalAppRunner();
@@ -269,6 +292,28 @@ describe('serve — local app wiring', () => {
     await expect(handle.close()).rejects.toThrow('local stop boom');
     await expect(stat(handle.socketPath)).rejects.toThrow();
     expect(process.listenerCount('SIGINT')).toBe(sigintBefore);
+  });
+
+  it('close() still stops the local app when pipeline.stop rejects, then rethrows that error', async () => {
+    const fs = new InMemoryFileSystem();
+    const localApp = new FakeLocalAppRunner();
+    const config = envConfig();
+    const handle = await serve(config, testAdapters({ fs, localApp }), { log: () => {} });
+    try {
+      const id = await createInvestigation(handle.socketPath);
+      await requestOn(handle.socketPath, 'POST', `/sessions/${id}/run`, { stage: 'findings' });
+      await new Promise((r) => setTimeout(r, 20));
+      await seedLocalAppState(fs, config);
+      localApp.setAlive(true);
+      vi.spyOn(handle.engine.pipeline, 'stop').mockRejectedValue(new Error('pipeline stop boom'));
+      const environmentStopSpy = vi.spyOn(handle.engine.environment!, 'stop');
+
+      await expect(handle.close()).rejects.toThrow('pipeline stop boom');
+      expect(environmentStopSpy).toHaveBeenCalled();
+      await expect(stat(handle.socketPath)).rejects.toThrow();
+    } finally {
+      await handle.close().catch(() => undefined);
+    }
   });
 
   it('MG-3 secret-never-leaves-the-process: a full start/status/stop cycle with verbose output never emits the bypass secret', async () => {
