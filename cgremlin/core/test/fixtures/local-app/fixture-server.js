@@ -4,8 +4,9 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 
 const port = Number(process.env.FIXTURE_PORT);
+const status = process.env.FIXTURE_STATUS ? Number(process.env.FIXTURE_STATUS) : 200;
 const server = http.createServer((_req, res) => {
-  res.writeHead(200);
+  res.writeHead(status);
   res.end('ok');
 });
 server.listen(port, () => {

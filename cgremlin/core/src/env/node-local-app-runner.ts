@@ -19,8 +19,8 @@ const STOP_POLL_INTERVAL_MS = 200;
 
 function wrap(command: string, nodeVersion?: string): string {
   return nodeVersion === undefined
-    ? `exec ${command}`
-    : `export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh" 2>/dev/null; nvm use ${nodeVersion} >/dev/null 2>&1 || exit 78; exec ${command}`;
+    ? command
+    : `export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh" 2>/dev/null; nvm use ${nodeVersion} >/dev/null 2>&1 || exit 78; ${command}`;
 }
 
 function sleep(ms: number): Promise<void> {

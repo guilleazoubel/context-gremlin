@@ -84,6 +84,26 @@ describe.skipIf(process.platform === 'win32')('NodeLocalAppRunner (real subproce
     expect(result).toEqual({ ok: true, status: 200, reason: null, exited: false });
   });
 
+  it('healthcheck rejects a non-2xx response as unhealthy (F2)', async () => {
+    const port = await getFreePort();
+    const logPath = join(tmpDir, 'health-500.log');
+    const proc = await runner.start({
+      cwd: tmpDir,
+      command: `env FIXTURE_PORT=${port} FIXTURE_STATUS=500 node ${FIXTURE}`,
+      logPath,
+    });
+    started.push(proc);
+    startedPorts.push(port);
+    await waitUntil(async () => (await runner.portListenerPid(port)) !== null, 2000);
+    const result = await runner.healthcheck(`http://127.0.0.1:${port}`, {
+      timeoutMs: 600,
+      intervalMs: 100,
+      insecureTls: false,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.reason).toContain('500');
+  });
+
   it('healthcheck against a closed port times out', async () => {
     const port = await getFreePort();
     const start = Date.now();
@@ -165,6 +185,39 @@ describe.skipIf(process.platform === 'win32')('NodeLocalAppRunner (real subproce
 
     const failed = await runner.exec("sh -c 'exit 3'", { cwd: tmpDir });
     expect(failed.code).toBe(3);
+  });
+
+  it('exec runs an env-prefixed inline command (no `env` wrapper) without exit 127 (F1)', async () => {
+    const result = await runner.exec('PORT=8080 node -e "process.exit(0)"', { cwd: tmpDir });
+    expect(result.code).toBe(0);
+  });
+
+  it('exec passes through a non-zero exit code from an env-prefixed command (F1)', async () => {
+    const result = await runner.exec('PORT=8080 node -e "process.exit(3)"', { cwd: tmpDir });
+    expect(result.code).toBe(3);
+  });
+
+  it('start with an env-prefixed command (no `env` wrapper) becomes healthy and stop frees the port and kills the group (F1)', async () => {
+    const port = await getFreePort();
+    const logPath = join(tmpDir, 'env-prefixed-start.log');
+    const proc = await runner.start({
+      cwd: tmpDir,
+      command: `FIXTURE_PORT=${port} node ${FIXTURE}`,
+      logPath,
+    });
+    started.push(proc);
+    startedPorts.push(port);
+    const result = await runner.healthcheck(`http://127.0.0.1:${port}`, {
+      timeoutMs: 5000,
+      intervalMs: 100,
+      insecureTls: false,
+    });
+    expect(result).toEqual({ ok: true, status: 200, reason: null, exited: false });
+
+    await runner.stop(proc, { port });
+    started.pop();
+    startedPorts.pop();
+    expect(await runner.portListenerPid(port)).toBeNull();
   });
 
   it('exec with logPath appends both streams to the log', async () => {
