@@ -76,3 +76,15 @@ export class LocalAppUnhealthyError extends Error {
     this.name = 'LocalAppUnhealthyError';
   }
 }
+
+export type LocalAppSetupStep = 'vercel link' | 'vercel env pull' | 'pnpm install' | 'generated dir' | 'env file';
+
+export class LocalAppSetupError extends Error {
+  readonly step: LocalAppSetupStep | undefined;
+
+  constructor(message: string, step?: LocalAppSetupStep) {
+    super(message);
+    this.name = 'LocalAppSetupError';
+    this.step = step;
+  }
+}
