@@ -20,6 +20,17 @@ const previewCtx: EnvironmentBriefContext = {
   bypassSecretPath: '/s/.bypass-secret',
 };
 
+// Both the local-app fields AND the preview fields set simultaneously, set directly
+// (not via a later spread that would null one half out) — this is what actually
+// exercises the LOCAL-APP line of renderEnvironmentSection alongside the preview line.
+const bothCtx: EnvironmentBriefContext = {
+  ...EMPTY_ENVIRONMENT,
+  localUrl: 'https://local.example.com',
+  localLogPath: '/s/logs/dev-server.log',
+  previewUrl: 'https://preview.example.com',
+  bypassSecretPath: '/s/.bypass-secret',
+};
+
 describe('prompt templates', () => {
   it('never instruct the agent to call back into cgremlin', () => {
     const all = [
@@ -53,7 +64,7 @@ describe('prompt templates', () => {
   });
 
   it('review prompt reproduces the legacy contract with the skill command and REVIEW.md path', () => {
-    const t = renderReviewPrompt({ sessionDir });
+    const t = renderReviewPrompt({ sessionDir, uiCheckRendered: true });
     expect(t).toContain('Run /APFM:apfm-review and write the findings to REVIEW.md');
     expect(t).toContain("run the '## LIVE UI CHECK' section");
     expect(t).toContain('Do NOT post to GitHub');
@@ -67,7 +78,7 @@ describe('prompt templates', () => {
   });
 
   it('review prompt live-UI sentence uses the bare skill name, not the full command', () => {
-    const t = renderReviewPrompt({ sessionDir });
+    const t = renderReviewPrompt({ sessionDir, uiCheckRendered: true });
     expect(t).toContain('even when apfm-review handled the code review');
     expect(t).not.toContain('even when /APFM:apfm-review');
   });
@@ -149,20 +160,30 @@ describe('renderEnvironmentSection', () => {
   });
 
   it('MG-7 no-agent-callback: none of the briefs/prompts instruct calling back into the engine', () => {
-    const ctx: EnvironmentBriefContext = { ...localCtx, ...previewCtx };
-    const all = [
-      renderFindingsBrief({ sessionDir, ticket: 'APP-1', intent: 'investigate_only', env: ctx }),
-      renderPlanBrief({ sessionDir, ticket: 'APP-1', driveToCompletion: false }),
-      renderDevelopBrief({ sessionDir, ticket: 'APP-1', hasPlan: true, env: ctx }),
-      renderReviewBrief({ sessionDir, prNumber: 123, env: ctx }),
-      renderRereviewBrief({ sessionDir, prNumber: 123, commitCount: 2, env: ctx }),
-    ];
+    // bothCtx has BOTH localUrl/localLogPath AND previewUrl/bypassSecretPath set
+    // simultaneously (see fixture above) — unlike the old `{ ...localCtx, ...previewCtx }`
+    // merge, this actually exercises the LOCAL-APP line of renderEnvironmentSection in
+    // every renderer below that emits the '## Environment' section (develop/review/rereview).
+    const ctx = bothCtx;
+    const findings = renderFindingsBrief({ sessionDir, ticket: 'APP-1', intent: 'investigate_only', env: ctx });
+    const plan = renderPlanBrief({ sessionDir, ticket: 'APP-1', driveToCompletion: false });
+    const develop = renderDevelopBrief({ sessionDir, ticket: 'APP-1', hasPlan: true, env: ctx });
+    const review = renderReviewBrief({ sessionDir, prNumber: 123, env: ctx });
+    const rereview = renderRereviewBrief({ sessionDir, prNumber: 123, commitCount: 2, env: ctx });
+    const all = [findings, plan, develop, review, rereview];
     for (const b of all) {
       expect(b).not.toContain('cgremlin --run-local');
       expect(b).not.toContain('cgremlin --stop-local');
       expect(b).not.toContain('engine.sock');
       expect(b).not.toContain('POST /sessions/');
       expect(b).not.toContain('curl ');
+    }
+    // Positive control: prove the local-app line (and the preview line) actually
+    // rendered in each of the three renderers that emit '## Environment', so the
+    // negative assertions above are known to have exercised that code path.
+    for (const b of [develop, review, rereview]) {
+      expect(b).toContain(`Local app: ${ctx.localUrl}`);
+      expect(b).toContain(`Vercel preview: ${ctx.previewUrl}`);
     }
     // positive control: the bare '/sessions/'-shaped session path is fine — the guard
     // only outlaws the callback patterns above, not legitimate session-dir paths.
@@ -289,6 +310,11 @@ describe('renderDevelopBrief environment-aware step 5', () => {
 });
 
 describe('renderReviewPrompt gating (R14)', () => {
+  it('omits the LIVE UI CHECK sentence when uiCheckRendered is omitted (fail-closed default)', () => {
+    const t = renderReviewPrompt({ sessionDir });
+    expect(t).not.toContain('LIVE UI CHECK');
+  });
+
   it('with uiCheckRendered true, the sentence points at BRIEF.md, not CLAUDE.md', () => {
     const t = renderReviewPrompt({ sessionDir, uiCheckRendered: true });
     expect(t).toContain(`'## LIVE UI CHECK' section in ${sessionDir}/BRIEF.md`);

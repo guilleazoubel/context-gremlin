@@ -385,7 +385,7 @@ export function renderRereviewBrief(p: RereviewBriefParams): string {
 
 export function renderReviewPrompt(p: ReviewPromptParams): string {
   const skill = p.reviewSkillCommand ?? DEFAULT_REVIEW_SKILL;
-  const uiCheckRendered = p.uiCheckRendered ?? true;
+  const uiCheckRendered = p.uiCheckRendered ?? false;
   const ui =
     (p.includeLiveUiCheck ?? true) && uiCheckRendered
       ? ` Then ALWAYS run the '## LIVE UI CHECK' section in ${p.sessionDir}/BRIEF.md (PM + Designer subagents) and merge its 📋/🎨 findings into REVIEW.md — this is required even when ${bareSkillName(skill)} handled the code review.`
