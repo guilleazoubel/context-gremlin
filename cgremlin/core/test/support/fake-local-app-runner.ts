@@ -4,6 +4,7 @@ import type {
   LocalAppProcess,
   LocalAppRunner,
   LocalAppSpec,
+  LocalAppStopResult,
 } from '../../src/env/local-app-runner';
 
 const DEFAULT_STARTED_PROCESS: LocalAppProcess = {
@@ -35,6 +36,7 @@ export class FakeLocalAppRunner implements LocalAppRunner {
   private logHead = '';
   private alive = false;
   private startedProcess: LocalAppProcess = DEFAULT_STARTED_PROCESS;
+  private stopResult: LocalAppStopResult = { freed: true };
 
   constructor(options: FakeLocalAppRunnerOptions = {}) {
     this.callLog = options.callLog;
@@ -54,6 +56,11 @@ export class FakeLocalAppRunner implements LocalAppRunner {
 
   setAlive(alive: boolean): void {
     this.alive = alive;
+  }
+
+  /** What `stop` reports — e.g. `{ freed: false, foreignListener: 9999 }` (R6). */
+  setStopResult(result: LocalAppStopResult): void {
+    this.stopResult = result;
   }
 
   setStartResult(proc: LocalAppProcess): void {
@@ -116,11 +123,12 @@ export class FakeLocalAppRunner implements LocalAppRunner {
     return this.alive;
   }
 
-  async stop(proc: LocalAppProcess, opts: { port: number }): Promise<void> {
+  async stop(proc: LocalAppProcess, opts: { port: number }): Promise<LocalAppStopResult> {
     this.stopCalls.push({ proc, opts });
-    this.portListener = null;
     this.alive = false;
     this.callLog?.push('local.stop');
+    if (this.stopResult.freed) this.portListener = null;
+    return this.stopResult;
   }
 
   async tailLog(_logPath: string, _lines: number): Promise<string> {

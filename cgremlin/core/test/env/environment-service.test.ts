@@ -578,6 +578,17 @@ describe('EnvironmentService — stop and reap', () => {
     expect(await h.fs.exists(STATE_PATH)).toBe(false);
   });
 
+  it('W2/R6 stop that leaves a foreign process on the port reports it instead of claiming stopped', async () => {
+    const h = await harness();
+    await h.service.start(devSession('s1'));
+    h.local.setStopResult({ freed: false, foreignListener: 9999 });
+    const status = await h.service.stop('s1');
+    expect(status.state).toBe('unavailable');
+    expect(status.reason).toContain('9999');
+    expect(status.reason).toContain('port 8080');
+    expect(await h.fs.exists(STATE_PATH)).toBe(false);
+  });
+
   it('MG-11 reap-only-our-own: a live recorded group is stopped and the state cleared', async () => {
     const h = await harness();
     await h.service.start(devSession('s1'));

@@ -84,6 +84,10 @@ function unavailable(reason: string): LocalAppStatus {
   return { ...STOPPED, state: 'unavailable', reason: redactBypassUrls(reason) };
 }
 
+function foreignListenerMessage(port: number, pid: number | undefined): string {
+  return `port ${port} is still held by pid ${pid ?? '?'}, which the engine did not start — it was not killed; stop it yourself or change localApp.port`;
+}
+
 function dirnameOf(path: string): string {
   const idx = path.lastIndexOf('/');
   return idx <= 0 ? '/' : path.slice(0, idx);
@@ -396,7 +400,11 @@ export class EnvironmentService {
           // Legacy idempotency (`bin/cgremlin:601`): our own app, answering 2xx.
           if (health.ok) return this.runningStatus(existing);
           // Ours but wedged — stopping it is safe, it is a process we started.
-          await this.deps.local.stop(procOf(existing), { port });
+          const stopped = await this.deps.local.stop(procOf(existing), { port });
+          if (!stopped.freed) {
+            await this.deps.fs.remove(this.deps.statePath);
+            throw new LocalAppPortBusyError(port, stopped.foreignListener ?? existing.pid, false);
+          }
         }
         await this.deps.fs.remove(this.deps.statePath);
       } else {
@@ -477,9 +485,12 @@ export class EnvironmentService {
         // Never stop another session's app (legacy `stop_local`'s owner guard).
         return this.runningStatus(state);
       }
-      await this.deps.local.stop(procOf(state), { port: state.port });
+      const result = await this.deps.local.stop(procOf(state), { port: state.port });
       await this.deps.fs.remove(this.deps.statePath);
       if (this.lastStart?.sessionId === state.sessionId) this.lastStart = null;
+      // R6: our group is gone but somebody else's process holds the port —
+      // say so, rather than reporting a clean stop the next start will trip over.
+      if (!result.freed) return unavailable(foreignListenerMessage(state.port, result.foreignListener));
       return { ...STOPPED };
     });
   }

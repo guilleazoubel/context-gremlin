@@ -19,6 +19,16 @@ export interface HealthResult {
   exited: boolean;
 }
 
+/**
+ * What `stop` achieved. `freed: false` means the port is still held by a
+ * process that is not in the group we stopped (R6: we never signal it) —
+ * `foreignListener` is its pid, for the caller to surface.
+ */
+export interface LocalAppStopResult {
+  freed: boolean;
+  foreignListener?: number;
+}
+
 export interface ExecResult {
   code: number | null;
   stdout: string;
@@ -40,7 +50,8 @@ export interface LocalAppRunner {
     opts: { timeoutMs: number; intervalMs: number; insecureTls: boolean; proc?: LocalAppProcess },
   ): Promise<HealthResult>;
   isAlive(proc: LocalAppProcess): Promise<boolean>;
-  stop(proc: LocalAppProcess, opts: { port: number }): Promise<void>;
+  /** R6: kills only `proc`'s own group; a lingering listener from another group is reported, never killed. */
+  stop(proc: LocalAppProcess, opts: { port: number }): Promise<LocalAppStopResult>;
   tailLog(logPath: string, lines: number): Promise<string>;
   headLog(logPath: string, lines: number): Promise<string>;
 }

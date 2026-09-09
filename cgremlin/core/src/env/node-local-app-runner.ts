@@ -10,12 +10,15 @@ import type {
   LocalAppProcess,
   LocalAppRunner,
   LocalAppSpec,
+  LocalAppStopResult,
 } from './local-app-runner';
 
 const MAX_BUFFER_BYTES = 64 * 1024 * 1024;
 const DEFAULT_EXEC_TIMEOUT_MS = 600_000;
 const STOP_GRACE_MS = 5_000;
 const STOP_POLL_INTERVAL_MS = 200;
+/** How long the port may stay bound after the group is gone before we look at who holds it. */
+const PORT_RELEASE_MS = 1_000;
 
 function wrap(command: string, nodeVersion?: string): string {
   return nodeVersion === undefined
@@ -139,16 +142,40 @@ export class NodeLocalAppRunner implements LocalAppRunner {
     }
   }
 
-  async stop(proc: LocalAppProcess, opts: { port: number }): Promise<void> {
+  async stop(proc: LocalAppProcess, opts: { port: number }): Promise<LocalAppStopResult> {
     this.killGroup(proc.pgid, 'SIGTERM');
     const deadline = Date.now() + STOP_GRACE_MS;
     while (Date.now() < deadline && (await this.isAlive(proc))) {
       await sleep(STOP_POLL_INTERVAL_MS);
     }
+    // A dev command that traps SIGTERM only lets go of the port here.
     this.killGroup(proc.pgid, 'SIGKILL');
-    const listenerPid = await this.portListenerPid(opts.port);
-    if (listenerPid !== null) {
-      this.killPid(listenerPid, 'SIGTERM');
+    let listenerPid = await this.waitForPortRelease(opts.port);
+    if (listenerPid === null) return { freed: true };
+
+    // R6: the lingering listener is only ours to kill when it is the process
+    // we recorded or sits in the group we just signalled. Anything else is a
+    // foreign process on the port — report it, never signal it.
+    const listenerPgid = await this.pgidOf(listenerPid);
+    if (listenerPid !== proc.pid && listenerPgid !== proc.pgid) {
+      return { freed: false, foreignListener: listenerPid };
+    }
+    this.killPid(listenerPid, 'SIGTERM');
+    listenerPid = await this.waitForPortRelease(opts.port);
+    if (listenerPid === null) return { freed: true };
+    this.killPid(listenerPid, 'SIGKILL');
+    listenerPid = await this.waitForPortRelease(opts.port);
+    return listenerPid === null ? { freed: true } : { freed: false, foreignListener: listenerPid };
+  }
+
+  /** Polls until nothing listens on `port`, or ~PORT_RELEASE_MS elapses; returns the holder or null. */
+  private async waitForPortRelease(port: number): Promise<number | null> {
+    const deadline = Date.now() + PORT_RELEASE_MS;
+    for (;;) {
+      const pid = await this.portListenerPid(port);
+      if (pid === null) return null;
+      if (Date.now() >= deadline) return pid;
+      await sleep(STOP_POLL_INTERVAL_MS);
     }
   }
 

@@ -1,5 +1,6 @@
 import { describe, expect, it, afterEach } from 'vitest';
 import { createServer } from 'node:net';
+import { spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -174,9 +175,58 @@ describe.skipIf(process.platform === 'win32')('NodeLocalAppRunner (real subproce
     expect(await runner.portListenerPid(port)).toBeNull();
   });
 
+  it('W2/R6 stop frees the port for a server we started and reports freed', async () => {
+    const port = await getFreePort();
+    const logPath = join(tmpDir, 'stop-freed.log');
+    const proc = await runner.start({ cwd: tmpDir, command: `env FIXTURE_PORT=${port} node ${FIXTURE}`, logPath });
+    await waitUntil(async () => (await runner.portListenerPid(port)) !== null, 2000);
+
+    const result = await runner.stop(proc, { port });
+
+    expect(result).toEqual({ freed: true });
+    expect(await runner.portListenerPid(port)).toBeNull();
+  });
+
+  it('W2/R6 stop leaves a foreign listener on the port alive and reports it instead of killing it', async () => {
+    const port = await getFreePort();
+    // A server in its own process group, which this engine did not start.
+    const foreign = spawn('node', [FIXTURE], {
+      env: { ...process.env, FIXTURE_PORT: String(port) },
+      detached: true,
+      stdio: 'ignore',
+    });
+    foreign.unref();
+    try {
+      expect(await waitUntil(async () => (await runner.portListenerPid(port)) !== null, 5000)).toBe(true);
+      const foreignPid = (await runner.portListenerPid(port))!;
+      // Our own process holds no port at all — the lingering listener on the
+      // port we are stopping belongs to somebody else.
+      const ours = await runner.start({
+        cwd: tmpDir,
+        command: 'node -e "setTimeout(() => {}, 60000)"',
+        logPath: join(tmpDir, 'stop-foreign.log'),
+      });
+
+      const result = await runner.stop(ours, { port });
+
+      expect(() => process.kill(foreignPid, 0)).not.toThrow();
+      expect(await runner.portListenerPid(port)).toBe(foreignPid);
+      expect(result).toEqual({ freed: false, foreignListener: foreignPid });
+    } finally {
+      if (foreign.pid !== undefined) {
+        try {
+          process.kill(-foreign.pid, 'SIGKILL');
+        } catch {
+          // already gone
+        }
+      }
+      await waitUntil(async () => (await runner.portListenerPid(port)) === null, 5000);
+    }
+  }, 20_000);
+
   it('stop on an already-dead process resolves without throwing', async () => {
     const proc: LocalAppProcess = { pid: 999998, pgid: 999998, startedAt: new Date().toISOString() };
-    await expect(runner.stop(proc, { port: await getFreePort() })).resolves.toBeUndefined();
+    await expect(runner.stop(proc, { port: await getFreePort() })).resolves.toEqual({ freed: true });
   });
 
   it('exec runs a command and reports its exit code without rejecting', async () => {
