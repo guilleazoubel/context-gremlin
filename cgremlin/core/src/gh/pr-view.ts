@@ -4,6 +4,7 @@ import type { PrInfo } from '../schema/stage';
 export const PR_LIST_FIELDS =
   'number,url,author,isDraft,reviewDecision,headRefOid,headRefName,baseRefName,title,updatedAt';
 export const PR_INVENTORY_FIELDS = `${PR_LIST_FIELDS},latestReviews,reviews,comments`;
+export const PR_COMMENTS_FIELDS = 'comments';
 export const PR_VIEW_FIELDS =
   'number,title,author,headRefName,headRefOid,baseRefName,url,state,isDraft,reviewDecision,mergedAt,closedAt,latestReviews,statusCheckRollup';
 
@@ -191,4 +192,14 @@ export function parsePrInventoryList(stdout: string): PrInventoryItem[] {
 export function parsePrView(stdout: string): PrView {
   const parsed = PrViewSchema.parse(JSON.parse(stdout));
   return { ...parsed, statusCheckRollup: parsed.statusCheckRollup ?? [] };
+}
+
+const PrCommentsEnvelopeSchema = z.object({
+  comments: z.array(z.object({ author: z.object({ login: z.string() }), body: z.string() }).passthrough()),
+});
+
+export function parsePrComments(stdout: string): { author: { login: string }; body: string }[] {
+  const trimmed = stdout.trim();
+  if (trimmed === '') return [];
+  return PrCommentsEnvelopeSchema.parse(JSON.parse(trimmed)).comments;
 }
