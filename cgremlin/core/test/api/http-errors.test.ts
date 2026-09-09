@@ -14,6 +14,12 @@ import { WorkspaceInUseError } from '../../src/workspace/workspace-in-use';
 import { ArtifactNotFoundError } from '../../src/api/artifacts';
 import { TickInProgressError } from '../../src/discovery/scheduler';
 import { OwnPrError, NoScanYetError } from '../../src/api/server';
+import {
+  LocalAppPortBusyError,
+  LocalAppPrereqError,
+  LocalAppSetupError,
+  LocalAppUnhealthyError,
+} from '../../src/env/local-app-runner';
 
 describe('mapErrorToHttp', () => {
   it('maps SessionNotFoundError to 404', () => {
@@ -89,5 +95,16 @@ describe('mapErrorToHttp', () => {
 
   it('maps NoScanYetError to 404', () => {
     expect(mapErrorToHttp(new NoScanYetError()).status).toBe(404);
+  });
+
+  it('maps every local-app failure to 409 with its own message', () => {
+    for (const err of [
+      new LocalAppPortBusyError(8080, 42, false),
+      new LocalAppPrereqError('PREREQ: nope'),
+      new LocalAppUnhealthyError('did not come up'),
+      new LocalAppSetupError('pnpm install failed', 'pnpm install'),
+    ]) {
+      expect(mapErrorToHttp(err)).toEqual({ status: 409, body: { error: err.message } });
+    }
   });
 });

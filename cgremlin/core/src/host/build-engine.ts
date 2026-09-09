@@ -16,6 +16,8 @@ import { DiscoveryScheduler, type Clock, type Tickable } from '../discovery/sche
 import { InventoryScanner, type ScanReport } from '../inventory/inventory-scanner';
 import { InventoryStore } from '../inventory/inventory-store';
 import { createApiServer } from '../api/server';
+import { EnvironmentService } from '../env/environment-service';
+import type { LocalAppRunner } from '../env/local-app-runner';
 
 export interface EngineAdapters {
   fs: SessionFileSystem;
@@ -23,8 +25,12 @@ export interface EngineAdapters {
   gh: GhRunner;
   runner: AgentRunner;
   runnerKind: 'claude-code' | 'codex';
+  /** Absent for a wiring with no local app: `Engine.environment` is then null and every stage behaves exactly as it did pre-Phase-5. */
+  localApp?: LocalAppRunner;
   clock?: Clock;
   now?: () => Date;
+  /** Where prereq checks read `HOME` and the required env vars from; defaults to the real process environment. */
+  env?: NodeJS.ProcessEnv;
 }
 
 export interface Engine {
@@ -36,6 +42,7 @@ export interface Engine {
   store: SessionStore;
   lock: KeyedLock;
   config: CoreConfig;
+  environment: EnvironmentService | null;
 }
 
 export interface TickableParts {
@@ -87,6 +94,22 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     now: adapters.now,
     lock,
   });
+  const environment = adapters.localApp
+    ? new EnvironmentService({
+        fs: adapters.fs,
+        gh: adapters.gh,
+        git: adapters.git,
+        local: adapters.localApp,
+        config,
+        sessionsDir,
+        statePath: config.localAppStatePath!,
+        // The SAME KeyedLock every other part shares, so `local-app:<port>`
+        // is serialized engine-wide (API route, pipeline and boot reap alike).
+        lock,
+        env: adapters.env ?? process.env,
+        now: adapters.now,
+      })
+    : null;
   const pipeline = new PipelineService({
     store,
     workspace,
@@ -103,6 +126,7 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     },
     now: adapters.now,
     lock,
+    environment: environment ?? undefined,
   });
   const factory = new ReviewSessionFactory({
     gh: adapters.gh,
@@ -145,7 +169,8 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     events,
     inventory: { scanner, scheduler, factory, inventoryStore, config: { me: config.me } },
     lock,
+    ...(environment ? { environment } : {}),
   });
 
-  return { server, scheduler, scanner, pipeline, events, store, lock, config };
+  return { server, scheduler, scanner, pipeline, events, store, lock, config, environment };
 }

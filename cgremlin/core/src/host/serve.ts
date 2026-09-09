@@ -6,6 +6,8 @@ import { ClaudeCodeRunner } from '../agent/claude-code-runner';
 import { CodexRunner } from '../agent/codex-runner';
 import type { AgentRunner } from '../agent/agent-runner';
 import type { CoreConfig } from '../config/core-config';
+import { redactBypassUrls } from '../config/core-config';
+import { NodeLocalAppRunner } from '../env/node-local-app-runner';
 import { listenOnSocket } from '../api/listen';
 import { buildEngine, type BuildEngineOptions, type Engine, type EngineAdapters } from './build-engine';
 
@@ -70,7 +72,7 @@ export async function serve(config: CoreConfig, adapters: EngineAdapters, opts: 
   await adapters.fs.mkdir(mirrorsDir, { recursive: true });
 
   const engine = buildEngine(config, adapters, { makeTickable: opts.makeTickable });
-  const { server, scheduler, pipeline, events } = engine;
+  const { server, scheduler, pipeline, events, environment } = engine;
 
   const unsubscribers: Array<() => void> = [
     events.on('session.created', (e) => logLine(opts.log, 'session.created', { sessionId: e.session.id })),
@@ -87,8 +89,24 @@ export async function serve(config: CoreConfig, adapters: EngineAdapters, opts: 
   ];
   if (opts.verbose) {
     unsubscribers.push(
-      events.on('run.output', (e) => logLine(opts.log, 'run.output', { sessionId: e.sessionId, stage: e.stage, chunk: e.chunk })),
+      // R3: an agent that echoes a bypass URL must never write the secret
+      // into the engine's own log.
+      events.on('run.output', (e) =>
+        logLine(opts.log, 'run.output', {
+          sessionId: e.sessionId,
+          stage: e.stage,
+          chunk: { ...e.chunk, data: redactBypassUrls(e.chunk.data) },
+        }),
+      ),
     );
+  }
+
+  // R13: before anything can reach us, reap the process group a previous
+  // engine recorded and then died without stopping — and only that one.
+  const reap = await environment?.reconcileOrphans();
+  if (reap?.reaped) {
+    const { sessionId, pid, pgid, port } = reap.reaped;
+    logLine(opts.log, 'local.reaped', { sessionId, pid, pgid, port, alreadyDead: reap.alreadyDead });
   }
 
   await listenOnSocket(server, socketPath);
@@ -132,6 +150,10 @@ export async function serve(config: CoreConfig, adapters: EngineAdapters, opts: 
       for (const id of pipeline.activeSessionIds()) {
         await pipeline.stop(id);
       }
+      // R16: sessions first, local app second — an agent still mid-turn may
+      // be talking to the dev server, so pulling it out from under a running
+      // stage would look like an app crash rather than a shutdown.
+      await environment?.stop();
     } catch (err) {
       firstError = err;
     } finally {
@@ -165,5 +187,5 @@ export function realAdapters(config: CoreConfig): EngineAdapters {
     config.runner === 'codex'
       ? new CodexRunner({ model: config.runnerOptions.model, sandbox: config.runnerOptions.sandbox })
       : new ClaudeCodeRunner({ model: config.runnerOptions.model, permissionMode: config.runnerOptions.permissionMode });
-  return { fs, git, gh, runner, runnerKind: config.runner };
+  return { fs, git, gh, runner, runnerKind: config.runner, localApp: new NodeLocalAppRunner() };
 }

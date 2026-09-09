@@ -23,6 +23,8 @@ import type { InventoryScanner, ScanReport } from '../inventory/inventory-scanne
 import type { InventoryStore } from '../inventory/inventory-store';
 import { groupInventory, type Inventory, type InventoryEntry } from '../inventory/inventory';
 import type { ReviewSessionFactory, CandidatePR } from '../pipeline/review-session-factory';
+import type { EnvironmentService, LocalAppStatus } from '../env/environment-service';
+import { redactBypassUrls } from '../config/core-config';
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
@@ -64,6 +66,8 @@ export interface ApiServerDeps {
     config: { me: string };
   };
   lock?: KeyedLock;
+  /** Absent for a wiring with no local-app adapter: every /local route then 404s. */
+  environment?: EnvironmentService;
 }
 
 export class OwnPrError extends Error {
@@ -238,6 +242,90 @@ async function handleArtifactRead(
   res.end(content);
 }
 
+/**
+ * 'unavailable' is how EnvironmentService reports a precondition failure it
+ * degraded on (busy port, missing prereq, app never answered) — the same
+ * class of thing `mapErrorToHttp` turns into a 409, so the status drives the
+ * code rather than an exception.
+ */
+function localStatusHttp(status: LocalAppStatus): { code: number; body: unknown } {
+  // Belt and braces: EnvironmentService already redacts what it hands back,
+  // and redaction is idempotent, so no bypass URL can leave through here.
+  const safe: LocalAppStatus = {
+    ...status,
+    reason: status.reason === null ? null : redactBypassUrls(status.reason),
+    logTail: status.logTail === null ? null : redactBypassUrls(status.logTail),
+  };
+  return status.state === 'unavailable'
+    ? { code: 409, body: { error: safe.reason ?? 'the local app is unavailable', status: safe } }
+    : { code: 200, body: { status: safe } };
+}
+
+function sendLocalStatus(res: ServerResponse, status: LocalAppStatus): void {
+  const { code, body } = localStatusHttp(status);
+  sendJson(res, code, body);
+}
+
+/**
+ * The /local routes. The session-scoped forms load the session first, so an
+ * unknown id is a 404 before anything touches a process; the id-less forms
+ * (`GET /local`, `POST /local/stop`) address whichever session currently owns
+ * the app, which is what `cgremlin-core local status|stop` needs with no
+ * argument. start/stop take the per-session lock so a second concurrent call
+ * queues instead of racing; EnvironmentService additionally serializes on
+ * `local-app:<port>`, and neither of those keys is the other, so no nesting
+ * deadlock is possible.
+ */
+async function handleLocalRoute(
+  req: IncomingMessage,
+  res: ServerResponse,
+  deps: ApiServerDeps,
+  lock: KeyedLock,
+  environment: EnvironmentService,
+  url: URL,
+  method: string | undefined,
+  id: string | null,
+  action: 'status' | 'start' | 'stop',
+): Promise<boolean> {
+  if (action === 'status' && method !== 'GET') return false;
+  if (action !== 'status' && method !== 'POST') return false;
+
+  if (id === null) {
+    if (action === 'start') return false; // starting always names a session
+    sendLocalStatus(res, action === 'status' ? await environment.status() : await environment.stop());
+    return true;
+  }
+
+  const session = await deps.sessionStore.load(id);
+  if (action === 'status') {
+    sendLocalStatus(res, await environment.status());
+    return true;
+  }
+  const fresh = url.searchParams.get('fresh') === '1';
+  const status = await lock.withLock(id, () =>
+    action === 'start' ? environment.start(session, { fresh }) : environment.stop(id),
+  );
+  sendLocalStatus(res, status);
+  return true;
+}
+
+/** `/local`, `/local/stop`, `/sessions/:id/local`, `/sessions/:id/local/{start,stop}`. */
+function localActionFor(
+  parts: readonly string[],
+): { id: string | null; action: 'status' | 'start' | 'stop' } | null {
+  if (parts[0] === 'local') {
+    if (parts.length === 1) return { id: null, action: 'status' };
+    if (parts.length === 2 && parts[1] === 'stop') return { id: null, action: 'stop' };
+    return null;
+  }
+  if (parts[0] !== 'sessions' || parts[2] !== 'local') return null;
+  if (parts.length === 3) return { id: parts[1], action: 'status' };
+  if (parts.length === 4 && (parts[3] === 'start' || parts[3] === 'stop')) {
+    return { id: parts[1], action: parts[3] };
+  }
+  return null;
+}
+
 async function handleRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -265,6 +353,18 @@ async function handleRequest(
       const id = parts[1];
       await lock.withLock(id, () => handleArtifactRead(res, deps, id, parts[3]));
       return;
+    }
+
+    const localAction = localActionFor(parts);
+    if (localAction !== null) {
+      if (!deps.environment) {
+        sendJson(res, 404, { error: 'environment not configured' });
+        return;
+      }
+      const handled = await handleLocalRoute(
+        req, res, deps, lock, deps.environment, url, method, localAction.id, localAction.action,
+      );
+      if (handled) return;
     }
 
     if (method === 'POST' && parts.length === 1 && parts[0] === 'sessions') {

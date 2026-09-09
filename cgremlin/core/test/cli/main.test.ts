@@ -66,4 +66,10 @@ describe('main', () => {
     expect(code).toBe(1);
     expect(err()).toContain('engine is not running');
   });
+
+  it('usage lists the local command', async () => {
+    const { io, out } = testIo();
+    await main(['--help'], io);
+    expect(out()).toContain('local start|stop|status');
+  });
 });

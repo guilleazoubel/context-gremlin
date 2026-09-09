@@ -31,6 +31,8 @@ export class FakeLocalAppRunner implements LocalAppRunner {
   private readonly callLog: string[] | undefined;
 
   private portListener: number | null = null;
+  private logTail = '';
+  private logHead = '';
   private alive = false;
   private startedProcess: LocalAppProcess = DEFAULT_STARTED_PROCESS;
 
@@ -56,6 +58,15 @@ export class FakeLocalAppRunner implements LocalAppRunner {
 
   setStartResult(proc: LocalAppProcess): void {
     this.startedProcess = proc;
+  }
+
+  /** What `tailLog` hands back — e.g. a line carrying a bypass URL, to prove redaction. */
+  setLogTail(text: string): void {
+    this.logTail = text;
+  }
+
+  setLogHead(text: string): void {
+    this.logHead = text;
   }
 
   setPgid(pid: number, pgid: number): void {
@@ -113,10 +124,10 @@ export class FakeLocalAppRunner implements LocalAppRunner {
   }
 
   async tailLog(_logPath: string, _lines: number): Promise<string> {
-    return '';
+    return this.logTail;
   }
 
   async headLog(_logPath: string, _lines: number): Promise<string> {
-    return '';
+    return this.logHead;
   }
 }
