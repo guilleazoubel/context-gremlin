@@ -54,6 +54,20 @@ describe('parseVercelPreviewComment', () => {
   it('only reads the marker at the start of a line', () => {
     expect(parseVercelPreviewComment([`prefix [vc]: #h:${Buffer.from('{}').toString('base64')}`])).toEqual([]);
   });
+  it('does not decode a decoy token that precedes the real marker on the same line, but decodes it once the marker starts a line', () => {
+    const decoyPayload = { isMonorepo: false, type: 'github', projects: [
+      { name: 'decoy', projectId: 'decoy-project-id', rootDirectory: null, inspectorUrl: 'https://vercel.com/decoy/inspect', previewUrl: null, nextCommitStatus: 'DEPLOYED' },
+    ] };
+    const decoyToken = Buffer.from(JSON.stringify(decoyPayload)).toString('base64');
+    const realPayload = { ...oneProject, projects: [{ ...oneProject.projects[0], name: 'real' }] };
+    const realToken = Buffer.from(JSON.stringify(realPayload)).toString('base64');
+
+    const decoyLineBody = `${decoyToken} [vc]: #hash:${realToken}`;
+    expect(parseVercelPreviewComment([decoyLineBody])).toEqual([]);
+
+    const startOfLineBody = `\n[vc]: #hash:${realToken}`;
+    expect(parseVercelPreviewComment([startOfLineBody]).map((p) => p.name)).toEqual(['real']);
+  });
   it('tolerates missing base64 padding', () => {
     const raw = Buffer.from(JSON.stringify(oneProject)).toString('base64').replace(/=+$/, '');
     expect(parseVercelPreviewComment([`[vc]: #h:${raw}`]).map((p) => p.name)).toEqual(['p']);
