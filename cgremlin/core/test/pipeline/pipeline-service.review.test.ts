@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { createHarness, flush, SESSIONS_DIR, type PipelineHarness } from '../support/pipeline-harness';
 import { UnsupportedStageError } from '../../src/pipeline/pipeline-service';
 import { WorkspaceMissingError } from '../../src/pipeline/stage-runner';
-import { renderReviewPrompt } from '../../src/pipeline/prompts';
+import { renderReviewBrief, renderReviewPrompt } from '../../src/pipeline/prompts';
 import { migrateV1ToV2, type ReviewSession } from '../../src/schema/session';
 import type { ReviewPhase } from '../../src/schema/pipeline';
 import type { PrInfo } from '../../src/schema/stage';
@@ -55,7 +55,9 @@ describe('PipelineService — review', () => {
     expect((await h.store.load(review.id)).stageStatus).toBe('reviewing');
     const handle = h.runner.lastHandle();
     expect(h.runner.getPrompts(handle)).toEqual([renderReviewPrompt({ sessionDir })]);
-    expect(await h.fs.exists(`${sessionDir}/BRIEF.md`)).toBe(false);
+    // Since Phase 5 review writes a BRIEF.md; with no environment wired it is
+    // the env-less render (no ## Environment, no ## LIVE UI CHECK).
+    expect(await h.fs.readFile(`${sessionDir}/BRIEF.md`)).toBe(renderReviewBrief({ sessionDir, prNumber: 12 }));
 
     await h.finishRun({ 'REVIEW.md': '# Review\nfindings here' }, { code: 0, signal: null });
     const session = await p;

@@ -722,6 +722,19 @@ describe('EnvironmentService — brief context', () => {
     expect(ctx.localUrl).toBeNull();
     expect(ctx.bypassSecretPath).toBe(`${SESSIONS_DIR}/s1/.bypass-secret`);
     expect(ctx.clerk).toEqual({ emailTemplate: 'uicheck-{key}+clerk_test@example.com', verificationCode: '424242' });
+    // F2: previewUrlFor's `status` must be copied through to the brief context.
+    expect(ctx.previewStatus).toBe('DEPLOYED');
+  });
+
+  it('F2: a non-DEPLOYED preview status (a usable URL that is still building) is copied into previewStatus', async () => {
+    const h = await harness();
+    const body = vercelBody([
+      { name: 'grace-frontend-dev', projectId: 'p', rootDirectory: null, inspectorUrl: 'https://vercel.com/x', previewUrl: 'pending.example.com', nextCommitStatus: 'PENDING' },
+    ]);
+    h.gh.queueResponse({ stdout: JSON.stringify({ comments: [{ author: { login: 'vercel' }, body }] }) });
+    const ctx = await h.service.briefContext(reviewSession(), 'review');
+    expect(ctx.previewUrl).toBe('https://pending.example.com');
+    expect(ctx.previewStatus).toBe('PENDING');
   });
 
   it('a develop stage carries the running local URL and no preview URL', async () => {

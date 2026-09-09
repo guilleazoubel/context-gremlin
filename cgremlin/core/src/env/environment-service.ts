@@ -597,6 +597,7 @@ export class EnvironmentService {
       const preview = await this.previewUrlFor(session);
       ctx.previewUrl = preview.url;
       ctx.previewUnavailableReason = preview.reason;
+      ctx.previewStatus = preview.status;
       if (preview.url !== null && env.vercel?.bypassSecret !== undefined) {
         ctx.bypassSecretPath = `${this.deps.sessionsDir}/${session.id}/${BYPASS_SECRET_FILE}`;
       }

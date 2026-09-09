@@ -4,6 +4,8 @@ export interface EnvironmentBriefContext {
   localUnavailableReason: string | null;
   previewUrl: string | null;
   previewUnavailableReason: string | null;
+  /** The preview deployment's status (e.g. 'DEPLOYED', 'PENDING') when a preview URL is known — null otherwise. */
+  previewStatus: string | null;
   bypassSecretPath: string | null;
   clerk: { emailTemplate: string; verificationCode: string } | null;
 }
@@ -14,6 +16,7 @@ export const EMPTY_ENVIRONMENT: EnvironmentBriefContext = {
   localUnavailableReason: null,
   previewUrl: null,
   previewUnavailableReason: null,
+  previewStatus: null,
   bypassSecretPath: null,
   clerk: null,
 };
@@ -57,7 +60,11 @@ export function renderEnvironmentSection(ctx: EnvironmentBriefContext): string {
     lines.push(`- Local app: UNAVAILABLE — ${ctx.localUnavailableReason}. Do not attempt to start it yourself; verify what you can statically and say so in your output.`);
   }
   if (ctx.previewUrl) {
-    lines.push(`- Vercel preview: ${ctx.previewUrl}`);
+    const note =
+      ctx.previewStatus !== null && ctx.previewStatus !== 'DEPLOYED'
+        ? ` (deployment status ${ctx.previewStatus} — may still be building; retry the page if it does not load)`
+        : '';
+    lines.push(`- Vercel preview: ${ctx.previewUrl}${note}`);
   } else if (ctx.previewUnavailableReason) {
     lines.push(`- Vercel preview: UNAVAILABLE — ${ctx.previewUnavailableReason}. Fall back to a Storybook preview link in the PR checks/comments if one exists; otherwise note it and continue.`);
   }
@@ -245,6 +252,8 @@ export function renderFindingsBrief(p: FindingsBriefParams): string {
       : `When FINDINGS.md is complete, write \`${p.sessionDir}/AGENT_STATE\` = \`ready\` and \`${p.sessionDir}/AGENT_NOTE\` = "FINDINGS.md ready — review it", present a short summary, and STOP. This investigation was NOT started as development-bound — do not draft a plan.`;
   const uiCheck = renderUiCheckProtocol('fix', `the LOCAL url ${env.localUrl}`, env);
   const uiCheckBlock = uiCheck ? `\n${uiCheck}\n` : '';
+  const envSection = renderEnvironmentSection(env);
+  const envBlock = envSection ? `\n\n${envSection}` : '';
   return `# INVESTIGATION — ${key}
 
 You are running in an isolated git worktree of the repository (the current working directory). Work autonomously. Your first deliverable is a complete, self-contained \`${p.sessionDir}/FINDINGS.md\` — no code changes.
@@ -252,7 +261,7 @@ You are running in an isolated git worktree of the repository (the current worki
 ## Source of truth: the Jira ticket
 ${ticketLine} If the ticket is unavailable or absent, use whatever task description you were given. The ticket defines scope — investigate ONLY what it asks about.
 
-${notes(p.sessionDir)}
+${notes(p.sessionDir)}${envBlock}
 
 ## What to do (autonomously — do not ask for routine steps)
 1. Understand the request from the ticket. As your first action write \`${p.sessionDir}/AGENT_NOTE\` = "${key}: <one-line goal>".

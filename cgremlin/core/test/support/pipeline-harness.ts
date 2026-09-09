@@ -9,6 +9,7 @@ import { PipelineService, type CreateInvestigationInput, type PipelineConfig } f
 import { KeyedLock } from '../../src/api/keyed-lock';
 import type { AgentExitResult } from '../../src/agent/agent-runner';
 import type { InvestigationSession } from '../../src/schema/session';
+import type { EnvironmentService } from '../../src/env/environment-service';
 
 export const SESSIONS_DIR = '/sessions';
 export const WORKTREES_DIR = '/worktrees';
@@ -26,6 +27,7 @@ export interface PipelineHarness {
   stageRunner: StageRunner;
   service: PipelineService;
   lock: KeyedLock;
+  environment: EnvironmentService | undefined;
   finishRun: (files: Record<string, string>, exit: AgentExitResult) => Promise<void>;
 }
 
@@ -39,14 +41,25 @@ export function flush(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
-export function createHarness(): PipelineHarness {
+export interface HarnessOptions {
+  /** Swap in an instrumented lock (e.g. one that records enter/exit) — still the ONE lock every component shares. */
+  lock?: KeyedLock;
+  /**
+   * Built after the harness's fs/git/lock exist, so an EnvironmentService can
+   * share them; omitted for every wiring that has no environment at all.
+   */
+  environment?: (parts: { fs: InMemoryFileSystem; git: FakeGitRunner; lock: KeyedLock }) => EnvironmentService;
+}
+
+export function createHarness(options: HarnessOptions = {}): PipelineHarness {
   const fs = new InMemoryFileSystem();
   const git = new FakeGitRunner();
   const store = new SessionStore(fs, SESSIONS_DIR);
   const workspace = new WorkspaceManager(git, fs, MIRRORS_DIR);
   const runner = new FakeAgentRunner();
   const events = new EngineEvents();
-  const lock = new KeyedLock();
+  const lock = options.lock ?? new KeyedLock();
+  const environment = options.environment?.({ fs, git, lock });
   const stageRunner = new StageRunner({
     runner,
     store,
@@ -72,6 +85,7 @@ export function createHarness(): PipelineHarness {
     config,
     now: FIXED_NOW,
     lock,
+    environment,
   });
 
   async function finishRun(files: Record<string, string>, exit: AgentExitResult): Promise<void> {
@@ -85,7 +99,7 @@ export function createHarness(): PipelineHarness {
     runner.emitExit(handle, exit);
   }
 
-  return { fs, git, store, workspace, runner, events, stageRunner, service, lock, finishRun };
+  return { fs, git, store, workspace, runner, events, stageRunner, service, lock, environment, finishRun };
 }
 
 export async function createInvestigation(
