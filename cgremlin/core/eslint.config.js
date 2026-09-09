@@ -5,7 +5,7 @@ module.exports = tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    ignores: ['dist/**', 'node_modules/**', 'eslint.config.js', 'test/fixtures/fake-claude-cli.js', 'test/fixtures/fake-codex-cli.js'],
+    ignores: ['dist/**', 'node_modules/**', 'eslint.config.js', 'test/fixtures/fake-claude-cli.js', 'test/fixtures/fake-codex-cli.js', 'test/fixtures/local-app/fixture-server.js'],
   },
   {
     rules: {
