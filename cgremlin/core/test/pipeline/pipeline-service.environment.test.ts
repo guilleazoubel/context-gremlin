@@ -37,6 +37,11 @@ const LOCAL_URL = 'https://local.test';
 const LOCAL_APP = { url: LOCAL_URL, port: 8080, stages: ['develop'] };
 const VERCEL = { scope: 'sc', project: 'p', previewProject: 'p', bypassSecret: SECRET };
 
+const F1_APPROVED_PLAN = `## Review Status
+- PM: ✅ Approved — solves exactly the ticket
+- Principal Engineer: ✅ Approved — mechanism checks out
+`;
+
 function vercelBody(previewUrl: string | null, nextCommitStatus = 'DEPLOYED'): string {
   const payload = {
     isMonorepo: false,
@@ -496,6 +501,48 @@ describe('PipelineService — environment preparation', () => {
     expect(prompt2).toBe(renderReviewPrompt({ sessionDir: dir2 }));
     await noUrl.h.finishRun({ 'REVIEW.md': '# Review\nx' }, { code: 0, signal: null });
     await p2;
+  });
+
+  it('F1: findings\' environment tears down before the findings->plan->develop chain starts develop (same port as findings)', async () => {
+    const { h, callLog } = setup({ env: { localApp: { ...LOCAL_APP, stages: ['findings', 'develop'] } } });
+    const invId = 'inv-f1';
+    const inv: Session = {
+      schemaVersion: 2,
+      id: invId,
+      mode: 'investigation',
+      createdAt: '2026-09-04T10:00:00.000Z',
+      workspace: { repoUrl: REPO_URL, worktreePath: `${WORKTREES_DIR}/${invId}`, branch: 'investigate/APP-1' },
+      lineage: { pipelineId: invId, parentSessionId: null, ticket: 'APP-1' },
+      stageStatus: 'findings',
+      agent: null,
+      lastRun: null,
+      pr: null,
+      intent: 'development',
+      driveToCompletion: true,
+    };
+    await h.store.save(inv);
+    await prepWorktree(h.fs, invId);
+
+    const p = h.service.runFindings(invId);
+    await h.finishRun({ 'FINDINGS.md': '# Findings\nroot cause found' }, { code: 0, signal: null }); // findings
+    await h.finishRun({ 'PLAN.md': F1_APPROVED_PLAN }, { code: 0, signal: null }); // plan -> approved -> promote -> runDevelop starts
+    await flush();
+    const devHandle = h.runner.lastHandle();
+    const devId = h.runner.getContext(devHandle).sessionId;
+    const devDir = `${SESSIONS_DIR}/${devId}`;
+
+    const starts = callLog.map((e, i) => ({ e, i })).filter((x) => x.e === 'local.start').map((x) => x.i);
+    const stops = callLog.map((e, i) => ({ e, i })).filter((x) => x.e === 'local.stop').map((x) => x.i);
+    // develop's local app must actually be attempted (a busy port would short-circuit
+    // before ever reaching the injected runner's start()) and it must come up as the
+    // running local URL, not degrade to UNAVAILABLE.
+    expect(starts).toHaveLength(2);
+    // findings' stop (the FIRST stop) must happen before develop's start (the SECOND start).
+    expect(stops[0]).toBeLessThan(starts[1]);
+    expect(await h.fs.readFile(`${devDir}/BRIEF.md`)).toContain(`Local app: ${LOCAL_URL}`);
+
+    h.runner.emitExit(devHandle, { code: 0, signal: null }); // develop run
+    await p;
   });
 });
 

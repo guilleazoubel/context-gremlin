@@ -171,7 +171,15 @@ export class PipelineService {
     const repoUrl = session.workspace.repoUrl;
     const sessionDir = this.sessionDir(id);
     let startedHere = false;
+    // Idempotent: a chained stage (e.g. runFindings -> runPlan -> promote ->
+    // runDevelop) tears this down BEFORE chaining, in addition to its own
+    // outer `finally` — so teardown must be safe to call twice. Guarded so
+    // the second call is a no-op rather than clearing an already-cleared
+    // secret or stopping an app some OTHER stage has since started.
+    let tornDown = false;
     const teardown = async (): Promise<void> => {
+      if (tornDown) return;
+      tornDown = true;
       // Never throws: a teardown failure must not mask the stage's own error
       // and must not fail an otherwise successful run. Takes no session lock.
       try {
@@ -295,6 +303,12 @@ export class PipelineService {
         });
       }
       if (session.intent === 'development') {
+        // Tear down BEFORE chaining into runPlan (which may itself chain into
+        // promote -> runDevelop): a repo can configure the SAME port for both
+        // the 'findings' and 'develop' stages, and the nested stage's own
+        // `environment.start()` must not find this stage's app still up.
+        // The outer `finally` below still runs too (idempotent — see teardown).
+        await prep.teardown();
         return await this.runPlan(id);
       }
       return result.session;

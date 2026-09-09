@@ -331,3 +331,49 @@ describe('renderReviewPrompt gating (R14)', () => {
     expect(t).not.toContain('CLAUDE.md');
   });
 });
+
+describe('F2: previewStatus (non-DEPLOYED preview status is not silently dropped)', () => {
+  it('EMPTY_ENVIRONMENT.previewStatus is null', () => {
+    expect(EMPTY_ENVIRONMENT.previewStatus).toBeNull();
+  });
+
+  it('renders the "deployment status" note when previewStatus is set and not DEPLOYED', () => {
+    const t = renderEnvironmentSection({
+      ...EMPTY_ENVIRONMENT,
+      previewUrl: 'https://preview.example.com',
+      previewStatus: 'PENDING',
+    });
+    expect(t).toContain('https://preview.example.com');
+    expect(t).toContain('(deployment status PENDING — may still be building; retry the page if it does not load)');
+  });
+
+  it('renders the plain preview line with no status note when previewStatus is DEPLOYED', () => {
+    const t = renderEnvironmentSection({
+      ...EMPTY_ENVIRONMENT,
+      previewUrl: 'https://preview.example.com',
+      previewStatus: 'DEPLOYED',
+    });
+    expect(t).toContain('- Vercel preview: https://preview.example.com');
+    expect(t).not.toContain('deployment status');
+  });
+
+  it('renders the plain preview line with no status note when previewStatus is null', () => {
+    const t = renderEnvironmentSection({
+      ...EMPTY_ENVIRONMENT,
+      previewUrl: 'https://preview.example.com',
+      previewStatus: null,
+    });
+    expect(t).toContain('- Vercel preview: https://preview.example.com');
+    expect(t).not.toContain('deployment status');
+  });
+
+});
+
+describe('F3: renderFindingsBrief gets the "## Environment" section (mirrors renderDevelopBrief)', () => {
+  it('includes "## Environment" with the local app URL and log path when the environment has a local app', () => {
+    const t = renderFindingsBrief({ sessionDir, ticket: 'APP-1', intent: 'development', env: localCtx });
+    expect(t).toContain('## Environment');
+    expect(t).toContain(`Local app: ${localCtx.localUrl}`);
+    expect(t).toContain(localCtx.localLogPath as string);
+  });
+});
