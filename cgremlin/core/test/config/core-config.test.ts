@@ -1,4 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   CONFIG_FILE_MODE,
   hasAnySecret,
@@ -11,6 +14,7 @@ import {
   writeCoreConfig,
 } from '../../src/config/core-config';
 import { ConfigError } from '../../src/discovery/discovery-config';
+import { NodeFileSystem } from '../../src/fs/node-file-system';
 import { InMemoryFileSystem } from '../support/in-memory-file-system';
 
 const HOME = '/Users/e2e';
@@ -320,6 +324,46 @@ describe('MG-8 config-file-is-0600', () => {
   it('hasAnySecret is true only when some environment carries a bypassSecret', () => {
     expect(hasAnySecret(resolveCoreConfig(SECRET_CONFIG_INPUT, HOME))).toBe(true);
     expect(hasAnySecret(resolveCoreConfig({ repos: ['acme/app'], me: 'me' }, HOME))).toBe(false);
+  });
+});
+
+describe('MG-8 config-file-is-0600 (real filesystem)', () => {
+  let dir: string;
+  let fsys: NodeFileSystem;
+  let configPath: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(path.join(tmpdir(), 'cgremlin-core-config-test-'));
+    fsys = new NodeFileSystem();
+    configPath = path.join(dir, 'core.json');
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('writeCoreConfig writes a config holding a bypassSecret at real mode 0600 and it round-trips through loadCoreConfig', async () => {
+    const cfg = resolveCoreConfig(SECRET_CONFIG_INPUT, HOME);
+    await writeCoreConfig(fsys, configPath, cfg, { force: false });
+    expect(await fsys.statMode(configPath)).toBe(0o600);
+    const loaded = await loadCoreConfig(fsys, configPath, HOME);
+    expect(loaded.environments['acme/app'].vercel?.bypassSecret).toBe('super-secret');
+  });
+
+  it('overwriting an existing 0644 file via writeCoreConfig with force ends at real mode 0600', async () => {
+    const cfg = resolveCoreConfig(SECRET_CONFIG_INPUT, HOME);
+    await fsys.mkdir(dir, { recursive: true });
+    await fsys.writeFile(configPath, JSON.stringify({ repos: ['acme/app'], me: 'me' }), { mode: 0o644 });
+    expect(await fsys.statMode(configPath)).toBe(0o644);
+    await writeCoreConfig(fsys, configPath, cfg, { force: true });
+    expect(await fsys.statMode(configPath)).toBe(0o600);
+  });
+
+  it('loadCoreConfig rejects a real 0644 file holding a secret with a ConfigError naming the path', async () => {
+    await fsys.mkdir(dir, { recursive: true });
+    await fsys.writeFile(configPath, JSON.stringify(SECRET_CONFIG_INPUT), { mode: 0o644 });
+    await expect(loadCoreConfig(fsys, configPath, HOME)).rejects.toThrow(ConfigError);
+    await expect(loadCoreConfig(fsys, configPath, HOME)).rejects.toThrow(configPath);
   });
 });
 
