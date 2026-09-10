@@ -1,3 +1,4 @@
+import * as os from 'node:os';
 import type { SessionFileSystem } from '../fs/session-file-system';
 import type { GhRunner } from '../gh/gh-runner';
 import type { GitRunner } from '../git/git-runner';
@@ -56,6 +57,8 @@ export interface EnvironmentServiceDeps {
   lock: KeyedLock;
   env?: NodeJS.ProcessEnv;
   now?: () => Date;
+  /** When this machine last booted, in epoch ms; injectable so the pid-reuse guard is testable. */
+  bootTimeMs?: () => number;
 }
 
 export const BYPASS_SECRET_FILE = '.bypass-secret';
@@ -475,6 +478,21 @@ export class EnvironmentService {
 
   // ---- stop / reap ----
 
+  /**
+   * W3: a recorded pid/pgid is only worth signalling while we can still tell
+   * it apart from a reused one. Two things prove that: the group still owns
+   * the port we recorded, or the record was written after this machine last
+   * booted (pids do not survive a reboot). Neither — signal nothing.
+   */
+  private async ownsRecordedProcess(state: LocalAppState): Promise<boolean> {
+    const listener = await this.deps.local.portListenerPid(state.port);
+    if (listener !== null && (await this.deps.local.pgidOf(listener)) === state.pgid) return true;
+    const startedAt = Date.parse(state.startedAt);
+    if (Number.isNaN(startedAt)) return false;
+    const bootTime = this.deps.bootTimeMs?.() ?? Date.now() - os.uptime() * 1000;
+    return startedAt > bootTime;
+  }
+
   async stop(sessionId?: string): Promise<LocalAppStatus> {
     const current = await this.readState();
     if (current === null) return { ...STOPPED };
@@ -484,6 +502,11 @@ export class EnvironmentService {
       if (sessionId !== undefined && sessionId !== state.sessionId) {
         // Never stop another session's app (legacy `stop_local`'s owner guard).
         return this.runningStatus(state);
+      }
+      if (!(await this.ownsRecordedProcess(state))) {
+        await this.deps.fs.remove(this.deps.statePath);
+        if (this.lastStart?.sessionId === state.sessionId) this.lastStart = null;
+        return { ...STOPPED };
       }
       const result = await this.deps.local.stop(procOf(state), { port: state.port });
       await this.deps.fs.remove(this.deps.statePath);
@@ -495,18 +518,32 @@ export class EnvironmentService {
     });
   }
 
-  /** R13: at boot, reap the process group this engine itself recorded — and nothing else. */
-  async reconcileOrphans(): Promise<{ reaped: LocalAppState | null; alreadyDead: boolean }> {
+  /**
+   * R13: at boot, reap the process group this engine itself recorded — and
+   * nothing else. W3: a record we can no longer prove is ours (it predates
+   * the boot and does not own the port) is only cleared, never signalled;
+   * the caller logs it as `local.reap_stale`.
+   */
+  async reconcileOrphans(): Promise<{
+    reaped: LocalAppState | null;
+    alreadyDead: boolean;
+    stale: LocalAppState | null;
+  }> {
     const current = await this.readState();
-    if (current === null) return { reaped: null, alreadyDead: false };
+    if (current === null) return { reaped: null, alreadyDead: false, stale: null };
     return this.deps.lock.withLock(`local-app:${current.port}`, async () => {
       const state = await this.readState();
-      if (state === null) return { reaped: null, alreadyDead: false };
+      if (state === null) return { reaped: null, alreadyDead: false, stale: null };
+      if (!(await this.ownsRecordedProcess(state))) {
+        await this.deps.fs.remove(this.deps.statePath);
+        this.lastStart = null;
+        return { reaped: null, alreadyDead: false, stale: state };
+      }
       const alive = await this.deps.local.isAlive(procOf(state));
       if (alive) await this.deps.local.stop(procOf(state), { port: state.port });
       await this.deps.fs.remove(this.deps.statePath);
       this.lastStart = null;
-      return { reaped: state, alreadyDead: !alive };
+      return { reaped: state, alreadyDead: !alive, stale: null };
     });
   }
 

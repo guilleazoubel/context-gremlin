@@ -117,6 +117,7 @@ async function harness(opts: {
   lock?: KeyedLock;
   prereqsOk?: boolean;
   setUp?: boolean;
+  bootTimeMs?: () => number;
 } = {}): Promise<Harness> {
   const fs = new InMemoryFileSystem();
   const gh = new FakeGhRunner();
@@ -156,6 +157,7 @@ async function harness(opts: {
     lock,
     env: opts.prereqsOk === false ? { HOME } : { HOME, NODE_AUTH_TOKEN: 'tok' },
     now: () => new Date('2020-02-02T03:04:05.000Z'),
+    ...(opts.bootTimeMs === undefined ? {} : { bootTimeMs: opts.bootTimeMs }),
   });
 
   return { fs, gh, git, local, lock, config, service: new EnvironmentService(deps()), make: () => new EnvironmentService(deps()) };
@@ -611,11 +613,75 @@ describe('EnvironmentService — stop and reap', () => {
     expect(await h.fs.exists(STATE_PATH)).toBe(false);
   });
 
+  it('W3 pid-reuse: a record predating the last boot that no longer owns the port is cleared, not signalled', async () => {
+    const h = await harness({ bootTimeMs: () => Date.parse('2021-01-01T00:00:00.000Z') });
+    await h.fs.writeFile(
+      STATE_PATH,
+      JSON.stringify({ sessionId: 's1', repoSlug: SLUG, url: 'https://local.findcare.dev.aplaceformom.com', port: 8080, pid: 4242, pgid: 4242, logPath: DEV_LOG, startedAt: '2020-01-01T00:00:00.000Z' }),
+    );
+    h.local.setAlive(true);
+    h.local.setPortListener(null);
+
+    const result = await h.service.reconcileOrphans();
+
+    expect(h.local.stopCalls).toEqual([]);
+    expect(result.reaped).toBeNull();
+    expect(result.stale?.sessionId).toBe('s1');
+    expect(await h.fs.exists(STATE_PATH)).toBe(false);
+  });
+
+  it('W3 pid-reuse: a record predating the boot that still owns the port is reaped', async () => {
+    const h = await harness({ bootTimeMs: () => Date.parse('2021-01-01T00:00:00.000Z') });
+    await h.fs.writeFile(
+      STATE_PATH,
+      JSON.stringify({ sessionId: 's1', repoSlug: SLUG, url: 'https://local.findcare.dev.aplaceformom.com', port: 8080, pid: 4242, pgid: 4242, logPath: DEV_LOG, startedAt: '2020-01-01T00:00:00.000Z' }),
+    );
+    h.local.setAlive(true);
+    h.local.setPortListener(4242);
+
+    const result = await h.service.reconcileOrphans();
+
+    expect(result.reaped?.sessionId).toBe('s1');
+    expect(result.stale).toBeNull();
+    expect(h.local.stopCalls).toHaveLength(1);
+  });
+
+  it('W3 pid-reuse: a record started after the last boot is reaped even with nothing on the port', async () => {
+    const h = await harness({ bootTimeMs: () => Date.parse('2019-01-01T00:00:00.000Z') });
+    await h.fs.writeFile(
+      STATE_PATH,
+      JSON.stringify({ sessionId: 's1', repoSlug: SLUG, url: 'https://local.findcare.dev.aplaceformom.com', port: 8080, pid: 4242, pgid: 4242, logPath: DEV_LOG, startedAt: '2020-01-01T00:00:00.000Z' }),
+    );
+    h.local.setAlive(true);
+    h.local.setPortListener(null);
+
+    const result = await h.service.reconcileOrphans();
+
+    expect(result.reaped?.sessionId).toBe('s1');
+    expect(h.local.stopCalls).toHaveLength(1);
+  });
+
+  it('W3 pid-reuse: stop refuses to signal a group recorded before the last boot and just clears the state', async () => {
+    const h = await harness({ bootTimeMs: () => Date.parse('2021-01-01T00:00:00.000Z') });
+    await h.fs.writeFile(
+      STATE_PATH,
+      JSON.stringify({ sessionId: 's1', repoSlug: SLUG, url: 'https://local.findcare.dev.aplaceformom.com', port: 8080, pid: 4242, pgid: 4242, logPath: DEV_LOG, startedAt: '2020-01-01T00:00:00.000Z' }),
+    );
+    h.local.setAlive(true);
+    h.local.setPortListener(null);
+
+    const status = await h.service.stop('s1');
+
+    expect(status.state).toBe('stopped');
+    expect(h.local.stopCalls).toEqual([]);
+    expect(await h.fs.exists(STATE_PATH)).toBe(false);
+  });
+
   it('MG-11 reap-only-our-own: a foreign listener with no state file is untouched', async () => {
     const h = await harness();
     h.local.setPortListener(9999);
     const result = await h.service.reconcileOrphans();
-    expect(result).toEqual({ reaped: null, alreadyDead: false });
+    expect(result).toEqual({ reaped: null, alreadyDead: false, stale: null });
     expect(h.local.stopCalls).toEqual([]);
     expect(await h.fs.exists(STATE_PATH)).toBe(false);
   });

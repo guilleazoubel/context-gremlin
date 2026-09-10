@@ -137,8 +137,11 @@ export class NodeLocalAppRunner implements LocalAppRunner {
       process.kill(-proc.pgid, 0);
       return true;
     } catch (err) {
-      if (isErrnoException(err) && err.code === 'ESRCH') return false;
-      return true;
+      if (!isErrnoException(err)) return true;
+      // ESRCH: nothing there. EPERM: the pgid was reused by a group we do not
+      // own — not our process, so not alive as far as this engine is concerned
+      // (and we must never go on to signal it).
+      return err.code !== 'ESRCH' && err.code !== 'EPERM';
     }
   }
 

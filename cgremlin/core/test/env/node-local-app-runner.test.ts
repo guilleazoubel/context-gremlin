@@ -1,4 +1,4 @@
-import { describe, expect, it, afterEach } from 'vitest';
+import { describe, expect, it, afterEach, vi } from 'vitest';
 import { createServer } from 'node:net';
 import { spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
@@ -227,6 +227,20 @@ describe.skipIf(process.platform === 'win32')('NodeLocalAppRunner (real subproce
   it('stop on an already-dead process resolves without throwing', async () => {
     const proc: LocalAppProcess = { pid: 999998, pgid: 999998, startedAt: new Date().toISOString() };
     await expect(runner.stop(proc, { port: await getFreePort() })).resolves.toEqual({ freed: true });
+  });
+
+  it('W3 isAlive treats EPERM (a group we do not own) as not ours, not as alive', async () => {
+    const spy = vi.spyOn(process, 'kill').mockImplementation(() => {
+      const err: NodeJS.ErrnoException = new Error('kill EPERM');
+      err.code = 'EPERM';
+      throw err;
+    });
+    try {
+      const proc: LocalAppProcess = { pid: 4242, pgid: 4242, startedAt: new Date().toISOString() };
+      expect(await runner.isAlive(proc)).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('exec runs a command and reports its exit code without rejecting', async () => {

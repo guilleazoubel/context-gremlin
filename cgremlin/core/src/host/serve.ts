@@ -111,6 +111,13 @@ export async function serve(config: CoreConfig, adapters: EngineAdapters, opts: 
       const { sessionId, pid, pgid, port } = reap.reaped;
       logLine(opts.log, 'local.reaped', { sessionId, pid, pgid, port, alreadyDead: reap.alreadyDead });
     }
+    // W3: a record we can no longer prove is ours (it predates this boot and
+    // does not own its port) was dropped without signalling anything — say so,
+    // because a pid recorded before a reboot may now belong to anybody.
+    if (reap?.stale) {
+      const { sessionId, pid, pgid, port } = reap.stale;
+      logLine(opts.log, 'local.reap_stale', { sessionId, pid, pgid, port });
+    }
   } catch (err) {
     logLine(opts.log, 'local.reap_failed', { error: err instanceof Error ? err.message : String(err) });
   }

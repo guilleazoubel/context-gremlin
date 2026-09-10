@@ -174,7 +174,9 @@ const RECORDED_STATE = {
   pid: 4321,
   pgid: 4321,
   logPath: '/sessions/dev-1/logs/dev-server.log',
-  startedAt: '2020-01-01T00:00:00.000Z',
+  // Written by the engine that just died — i.e. after this machine booted, so
+  // the pid-reuse guard (W3) trusts it.
+  startedAt: new Date().toISOString(),
 };
 
 async function seedLocalAppState(fs: InMemoryFileSystem, config: CoreConfig): Promise<void> {
@@ -254,6 +256,31 @@ describe('serve — local app wiring', () => {
     try {
       expect(lines.map((l) => JSON.parse(l) as { type: string }).some((e) => e.type === 'local.reaped')).toBe(false);
       expect(localApp.stopCalls).toHaveLength(0);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('W3 logs local.reap_stale and kills nothing when the recorded group predates the last boot', async () => {
+    const lines: string[] = [];
+    const fs = new InMemoryFileSystem();
+    const localApp = new FakeLocalAppRunner();
+    const config = envConfig();
+    await fs.mkdir('/state', { recursive: true });
+    await fs.writeFile(
+      config.localAppStatePath!,
+      JSON.stringify({ ...RECORDED_STATE, startedAt: '2020-01-01T00:00:00.000Z' }),
+    );
+    localApp.setAlive(true);
+
+    const handle = await serve(config, testAdapters({ fs, localApp }), { log: (l) => lines.push(l) });
+    try {
+      const stale = lines.map((l) => JSON.parse(l) as Record<string, unknown>).filter((e) => e.type === 'local.reap_stale');
+      expect(stale).toHaveLength(1);
+      expect(stale[0]).toMatchObject({ sessionId: 'dev-1', pid: 4321, pgid: 4321, port: 8080 });
+      expect(lines.some((l) => l.includes('local.reaped'))).toBe(false);
+      expect(localApp.stopCalls).toEqual([]);
+      expect(await fs.exists(config.localAppStatePath!)).toBe(false);
     } finally {
       await handle.close();
     }
