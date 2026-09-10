@@ -9,6 +9,7 @@ import { KeyedLock } from './keyed-lock';
 import { mapErrorToHttp } from './http-errors';
 import {
   parseArtifactName,
+  parseCreateDevelopmentRequest,
   parseCreateInvestigationRequest,
   parseCreateWorkspaceRequest,
   parseRemoveWorkspaceRequest,
@@ -25,6 +26,8 @@ import { groupInventory, type Inventory, type InventoryEntry } from '../inventor
 import type { ReviewSessionFactory, CandidatePR } from '../pipeline/review-session-factory';
 import type { EnvironmentService, LocalAppStatus } from '../env/environment-service';
 import { redactBypassUrls, redactCoreConfig, type CoreConfig } from '../config/core-config';
+import { OwnPrError } from '../gh/own-pr-error';
+import { parsePrUrl } from '../gh/pr-url';
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
@@ -72,12 +75,9 @@ export interface ApiServerDeps {
   config?: CoreConfig;
 }
 
-export class OwnPrError extends Error {
-  constructor(repo: string, number: number) {
-    super(`PR ${repo}#${number} is authored by the configured user; the engine never reviews its own PRs`);
-    this.name = 'OwnPrError';
-  }
-}
+// Re-exported (not redefined) so every existing importer keeps working while
+// ReviewSessionFactory can throw the same class without importing the server.
+export { OwnPrError } from '../gh/own-pr-error';
 
 export class NoScanYetError extends Error {
   constructor() {
@@ -457,6 +457,16 @@ async function handleRequest(
       return;
     }
 
+    if (method === 'POST' && parts.length === 2 && parts[0] === 'sessions' && parts[1] === 'developments') {
+      const body = await readJsonBody(req);
+      const input = parseCreateDevelopmentRequest(body);
+      const session = await deps.pipeline.createDevelopmentSession(input);
+      // 201 and nothing started: the develop turn is a separate, explicit
+      // POST /sessions/:id/run (R16, MG-A11).
+      sendJson(res, 201, { session });
+      return;
+    }
+
     // /transition, /run, /promote, /rereview, /retry, and /approve-plan are
     // NOT wrapped in lock.withLock here — PipelineService now owns per-session
     // locking for all of these itself (see the invariant documented atop
@@ -525,6 +535,48 @@ async function handleRequest(
       assertWorktreeNotInUse(sessions, params.worktreePath);
       await deps.workspaceManager.removeWorkspace(params.repoUrl, params.worktreePath, params.branchName);
       sendJson(res, 204, undefined);
+      return;
+    }
+
+    // R17: the only way to review a PR in a repo the scan does not watch —
+    // there is no InventoryEntry to address, so the PR URL is the input. The
+    // factory and `me` live under `inventory`, hence the same guard /prs uses.
+    if (method === 'POST' && parts.length === 1 && parts[0] === 'reviews') {
+      if (!deps.inventory) {
+        sendJson(res, 404, { error: 'inventory not configured' });
+        return;
+      }
+      const inv = deps.inventory;
+      const body = (await readJsonBody(req)) as { prUrl?: unknown } | undefined;
+      if (typeof body?.prUrl !== 'string') {
+        throw new ValidationError('Invalid review request: prUrl must be a string');
+      }
+      const ref = parsePrUrl(body.prUrl); // InvalidPrUrlError -> 400
+      // The SAME lock key the inventory-originated route uses (below), so the
+      // two entry points cannot create two sessions for one PR concurrently.
+      await lock.withLock(`pr:${ref.slug}#${ref.number}`, async () => {
+        const sessions = await deps.sessionStore.list();
+        const existing = sessions.find(
+          (s) =>
+            s.mode === 'review' &&
+            !TERMINAL_PHASES_BY_MODE.review.has(s.stageStatus) &&
+            s.pr !== null &&
+            s.pr.repo === ref.slug &&
+            s.pr.number === ref.number,
+        );
+        if (existing) {
+          // R23: 200, exactly like the inventory-originated route answers for
+          // the same situation — the caller's intent is satisfied by the
+          // session that already exists. A terminal one is not a match and
+          // falls through to a fresh session below.
+          sendJson(res, 200, { session: existing, created: false, started: false });
+          return;
+        }
+        const created = await inv.factory.createFromPrUrl(ref.url, { refuseAuthor: inv.config.me });
+        await awaitRunStart(deps.events, created.id, deps.pipeline.runReview(created.id));
+        const session = await deps.sessionStore.load(created.id);
+        sendJson(res, 202, { session, created: true, started: true });
+      });
       return;
     }
 

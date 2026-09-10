@@ -1409,3 +1409,41 @@ describe('artifact listing and GET /config', () => {
     }
   });
 });
+
+describe('POST /sessions/developments (R16)', () => {
+  it('creates a development session at active on feature/<ticket> and starts nothing', async () => {
+    const runEvents: string[] = [];
+    h.events.on('run.started', () => runEvents.push('run.started'));
+
+    const res = await request('POST', '/sessions/developments', {
+      repoUrl: 'git@github.com:acme/app.git',
+      ticket: 'APP-9',
+    });
+
+    expect(res.status).toBe(201);
+    const { session } = res.body as { session: Session };
+    expect(session.mode).toBe('development');
+    expect(session.stageStatus).toBe('active');
+    expect(session.lastRun).toBeNull();
+    expect(session.workspace.branch).toBe('feature/APP-9');
+    expect(session.lineage).toEqual({ pipelineId: session.id, parentSessionId: null, ticket: 'APP-9' });
+    expect((await h.store.load(session.id)).id).toBe(session.id);
+
+    // MG-A11 at the HTTP layer: the route starts nothing.
+    expect(runEvents).toEqual([]);
+    expect(() => h.runner.lastHandle()).toThrow();
+  });
+
+  it('400s a ticket that would smuggle a path and a missing repoUrl, creating nothing', async () => {
+    const badTicket = await request('POST', '/sessions/developments', {
+      repoUrl: 'git@github.com:acme/app.git',
+      ticket: '../../x',
+    });
+    expect(badTicket.status).toBe(400);
+
+    const noRepo = await request('POST', '/sessions/developments', { ticket: 'APP-9' });
+    expect(noRepo.status).toBe(400);
+
+    expect(await h.store.list()).toEqual([]);
+  });
+});

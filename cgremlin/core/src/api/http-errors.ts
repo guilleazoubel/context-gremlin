@@ -15,7 +15,10 @@ export function mapErrorToHttp(err: unknown): HttpError {
       return { status: 409, body: { error: message } };
     case 'SessionCorruptError':
       return { status: 500, body: { error: message } };
+    // InvalidPrUrlError included: a PR URL the caller typed is a bad
+    // request, not an engine failure.
     case 'ValidationError':
+    case 'InvalidPrUrlError':
       return { status: 400, body: { error: message } };
     case 'PlanGateError':
     case 'RunInProgressError':

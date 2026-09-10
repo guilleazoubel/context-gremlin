@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { SessionModeSchema } from '../schema/session-mode';
 import type { CreateWorkspaceParams } from '../workspace/workspace-manager';
-import type { CreateInvestigationInput } from '../pipeline/pipeline-service';
+import type { CreateDevelopmentInput, CreateInvestigationInput } from '../pipeline/pipeline-service';
 import { StageNameSchema, type StageName } from '../schema/stage';
 
 export class ValidationError extends Error {
@@ -61,6 +61,22 @@ export function parseCreateInvestigationRequest(body: unknown): CreateInvestigat
   const result = CreateInvestigationRequestSchema.safeParse(body);
   if (!result.success) {
     throw new ValidationError(`Invalid investigation creation request: ${result.error.message}`);
+  }
+  return result.data;
+}
+
+const CreateDevelopmentRequestSchema = z.object({
+  repoUrl: z.string().min(1),
+  // The SAME ticket rule as the investigation request above, so the two
+  // creation paths can never disagree about what a safe ticket is.
+  ticket: z.string().min(1).regex(/^[A-Za-z0-9._-]+$/).nullable(),
+  baseRef: z.string().min(1).optional(),
+});
+
+export function parseCreateDevelopmentRequest(body: unknown): CreateDevelopmentInput {
+  const result = CreateDevelopmentRequestSchema.safeParse(body);
+  if (!result.success) {
+    throw new ValidationError(`Invalid development creation request: ${result.error.message}`);
   }
   return result.data;
 }
