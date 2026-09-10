@@ -134,6 +134,9 @@ export const PROBE_RETRY_GAP_MS = 200;
 /** R26: three automatic retries, each behind a longer gate, then no more. */
 export const RESPAWN_BACKOFF_MS: readonly number[] = [1_000, 5_000, 30_000];
 
+/** The three lifecycle operations; the memo above is per kind, the lane is shared. */
+type OperationKind = 'ensure' | 'stop' | 'restart';
+
 function sameIdentity(a: EnginePidFile, b: EngineIdentity): boolean {
   return a.pid === b.pid && a.startedAt === b.startedAt;
 }
@@ -141,8 +144,14 @@ function sameIdentity(a: EnginePidFile, b: EngineIdentity): boolean {
 export class EngineManager {
   private current: EngineState = { kind: 'unknown' };
   private readonly listeners = new Set<(state: EngineState) => void>();
-  private starting: Promise<EngineState> | null = null;
-  private stopping: Promise<EngineState> | null = null;
+  /**
+   * The single serial lane every lifecycle operation runs in. `starting` and `stopping` used to be
+   * two independent locks, which let a start interleave with a stop that had signalled but whose
+   * process had not exited yet — and adopt the engine that was on its way out.
+   */
+  private queue: Promise<unknown> = Promise.resolve();
+  /** The in-flight operation per kind, so a burst of one kind still costs one operation. */
+  private readonly inFlight = new Map<OperationKind, Promise<EngineState>>();
   private child: SpawnedEngine | null = null;
   /** How many spawns we have made since the last user request; drives the backoff gate. */
   private attempts = 0;
@@ -177,21 +186,11 @@ export class EngineManager {
    * a burst of triggers produces exactly one spawn (MG-C1).
    */
   ensureRunning(trigger: Trigger = 'auto'): Promise<EngineState> {
-    if (this.starting !== null) return this.starting;
-    const work = this.runEnsure(trigger).finally(() => {
-      if (this.starting === work) this.starting = null;
-    });
-    this.starting = work;
-    return work;
+    return this.serial('ensure', () => this.runEnsure(trigger));
   }
 
   stop(): Promise<EngineState> {
-    if (this.stopping !== null) return this.stopping;
-    const work = this.runStop().finally(() => {
-      if (this.stopping === work) this.stopping = null;
-    });
-    this.stopping = work;
-    return work;
+    return this.serial('stop', () => this.runStop());
   }
 
   /**
@@ -199,12 +198,45 @@ export class EngineManager {
    * goes silent (R23); a stop that could not prove ownership aborts it — the manager never spawns
    * a second engine against a live socket.
    */
-  async restart(trigger: Trigger = 'auto'): Promise<EngineState> {
+  restart(trigger: Trigger = 'auto'): Promise<EngineState> {
+    return this.serial('restart', () => this.runRestart(trigger));
+  }
+
+  /**
+   * One operation at a time, in the order they were asked for, with the memo the burst case needs:
+   * five concurrent `ensureRunning`s share one queued operation (MG-C1), while a `stop` asked for
+   * during one waits its turn rather than interleaving with it.
+   */
+  private serial(kind: OperationKind, work: () => Promise<EngineState>): Promise<EngineState> {
+    const pending = this.inFlight.get(kind);
+    if (pending !== undefined) return pending;
+    const run = this.enqueue(work).finally(() => {
+      if (this.inFlight.get(kind) === run) this.inFlight.delete(kind);
+    });
+    this.inFlight.set(kind, run);
+    return run;
+  }
+
+  /** Appends to the lane. A failed operation does not stall the ones behind it. */
+  private enqueue(work: () => Promise<EngineState>): Promise<EngineState> {
+    const run = this.queue.then(work, work);
+    this.queue = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  /**
+   * The restart is one lane entry, not three: it calls the operations' bodies directly, because
+   * queueing them from inside the lane would wait on a turn that cannot come until it returns.
+   */
+  private async runRestart(trigger: Trigger): Promise<EngineState> {
     const before = await this.probeOrRetry(this.opts.paths().socketPath);
-    if (before === null) return await this.ensureRunning(trigger);
-    const stopped = await this.stop();
+    if (before === null) return await this.runEnsure(trigger);
+    const stopped = await this.runStop();
     if (stopped.kind !== 'stopped') return stopped;
-    return await this.ensureRunning(trigger);
+    return await this.runEnsure(trigger);
   }
 
   private setState(state: EngineState): EngineState {

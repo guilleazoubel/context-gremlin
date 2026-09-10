@@ -409,6 +409,31 @@ describe('R23 the stop budget', () => {
   });
 });
 
+describe('the serial operation queue', () => {
+  it('holds a triggered start behind an in-flight stop, and reports the two in order', async () => {
+    // SIGTERM is sent but the socket keeps answering: the process has not exited yet, which is
+    // exactly the window in which a concurrent `ensureRunning` used to adopt the dying engine.
+    fake.probes = [identity()];
+    fake.pidFiles = [pidFile()];
+    const stop = manager.stop();
+    const ensure = manager.ensureRunning('auto');
+
+    await fake.advance(2_000);
+    expect(fake.spawns).toHaveLength(0);
+    expect(states.map((s) => s.kind)).toEqual([]);
+    expect(fake.signals).toHaveLength(1);
+
+    fake.probes = [null];
+    fake.spawnedAnswer = identity({ pid: 99 });
+    await fake.advance(2_000);
+
+    expect(await stop).toEqual({ kind: 'stopped' });
+    expect(await ensure).toEqual({ kind: 'running', version: '0.0.1', pid: 99, adopted: false });
+    expect(fake.spawns).toHaveLength(1);
+    expect(states.map((s) => s.kind)).toEqual(['stopped', 'starting', 'running']);
+  });
+});
+
 describe('restart', () => {
   it('starts without a stop when nothing answers', async () => {
     fake.spawnedAnswer = identity();
