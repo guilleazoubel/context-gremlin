@@ -80,6 +80,21 @@ export interface ApiServerDeps {
   eventRing?: EventRing;
   /** Absent for a wiring built without one (every test server that doesn't need it): `GET /config` then 404s. */
   config?: CoreConfig;
+  /**
+   * R1/R21: the identity `GET /version` reports. Captured once, at build
+   * time — `activeRuns` is the only part of that body computed per request.
+   * Absent for a wiring built without one: `GET /version` then 404s.
+   */
+  engineInfo?: EngineInfo;
+}
+
+/** The identity a running engine reports on `GET /version` and records in its `engine.json` lock. */
+export interface EngineInfo {
+  name: string;
+  version: string;
+  pid: number;
+  startedAt: string;
+  socketPath: string;
 }
 
 // Re-exported (not redefined) so every existing importer keeps working while
@@ -486,6 +501,23 @@ async function handleRequest(
     const url = new URL(req.url ?? '/', 'http://localhost');
     const parts = url.pathname.split('/').filter(Boolean);
     const method = req.method;
+
+    // R1: the identity probe. First branch in the chain and free of every
+    // optional dependency, so "did cgremlin-core answer?" is answerable on
+    // any wiring — unlike GET /config, which 404s without a config dep.
+    if (method === 'GET' && parts.length === 1 && parts[0] === 'version') {
+      if (!deps.engineInfo) {
+        sendJson(res, 404, { error: 'version not available' });
+        return;
+      }
+      const { name, version, pid, startedAt, socketPath } = deps.engineInfo;
+      // R21: recomputed per request. Live StageRunner runs PLUS environment
+      // preparations still in flight — a stage still preparing has no active
+      // run for pipeline.stop() to find, yet a restart aborts it.
+      const activeRuns = deps.pipeline.activeSessionIds().length + (deps.environment?.inFlightCount() ?? 0);
+      sendJson(res, 200, { name, version, pid, startedAt, socketPath, activeRuns });
+      return;
+    }
 
     // The server-sent event stream. First branch in the chain, and the only
     // one that hijacks the response: it writes SSE frames and returns without

@@ -16,8 +16,8 @@ import { FakeLocalAppRunner } from '../support/fake-local-app-runner';
 import type { Session } from '../../src/schema/session';
 
 const HOME = '/home/u';
-const SESSIONS_DIR = `${HOME}/.cgremlin/sessions`;
-const STATE_PATH = `${HOME}/.cgremlin/local-app.json`;
+const SESSIONS_DIR = `${HOME}/.cgremlin-core/sessions`;
+const STATE_PATH = `${HOME}/.cgremlin-core/local-app.json`;
 const WT = '/wt/s1';
 const REPO_URL = 'https://github.com/aplaceformom/grace-frontend.git';
 const SLUG = 'aplaceformom/grace-frontend';
@@ -126,7 +126,7 @@ async function harness(opts: {
   const lock = opts.lock ?? new KeyedLock();
   const config = opts.config ?? makeConfig();
 
-  await fs.mkdir(`${HOME}/.cgremlin`, { recursive: true });
+  await fs.mkdir(`${HOME}/.cgremlin-core`, { recursive: true });
   await fs.mkdir(SESSIONS_DIR, { recursive: true });
   await fs.mkdir(WT, { recursive: true });
   await fs.writeFile(`${WT}/package.json`, JSON.stringify({ scripts: { dev: 'next dev' } }));
@@ -587,7 +587,7 @@ describe('EnvironmentService — start, single instance', () => {
   it('writes the state file atomically and reads it back from a fresh instance', async () => {
     const h = await harness();
     await h.service.start(devSession());
-    const leftovers = (await h.fs.readdir(`${HOME}/.cgremlin`)).filter((n) => n.endsWith('.tmp'));
+    const leftovers = (await h.fs.readdir(`${HOME}/.cgremlin-core`)).filter((n) => n.endsWith('.tmp'));
     expect(leftovers).toEqual([]);
     expect((await h.make().status()).sessionId).toBe('s1');
   });

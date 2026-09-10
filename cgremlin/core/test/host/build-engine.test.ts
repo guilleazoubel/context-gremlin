@@ -206,7 +206,7 @@ describe('buildEngine', () => {
     const config = testConfig();
     const engine = buildEngine(config, testAdapters({ localApp, fs }));
     expect(engine.environment).toBeInstanceOf(EnvironmentService);
-    await fs.mkdir('/home/e2e/.cgremlin', { recursive: true });
+    await fs.mkdir('/home/e2e/.cgremlin-core', { recursive: true });
     await fs.writeFile(
       config.localAppStatePath!,
       JSON.stringify({
@@ -239,7 +239,7 @@ describe('buildEngine', () => {
     const fs = new InMemoryFileSystem();
     const config = testConfig();
     const engine = buildEngine(config, testAdapters({ localApp, fs }));
-    await fs.mkdir('/home/e2e/.cgremlin', { recursive: true });
+    await fs.mkdir('/home/e2e/.cgremlin-core', { recursive: true });
     await fs.writeFile(
       config.localAppStatePath!,
       JSON.stringify({

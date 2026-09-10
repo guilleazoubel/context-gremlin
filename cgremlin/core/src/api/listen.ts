@@ -3,13 +3,15 @@ import net from 'node:net';
 import type { Server } from 'node:http';
 
 export class SocketInUseError extends Error {
-  constructor(socketPath: string) {
-    super(`Another process is already listening on '${socketPath}'`);
+  /** `detail` appends a parenthesised explanation — e.g. which lock file named the owner we could not identify. */
+  constructor(socketPath: string, detail?: string) {
+    super(`Another process is already listening on '${socketPath}'${detail === undefined ? '' : ` (${detail})`}`);
     this.name = 'SocketInUseError';
   }
 }
 
-function isSocketLive(socketPath: string): Promise<boolean> {
+/** True when something is accepting connections on `socketPath` right now. Also the lock's "is the recorded owner still serving?" probe (R22). */
+export function isSocketLive(socketPath: string): Promise<boolean> {
   return new Promise((resolve) => {
     const client = net.createConnection(socketPath);
     client.once('connect', () => {

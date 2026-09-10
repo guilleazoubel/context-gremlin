@@ -107,6 +107,9 @@ function testConfig(): CoreConfig {
       worktreesDir: '/worktrees',
       mirrorsDir: '/mirrors',
       socketPath: path.join(dir, 'engine.sock'),
+      // R22's lock bypasses the in-memory adapter by design, so it points at
+      // the test's real mkdtemp dir.
+      enginePidPath: path.join(dir, 'engine.json'),
     },
     '/home/e2e',
   );
@@ -140,6 +143,7 @@ function envConfig(): CoreConfig {
       worktreesDir: '/worktrees',
       mirrorsDir: '/mirrors',
       socketPath: path.join(dir, 'engine.sock'),
+      enginePidPath: path.join(dir, 'engine.json'),
       stateDir: '/state',
       environments: {
         'acme/app': {

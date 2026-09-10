@@ -1,4 +1,6 @@
-import { unlink } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { link, mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
+import { dirname } from 'node:path';
 import { NodeFileSystem } from '../fs/node-file-system';
 import { NodeGitRunner } from '../git/node-git-runner';
 import { NodeGhRunner } from '../gh/node-gh-runner';
@@ -8,10 +10,157 @@ import type { AgentRunner } from '../agent/agent-runner';
 import type { CoreConfig } from '../config/core-config';
 import { redactBypassUrls } from '../config/core-config';
 import { NodeLocalAppRunner } from '../env/node-local-app-runner';
-import { listenOnSocket } from '../api/listen';
+import { isSocketLive, listenOnSocket, SocketInUseError } from '../api/listen';
 import { buildEngine, type BuildEngineOptions, type Engine, type EngineAdapters } from './build-engine';
 
 const DEFAULT_SERVER_CLOSE_TIMEOUT_MS = 5000;
+
+/** The mode the lock file is created with — the same 0600 `writeCoreConfig` uses for core.json. */
+const ENGINE_LOCK_MODE = 0o600;
+
+interface EngineLockRecord {
+  pid: number;
+  version: string;
+  socketPath: string;
+  startedAt: string;
+}
+
+/**
+ * W8's classification, reused verbatim: ESRCH means the target is already
+ * gone, EPERM means it is alive but belongs to somebody else. Anything else
+ * is a real fault and still throws.
+ * (`src/env/node-local-app-runner.ts:249-262`.)
+ */
+function pidLiveness(pid: number): 'alive' | 'gone' | 'foreign' {
+  try {
+    process.kill(pid, 0);
+    return 'alive';
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ESRCH') return 'gone';
+    if (code === 'EPERM') return 'foreign';
+    throw err;
+  }
+}
+
+/**
+ * Reads a pid's command line — the second half of "is this lock's owner
+ * really our engine?". `null` means we could not find out (ps failed, timed
+ * out, or the pid vanished mid-call), which callers treat conservatively.
+ */
+export type ProcessCommandReader = (pid: number) => Promise<string | null>;
+
+const PS_TIMEOUT_MS = 2000;
+
+const nodeProcessCommand: ProcessCommandReader = (pid) =>
+  new Promise((resolve) => {
+    execFile('ps', ['-o', 'command=', '-p', String(pid)], { timeout: PS_TIMEOUT_MS }, (err, stdout) => {
+      if (err) {
+        resolve(null);
+        return;
+      }
+      const command = stdout.trim();
+      resolve(command === '' ? null : command);
+    });
+  });
+
+/**
+ * A pid alone proves nothing: pids get reused, and a crashed engine leaves
+ * its `engine.json` behind. Without this check a recycled pid would make
+ * every later `serve` refuse forever until somebody deleted the file by hand.
+ * Both shapes the engine runs as: the CLI (`.../bin/cgremlin-core serve`) and
+ * the bundle the editor spawns (`... engine.js serve`).
+ */
+function looksLikeEngineCommand(command: string): boolean {
+  return command.includes('cgremlin-core') || command.includes('engine.js');
+}
+
+async function readLockRecord(lockPath: string): Promise<EngineLockRecord | null> {
+  let raw: string;
+  try {
+    raw = await readFile(lockPath, 'utf8');
+  } catch {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(raw) as Partial<EngineLockRecord>;
+    if (typeof parsed.pid !== 'number' || typeof parsed.socketPath !== 'string') return null;
+    return parsed as EngineLockRecord;
+  } catch {
+    return null;
+  }
+}
+
+async function writeLockRecord(lockPath: string, record: EngineLockRecord): Promise<void> {
+  // Exclusive create, and the file is COMPLETE the instant it exists. A plain
+  // open(path, 'wx') would also be exclusive, but it publishes a zero-byte
+  // file that the loser can read before the winner has written a word — and a
+  // record with no readable pid looks exactly like a dead owner to take over,
+  // which is how two engines end up racing `listen`. So: write a temp file
+  // first, then `link` it into place, which is atomic and fails EEXIST.
+  // SessionFileSystem has no exclusive create, so this goes straight to
+  // node:fs/promises — the same bypass serve() already makes for the socket.
+  const tmpPath = `${lockPath}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
+  await writeFile(tmpPath, JSON.stringify(record, null, 2), { mode: ENGINE_LOCK_MODE });
+  try {
+    await link(tmpPath, lockPath);
+  } finally {
+    await unlink(tmpPath).catch(() => undefined);
+  }
+}
+
+/**
+ * R22: `engine.json` is the lock, and it is taken BEFORE `listenOnSocket`.
+ * `listenOnSocket` cannot be the primitive — its liveness test is a *connect*
+ * and it unlinks a socket nobody answers, so two engines starting at the same
+ * moment can both proceed and the loser can unlink the winner's fresh socket.
+ *
+ * On EEXIST the recorded owner is probed two ways — is its pid alive, and does
+ * its socket answer. Either signal positive refuses this boot with
+ * `SocketInUseError`; provably negative on both takes the lock over, once.
+ */
+async function acquireEngineLock(
+  lockPath: string,
+  record: EngineLockRecord,
+  readProcessCommand: ProcessCommandReader,
+): Promise<void> {
+  await mkdir(dirname(lockPath), { recursive: true });
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await writeLockRecord(lockPath, record);
+      return;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+    }
+    const owner = await readLockRecord(lockPath);
+    // Somebody beat us to the retake — they are alive by definition. Report
+    // THEIR socket, not ours: ours is the one nobody is listening on.
+    if (attempt > 0) throw new SocketInUseError(owner?.socketPath ?? record.socketPath);
+    // An unreadable or truncated file proves no live owner by itself, but its
+    // socket still might be served — so the socket probe runs either way.
+    const ownerSocket = owner?.socketPath ?? record.socketPath;
+    if (owner !== null && pidLiveness(owner.pid) !== 'gone') {
+      // Alive and serving: unambiguously the owner, no need to ask ps.
+      if (await isSocketLive(ownerSocket)) throw new SocketInUseError(ownerSocket);
+      // Alive but silent: either an engine still booting, or a stranger who
+      // inherited the pid after a crash left this file behind.
+      const command = await readProcessCommand(owner.pid);
+      if (command === null) {
+        throw new SocketInUseError(
+          ownerSocket,
+          `pid ${owner.pid} recorded in ${lockPath} could not be identified; delete that file if no engine is running`,
+        );
+      }
+      if (looksLikeEngineCommand(command)) throw new SocketInUseError(ownerSocket);
+      // Reused pid: the lock is stale, take it over.
+    } else if (await isSocketLive(ownerSocket)) {
+      throw new SocketInUseError(ownerSocket);
+    }
+    await unlink(lockPath).catch((err: NodeJS.ErrnoException) => {
+      if (err.code !== 'ENOENT') throw err;
+    });
+  }
+}
 
 export interface ServeHandle {
   socketPath: string;
@@ -28,6 +177,8 @@ export interface ServeOptions {
   makeTickable?: BuildEngineOptions['makeTickable'];
   /** How long close() waits for server.close() before giving up and logging shutdown.timeout. Default 5000. */
   serverCloseTimeoutMs?: number;
+  /** Overrides the real `ps -o command= -p <pid>` the lock uses to tell an engine from a reused pid — a test seam. */
+  readProcessCommand?: ProcessCommandReader;
 }
 
 function logLine(log: (line: string) => void, type: string, payload: Record<string, unknown> = {}): void {
@@ -72,7 +223,8 @@ export async function serve(config: CoreConfig, adapters: EngineAdapters, opts: 
   await adapters.fs.mkdir(mirrorsDir, { recursive: true });
 
   const engine = buildEngine(config, adapters, { makeTickable: opts.makeTickable });
-  const { server, scheduler, pipeline, events, environment, attention } = engine;
+  const { server, scheduler, pipeline, events, environment, attention, engineInfo } = engine;
+  const lockPath = config.enginePidPath!;
 
   const unsubscribers: Array<() => void> = [
     events.on('session.created', (e) => logLine(opts.log, 'session.created', { sessionId: e.session.id })),
@@ -111,37 +263,63 @@ export async function serve(config: CoreConfig, adapters: EngineAdapters, opts: 
     );
   }
 
-  // R13: before anything can reach us, reap the process group a previous
-  // engine recorded and then died without stopping — and only that one. A
-  // failure here (e.g. a stuck `ps`/kill call) must not abort boot — the
-  // engine should still come up and serve, just without having reaped.
+  // R22: the lock comes first — before the reap, before the claim clearing
+  // and before we listen. A losing second engine must not clear the winner's
+  // human-turn claims on its way to being refused.
+  await acquireEngineLock(
+    lockPath,
+    {
+      pid: engineInfo.pid,
+      version: engineInfo.version,
+      socketPath: engineInfo.socketPath,
+      startedAt: engineInfo.startedAt,
+    },
+    opts.readProcessCommand ?? nodeProcessCommand,
+  );
+  async function removeLock(): Promise<void> {
+    await unlink(lockPath).catch((err: NodeJS.ErrnoException) => {
+      if (err.code !== 'ENOENT') throw err;
+    });
+  }
+  // Everything from here to `listen` returns by throwing, before any handle
+  // exists, so a failure has to remove the lock this call created (R22).
   try {
-    const reap = await environment?.reconcileOrphans();
-    if (reap?.reaped) {
-      const { sessionId, pid, pgid, port } = reap.reaped;
-      logLine(opts.log, 'local.reaped', { sessionId, pid, pgid, port, alreadyDead: reap.alreadyDead });
+    // R13: before anything can reach us, reap the process group a previous
+    // engine recorded and then died without stopping — and only that one. A
+    // failure here (e.g. a stuck `ps`/kill call) must not abort boot — the
+    // engine should still come up and serve, just without having reaped.
+    try {
+      const reap = await environment?.reconcileOrphans();
+      if (reap?.reaped) {
+        const { sessionId, pid, pgid, port } = reap.reaped;
+        logLine(opts.log, 'local.reaped', { sessionId, pid, pgid, port, alreadyDead: reap.alreadyDead });
+      }
+      // W3: a record we can no longer prove is ours (it predates this boot and
+      // does not own its port) was dropped without signalling anything — say so,
+      // because a pid recorded before a reboot may now belong to anybody.
+      if (reap?.stale) {
+        const { sessionId, pid, pgid, port } = reap.stale;
+        logLine(opts.log, 'local.reap_stale', { sessionId, pid, pgid, port });
+      }
+    } catch (err) {
+      logLine(opts.log, 'local.reap_failed', { error: err instanceof Error ? err.message : String(err) });
     }
-    // W3: a record we can no longer prove is ours (it predates this boot and
-    // does not own its port) was dropped without signalling anything — say so,
-    // because a pid recorded before a reboot may now belong to anybody.
-    if (reap?.stale) {
-      const { sessionId, pid, pgid, port } = reap.stale;
-      logLine(opts.log, 'local.reap_stale', { sessionId, pid, pgid, port });
+
+    // R20: no extension can hold a human-turn claim across an engine restart it
+    // did not survive, so every claim is cleared BEFORE anything can reach us —
+    // otherwise an orphaned claim would refuse every stage on that session with
+    // nothing left alive to release it.
+    const clearedClaims = await pipeline.clearAllHumanTurns();
+    if (clearedClaims.count > 0) {
+      logLine(opts.log, 'conversation.claims_cleared', clearedClaims);
     }
+
+    await listenOnSocket(server, socketPath);
   } catch (err) {
-    logLine(opts.log, 'local.reap_failed', { error: err instanceof Error ? err.message : String(err) });
+    await removeLock();
+    throw err;
   }
 
-  // R20: no extension can hold a human-turn claim across an engine restart it
-  // did not survive, so every claim is cleared BEFORE anything can reach us —
-  // otherwise an orphaned claim would refuse every stage on that session with
-  // nothing left alive to release it.
-  const clearedClaims = await pipeline.clearAllHumanTurns();
-  if (clearedClaims.count > 0) {
-    logLine(opts.log, 'conversation.claims_cleared', clearedClaims);
-  }
-
-  await listenOnSocket(server, socketPath);
   scheduler.start();
   // Subscribes the attention model to the engine events and starts the
   // session-directory watch it owns (R7). Nothing here starts an agent.
@@ -223,6 +401,10 @@ export async function serve(config: CoreConfig, adapters: EngineAdapters, opts: 
       await unlink(socketPath).catch((err: NodeJS.ErrnoException) => {
         if (err.code !== 'ENOENT') throw err;
       });
+      // R22: the lock is released in the same finally that unlinks the
+      // socket — a close() that failed halfway must not leave a state dir
+      // that refuses every later engine.
+      await removeLock();
       for (const off of unsubscribers) off();
       for (const { sig, handler } of processHandlers) process.removeListener(sig, handler);
     }
