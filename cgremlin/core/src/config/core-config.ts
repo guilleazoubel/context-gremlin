@@ -78,6 +78,10 @@ export const CoreConfigSchema = z.object({
   environments: z.record(z.string().regex(/^[^/\s]+\/[^/\s]+$/), RepoEnvironmentSchema).default({}),
   localAppStatePath: z.string().optional(),
   attentionAcksPath: z.string().optional(),
+  // R20: how long a human-turn claim stays live before any stage that trips
+  // over it reaps it. Optional-with-a-default, so every core.json on disk
+  // keeps loading.
+  humanTurnTtlMs: z.number().int().positive().default(600_000),
 });
 
 export type CoreConfig = z.infer<typeof CoreConfigSchema>;

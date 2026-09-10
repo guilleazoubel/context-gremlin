@@ -174,7 +174,7 @@ async function createDelayedServer(socketFileName: string, opts: { inventory?: b
     fs: delayedFs,
     git,
     events,
-    config: { sessionsDir: '/sessions', worktreesDir: '/worktrees', defaultBaseRef: 'origin/main' },
+    config: { sessionsDir: '/sessions', worktreesDir: '/worktrees', defaultBaseRef: 'origin/main' , runnerKind: 'claude-code', humanTurnTtlMs: 600_000 },
     lock,
   });
 
@@ -403,7 +403,7 @@ describe('API server', () => {
       fs: delayedFs,
       git,
       events: delayedEvents,
-      config: { sessionsDir: '/sessions', worktreesDir: '/worktrees', defaultBaseRef: 'origin/main' },
+      config: { sessionsDir: '/sessions', worktreesDir: '/worktrees', defaultBaseRef: 'origin/main' , runnerKind: 'claude-code', humanTurnTtlMs: 600_000 },
       lock: delayedLock,
     });
     const delayedServer = createApiServer({
@@ -1280,4 +1280,101 @@ it('F5/M1 + F7: GET /prs and GET /prs/status fall back to inventoryStore.load() 
     await new Promise<void>((resolve) => freshServer.close(() => resolve()));
     await rm(freshSocketPath, { force: true });
   }
+});
+
+const CLAIM_LIVE = {
+  claimedAt: FIXED_NOW().toISOString(),
+  expiresAt: new Date(FIXED_NOW().getTime() + 600_000).toISOString(),
+};
+
+function devSessionForConversation(id: string, humanTurn: typeof CLAIM_LIVE | null): Session {
+  return {
+    schemaVersion: 2, id, mode: 'development', createdAt: '2026-09-04T10:00:00.000Z',
+    workspace: { repoUrl: 'git@github.com:acme/app.git', worktreePath: `${WORKTREES_DIR}/${id}`, branch: 'feature/x' },
+    lineage: { pipelineId: id, parentSessionId: null, ticket: 'APP-1' },
+    stageStatus: 'active',
+    agent: { runner: 'claude-code', resumeId: 'resume-1', humanTurn },
+    lastRun: null, pr: null,
+  };
+}
+
+describe('conversation routes (R9, R12, R20)', () => {
+  it('GET /sessions/:id/conversation returns the resume contract, 404 for an unknown session', async () => {
+    await h.store.save(devSessionForConversation('dev-conv-1', CLAIM_LIVE));
+    const res = await request('GET', '/sessions/dev-conv-1/conversation');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      runner: 'claude-code', resumeId: 'resume-1', worktreePath: `${WORKTREES_DIR}/dev-conv-1`, claimed: true,
+    });
+    expect((await request('GET', '/sessions/nope/conversation')).status).toBe(404);
+  });
+
+  it('POST /sessions/:id/conversation/claim returns 200 with the session, 404 for an unknown session', async () => {
+    await h.store.save(devSessionForConversation('dev-conv-2', null));
+    const res = await request('POST', '/sessions/dev-conv-2/conversation/claim');
+    expect(res.status).toBe(200);
+    expect((res.body as { session: Session }).session.agent?.humanTurn).toEqual(CLAIM_LIVE);
+    expect((await request('POST', '/sessions/nope/conversation/claim')).status).toBe(404);
+  });
+
+  it('POST /sessions/:id/conversation/claim answers 409 while a run is in flight (R9)', async () => {
+    await h.store.save(devSessionForConversation('dev-conv-3', null));
+    const run = h.service.runDevelop('dev-conv-3');
+    run.catch(() => undefined);
+    await flush();
+    const res = await request('POST', '/sessions/dev-conv-3/conversation/claim');
+    expect(res.status).toBe(409);
+    expect((await h.store.load('dev-conv-3')).agent?.humanTurn).toBeNull();
+    h.runner.emitExit(h.runner.lastHandle(), { code: 0, signal: null });
+    await run;
+  });
+
+  it('POST /sessions/:id/conversation/release returns 200 and clears the claim, 404 for an unknown session', async () => {
+    await h.store.save(devSessionForConversation('dev-conv-4', CLAIM_LIVE));
+    const res = await request('POST', '/sessions/dev-conv-4/conversation/release');
+    expect(res.status).toBe(200);
+    expect((res.body as { session: Session }).session.agent?.humanTurn).toBeNull();
+    expect((await request('POST', '/sessions/nope/conversation/release')).status).toBe(404);
+  });
+
+  it('POST /sessions/:id/run and /retry answer 409 with the message for a claimed session', async () => {
+    await h.store.save(devSessionForConversation('dev-conv-5', CLAIM_LIVE));
+    const runRes = await request('POST', '/sessions/dev-conv-5/run', { stage: 'develop' });
+    expect(runRes.status).toBe(409);
+    expect((runRes.body as { error: string }).error).toMatch(/human holds the agent conversation/);
+
+    await h.store.save({
+      ...devSessionForConversation('dev-conv-6', CLAIM_LIVE),
+      lastRun: {
+        stage: 'develop', startedAt: FIXED_NOW().toISOString(), finishedAt: FIXED_NOW().toISOString(),
+        exitCode: 1, signal: null, outcome: 'failed', error: 'boom',
+      },
+    });
+    expect((await request('POST', '/sessions/dev-conv-6/retry')).status).toBe(409);
+  });
+
+  it('POST /sessions/:id/promote answers 409 for a claimed investigation', async () => {
+    const inv = migrateV1ToV2({
+      schemaVersion: 1, id: 'inv-conv-1', mode: 'investigation', createdAt: '2026-09-04T10:00:00.000Z',
+      workspace: { repoUrl: 'git@github.com:acme/app.git', worktreePath: `${WORKTREES_DIR}/inv-conv-1` },
+      lineage: { pipelineId: 'inv-conv-1', parentSessionId: null, ticket: 'APP-1' },
+      stageStatus: 'approved',
+    });
+    await h.store.save({ ...inv, agent: { runner: 'claude-code', resumeId: null, humanTurn: CLAIM_LIVE } });
+    const res = await request('POST', '/sessions/inv-conv-1/promote');
+    expect(res.status).toBe(409);
+    expect((await h.store.load('inv-conv-1')).stageStatus).toBe('approved');
+  });
+
+  it('none of the three conversation branches takes a route-layer lock (KeyedLock is not re-entrant)', async () => {
+    const source = await import('node:fs/promises').then((fs) =>
+      fs.readFile(path.join(__dirname, '../../src/api/server.ts'), 'utf8'),
+    );
+    const handler = /async function handleConversationRoute[\s\S]*?\n}\n/.exec(source);
+    expect(handler, 'handleConversationRoute must exist').not.toBeNull();
+    expect(handler![0]).not.toContain('withLock');
+    const dispatch = /const conversationAction = [\s\S]*?\n {4}}\n/.exec(source);
+    expect(dispatch, 'the conversation dispatch must exist').not.toBeNull();
+    expect(dispatch![0]).not.toContain('withLock');
+  });
 });

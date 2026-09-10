@@ -9,7 +9,7 @@ import { IllegalTransitionError } from '../../src/schema/pipeline';
 import { ValidationError } from '../../src/api/validation';
 import { PlanGateError } from '../../src/pipeline/plan-gate';
 import { RunInProgressError, WorkspaceMissingError } from '../../src/pipeline/stage-runner';
-import { UnsupportedStageError } from '../../src/pipeline/pipeline-service';
+import { HumanTurnInProgressError, UnsupportedStageError } from '../../src/pipeline/pipeline-service';
 import { WorkspaceInUseError } from '../../src/workspace/workspace-in-use';
 import { ArtifactNotFoundError } from '../../src/api/artifacts';
 import { TickInProgressError } from '../../src/discovery/scheduler';
@@ -71,6 +71,12 @@ describe('mapErrorToHttp', () => {
 
   it('maps WorkspaceInUseError to 409', () => {
     expect(mapErrorToHttp(new WorkspaceInUseError('/w', ['inv-1'])).status).toBe(409);
+  });
+
+  it('maps HumanTurnInProgressError to 409 with its message', () => {
+    const result = mapErrorToHttp(new HumanTurnInProgressError('dev-1'));
+    expect(result.status).toBe(409);
+    expect(result.body.error).toMatch(/dev-1/);
   });
 
   it('maps UnsupportedStageError to 409', () => {

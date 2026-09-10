@@ -16,7 +16,7 @@ function inv(overrides: Partial<{ worktreePath: string | undefined; resumeId: st
     stageStatus: 'findings',
   });
   if ('worktreePath' in overrides) s.workspace = { ...s.workspace, worktreePath: overrides.worktreePath };
-  if (overrides.resumeId !== undefined) s.agent = { runner: 'claude-code', resumeId: overrides.resumeId };
+  if (overrides.resumeId !== undefined) s.agent = { runner: 'claude-code', resumeId: overrides.resumeId, humanTurn: null };
   return s;
 }
 
@@ -76,7 +76,7 @@ describe('StageRunner.run', () => {
       stage: 'findings', startedAt: '2026-09-04T12:00:00.000Z', finishedAt: '2026-09-04T12:00:00.000Z',
       exitCode: 0, signal: null, outcome: 'succeeded', error: null,
     });
-    expect(session.agent).toEqual({ runner: 'claude-code', resumeId: 'claude-sess-1' });
+    expect(session.agent).toEqual({ runner: 'claude-code', resumeId: 'claude-sess-1', humanTurn: null });
     expect(started).toEqual(['findings']); expect(finished).toEqual(['succeeded']);
   });
 
@@ -100,12 +100,12 @@ describe('StageRunner.run', () => {
     runner.emitExit(h, { code: 0, signal: null });
     const { session, outcome } = await p;
     expect(outcome).toBe('succeeded');
-    expect(session.agent).toEqual({ runner: 'codex', resumeId: 'codex-sess-1' });
+    expect(session.agent).toEqual({ runner: 'codex', resumeId: 'codex-sess-1', humanTurn: null });
     expect(session.lastRun).toMatchObject({
       outcome: 'succeeded',
       error: 'runner changed from claude-code to codex; started a fresh conversation',
     });
-    expect((await store.load('inv-1')).agent).toEqual({ runner: 'codex', resumeId: 'codex-sess-1' });
+    expect((await store.load('inv-1')).agent).toEqual({ runner: 'codex', resumeId: 'codex-sess-1', humanTurn: null });
   });
 
   it('same-runner resume still seeds and completes with no runner-change note', async () => {
@@ -116,7 +116,7 @@ describe('StageRunner.run', () => {
     expect(runner.getContext(h).resumeId).toBe('prev');
     runner.emitExit(h, { code: 0, signal: null });
     const { session } = await p;
-    expect(session.agent).toEqual({ runner: 'claude-code', resumeId: 'prev' });
+    expect(session.agent).toEqual({ runner: 'claude-code', resumeId: 'prev', humanTurn: null });
     expect(session.lastRun).toMatchObject({ outcome: 'succeeded', error: null });
   });
 
@@ -260,5 +260,35 @@ describe('StageRunner.run', () => {
     const persisted = await store.load('inv-1');
     expect(persisted.stageStatus).toBe('planning');
     expect(persisted.lastRun).toMatchObject({ outcome: 'succeeded' });
+  });
+});
+
+describe('MG-A7 human-turn-survives-a-run', () => {
+  it("a claim survives both of run()'s agent-object rebuilds, and resumeId is still recorded", async () => {
+    const CLAIM = { claimedAt: '2026-09-10T09:00:00.000Z', expiresAt: '2026-09-10T09:10:00.000Z' };
+    const { store, runner, events, sr, lock } = await setup(inv({ resumeId: 'prev' }));
+    // R9 refuses `claimConversation` while a run is live, so a mid-run claim
+    // is not expressible: the claim is written BEFORE the run starts, through
+    // the store, under the SAME per-session lock every other writer takes.
+    await lock.withLock('inv-1', async () => {
+      const s = await store.load('inv-1');
+      await store.save({ ...s, agent: { runner: 'claude-code', resumeId: 'prev', humanTurn: CLAIM } });
+    });
+
+    let seededAgent: unknown;
+    events.on('run.started', (e) => { seededAgent = e.session.agent; });
+    const p = sr.run({ sessionId: 'inv-1', stage: 'findings', brief: null, prompt: 'go' });
+    await flush();
+    // The pre-run seed (stage-runner.ts:103) — the `running` snapshot.
+    expect(seededAgent).toEqual({ runner: 'claude-code', resumeId: 'prev', humanTurn: CLAIM });
+
+    const h = runner.lastHandle();
+    runner.setResumeId(h, 'claude-sess-9');
+    runner.emitExit(h, { code: 0, signal: null });
+    await p;
+    // The post-exit merge (stage-runner.ts:165).
+    expect((await store.load('inv-1')).agent).toEqual({
+      runner: 'claude-code', resumeId: 'claude-sess-9', humanTurn: CLAIM,
+    });
   });
 });

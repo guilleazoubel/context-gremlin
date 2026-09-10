@@ -100,7 +100,14 @@ export class StageRunner {
         // succeeds (a failed/stopped run keeps its own error text).
         const runnerMismatch = priorAgent !== null && priorAgent.runner !== this.deps.runnerKind;
         const seedResumeId = runnerMismatch ? null : (priorAgent?.resumeId ?? null);
-        session = { ...session, lastRun: running, agent: { runner: this.deps.runnerKind, resumeId: seedResumeId } };
+        // `humanTurn` is carried forward, never re-derived: this rebuild
+        // would otherwise silently drop a human's claim on the conversation
+        // (R20/MG-A7). Same at the post-exit merge below.
+        session = {
+          ...session,
+          lastRun: running,
+          agent: { runner: this.deps.runnerKind, resumeId: seedResumeId, humanTurn: priorAgent?.humanTurn ?? null },
+        };
         await this.deps.store.save(session);
         this.deps.events.emit('run.started', { session, stage });
         runStarted = true;
@@ -162,7 +169,13 @@ export class StageRunner {
         // only lastRun/agent, never clobbering a concurrent stageStatus change.
         session = await this.lock.withLock(sessionId, async () => {
           const fresh = await this.deps.store.load(sessionId);
-          const merged: Session = { ...fresh, lastRun: finishedLastRun, agent: { runner: this.deps.runnerKind, resumeId } };
+          const merged: Session = {
+            ...fresh,
+            lastRun: finishedLastRun,
+            // From `fresh`, not from the pre-run snapshot: a human may have
+            // claimed (or released) the conversation while the agent ran.
+            agent: { runner: this.deps.runnerKind, resumeId, humanTurn: fresh.agent?.humanTurn ?? null },
+          };
           await this.deps.store.save(merged);
           return merged;
         });

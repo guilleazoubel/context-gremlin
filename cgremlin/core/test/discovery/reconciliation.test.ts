@@ -10,6 +10,15 @@ import { migrateV1ToV2, type ReviewSession, type Session } from '../../src/schem
 import type { DevelopmentPhase, InvestigationPhase, ReviewPhase } from '../../src/schema/pipeline';
 
 const fixturesDir = path.join(__dirname, '../fixtures/gh');
+const NOW = new Date('2026-09-10T12:00:00.000Z');
+/** A claim that is still live at NOW. */
+const LIVE_CLAIM = { claimedAt: '2026-09-10T11:55:00.000Z', expiresAt: '2026-09-10T12:05:00.000Z' };
+/** A claim whose TTL ran out before NOW. */
+const EXPIRED_CLAIM = { claimedAt: '2026-09-10T11:00:00.000Z', expiresAt: '2026-09-10T11:10:00.000Z' };
+
+function claimed<S extends Session>(session: S, humanTurn: { claimedAt: string; expiresAt: string } | null): S {
+  return { ...session, agent: { runner: 'claude-code' as const, resumeId: null, humanTurn } };
+}
 const baseView = JSON.parse(readFileSync(path.join(fixturesDir, 'pr-view-open-approved.json'), 'utf8'));
 
 function viewJson(overrides: Record<string, unknown> = {}): string {
@@ -83,7 +92,7 @@ function investigationSession(id: string, stageStatus: InvestigationPhase, repo 
 describe('planReconciliation', () => {
   it('MERGED dismisses the review with no source', () => {
     const review = reviewSession({ stageStatus: 'ready' });
-    const { actions, skipped } = planReconciliation({ review, view: view({ state: 'MERGED' }), source: null });
+    const { actions, skipped } = planReconciliation({ now: NOW, review, view: view({ state: 'MERGED' }), source: null });
     expect(actions).toEqual([{ type: 'transition', sessionId: review.id, to: 'dismissed', reason: expect.any(String) }]);
     expect(skipped).toEqual([]);
   });
@@ -91,7 +100,7 @@ describe('planReconciliation', () => {
   it('MERGED with a development source at pr_opened dismisses the review and merges the source', () => {
     const review = reviewSession({ stageStatus: 'ready', parentSessionId: 'dev-1' });
     const source = developmentSession('dev-1', 'pr_opened');
-    const { actions, skipped } = planReconciliation({ review, view: view({ state: 'MERGED' }), source });
+    const { actions, skipped } = planReconciliation({ now: NOW, review, view: view({ state: 'MERGED' }), source });
     expect(actions).toEqual([
       { type: 'transition', sessionId: review.id, to: 'dismissed', reason: expect.any(String) },
       { type: 'transition', sessionId: 'dev-1', to: 'merged', reason: expect.any(String) },
@@ -102,7 +111,7 @@ describe('planReconciliation', () => {
   it('MERGED with a development source at superseded also merges it', () => {
     const review = reviewSession({ stageStatus: 'ready', parentSessionId: 'dev-1' });
     const source = developmentSession('dev-1', 'superseded');
-    const { actions } = planReconciliation({ review, view: view({ state: 'MERGED' }), source });
+    const { actions } = planReconciliation({ now: NOW, review, view: view({ state: 'MERGED' }), source });
     expect(actions).toEqual([
       { type: 'transition', sessionId: review.id, to: 'dismissed', reason: expect.any(String) },
       { type: 'transition', sessionId: 'dev-1', to: 'merged', reason: expect.any(String) },
@@ -112,7 +121,7 @@ describe('planReconciliation', () => {
   it('MERGED with a development source at active also merges it (Phase 3a never records pr_opened, so active must not get stranded)', () => {
     const review = reviewSession({ stageStatus: 'ready', parentSessionId: 'dev-1' });
     const source = developmentSession('dev-1', 'active');
-    const { actions, skipped } = planReconciliation({ review, view: view({ state: 'MERGED' }), source });
+    const { actions, skipped } = planReconciliation({ now: NOW, review, view: view({ state: 'MERGED' }), source });
     expect(actions).toEqual([
       { type: 'transition', sessionId: review.id, to: 'dismissed', reason: expect.any(String) },
       { type: 'transition', sessionId: 'dev-1', to: 'merged', reason: expect.any(String) },
@@ -123,7 +132,7 @@ describe('planReconciliation', () => {
   it('MERGED with an investigation source leaves the source untouched', () => {
     const review = reviewSession({ stageStatus: 'ready', parentSessionId: 'inv-1' });
     const source = investigationSession('inv-1', 'approved');
-    const { actions, skipped } = planReconciliation({ review, view: view({ state: 'MERGED' }), source });
+    const { actions, skipped } = planReconciliation({ now: NOW, review, view: view({ state: 'MERGED' }), source });
     expect(actions).toEqual([{ type: 'transition', sessionId: review.id, to: 'dismissed', reason: expect.any(String) }]);
     expect(skipped).toEqual([]);
   });
@@ -131,7 +140,7 @@ describe('planReconciliation', () => {
   it('CLOSED (not merged) dismisses the review and abandons a non-terminal development source', () => {
     const review = reviewSession({ stageStatus: 'changes_requested', parentSessionId: 'dev-1' });
     const source = developmentSession('dev-1', 'active');
-    const { actions, skipped } = planReconciliation({ review, view: view({ state: 'CLOSED' }), source });
+    const { actions, skipped } = planReconciliation({ now: NOW, review, view: view({ state: 'CLOSED' }), source });
     expect(actions).toEqual([
       { type: 'transition', sessionId: review.id, to: 'dismissed', reason: expect.any(String) },
       { type: 'transition', sessionId: 'dev-1', to: 'abandoned', reason: expect.any(String) },
@@ -142,13 +151,13 @@ describe('planReconciliation', () => {
   it('CLOSED with an investigation source leaves the source untouched', () => {
     const review = reviewSession({ stageStatus: 'changes_requested', parentSessionId: 'inv-1' });
     const source = investigationSession('inv-1', 'plan_ready');
-    const { actions } = planReconciliation({ review, view: view({ state: 'CLOSED' }), source });
+    const { actions } = planReconciliation({ now: NOW, review, view: view({ state: 'CLOSED' }), source });
     expect(actions).toEqual([{ type: 'transition', sessionId: review.id, to: 'dismissed', reason: expect.any(String) }]);
   });
 
   it('OPEN + APPROVED from ready approves the review', () => {
     const review = reviewSession({ stageStatus: 'ready' });
-    const { actions, skipped } = planReconciliation({
+    const { actions, skipped } = planReconciliation({ now: NOW,
       review, view: view({ state: 'OPEN', reviewDecision: 'APPROVED' }), source: null,
     });
     expect(actions).toEqual([{ type: 'transition', sessionId: review.id, to: 'approved', reason: expect.any(String) }]);
@@ -157,7 +166,7 @@ describe('planReconciliation', () => {
 
   it('OPEN + APPROVED from queued approves the review (an external approval is a fact regardless of local phase)', () => {
     const review = reviewSession({ stageStatus: 'queued' });
-    const { actions, skipped } = planReconciliation({
+    const { actions, skipped } = planReconciliation({ now: NOW,
       review, view: view({ state: 'OPEN', reviewDecision: 'APPROVED' }), source: null,
     });
     expect(actions).toEqual([{ type: 'transition', sessionId: review.id, to: 'approved', reason: expect.any(String) }]);
@@ -166,7 +175,7 @@ describe('planReconciliation', () => {
 
   it('OPEN + APPROVED from changes_requested approves the review', () => {
     const review = reviewSession({ stageStatus: 'changes_requested' });
-    const { actions, skipped } = planReconciliation({
+    const { actions, skipped } = planReconciliation({ now: NOW,
       review, view: view({ state: 'OPEN', reviewDecision: 'APPROVED' }), source: null,
     });
     expect(actions).toEqual([{ type: 'transition', sessionId: review.id, to: 'approved', reason: expect.any(String) }]);
@@ -175,7 +184,7 @@ describe('planReconciliation', () => {
 
   it('OPEN + APPROVED from failed approves the review', () => {
     const review = reviewSession({ stageStatus: 'failed' });
-    const { actions, skipped } = planReconciliation({
+    const { actions, skipped } = planReconciliation({ now: NOW,
       review, view: view({ state: 'OPEN', reviewDecision: 'APPROVED' }), source: null,
     });
     expect(actions).toEqual([{ type: 'transition', sessionId: review.id, to: 'approved', reason: expect.any(String) }]);
@@ -184,21 +193,21 @@ describe('planReconciliation', () => {
 
   it('MERGED from queued dismisses the review (dismissed is now reachable from queued too)', () => {
     const review = reviewSession({ stageStatus: 'queued' });
-    const { actions, skipped } = planReconciliation({ review, view: view({ state: 'MERGED' }), source: null });
+    const { actions, skipped } = planReconciliation({ now: NOW, review, view: view({ state: 'MERGED' }), source: null });
     expect(actions).toEqual([{ type: 'transition', sessionId: review.id, to: 'dismissed', reason: expect.any(String) }]);
     expect(skipped).toEqual([]);
   });
 
   it('forbidden transition guard: an already-approved review with a MERGED view is skipped, not emitted (approved cannot go to dismissed)', () => {
     const review = reviewSession({ stageStatus: 'approved' });
-    const { actions, skipped } = planReconciliation({ review, view: view({ state: 'MERGED' }), source: null });
+    const { actions, skipped } = planReconciliation({ now: NOW, review, view: view({ state: 'MERGED' }), source: null });
     expect(actions).toEqual([]);
     expect(skipped).toEqual([{ sessionId: review.id, to: 'dismissed', why: expect.any(String) }]);
   });
 
   it('OPEN with a new head sha from ready requests a rereview', () => {
     const review = reviewSession({ stageStatus: 'ready', reviewedSha: 'b'.repeat(40) });
-    const { actions } = planReconciliation({
+    const { actions } = planReconciliation({ now: NOW,
       review, view: view({ state: 'OPEN', pr: { ...view().pr, headSha: 'c'.repeat(40) } }), source: null,
     });
     expect(actions).toEqual([{ type: 'rereview', sessionId: review.id, reason: expect.any(String) }]);
@@ -206,7 +215,7 @@ describe('planReconciliation', () => {
 
   it('mutation guard: OPEN with a new head sha from queued does NOT request a rereview', () => {
     const review = reviewSession({ stageStatus: 'queued', reviewedSha: 'b'.repeat(40) });
-    const { actions, skipped } = planReconciliation({
+    const { actions, skipped } = planReconciliation({ now: NOW,
       review, view: view({ state: 'OPEN', pr: { ...view().pr, headSha: 'c'.repeat(40) } }), source: null,
     });
     expect(actions).toEqual([]);
@@ -215,7 +224,7 @@ describe('planReconciliation', () => {
 
   it('an already-approved review with a new head sha is not re-reviewed', () => {
     const review = reviewSession({ stageStatus: 'approved', reviewedSha: 'b'.repeat(40) });
-    const { actions } = planReconciliation({
+    const { actions } = planReconciliation({ now: NOW,
       review, view: view({ state: 'OPEN', pr: { ...view().pr, headSha: 'c'.repeat(40) } }), source: null,
     });
     expect(actions).toEqual([]);
@@ -223,7 +232,7 @@ describe('planReconciliation', () => {
 
   it('OPEN with no decision change and no new commits produces no actions', () => {
     const review = reviewSession({ stageStatus: 'queued', reviewedSha: 'a'.repeat(40) });
-    const { actions, skipped } = planReconciliation({
+    const { actions, skipped } = planReconciliation({ now: NOW,
       review, view: view({ state: 'OPEN', reviewDecision: '', pr: { ...view().pr, headSha: 'a'.repeat(40) } }), source: null,
     });
     expect(actions).toEqual([]);
@@ -429,5 +438,111 @@ describe('ReconciliationTick', () => {
 
     expect((await h.store.load('dev-1')).stageStatus).toBe('merged');
     expect((await h.store.load(review.id)).stageStatus).toBe('dismissed');
+  });
+});
+
+describe('R20 — a claimed conversation skips the re-review, it never errors', () => {
+  it('a live claim replaces the rereview action with one skipped entry', () => {
+    const review = claimed(reviewSession({ stageStatus: 'ready', reviewedSha: 'b'.repeat(40) }), LIVE_CLAIM);
+    const { actions, skipped } = planReconciliation({ now: NOW, review, view: view(), source: null });
+    expect(actions).toEqual([]);
+    expect(skipped).toEqual([
+      { sessionId: review.id, to: 'reviewing', why: 'conversation claimed by a human turn' },
+    ]);
+  });
+
+  it('no claim, or an expired one, returns the rereview action unchanged (regression pin)', () => {
+    const base = reviewSession({ stageStatus: 'ready', reviewedSha: 'b'.repeat(40) });
+    for (const review of [base, claimed(base, null), claimed(base, EXPIRED_CLAIM)]) {
+      const { actions, skipped } = planReconciliation({ now: NOW, review, view: view(), source: null });
+      expect(actions).toEqual([{ type: 'rereview', sessionId: review.id, reason: expect.any(String) }]);
+      expect(skipped).toEqual([]);
+    }
+  });
+
+  it('a transition-type action still applies while claimed, and the apply loop clears the claim', async () => {
+    const { h, gh, lock } = tickHarness();
+    const review = claimed(reviewSession({ stageStatus: 'ready', repo: 'acme/app', number: 5 }), LIVE_CLAIM);
+    const { actions, skipped } = planReconciliation({ now: NOW, review, view: view({ state: 'MERGED' }), source: null });
+    expect(actions).toEqual([{ type: 'transition', sessionId: review.id, to: 'dismissed', reason: expect.any(String) }]);
+    expect(skipped).toEqual([]);
+
+    await h.store.save(review);
+    gh.queueResponse({ stdout: viewJson({ state: 'MERGED', mergedAt: '2026-09-04T00:00:00Z' }) });
+    const tick = new ReconciliationTick({ gh, store: h.store, pipeline: h.service, events: h.events, lock, now: () => NOW });
+    const report = await tick.run();
+    expect(report.errors).toEqual([]);
+    const reloaded = await h.store.load(review.id);
+    expect(reloaded.stageStatus).toBe('dismissed');
+    expect(reloaded.agent?.humanTurn).toBeNull();
+  });
+
+  it('a full tick over a claimed re-reviewable session records zero errors and exactly one skipped entry', async () => {
+    const { h, gh, lock } = tickHarness();
+    const review = claimed(
+      reviewSession({ stageStatus: 'ready', repo: 'acme/app', number: 5, reviewedSha: 'b'.repeat(40) }),
+      LIVE_CLAIM,
+    );
+    await h.store.save(review);
+    gh.queueResponse({ stdout: viewJson({ state: 'OPEN', reviewDecision: '' }) });
+
+    const tick = new ReconciliationTick({ gh, store: h.store, pipeline: h.service, events: h.events, lock, now: () => NOW });
+    const report = await tick.run();
+
+    expect(report.errors).toEqual([]);
+    expect(report.actions).toEqual([]);
+    expect(report.skipped).toEqual([
+      { sessionId: review.id, to: 'reviewing', why: 'conversation claimed by a human turn' },
+    ]);
+    // Nothing started, and the claim is untouched.
+    expect((await h.store.load(review.id)).agent?.humanTurn).toEqual(LIVE_CLAIM);
+    expect((await h.store.load(review.id)).stageStatus).toBe('ready');
+  });
+});
+
+describe('R20 — a claim that races in AFTER planning is skipped, not errored', () => {
+  it('a rereview refused by the pipeline files a skipped entry, never a report.errors entry', async () => {
+    const { h, gh, lock } = tickHarness();
+    const review = reviewSession({ stageStatus: 'ready', repo: 'acme/app', number: 5, reviewedSha: 'b'.repeat(40) });
+    await h.store.save(review);
+    gh.queueResponse({ stdout: viewJson({ state: 'OPEN', reviewDecision: '' }) });
+
+    // The claim lands between the tick's locked PLANNING load (#2 — #1 is
+    // store.list()'s own) and runRereview's own snapshot, so
+    // planReconciliation still returns the rereview action and the refusal
+    // happens in the apply loop, which is the path under test.
+    const originalLoad = h.store.load.bind(h.store);
+    let loads = 0;
+    h.store.load = async (loadId: string) => {
+      const loaded = await originalLoad(loadId);
+      if (loadId === review.id) {
+        loads += 1;
+        if (loads === 2) await h.store.save(claimed(loaded as ReviewSession, LIVE_CLAIM));
+      }
+      return loaded;
+    };
+
+    const tick = new ReconciliationTick({ gh, store: h.store, pipeline: h.service, events: h.events, lock, now: () => NOW });
+    const report = await tick.run();
+
+    expect(report.errors).toEqual([]);
+    expect(report.skipped).toEqual([
+      { sessionId: review.id, to: 'reviewing', why: 'conversation claimed by a human turn' },
+    ]);
+    expect((await originalLoad(review.id)).agent?.humanTurn).toEqual(LIVE_CLAIM);
+  });
+
+  it('any OTHER rereview failure is still a report.errors entry (regression pin)', async () => {
+    const { h, gh, lock } = tickHarness();
+    const review = reviewSession({ stageStatus: 'ready', repo: 'acme/app', number: 5, reviewedSha: 'b'.repeat(40) });
+    await h.store.save({ ...review, workspace: { repoUrl: review.workspace.repoUrl } });
+    gh.queueResponse({ stdout: viewJson({ state: 'OPEN', reviewDecision: '' }) });
+
+    const tick = new ReconciliationTick({ gh, store: h.store, pipeline: h.service, events: h.events, lock, now: () => NOW });
+    const report = await tick.run();
+
+    expect(report.skipped).toEqual([]);
+    expect(report.errors).toHaveLength(1);
+    expect(report.errors[0]).toMatchObject({ where: review.id });
   });
 });

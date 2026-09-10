@@ -19,9 +19,25 @@ export const LastRunSchema = z.object({
 });
 export type LastRun = z.infer<typeof LastRunSchema>;
 
+/**
+ * A human's claim on the session's agent conversation (R20) — a TTL'd record,
+ * never a boolean: an extension that crashes (or a machine that reboots) must
+ * not wedge the session's pipeline forever. `expiresAt` is
+ * `claimedAt + CoreConfig.humanTurnTtlMs`; whether a claim is LIVE is decided
+ * in exactly one place, `isClaimed` (src/pipeline/pipeline-service.ts).
+ */
+export const HumanTurnSchema = z.object({
+  claimedAt: z.string().min(1), // ISO
+  expiresAt: z.string().min(1), // ISO
+});
+export type HumanTurn = z.infer<typeof HumanTurnSchema>;
+
 export const AgentSchema = z.object({
   runner: z.enum(['claude-code', 'codex']),
   resumeId: z.string().min(1).nullable(),
+  // Additive AND defaulted: every session.json already on disk (whose agent
+  // record predates the claim) must keep loading, as `humanTurn: null`.
+  humanTurn: HumanTurnSchema.nullable().default(null),
 });
 export type AgentInfo = z.infer<typeof AgentSchema>;
 

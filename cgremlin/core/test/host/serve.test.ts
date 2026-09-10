@@ -16,6 +16,7 @@ import { FakeGhRunner } from '../support/fake-gh-runner';
 import { FakeAgentRunner } from '../support/fake-agent-runner';
 import { FakeClock } from '../support/fake-clock';
 import { migrateV1ToV2, type Session } from '../../src/schema/session';
+import { SessionStore } from '../../src/engine/session-store';
 import { FakeLocalAppRunner } from '../support/fake-local-app-runner';
 import { redactCoreConfig } from '../../src/config/core-config';
 import { existsSync } from 'node:fs';
@@ -803,6 +804,70 @@ describe('serve', () => {
     } finally {
       handle.engine.server.close = originalClose;
       await new Promise<void>((resolve) => handle.engine.server.close(() => resolve()));
+    }
+  });
+});
+
+describe('serve — human-turn claims are cleared at boot (R20)', () => {
+  const CLAIM = { claimedAt: '2026-09-04T11:55:00.000Z', expiresAt: '2026-09-04T12:05:00.000Z' };
+
+  function claimedDevSession(id: string) {
+    return {
+      ...devSession(id),
+      workspace: { repoUrl: ENV_REPO_URL, worktreePath: `/worktrees/${id}`, branch: 'feat/x' },
+      agent: { runner: 'claude-code' as const, resumeId: 'resume-1', humanTurn: CLAIM },
+    };
+  }
+
+  it('clears every claim before it listens, logs one conversation.claims_cleared line, and a run works immediately after', async () => {
+    const lines: string[] = [];
+    const fs = new InMemoryFileSystem();
+    const runner = new FakeAgentRunner();
+    const config = testConfig();
+    const store = new SessionStore(fs, '/sessions');
+    await store.save(claimedDevSession('dev-claim-1'));
+    await store.save(claimedDevSession('dev-claim-2'));
+
+    let claimsAtListen: unknown;
+    const handle = await serve(config, testAdapters({ fs, runner }), {
+      log: (l) => {
+        lines.push(l);
+        if ((JSON.parse(l) as { type: string }).type === 'conversation.claims_cleared') {
+          // Recorded from inside the log call, which happens before listen().
+          claimsAtListen = existsSync(config.socketPath!);
+        }
+      },
+    });
+    try {
+      const cleared = lines
+        .map((l) => JSON.parse(l) as Record<string, unknown>)
+        .filter((e) => e.type === 'conversation.claims_cleared');
+      expect(cleared).toHaveLength(1);
+      expect(cleared[0]).toMatchObject({ count: 2, sessionIds: ['dev-claim-1', 'dev-claim-2'] });
+      expect(claimsAtListen).toBe(false); // the socket was not listening yet
+
+      expect((await store.load('dev-claim-1')).agent).toEqual({
+        runner: 'claude-code', resumeId: 'resume-1', humanTurn: null,
+      });
+      expect((await store.load('dev-claim-2')).agent?.humanTurn).toBeNull();
+
+      const res = await requestOn(handle.socketPath, 'POST', '/sessions/dev-claim-1/run', { stage: 'develop' });
+      expect(res.status).toBe(202);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('logs no conversation.claims_cleared line when nothing was claimed', async () => {
+    const lines: string[] = [];
+    const fs = new InMemoryFileSystem();
+    const store = new SessionStore(fs, '/sessions');
+    await store.save(devSession('dev-unclaimed'));
+    const handle = await serve(testConfig(), testAdapters({ fs }), { log: (l) => lines.push(l) });
+    try {
+      expect(lines.filter((l) => l.includes('conversation.claims_cleared'))).toEqual([]);
+    } finally {
+      await handle.close();
     }
   });
 });

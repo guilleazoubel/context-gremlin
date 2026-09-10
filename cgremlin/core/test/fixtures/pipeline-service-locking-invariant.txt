@@ -1,0 +1,14 @@
+// Locking invariant (replaces the old F5/F6 "known gap" note — this used to
+// be accepted debt; a proven session-store clobber promoted it to a fix):
+// before `run.started` fires, the caller — an API route handler, or this
+// file's own `runStageLocked` — holds the per-session KeyedLock, so pre-run
+// work must NOT try to acquire it too (KeyedLock is not re-entrant; nesting
+// `lock.withLock` for the same id deadlocks). After `run.started`, the
+// caller has released that lock, so EVERY subsequent write to that
+// session — StageRunner's post-exit lastRun/agent patch, this file's
+// evaluate -> transition -> pr/reviewVersion/lastRereviewSummary patches,
+// and any chained stage's own pre-run work — must acquire the lock itself
+// before reading-then-saving. Methods below that read-then-save without
+// going through `transition`/`patchLastRun`/`runStageLocked` are the ones
+// still doing a single, atomic, brand-new-id-only write (nothing else can
+// reference that id yet) — those don't need the lock.

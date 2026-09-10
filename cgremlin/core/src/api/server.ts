@@ -351,7 +351,6 @@ function localActionFor(
   return null;
 }
 
-
 /**
  * `/attention`, `/attention/ack`, and the two named ack aliases. The aliases
  * only format an ItemRef and delegate to the same `AttentionService.ack`, so
@@ -382,6 +381,42 @@ function parseSourceFilter(raw: string | null): ItemSource | null {
     throw new ValidationError(`Invalid source '${raw}': expected one of ${ITEM_SOURCES.join(', ')}`);
   }
   return raw as ItemSource;
+}
+
+/**
+ * The three conversation routes (R9, R12, R20). Deliberately NOT wrapped in
+ * `lock.withLock` at the route layer, for exactly the reason the comment
+ * inside `handleRequest` gives for /run and friends: `claimConversation` and
+ * `releaseConversation` take the per-session lock themselves and KeyedLock is
+ * not re-entrant, so a route-layer lock would deadlock. `conversation` is a
+ * pure read.
+ */
+async function handleConversationRoute(
+  res: ServerResponse,
+  deps: ApiServerDeps,
+  id: string,
+  action: 'get' | 'claim' | 'release',
+): Promise<void> {
+  if (action === 'get') {
+    sendJson(res, 200, await deps.pipeline.conversation(id));
+    return;
+  }
+  const session =
+    action === 'claim' ? await deps.pipeline.claimConversation(id) : await deps.pipeline.releaseConversation(id);
+  sendJson(res, 200, { session });
+}
+
+/** `GET /sessions/:id/conversation`, `POST /sessions/:id/conversation/{claim,release}`. */
+function conversationActionFor(
+  parts: readonly string[],
+  method: string | undefined,
+): { id: string; action: 'get' | 'claim' | 'release' } | null {
+  if (parts[0] !== 'sessions' || parts[2] !== 'conversation') return null;
+  if (parts.length === 3 && method === 'GET') return { id: parts[1], action: 'get' };
+  if (parts.length === 4 && method === 'POST' && (parts[3] === 'claim' || parts[3] === 'release')) {
+    return { id: parts[1], action: parts[3] };
+  }
+  return null;
 }
 
 async function handleRequest(
@@ -543,6 +578,12 @@ async function handleRequest(
     if (method === 'POST' && parts.length === 3 && parts[0] === 'sessions' && parts[2] === 'retry') {
       const id = parts[1];
       await respondAfterRunStarted(res, deps, id, deps.pipeline.retry(id));
+      return;
+    }
+
+    const conversationAction = conversationActionFor(parts, method);
+    if (conversationAction !== null) {
+      await handleConversationRoute(res, deps, conversationAction.id, conversationAction.action);
       return;
     }
 

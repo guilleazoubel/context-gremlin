@@ -8,6 +8,7 @@ import { sessionsCommand } from './commands/sessions';
 import { scanCommand } from './commands/scan';
 import { configCommand } from './commands/config';
 import { localCommand } from './commands/local';
+import { releaseCommand } from './commands/release';
 
 export const USAGE = `Usage: cgremlin-core <command> [options]
 
@@ -19,6 +20,7 @@ Commands:
   scan [--json]                       Run one inventory scan now
   config import-legacy [--force]      Import ~/.cgremlin/config into core.json
   local start|stop|status [session]   Control the local dev app the engine owns
+  release <session-id>                Drop a human-turn claim on a session's conversation
 `;
 
 type Command = (args: readonly string[], io: CommandIO) => Promise<number>;
@@ -31,6 +33,7 @@ const COMMANDS: Record<string, Command> = {
   scan: scanCommand,
   config: configCommand,
   local: localCommand,
+  release: releaseCommand,
 };
 
 const CONFIG_FLAG_PREFIX = '--config=';

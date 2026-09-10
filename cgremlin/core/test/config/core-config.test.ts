@@ -536,3 +536,18 @@ describe('importLegacyConfig environments', () => {
     expect(() => importLegacyConfig('GITHUB_ME="me"\n')).toThrow(ConfigError);
   });
 });
+
+describe('humanTurnTtlMs (R20)', () => {
+  it('defaults to 600000 when core.json does not set it', () => {
+    expect(resolveCoreConfig({ repos: ['acme/app'], me: 'me' }, HOME).humanTurnTtlMs).toBe(600_000);
+  });
+
+  it('honours an explicit value', () => {
+    expect(resolveCoreConfig({ repos: ['acme/app'], me: 'me', humanTurnTtlMs: 1_000 }, HOME).humanTurnTtlMs).toBe(1_000);
+  });
+
+  it('rejects a zero or negative value', () => {
+    expect(() => resolveCoreConfig({ repos: ['acme/app'], me: 'me', humanTurnTtlMs: 0 }, HOME)).toThrow();
+    expect(() => resolveCoreConfig({ repos: ['acme/app'], me: 'me', humanTurnTtlMs: -1 }, HOME)).toThrow();
+  });
+});

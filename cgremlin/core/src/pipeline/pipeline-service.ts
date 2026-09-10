@@ -38,7 +38,8 @@ import {
 import { ABORTED_REASON, EnvironmentAbortedError, type EnvironmentService } from '../env/environment-service';
 import { evaluateFindings, evaluatePlan, evaluateRereview, evaluateReview, nextReviewVersion, readNonEmpty } from './artifacts';
 import { assertCanPromote } from './plan-gate';
-import { WorkspaceMissingError, type StageRunResult } from './stage-runner';
+import { RunInProgressError, WorkspaceMissingError, type StageRunResult } from './stage-runner';
+import { TERMINAL_PHASES_BY_MODE } from '../workspace/workspace-in-use';
 import { repoSlugFromUrl } from '../gh/repo-slug';
 
 export interface PipelineConfig {
@@ -47,6 +48,10 @@ export interface PipelineConfig {
   defaultBaseRef: string; // e.g. 'origin/main'
   reviewSkillCommand?: string;
   includeLiveUiCheck?: boolean;
+  /** The runner a claim on a never-run session records, so `claude --resume` knows what it is resuming (R20). */
+  runnerKind: 'claude-code' | 'codex';
+  /** How long a human-turn claim stays live: `expiresAt = claimedAt + this` (R20). */
+  humanTurnTtlMs: number;
 }
 
 export interface PipelineServiceDeps {
@@ -90,6 +95,27 @@ export class UnsupportedStageError extends Error {
   }
 }
 
+/** A human holds this session's agent conversation right now — no headless stage may run (R9, R19). Maps to 409. */
+export class HumanTurnInProgressError extends Error {
+  constructor(sessionId: string) {
+    super(`Session '${sessionId}': a human holds the agent conversation; release it before running a stage`);
+    this.name = 'HumanTurnInProgressError';
+  }
+}
+
+/**
+ * The ONE definition of "claimed" (R20): a claim is present AND has not
+ * expired. Every caller — both refusal sites, `conversation`,
+ * `AttentionItem.claimed`, the `sessions` table, the reconciliation tick —
+ * goes through this, so an orphaned claim can never wedge a session: it
+ * simply stops being a claim once `expiresAt` passes.
+ */
+export function isClaimed(session: Session, now: Date): boolean {
+  const humanTurn = session.agent?.humanTurn;
+  if (humanTurn == null) return false;
+  return new Date(humanTurn.expiresAt).getTime() > now.getTime();
+}
+
 export class PipelineService {
   private readonly now: () => Date;
   private readonly newId: (prefix: string, repoSlug: string, key: string) => string;
@@ -109,8 +135,37 @@ export class PipelineService {
   private async transitionUnlocked(id: string, to: string): Promise<Session> {
     const before = await this.deps.store.load(id);
     const after = await this.deps.store.transition(id, to);
-    this.deps.events.emit('session.transitioned', { session: after, from: before.stageStatus, to });
-    return after;
+    // R20: a session that just became terminal has no conversation left to
+    // protect (and its worktree may be reclaimed), so the claim goes in the
+    // same locked write — one of the four paths that keep an orphaned claim
+    // from wedging a session. Transitions themselves are never refused for a
+    // claim: a claim delays a re-review, never the truth about the PR.
+    const cleared = await this.clearHumanTurnIfTerminal(after);
+    this.deps.events.emit('session.transitioned', { session: cleared, from: before.stageStatus, to });
+    return cleared;
+  }
+
+  /** Only call from inside a callback already running under `this.lock` for `session.id`. */
+  private async clearHumanTurnIfTerminal(session: Session): Promise<Session> {
+    if (session.agent?.humanTurn == null) return session;
+    if (!TERMINAL_PHASES_BY_MODE[session.mode].has(session.stageStatus)) return session;
+    const cleared: Session = { ...session, agent: { ...session.agent, humanTurn: null } };
+    await this.deps.store.save(cleared);
+    return cleared;
+  }
+
+  /**
+   * Authoritative. Runs under the per-session lock, on a fresh load, on the
+   * write path — which is why it may also REAP an expired claim (R20) rather
+   * than merely ignore it. Never nests `lock.withLock`: it is already inside
+   * the caller's, per the invariant above.
+   */
+  private async assertNoHumanTurn(fresh: Session): Promise<Session> {
+    if (fresh.agent?.humanTurn == null) return fresh;
+    if (isClaimed(fresh, this.now())) throw new HumanTurnInProgressError(fresh.id);
+    const reaped: Session = { ...fresh, agent: { ...fresh.agent, humanTurn: null } };
+    await this.deps.store.save(reaped);
+    return reaped;
   }
 
   async transition(id: string, to: string): Promise<Session> {
@@ -288,6 +343,14 @@ export class PipelineService {
     if (session.mode !== 'investigation') {
       throw new UnsupportedStageError(`Session '${id}' cannot run findings (mode=${session.mode})`);
     }
+    // R19, advisory and UNLOCKED — on the snapshot the mode check just read,
+    // with no second load and no lock, so a refusal costs no environment
+    // setup and no git work in the worktree the human is talking about. It is
+    // a fast path, never a substitute for the authoritative locked check
+    // below: it takes no lock, so it can be stale, and it does not reap.
+    if (isClaimed(session, this.now())) {
+      throw new HumanTurnInProgressError(id);
+    }
     const sessionDir = this.sessionDir(id);
     const prep = await this.prepareEnvironment(id, 'findings', session);
     const brief = renderFindingsBrief({ sessionDir, ticket: session.lineage.ticket, intent: session.intent, env: prep.ctx });
@@ -295,6 +358,11 @@ export class PipelineService {
     try {
       const result = await this.runStageLocked(id, 'findings', brief, prompt, async () => {
         const fresh = await this.deps.store.load(id);
+        // Authoritative (R9/R19): first statement after the fresh load, so a
+        // claimed session is refused as claimed rather than as ineligible.
+        // The reaped copy is deliberately not rebound — nothing below reads
+        // `agent`, and every write from here re-loads under this same lock.
+        await this.assertNoHumanTurn(fresh);
         if (fresh.mode !== 'investigation' || fresh.stageStatus !== 'findings') {
           throw new UnsupportedStageError(`Session '${id}' cannot run findings (mode=${fresh.mode}, stage=${fresh.stageStatus})`);
         }
@@ -328,6 +396,10 @@ export class PipelineService {
     if (session.mode !== 'investigation') {
       throw new UnsupportedStageError(`Session '${id}' cannot run plan (mode=${session.mode})`);
     }
+    // R19, advisory and UNLOCKED — see runFindings for why both sites exist.
+    if (isClaimed(session, this.now())) {
+      throw new HumanTurnInProgressError(id);
+    }
     const sessionDir = this.sessionDir(id);
     const brief = renderPlanBrief({ sessionDir, ticket: session.lineage.ticket, driveToCompletion: session.driveToCompletion });
     const prompt = STAGE_ENTRY_PROMPT(sessionDir);
@@ -335,6 +407,8 @@ export class PipelineService {
     // must run on a FRESH load inside the lock, not the snapshot above.
     const result = await this.runStageLocked(id, 'plan', brief, prompt, async () => {
       const fresh = await this.deps.store.load(id);
+      // Authoritative (R9/R19) — see runFindings.
+      await this.assertNoHumanTurn(fresh);
       if (fresh.mode !== 'investigation') {
         throw new UnsupportedStageError(`Session '${id}' cannot run plan (mode=${fresh.mode})`);
       }
@@ -380,39 +454,66 @@ export class PipelineService {
   }
 
   async promote(id: string): Promise<{ investigation: Session; development: Session }> {
-    const inv = await this.deps.store.load(id);
-    assertCanPromote(inv);
-    // Legal from either 'approved' (a human approved it) or 'plan_ready'
-    // (drive-to-completion) directly — the schema has both edges so this
-    // never has to synthesize an 'approved' step nobody actually took.
-    const investigation = await this.transition(id, 'promoted_to_development');
-
-    const slug = repoSlugFromUrl(inv.workspace.repoUrl);
-    const devId = this.newId('dev', slug, inv.lineage.ticket ?? inv.id);
-    const development: Session = {
-      schemaVersion: 2,
-      id: devId,
-      mode: 'development',
-      createdAt: this.now().toISOString(),
-      workspace: inv.workspace,
-      lineage: { pipelineId: inv.lineage.pipelineId, parentSessionId: inv.id, ticket: inv.lineage.ticket },
-      stageStatus: 'active',
-      agent: null,
-      lastRun: null,
-      pr: null,
-    };
-    await this.deps.store.save(development);
-
-    const invDir = this.sessionDir(id);
-    const devDir = this.sessionDir(devId);
-    for (const name of ['FINDINGS.md', 'PLAN.md']) {
-      const src = `${invDir}/${name}`;
-      if (await this.deps.fs.exists(src)) {
-        await this.deps.fs.writeFile(`${devDir}/${name}`, await this.deps.fs.readFile(src));
-      }
+    const snapshot = await this.deps.store.load(id);
+    // R19, advisory and UNLOCKED — see runFindings for why both sites exist.
+    if (isClaimed(snapshot, this.now())) {
+      throw new HumanTurnInProgressError(id);
     }
+    // Promoting is a write the human's conversation is about, and no stage's
+    // own check can protect it: the terminal transition below would itself
+    // CLEAR the claim (clearHumanTurnIfTerminal) and the development session
+    // it creates is unclaimed. So the authoritative check lives here, on a
+    // fresh load under this session's own lock — a claim landing after the
+    // advisory snapshot is still refused. It cannot live inside `transition`:
+    // transitions must stay un-refusable so the reconciliation tick's
+    // merge/close still applies (and clears the claim) while claimed (R20).
+    const { investigation, devId } = await this.lock.withLock(id, async () => {
+      const fresh = await this.deps.store.load(id);
+      await this.assertNoHumanTurn(fresh);
+      assertCanPromote(fresh);
+      // Legal from either 'approved' (a human approved it) or 'plan_ready'
+      // (drive-to-completion) directly — the schema has both edges so this
+      // never has to synthesize an 'approved' step nobody actually took.
+      // `transitionUnlocked`, not `transition`: we already hold this
+      // session's lock and KeyedLock is not re-entrant.
+      const promoted = await this.transitionUnlocked(id, 'promoted_to_development');
 
-    this.deps.events.emit('session.created', { session: development });
+      const slug = repoSlugFromUrl(fresh.workspace.repoUrl);
+      // The development session is a brand-new id nothing else can reference
+      // yet, so its own writes need no lock of their own (see the invariant
+      // above); doing them here keeps the whole promotion atomic against any
+      // concurrent action on the investigation.
+      const newDevId = this.newId('dev', slug, fresh.lineage.ticket ?? fresh.id);
+      const newDevelopment: Session = {
+        schemaVersion: 2,
+        id: newDevId,
+        mode: 'development',
+        createdAt: this.now().toISOString(),
+        workspace: fresh.workspace,
+        lineage: { pipelineId: fresh.lineage.pipelineId, parentSessionId: fresh.id, ticket: fresh.lineage.ticket },
+        stageStatus: 'active',
+        agent: null,
+        lastRun: null,
+        pr: null,
+      };
+      await this.deps.store.save(newDevelopment);
+
+      const invDir = this.sessionDir(id);
+      const devDir = this.sessionDir(newDevId);
+      for (const name of ['FINDINGS.md', 'PLAN.md']) {
+        const src = `${invDir}/${name}`;
+        if (await this.deps.fs.exists(src)) {
+          await this.deps.fs.writeFile(`${devDir}/${name}`, await this.deps.fs.readFile(src));
+        }
+      }
+
+      this.deps.events.emit('session.created', { session: newDevelopment });
+      return { investigation: promoted, devId: newDevId };
+    });
+
+    // OUTSIDE the lock: runDevelop takes the development session's own lock,
+    // but it also awaits a whole agent turn, and holding the investigation's
+    // lock for that long would block every other action on it.
     await this.runDevelop(devId);
     const finalDevelopment = await this.deps.store.load(devId);
     return { investigation, development: finalDevelopment };
@@ -422,6 +523,10 @@ export class PipelineService {
     const session = await this.deps.store.load(id);
     if (session.mode !== 'development') {
       throw new UnsupportedStageError(`Session '${id}' cannot run develop (mode=${session.mode})`);
+    }
+    // R19, advisory and UNLOCKED — see runFindings for why both sites exist.
+    if (isClaimed(session, this.now())) {
+      throw new HumanTurnInProgressError(id);
     }
     const sessionDir = this.sessionDir(id);
     const hasPlan = await this.deps.fs.exists(`${sessionDir}/PLAN.md`);
@@ -435,6 +540,8 @@ export class PipelineService {
       // exactly the hole this closes.
       const result = await this.runStageLocked(id, 'develop', brief, prompt, async () => {
         const fresh = await this.deps.store.load(id);
+        // Authoritative (R9/R19) — see runFindings.
+        await this.assertNoHumanTurn(fresh);
         if (fresh.mode !== 'development' || fresh.stageStatus !== 'active') {
           throw new UnsupportedStageError(`Session '${id}' cannot run develop (mode=${fresh.mode}, stage=${fresh.stageStatus})`);
         }
@@ -452,6 +559,10 @@ export class PipelineService {
     const session = await this.deps.store.load(id);
     if (session.mode !== 'review') {
       throw new UnsupportedStageError(`Session '${id}' cannot run review (mode=${session.mode})`);
+    }
+    // R19, advisory and UNLOCKED — see runFindings for why both sites exist.
+    if (isClaimed(session, this.now())) {
+      throw new HumanTurnInProgressError(id);
     }
 
     const sessionDir = this.sessionDir(id);
@@ -478,6 +589,8 @@ export class PipelineService {
       try {
         result = await this.runStageLocked(id, 'review', brief, prompt, async () => {
           const fresh = await this.deps.store.load(id);
+          // Authoritative (R9/R19) — see runFindings.
+          await this.assertNoHumanTurn(fresh);
           if (fresh.mode !== 'review' || !REVIEW_RUNNABLE_FROM.includes(fresh.stageStatus)) {
             throw new UnsupportedStageError(`Session '${id}' cannot run review (mode=${fresh.mode}, stage=${fresh.stageStatus})`);
           }
@@ -528,6 +641,10 @@ export class PipelineService {
     const session = await this.deps.store.load(id);
     if (session.mode !== 'review') {
       throw new UnsupportedStageError(`Session '${id}' cannot run rereview (mode=${session.mode})`);
+    }
+    // R19, advisory and UNLOCKED — see runFindings for why both sites exist.
+    if (isClaimed(session, this.now())) {
+      throw new HumanTurnInProgressError(id);
     }
     if (!session.pr) {
       throw new UnsupportedStageError(`Session '${id}': review session has no pr`);
@@ -593,6 +710,8 @@ export class PipelineService {
       try {
         result = await this.runStageLocked(id, 'rereview', brief, prompt, async () => {
           const fresh = await this.deps.store.load(id);
+          // Authoritative (R9/R19) — see runFindings.
+          await this.assertNoHumanTurn(fresh);
           if (fresh.mode !== 'review' || !REREVIEW_RUNNABLE_FROM.includes(fresh.stageStatus)) {
             throw new UnsupportedStageError(`Session '${id}' cannot run rereview (mode=${fresh.mode}, stage=${fresh.stageStatus})`);
           }
@@ -664,6 +783,83 @@ export class PipelineService {
   /** Ids of sessions with an in-flight run right now — see StageRunner.activeSessionIds. */
   activeSessionIds(): string[] {
     return this.deps.stageRunner.activeSessionIds();
+  }
+
+  /**
+   * Claims the agent conversation for a human (R9, R20). Refused while a run
+   * is in flight: two `claude --resume <same id>` processes on one transcript
+   * is unrecoverable corruption, so the caller must `stop` first. Idempotent
+   * — a re-claim is the extension's heartbeat and simply pushes `expiresAt`
+   * out.
+   */
+  async claimConversation(id: string): Promise<Session> {
+    return this.lock.withLock(id, async () => {
+      const fresh = await this.deps.store.load(id);
+      // Read inside the lock, so a run that started while this call queued is
+      // still seen. A live run has already released the lock (it releases at
+      // `run.started`), so the lock alone cannot exclude it.
+      if (this.activeSessionIds().includes(id)) {
+        throw new RunInProgressError(id);
+      }
+      const now = this.now();
+      const humanTurn = {
+        claimedAt: now.toISOString(),
+        expiresAt: new Date(now.getTime() + this.deps.config.humanTurnTtlMs).toISOString(),
+      };
+      const agent = fresh.agent
+        ? { ...fresh.agent, humanTurn }
+        : { runner: this.deps.config.runnerKind, resumeId: null, humanTurn };
+      const claimed: Session = { ...fresh, agent };
+      await this.deps.store.save(claimed);
+      return claimed;
+    });
+  }
+
+  /** Releases the claim. Idempotent, and a no-op on a session that has no agent record at all. */
+  async releaseConversation(id: string): Promise<Session> {
+    return this.lock.withLock(id, async () => {
+      const fresh = await this.deps.store.load(id);
+      if (fresh.agent == null || fresh.agent.humanTurn == null) return fresh;
+      const released: Session = { ...fresh, agent: { ...fresh.agent, humanTurn: null } };
+      await this.deps.store.save(released);
+      return released;
+    });
+  }
+
+  /** The resume contract: what a human needs to pick this conversation up by hand, and whether one already has it. */
+  async conversation(id: string): Promise<{
+    runner: 'claude-code' | 'codex' | null;
+    resumeId: string | null;
+    worktreePath: string | null;
+    claimed: boolean;
+  }> {
+    const session = await this.deps.store.load(id);
+    return {
+      runner: session.agent?.runner ?? null,
+      resumeId: session.agent?.resumeId ?? null,
+      worktreePath: session.workspace.worktreePath ?? null,
+      claimed: isClaimed(session, this.now()),
+    };
+  }
+
+  /**
+   * Clears every claim in the store, one session at a time under that
+   * session's own lock (R20's boot recovery path): no extension can hold a
+   * claim across an engine restart it did not survive. Reports what it
+   * touched so the host can log it.
+   */
+  async clearAllHumanTurns(): Promise<{ count: number; sessionIds: string[] }> {
+    const sessionIds: string[] = [];
+    for (const session of await this.deps.store.list()) {
+      if (session.agent?.humanTurn == null) continue;
+      await this.lock.withLock(session.id, async () => {
+        const fresh = await this.deps.store.load(session.id);
+        if (fresh.agent?.humanTurn == null) return;
+        await this.deps.store.save({ ...fresh, agent: { ...fresh.agent, humanTurn: null } });
+        sessionIds.push(session.id);
+      });
+    }
+    return { count: sessionIds.length, sessionIds };
   }
 
   async retry(id: string): Promise<Session> {
