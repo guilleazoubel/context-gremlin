@@ -18,6 +18,7 @@ import type { Session } from '../../src/schema/session';
 import type { HumanTurn } from '../../src/schema/stage';
 import { createHarness, SESSIONS_DIR, type PipelineHarness } from '../support/pipeline-harness';
 import { FakeSessionWatcher } from '../support/fake-session-watcher';
+import { InMemoryFileSystem } from '../support/in-memory-file-system';
 
 const ACKS_PATH = '/state/attention-acks.json';
 const NOW = new Date('2026-09-10T12:00:00.000Z');
@@ -193,13 +194,54 @@ describe('AttentionService.list', () => {
     expect(item.stageStatus).toBe('plan_ready');
     expect(item.running).toBe(false);
     expect(item.repoOrContext).toBe('acme/app');
-    // A1 placeholder: A2 wires primaryArtifact.
+    // A session that has written nothing yet has no artifact to open.
     expect(item.links.primaryArtifact).toBeNull();
     expect(item.links.worktreePath).toBe('/worktrees/loud');
     expect(item.links.ticket).toBe('APP-1');
   });
 
   // R20: `claimed` is `isClaimed`, never `humanTurn !== null`.
+  // R11: the core, not the UI, chooses the artifact a row opens.
+  it('carries the core-chosen primary artifact: preference order for a review session', async () => {
+    await fx.h.store.save(reviewSession('r-art'));
+    await fx.h.fs.writeFile(`${SESSIONS_DIR}/r-art/BRIEF.md`, 'brief');
+    await fx.h.fs.writeFile(`${SESSIONS_DIR}/r-art/REVIEW.md`, 'review');
+    const all = await fx.service.list({ all: true });
+    expect(all.items.find((i) => i.ref === 'session:r-art')!.links.primaryArtifact).toBe('REVIEW.md');
+  });
+
+  it('carries the core-chosen primary artifact: the most recent one for a work session', async () => {
+    // The adapter gets its own clock-driven fs so two writes can be ordered
+    // without sleeping; the store keeps using the harness fs.
+    let ms = 1_000;
+    const fs = new InMemoryFileSystem(() => (ms += 1_000));
+    const adapter = new SessionSourceAdapter({
+      store: fx.h.store,
+      fs,
+      sessionsDir: SESSIONS_DIR,
+      isRunning: () => false,
+      now: () => NOW,
+    });
+    await fx.h.store.save(investigation('w-art'));
+    await fs.mkdir(`${SESSIONS_DIR}/w-art`, { recursive: true });
+    await fs.writeFile(`${SESSIONS_DIR}/w-art/PLAN.md`, 'plan');
+    await fs.writeFile(`${SESSIONS_DIR}/w-art/FINDINGS.md`, 'findings');
+    expect((await adapter.collectOne(sessionRef('w-art')))!.links.primaryArtifact).toBe('FINDINGS.md');
+
+    // …and the ranking really is by mtime, not by name: rewrite PLAN.md last.
+    await fs.writeFile(`${SESSIONS_DIR}/w-art/PLAN.md`, 'plan again');
+    expect((await adapter.collectOne(sessionRef('w-art')))!.links.primaryArtifact).toBe('PLAN.md');
+  });
+
+  it('leaves primaryArtifact null for a non-listable artifact and for a non-session source', async () => {
+    await fx.h.store.save(investigation('junk-art'));
+    await fx.h.fs.writeFile(`${SESSIONS_DIR}/junk-art/notes.txt`, 'not listable');
+    fx.setInventory(inventory([entry({ number: 7 })]));
+    const all = await fx.service.list({ all: true });
+    expect(all.items.find((i) => i.ref === 'session:junk-art')!.links.primaryArtifact).toBeNull();
+    expect(all.items.find((i) => i.ref === 'pr:acme/app#7')!.links.primaryArtifact).toBeNull();
+  });
+
   it('reports claimed: true for a session whose human-turn claim is still live', async () => {
     await fx.h.store.save(withClaim(investigation('claimed-live'), LIVE));
     const all = await fx.service.list({ all: true });

@@ -7,6 +7,8 @@ import type { SessionWatchEvent, SessionWatcher } from '../fs/session-watcher';
 import type { Session, SessionMode } from '../schema/session';
 import { repoSlugFromUrl } from '../gh/repo-slug';
 import { isClaimed } from '../pipeline/pipeline-service';
+import { pickPrimaryArtifact } from '../api/artifacts';
+import { parseArtifactName } from '../api/validation';
 import { TERMINAL_PHASES_BY_MODE } from '../workspace/workspace-in-use';
 import {
   deriveSessionReasons,
@@ -41,9 +43,8 @@ export interface ItemLinks {
   ticket: string | null;
   /**
    * Populated by SessionSourceAdapter via `pickPrimaryArtifact` (R11), so a
-   * row can be opened from `/attention` alone. A1 defines the field and
-   * leaves it null; A2, which introduces `pickPrimaryArtifact` and
-   * `statMtimeMs`, is what wires the adapter to fill it.
+   * row can be opened from `/attention` alone. Null for a source with no
+   * artifacts, and for a session that has not written one yet.
    */
   primaryArtifact: string | null;
 }
@@ -205,6 +206,7 @@ export class SessionSourceAdapter implements SourceAdapter {
         prNumber: pr?.number ?? null,
         prUrl: pr?.url ?? null,
         ticket: session.lineage.ticket,
+        primaryArtifact: await this.primaryArtifactFor(session),
       },
     };
   }
@@ -228,22 +230,49 @@ export class SessionSourceAdapter implements SourceAdapter {
     return (AGENT_STATES as readonly string[]).includes(value) ? (value as AgentState) : null;
   }
 
-  /**
-   * `statMtimeMs` arrives with A2; until then every session reports a null
-   * AGENT_STATE mtime and `since` falls back to session.createdAt, which is
-   * what keeps A1 and A2 order-independent.
-   */
   private async agentStateMtime(id: string): Promise<string | null> {
     return this.mtimeOf(`${this.deps.sessionsDir}/${id}/AGENT_STATE`);
   }
 
   private async mtimeOf(path: string): Promise<string | null> {
-    const fs = this.deps.fs as SessionFileSystem & {
-      statMtimeMs?: (path: string) => Promise<number | null>;
-    };
-    if (typeof fs.statMtimeMs !== 'function') return null;
-    const ms = await fs.statMtimeMs(path);
-    return ms === null ? null : new Date(ms).toISOString();
+    try {
+      const ms = await this.deps.fs.statMtimeMs(path);
+      return ms === null ? null : new Date(ms).toISOString();
+    } catch {
+      return null; // attention is best-effort: an unreadable path has no mtime
+    }
+  }
+
+  /**
+   * R11: the core chooses the artifact a row opens. Deliberately a private
+   * listing rather than a call into `handleArtifactList` — that one takes the
+   * per-session lock and reads every file to report a size, and attention
+   * must never lock a session (MG-A3). `parseArtifactName` stays the one
+   * allow-list.
+   */
+  private async primaryArtifactFor(session: Session): Promise<string | null> {
+    const sessionDir = `${this.deps.sessionsDir}/${session.id}`;
+    let names: string[];
+    try {
+      names = await this.deps.fs.readdir(sessionDir);
+    } catch {
+      return null; // nothing has run yet: no artifacts, not an error
+    }
+    // Unsorted on purpose: `pickPrimaryArtifact` ranks by its own preference
+    // order and by mtime, so readdir order cannot change the answer — and the
+    // DoD pins this directory as sort-free.
+    const listing: Array<{ name: string; mtime: string }> = [];
+    for (const name of names) {
+      try {
+        parseArtifactName(name);
+      } catch {
+        continue;
+      }
+      const mtime = await this.mtimeOf(`${sessionDir}/${name}`);
+      if (mtime === null) continue;
+      listing.push({ name, mtime });
+    }
+    return pickPrimaryArtifact(session, listing);
   }
 }
 

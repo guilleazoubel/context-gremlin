@@ -31,7 +31,12 @@ const WORK_FALLBACK = 'BRIEF.md';
  * R11: the core, not the UI, chooses the artifact a row opens. Pure over the
  * listing, so it never touches the filesystem itself.
  */
-export function pickPrimaryArtifact(session: Session, listing: readonly ArtifactListing[]): string | null {
+export function pickPrimaryArtifact(
+  session: Session,
+  // Only the name and the mtime rank a candidate, so a caller that must not
+  // read every file (the attention adapter) can answer without a size.
+  listing: readonly Pick<ArtifactListing, 'name' | 'mtime'>[],
+): string | null {
   const byName = new Map(listing.map((a) => [a.name, a]));
 
   if (session.mode === 'review') {
