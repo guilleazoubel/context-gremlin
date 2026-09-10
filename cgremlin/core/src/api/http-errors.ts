@@ -30,6 +30,9 @@ export function mapErrorToHttp(err: unknown): HttpError {
       return { status: 409, body: { error: message } };
     case 'NoScanYetError':
       return { status: 404, body: { error: message } };
+    // An attention ref that names no session, PR (or future source item).
+    case 'ItemNotFoundError':
+      return { status: 404, body: { error: message } };
     // Every local-app failure is a precondition the caller can act on (a busy
     // port, a missing sudo prereq, an app that never answered) — never a bug
     // in the engine, so 409 rather than 500.

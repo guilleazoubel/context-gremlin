@@ -262,6 +262,22 @@ describe('environments schema', () => {
     expect(raw.localAppStatePath).toBeUndefined();
   });
 
+  it('derives attentionAcksPath under stateDir, in both places, and keeps an override', async () => {
+    const cfg = resolveCoreConfig(BASE, HOME);
+    expect(cfg.attentionAcksPath).toBe(`${HOME}/.cgremlin/attention-acks.json`);
+    const fs = new InMemoryFileSystem();
+    await writeCoreConfig(fs, '/state/core.json', cfg, { force: false });
+    const raw = JSON.parse(await fs.readFile('/state/core.json')) as Record<string, unknown>;
+    expect(raw.attentionAcksPath).toBeUndefined();
+
+    const override = resolveCoreConfig({ ...BASE, attentionAcksPath: '~/custom-acks.json' }, HOME);
+    expect(override.attentionAcksPath).toBe(`${HOME}/custom-acks.json`);
+    const fs2 = new InMemoryFileSystem();
+    await writeCoreConfig(fs2, '/state/core.json', override, { force: false });
+    const raw2 = JSON.parse(await fs2.readFile('/state/core.json')) as Record<string, unknown>;
+    expect(raw2.attentionAcksPath).toBe(`${HOME}/custom-acks.json`);
+  });
+
   it('keeps and expands an explicit localAppStatePath override', async () => {
     const cfg = resolveCoreConfig({ ...BASE, localAppStatePath: '~/custom-local-app.json' }, HOME);
     expect(cfg.localAppStatePath).toBe(`${HOME}/custom-local-app.json`);

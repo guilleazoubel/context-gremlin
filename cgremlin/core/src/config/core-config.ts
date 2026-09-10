@@ -77,6 +77,7 @@ export const CoreConfigSchema = z.object({
   defaultBaseRef: z.string().default('origin/main'),
   environments: z.record(z.string().regex(/^[^/\s]+\/[^/\s]+$/), RepoEnvironmentSchema).default({}),
   localAppStatePath: z.string().optional(),
+  attentionAcksPath: z.string().optional(),
 });
 
 export type CoreConfig = z.infer<typeof CoreConfigSchema>;
@@ -102,6 +103,7 @@ export function resolveCoreConfig(raw: unknown, home: string): CoreConfig {
     socketPath: expandOrDerive(parsed.socketPath, 'engine.sock'),
     inventoryPath: expandOrDerive(parsed.inventoryPath, 'inventory.json'),
     localAppStatePath: expandOrDerive(parsed.localAppStatePath, 'local-app.json'),
+    attentionAcksPath: expandOrDerive(parsed.attentionAcksPath, 'attention-acks.json'),
   };
 }
 
@@ -255,6 +257,7 @@ const DERIVED_PATH_SUFFIXES: Record<string, string> = {
   socketPath: 'engine.sock',
   inventoryPath: 'inventory.json',
   localAppStatePath: 'local-app.json',
+  attentionAcksPath: 'attention-acks.json',
 };
 
 export async function writeCoreConfig(

@@ -2,6 +2,7 @@ import type { Session } from '../schema/session';
 import type { StageName, RunOutcome } from '../schema/stage';
 import type { AgentOutput } from '../agent/agent-runner';
 import type { Inventory } from '../inventory/inventory';
+import type { AttentionItem } from '../attention/attention-service';
 
 export interface EngineEventMap {
   'session.created': { session: Session };
@@ -10,6 +11,11 @@ export interface EngineEventMap {
   'run.output': { sessionId: string; stage: StageName; chunk: AgentOutput };
   'run.finished': { session: Session; stage: StageName; outcome: RunOutcome };
   'inventory.updated': { inventory: Inventory };
+  /**
+   * Emitted by AttentionService when a recompute produces a state a client
+   * has not seen yet. In-process only, like every other engine event.
+   */
+  'attention.changed': { item: AttentionItem };
 }
 
 type Listener<K extends keyof EngineEventMap> = (payload: EngineEventMap[K]) => void;
