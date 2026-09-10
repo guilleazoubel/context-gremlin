@@ -4,8 +4,11 @@
 workflow: **investigate → plan → develop**, plus independent **PR review / re-review**. It
 runs as one local process (`cgremlin-core serve`), owns session state, git-worktree
 isolation, agent invocation, and (optionally) a local dev server + Vercel preview per repo.
-There is no hosted backend and no UI shipped in this package — frontends (a CLI today,
-a plugin-style UI later) talk to the engine over an HTTP-over-Unix-socket API.
+There is no hosted backend and nothing in this package renders HTML — the engine's own output is
+JSON over a Unix socket and Server-Sent Events (`GET /events`), never markup. Frontends talk to it
+over that API: a CLI (below), and `cgremlin/vscode`, the VS Code extension that is Phase 7's UI
+(mission control — four attention lists, needs-you notifications, and a chat hand-off into the
+agent's own transcript; see `../vscode/README.md`).
 
 It is a ground-up, tested rebuild of the ideas in `bin/cgremlin` (the legacy ~15,000-line
 bash script). It does not share code or state with `bin/cgremlin`.
@@ -33,6 +36,7 @@ cgremlin-core sessions [--json]            # list every session
 cgremlin-core scan [--json]                # run one inventory scan right now
 cgremlin-core local start <session-id> [--fresh]      # start needs a session
 cgremlin-core local stop|status [session-id] [--json]  # id optional: engine-wide
+cgremlin-core release <session-id>         # drop a human-turn claim (see "Human turn" below)
 ```
 
 `cgremlin-core --help` prints the same summary. Every command other than `serve` and
@@ -63,7 +67,9 @@ one-line error. Paths may start with `~`.
 | `socketPath` | `<stateDir>/engine.sock` | |
 | `inventoryPath` | `<stateDir>/inventory.json` | |
 | `localAppStatePath` | `<stateDir>/local-app.json` | |
+| `attentionAcksPath` | `<stateDir>/attention-acks.json` | per-`ItemRef` acknowledgement store |
 | `reviewSkillCommand` | `'/APFM:apfm-review'` | slash command the review/rereview prompt invokes first |
+| `humanTurnTtlMs` | `600000` (10 min) | how long a human-turn claim (`POST /sessions/:id/conversation/claim`) stays live before it expires and is reaped |
 | `includeLiveUiCheck` | `true` | AND'd with "did the brief actually render a LIVE UI CHECK section" |
 | `defaultBaseRef` | `'origin/main'` | base ref for a new investigation's worktree |
 | `environments` | `{}` | per-repo environment config, keyed by `owner/name` — see below |
@@ -137,6 +143,23 @@ into a local app too, it just isn't on by default.
   transcript and in its browser-tool call arguments. Nothing in this package protects
   against that.
 
+## API surface (Phase 7 additions)
+
+Beyond session/workspace/PR-inventory routes, the socket API also answers:
+
+| Route | What |
+|---|---|
+| `GET /events` | Server-Sent Events — every engine event, with `Last-Event-ID` replay |
+| `GET /attention`, `POST /attention/ack` (+ `POST /sessions/:id/ack`, `POST /prs/:o/:r/:n/ack`) | which items need attention/you, and acknowledging one |
+| `GET /config` | the resolved, redacted `CoreConfig` |
+| `GET /sessions/:id/artifacts` | artifact listing with mtimes and the core-chosen `primary` file |
+| `GET /sessions/:id/conversation`, `POST .../conversation/claim`, `POST .../conversation/release` | the human-turn claim/release/resume contract |
+| `POST /sessions/developments` | create a development session directly (no investigation, starts nothing) |
+| `POST /reviews` `{prUrl}` | review **any** PR URL, including a repo outside `config.repos` — this is the only way to review an off-config repo; an already-tracked PR answers **200** `{created:false}` (matching `POST /prs/:o/:r/:n/review`'s own behavior), a genuinely new one **202**, and a PR authored by `config.me` **409** |
+
+Full request/response shapes, status codes and the event/attention/human-turn models are in
+`docs/ARCHITECTURE.md`.
+
 ## What runs automatically vs. only on request
 
 **Automatic**, once `serve` is running:
@@ -148,6 +171,10 @@ into a local app too, it just isn't on by default.
   session marked merged/abandoned); one whose PR was approved on GitHub is marked
   approved; one whose PR has new commits since the last review is **automatically
   re-reviewed**.
+- An **attention state change or an artifact write becomes an event**: `AttentionService`
+  recomputes on every relevant engine event and on a filesystem watch of `sessions/` (so an agent
+  writing `AGENT_STATE`/`FINDINGS.md` mid-turn is seen without waiting for the turn to exit), and
+  emits `attention.changed`/`artifact.changed` on `GET /events` for any connected client.
 
 **Only on explicit request** — nothing else ever starts an agent:
 - Starting a review for a PR not already tracked (`cgremlin-core review <url>`, or
@@ -170,6 +197,7 @@ Everything is under `stateDir` (default `~/.cgremlin`):
   engine.sock                  # the API socket serve listens on (mode 0600)
   inventory.json               # last completed scan
   local-app.json               # the one local dev app's state, if any is running
+  attention-acks.json          # per-ItemRef acknowledgement ('session:<id>' / 'pr:<owner>/<repo>#<n>')
   sessions/
     <session-id>/
       session.json             # the session record (schemaVersion 2)
@@ -223,9 +251,9 @@ and `.bypass-secret` is explicitly excluded.
   to a future, separate component that would take structured input (a verdict and
   per-finding `{path, line, body}`) — it would not itself read or know `REVIEW.md`'s
   format.
-- **A UI.** The originally-planned local web dashboard was dropped in favor of a CLI plus
-  a later plugin-style UI, both consuming the same API — nothing in this package renders
-  HTML.
+- **A UI in this package.** The originally-planned local web dashboard was dropped in favor of a
+  CLI plus `cgremlin/vscode`, both consuming the same API — nothing in *this* package renders HTML
+  (Server-Sent Events are not markup either).
 - **Own-PR comment triage.** Reading/replying to comments on your own PRs is a distinct,
   unbuilt feature.
 - **Legacy session migration.** See Troubleshooting above.
