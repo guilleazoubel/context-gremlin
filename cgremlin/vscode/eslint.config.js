@@ -5,7 +5,7 @@ module.exports = tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    ignores: ['out/**', 'node_modules/**', 'eslint.config.js'],
+    ignores: ['out/**', 'engine/**', 'node_modules/**', 'eslint.config.js'],
   },
   {
     // The stand-in for the engine bundle is, like the real one, a CommonJS artifact rather than a
