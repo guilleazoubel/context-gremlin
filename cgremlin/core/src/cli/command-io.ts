@@ -1,4 +1,5 @@
 import type { SessionFileSystem } from '../fs/session-file-system';
+import type { GhRunner } from '../gh/gh-runner';
 import { loadCoreConfig, type CoreConfig } from '../config/core-config';
 
 export interface CommandWriter {
@@ -13,6 +14,12 @@ export interface CommandIO {
   fs: SessionFileSystem;
   /** Overrides the default `${home}/.cgremlin-core/core.json`, e.g. from a `--config` flag. */
   configPath?: string;
+  /**
+   * The `gh` CLI, for the handful of commands that ask GitHub something
+   * before an engine exists (today: `config init` resolving `me`). Absent in
+   * a unit test, which is exactly the "no gh to ask" case.
+   */
+  gh?: GhRunner;
 }
 
 export function defaultConfigPath(home: string): string {

@@ -1,5 +1,6 @@
 import { homedir } from 'node:os';
 import { NodeFileSystem } from '../fs/node-file-system';
+import { NodeGhRunner } from '../gh/node-gh-runner';
 import type { CommandIO } from './command-io';
 import { serveCommand } from './commands/serve';
 import { prsCommand } from './commands/prs';
@@ -18,6 +19,7 @@ Commands:
   review <pr-url>                     Start (or report) a review for a PR
   sessions [--json]                   List all sessions
   scan [--json]                       Run one inventory scan now
+  config init [--me login] [--force]  Write a first-run core.json (me from gh when omitted)
   config import-legacy [--force]      Import the legacy ~/.cgremlin/config into core.json
   local start|stop|status [session]   Control the local dev app the engine owns
   release <session-id>                Drop a human-turn claim on a session's conversation
@@ -82,6 +84,7 @@ export async function run(): Promise<void> {
     stderr: process.stderr,
     home: homedir(),
     fs: new NodeFileSystem(),
+    gh: new NodeGhRunner(),
   };
   try {
     process.exitCode = await main(process.argv.slice(2), io);
