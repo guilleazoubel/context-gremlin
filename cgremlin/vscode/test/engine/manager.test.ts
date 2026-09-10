@@ -82,6 +82,33 @@ describe('MG-C1 no-second-engine', () => {
   });
 });
 
+describe('a probe that times out (unreachable)', () => {
+  it('retries a transient timeout and adopts the engine that answers next', async () => {
+    fake.probes = ['unreachable', identity({ pid: 77 })];
+    const state = await withClock(manager.ensureRunning(), 1_000);
+    expect(state).toEqual({ kind: 'running', version: '0.0.1', pid: 77, adopted: true });
+    expect(fake.spawns).toHaveLength(0);
+  });
+
+  it('gives up as foreign only after three timeouts', async () => {
+    fake.probes = ['unreachable'];
+    const state = await withClock(manager.ensureRunning(), 1_000);
+    expect(state).toEqual({ kind: 'foreign' });
+    expect(fake.calls.filter((c) => c.kind === 'probe')).toHaveLength(3);
+    expect(fake.spawns).toHaveLength(0);
+  });
+
+  it('re-probes on a user action rather than trusting the foreign state', async () => {
+    fake.probes = ['unreachable'];
+    expect((await withClock(manager.ensureRunning(), 1_000)).kind).toBe('foreign');
+
+    fake.probes = [identity({ pid: 88 })];
+    const state = await manager.ensureRunning('user');
+    expect(state).toEqual({ kind: 'running', version: '0.0.1', pid: 88, adopted: true });
+    expect(fake.spawns).toHaveLength(0);
+  });
+});
+
 describe('starting an engine', () => {
   it('reports starting before the first poll and running on the first answer', async () => {
     fake.spawnedAnswer = identity();
@@ -379,6 +406,31 @@ describe('R23 the stop budget', () => {
     if (state.kind !== 'failed') throw new Error('unreachable');
     expect(state.reason).toContain(PATHS.engineLogPath);
     expect(fake.signals).toHaveLength(1);
+  });
+});
+
+describe('the serial operation queue', () => {
+  it('holds a triggered start behind an in-flight stop, and reports the two in order', async () => {
+    // SIGTERM is sent but the socket keeps answering: the process has not exited yet, which is
+    // exactly the window in which a concurrent `ensureRunning` used to adopt the dying engine.
+    fake.probes = [identity()];
+    fake.pidFiles = [pidFile()];
+    const stop = manager.stop();
+    const ensure = manager.ensureRunning('auto');
+
+    await fake.advance(2_000);
+    expect(fake.spawns).toHaveLength(0);
+    expect(states.map((s) => s.kind)).toEqual([]);
+    expect(fake.signals).toHaveLength(1);
+
+    fake.probes = [null];
+    fake.spawnedAnswer = identity({ pid: 99 });
+    await fake.advance(2_000);
+
+    expect(await stop).toEqual({ kind: 'stopped' });
+    expect(await ensure).toEqual({ kind: 'running', version: '0.0.1', pid: 99, adopted: false });
+    expect(fake.spawns).toHaveLength(1);
+    expect(states.map((s) => s.kind)).toEqual(['stopped', 'starting', 'running']);
   });
 });
 

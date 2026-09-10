@@ -13,6 +13,7 @@ import type {
   InputBoxOptionsLike,
   MessageOptionsLike,
   QuickPickOptionsLike,
+  SpawnCaptureOptions,
   StatusBarItemLike,
   TerminalLike,
   TerminalOptionsLike,
@@ -307,7 +308,7 @@ export class FakeHost implements Host {
   async spawnCapture(
     command: string,
     args: readonly string[],
-    options?: { cwd?: string; timeoutMs?: number },
+    options?: SpawnCaptureOptions,
   ): Promise<{ code: number; stdout: string; stderr: string }> {
     this.record('spawnCapture', command, [...args], options);
     return this.spawnResults.get(command) ?? { code: 0, stdout: '', stderr: '' };

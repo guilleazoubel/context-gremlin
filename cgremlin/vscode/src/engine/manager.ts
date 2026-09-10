@@ -26,9 +26,13 @@ export interface EngineIdentity {
 
 /**
  * `null` — nothing is listening (ENOENT/ECONNREFUSED, the two codes the API client already treats
- * as "not running"). `'foreign'` — something answers the socket but it is not this engine.
+ * as "not running"). `'foreign'` — something answers the socket with a body that is not this
+ * engine's `/version`. `'unreachable'` — the socket accepted the connection and then said nothing
+ * within the probe's timeout, which is what an engine that is still booting or wedged under load
+ * looks like. It is deliberately *not* `'foreign'`: a stranger is a verdict, a timeout is a
+ * question, and the manager asks it again before it answers (see `probeOrRetry`).
  */
-export type ProbeResult = EngineIdentity | 'foreign' | null;
+export type ProbeResult = EngineIdentity | 'foreign' | 'unreachable' | null;
 
 /** What `<stateDir>/engine.json` says. The engine writes it before it listens (R22). */
 export interface EnginePidFile {
@@ -124,8 +128,14 @@ export const STOPPING_BOUND_MS = 300_000;
 /** R11: rotate at 8 MB. */
 export const LOG_MAX_BYTES = 8 * 1024 * 1024;
 export const TAIL_LINES = 20;
+/** A timeout is retried, not believed: three attempts (2 s each, in the adapter) then `foreign`. */
+export const PROBE_ATTEMPTS = 3;
+export const PROBE_RETRY_GAP_MS = 200;
 /** R26: three automatic retries, each behind a longer gate, then no more. */
 export const RESPAWN_BACKOFF_MS: readonly number[] = [1_000, 5_000, 30_000];
+
+/** The three lifecycle operations; the memo above is per kind, the lane is shared. */
+type OperationKind = 'ensure' | 'stop' | 'restart';
 
 function sameIdentity(a: EnginePidFile, b: EngineIdentity): boolean {
   return a.pid === b.pid && a.startedAt === b.startedAt;
@@ -134,8 +144,14 @@ function sameIdentity(a: EnginePidFile, b: EngineIdentity): boolean {
 export class EngineManager {
   private current: EngineState = { kind: 'unknown' };
   private readonly listeners = new Set<(state: EngineState) => void>();
-  private starting: Promise<EngineState> | null = null;
-  private stopping: Promise<EngineState> | null = null;
+  /**
+   * The single serial lane every lifecycle operation runs in. `starting` and `stopping` used to be
+   * two independent locks, which let a start interleave with a stop that had signalled but whose
+   * process had not exited yet — and adopt the engine that was on its way out.
+   */
+  private queue: Promise<unknown> = Promise.resolve();
+  /** The in-flight operation per kind, so a burst of one kind still costs one operation. */
+  private readonly inFlight = new Map<OperationKind, Promise<EngineState>>();
   private child: SpawnedEngine | null = null;
   /** How many spawns we have made since the last user request; drives the backoff gate. */
   private attempts = 0;
@@ -157,7 +173,7 @@ export class EngineManager {
    */
   async activeRuns(): Promise<number | null> {
     const probe = await this.opts.process.probe(this.opts.paths().socketPath);
-    return probe === null || probe === 'foreign' ? null : probe.activeRuns;
+    return probe === null || typeof probe === 'string' ? null : probe.activeRuns;
   }
 
   onStateChange(cb: (state: EngineState) => void): () => void {
@@ -170,21 +186,11 @@ export class EngineManager {
    * a burst of triggers produces exactly one spawn (MG-C1).
    */
   ensureRunning(trigger: Trigger = 'auto'): Promise<EngineState> {
-    if (this.starting !== null) return this.starting;
-    const work = this.runEnsure(trigger).finally(() => {
-      if (this.starting === work) this.starting = null;
-    });
-    this.starting = work;
-    return work;
+    return this.serial('ensure', () => this.runEnsure(trigger));
   }
 
   stop(): Promise<EngineState> {
-    if (this.stopping !== null) return this.stopping;
-    const work = this.runStop().finally(() => {
-      if (this.stopping === work) this.stopping = null;
-    });
-    this.stopping = work;
-    return work;
+    return this.serial('stop', () => this.runStop());
   }
 
   /**
@@ -192,12 +198,45 @@ export class EngineManager {
    * goes silent (R23); a stop that could not prove ownership aborts it — the manager never spawns
    * a second engine against a live socket.
    */
-  async restart(trigger: Trigger = 'auto'): Promise<EngineState> {
-    const before = await this.opts.process.probe(this.opts.paths().socketPath);
-    if (before === null) return await this.ensureRunning(trigger);
-    const stopped = await this.stop();
+  restart(trigger: Trigger = 'auto'): Promise<EngineState> {
+    return this.serial('restart', () => this.runRestart(trigger));
+  }
+
+  /**
+   * One operation at a time, in the order they were asked for, with the memo the burst case needs:
+   * five concurrent `ensureRunning`s share one queued operation (MG-C1), while a `stop` asked for
+   * during one waits its turn rather than interleaving with it.
+   */
+  private serial(kind: OperationKind, work: () => Promise<EngineState>): Promise<EngineState> {
+    const pending = this.inFlight.get(kind);
+    if (pending !== undefined) return pending;
+    const run = this.enqueue(work).finally(() => {
+      if (this.inFlight.get(kind) === run) this.inFlight.delete(kind);
+    });
+    this.inFlight.set(kind, run);
+    return run;
+  }
+
+  /** Appends to the lane. A failed operation does not stall the ones behind it. */
+  private enqueue(work: () => Promise<EngineState>): Promise<EngineState> {
+    const run = this.queue.then(work, work);
+    this.queue = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  /**
+   * The restart is one lane entry, not three: it calls the operations' bodies directly, because
+   * queueing them from inside the lane would wait on a turn that cannot come until it returns.
+   */
+  private async runRestart(trigger: Trigger): Promise<EngineState> {
+    const before = await this.probeOrRetry(this.opts.paths().socketPath);
+    if (before === null) return await this.runEnsure(trigger);
+    const stopped = await this.runStop();
     if (stopped.kind !== 'stopped') return stopped;
-    return await this.ensureRunning(trigger);
+    return await this.runEnsure(trigger);
   }
 
   private setState(state: EngineState): EngineState {
@@ -219,9 +258,8 @@ export class EngineManager {
     }
   }
 
-  private classify(probe: ProbeResult, adopted: boolean): EngineState | null {
+  private classify(probe: EngineIdentity | null, adopted: boolean): EngineState | null {
     if (probe === null) return null;
-    if (probe === 'foreign') return this.setState({ kind: 'foreign' });
     if (probe.version !== this.opts.bundledVersion) {
       return this.setState({
         kind: 'mismatch',
@@ -233,9 +271,36 @@ export class EngineManager {
     return this.setState({ kind: 'running', version: probe.version, pid: probe.pid, adopted });
   }
 
+  /**
+   * A probe whose only answer is silence is asked again before it is believed. Three attempts (the
+   * adapter caps each at 2 s) is long enough for an engine that is merely slow to boot, and short
+   * enough that a genuinely wedged stranger still ends the burst; only then does it become the
+   * `foreign` verdict, which is what stops a second engine being started against a live socket.
+   */
+  private async probeOrRetry(socketPath: string): Promise<EngineIdentity | 'foreign' | null> {
+    const proc = this.opts.process;
+    for (let attempt = 1; ; attempt += 1) {
+      const result = await proc.probe(socketPath);
+      if (result !== 'unreachable') return result;
+      if (attempt >= PROBE_ATTEMPTS) {
+        this.opts.log(
+          `engine.probe_unreachable: ${socketPath} accepted ${PROBE_ATTEMPTS} probes and answered none; treating it as another server`,
+        );
+        return 'foreign';
+      }
+      await proc.sleep(PROBE_RETRY_GAP_MS);
+    }
+  }
+
+  /**
+   * Every trigger — a user's or activation's — re-probes here first, so a `foreign` the manager
+   * reported earlier is never trusted as a standing fact: it is re-checked against reality.
+   */
   private async runEnsure(trigger: Trigger): Promise<EngineState> {
     const paths = this.opts.paths();
-    const adopted = this.classify(await this.opts.process.probe(paths.socketPath), true);
+    const probe = await this.probeOrRetry(paths.socketPath);
+    if (probe === 'foreign') return this.setState({ kind: 'foreign' });
+    const adopted = this.classify(probe, true);
     if (adopted !== null) return adopted;
     if (trigger === 'user') this.attempts = 0;
     const refusal = this.backoffRefusal(trigger);
@@ -311,7 +376,9 @@ export class EngineManager {
         return this.current;
       }
       const probe = await proc.probe(paths.socketPath);
-      const state = probe === 'foreign' ? null : this.classify(probe, false);
+      // Neither a stranger nor a silence ends the wait: the socket we are waiting on may still be
+      // the one our own child is about to answer on.
+      const state = typeof probe === 'string' ? null : this.classify(probe, false);
       if (state !== null) {
         this.lastAttemptEndedAt = proc.now();
         return state;
@@ -407,6 +474,9 @@ export class EngineManager {
     }
     if (probe === 'foreign') {
       return `another server answers on ${paths.socketPath}; nothing was signalled`;
+    }
+    if (probe === 'unreachable') {
+      return `${paths.socketPath} did not answer in time, so nothing on it is provably ours; nothing was signalled`;
     }
     if (!sameIdentity(recorded, probe)) {
       return `${paths.enginePidPath} (pid ${recorded.pid}) and the engine on the socket (pid ${probe.pid}) disagree; nothing was signalled`;

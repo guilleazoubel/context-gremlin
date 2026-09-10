@@ -30,6 +30,8 @@ const CONFIG = '/home/me/.cgremlin-core/core.json';
 const LOG = FAKE_PATHS.engineLogPath;
 const EXEC = '/path/to/node';
 const ENGINE = '/ext/engine/engine.js';
+/** What R20's login shell answers — the PATH the engine's own spawn is given. */
+const LOGIN_PATH = '/opt/homebrew/bin:/usr/bin';
 
 let host: FakeHost;
 let manager: FakeEngineManager;
@@ -45,6 +47,7 @@ function build(): EngineSurface {
     home: '/home/me',
     execPath: EXEC,
     enginePath: ENGINE,
+    resolveLoginPath: async () => loginPath,
     // Recorded in the manager's own log so ordering assertions read as one sequence.
     reconnect: async () => {
       manager.calls.push('reconnect');
@@ -54,12 +57,14 @@ function build(): EngineSurface {
 }
 
 let configPath = CONFIG;
+let loginPath: string | null = LOGIN_PATH;
 
 beforeEach(() => {
   host = new FakeHost();
   manager = new FakeEngineManager();
   bridge = new FakeBridge();
   configPath = CONFIG;
+  loginPath = LOGIN_PATH;
   manager.current = { kind: 'running', version: '0.0.1', pid: 10, adopted: true };
   surface = build();
 });
@@ -127,6 +132,26 @@ describe('first run (R5)', () => {
     expect(warnings).toHaveLength(1);
     expect(String(warnings[0].args[0])).toContain('cgremlin.configPath');
     expect(manager.calls).toEqual([]);
+  });
+
+  it('asks gh with the login shell PATH the engine itself is spawned with (R20)', async () => {
+    host.spawnResults.set('gh', { code: 0, stdout: 'someone\n', stderr: '' });
+    await surface.bootstrap();
+    await surface.settled();
+
+    const gh = host.callsOf('spawnCapture')[0];
+    expect(gh.args[0]).toBe('gh');
+    expect((gh.args[2] as { env?: Record<string, string | undefined> }).env?.PATH).toBe(LOGIN_PATH);
+  });
+
+  it('falls back to this process own PATH when the login shell does not answer', async () => {
+    loginPath = null;
+    host.spawnResults.set('gh', { code: 0, stdout: 'someone\n', stderr: '' });
+    await surface.bootstrap();
+    await surface.settled();
+
+    const gh = host.callsOf('spawnCapture')[0];
+    expect((gh.args[2] as { env?: Record<string, string | undefined> }).env).toBeUndefined();
   });
 
   it('uses a typed login when gh cannot answer', async () => {
@@ -221,6 +246,17 @@ describe('a foreign server on the socket', () => {
     expect(warnings).toHaveLength(1);
     expect(warnings[0].args[2]).toEqual([SHOW_LOG, 'Settings']);
     expect(manager.calls).toEqual([]);
+  });
+
+  it('warns again after the socket stops being foreign and becomes foreign anew', async () => {
+    host.files.set(CONFIG, '{}');
+    await surface.bootstrap();
+    manager.emit({ kind: 'foreign' });
+    manager.emit({ kind: 'running', version: '0.0.1', pid: 10, adopted: true });
+    manager.emit({ kind: 'foreign' });
+    await surface.settled();
+
+    expect(host.callsOf('showWarningMessage')).toHaveLength(2);
   });
 });
 

@@ -12,7 +12,7 @@ import { CoreClient } from './core-client';
 import { engineBundlePath, loadBridge, type EngineBridge } from './engine/bridge';
 import { watchFileByRename } from './engine/file-watch';
 import { EngineManager } from './engine/manager';
-import { NodeEngineProcess } from './engine/node-engine-process';
+import { NodeEngineProcess, resolveLoginPath } from './engine/node-engine-process';
 import { SseClient } from './sse';
 import { readSettings } from './settings';
 import { EngineSurface } from './ui/engine';
@@ -90,6 +90,7 @@ export function activate(context: vscode.ExtensionContext): void {
     home: os.homedir(),
     execPath: process.execPath,
     enginePath: engineBundlePath(context.extensionPath),
+    resolveLoginPath: () => resolveLoginPath(),
     reconnect: async () => {
       sse.stop();
       sse.start();
@@ -282,7 +283,14 @@ function buildHost(output: vscode.OutputChannel): Host {
         execFile(
           command,
           [...args],
-          { cwd: options?.cwd, timeout: options?.timeoutMs, encoding: 'utf8' },
+          {
+            cwd: options?.cwd,
+            timeout: options?.timeoutMs,
+            encoding: 'utf8',
+            // The overrides are merged onto this process's own environment, never a replacement
+            // for it: only `PATH` is ever supplied, and only to match the engine's spawn (R20).
+            env: options?.env === undefined ? process.env : { ...process.env, ...options.env },
+          },
           (err, stdout, stderr) => {
             const code =
               err === null ? 0 : typeof err.code === 'number' ? err.code : 1;

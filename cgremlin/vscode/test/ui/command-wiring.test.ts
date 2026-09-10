@@ -63,6 +63,7 @@ async function harness(opts: { handler?: StubHandler; socketPath?: string } = {}
     bridge: new FakeBridge(),
     configPath: () => `${STATE_DIR}/core.json`,
     home: '/home/me',
+    resolveLoginPath: async () => null,
     execPath: '/path/to/node',
     enginePath: '/ext/engine/engine.js',
     reconnect: async () => undefined,

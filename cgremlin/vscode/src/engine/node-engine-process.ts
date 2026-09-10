@@ -73,6 +73,34 @@ export function parsePidFile(text: string): EnginePidFile | null {
 }
 
 /**
+ * R20. `-l` picks up the login files and `-i` the interactive ones (a `PATH` set in `.zshrc` is
+ * the common case); the cap is what stops a pathological profile from hanging activation.
+ *
+ * Exported on its own because the engine is not the only thing spawned outside the editor's own
+ * environment: the first run asks `gh` who the user is, and a `gh` that is only on the login
+ * shell's `PATH` must be found the same way the engine's own host is.
+ */
+export function resolveLoginPath(
+  opts: { shell?: string; env?: NodeJS.ProcessEnv; timeoutMs?: number } = {},
+): Promise<string | null> {
+  const shell = opts.shell ?? (opts.env ?? process.env).SHELL;
+  if (shell === undefined || shell === '') return Promise.resolve(null);
+  return new Promise<string | null>((resolve) => {
+    execFile(
+      shell,
+      ['-lic', 'echo $PATH'],
+      { timeout: opts.timeoutMs ?? LOGIN_PATH_TIMEOUT_MS, encoding: 'utf8' },
+      (err, stdout) => {
+        if (err !== null) return resolve(null);
+        const lines = stdout.split('\n').map((line) => line.trim()).filter((line) => line !== '');
+        const last = lines.at(-1);
+        resolve(last === undefined ? null : last);
+      },
+    );
+  });
+}
+
+/**
  * R10/R24: the child gets the host's environment minus the editor's own plumbing, plus the flag
  * that makes the editor's Node host behave as Node. The engine scrubs the same keys from its own
  * environment at startup, so an agent it later spawns cannot inherit them either.
@@ -128,10 +156,13 @@ export class NodeEngineProcess implements EngineProcessPort {
         },
       );
       req.setTimeout(this.opts.probeTimeoutMs ?? PROBE_TIMEOUT_MS, () => {
+        // Something holds the socket and will not answer *yet*. That is not "nobody home", and it
+        // is certainly not something to start a second engine against — but neither is it proof of
+        // a stranger: an engine still booting, or one busy under load, reads exactly like this.
+        // The outcome is latched before the destroy, so the `error` the destroy raises cannot
+        // overwrite it with `foreign`. The caller decides how many of these make a `foreign`.
+        done('unreachable');
         req.destroy();
-        // Something holds the socket and will not answer. That is not "nobody home", and it is
-        // certainly not something to start a second engine against.
-        done('foreign');
       });
       req.on('error', (err: NodeJS.ErrnoException) => {
         done(OFFLINE_CODES.has(err.code ?? '') ? null : 'foreign');
@@ -140,25 +171,12 @@ export class NodeEngineProcess implements EngineProcessPort {
     });
   }
 
-  /**
-   * R20. `-l` picks up the login files and `-i` the interactive ones (a `PATH` set in `.zshrc` is
-   * the common case); the cap is what stops a pathological profile from hanging activation.
-   */
+  /** R20, delegated to the exported function so the `gh` spawn can resolve `PATH` the same way. */
   resolveLoginPath(): Promise<string | null> {
-    const shell = this.opts.shell ?? this.env.SHELL;
-    if (shell === undefined || shell === '') return Promise.resolve(null);
-    return new Promise<string | null>((resolve) => {
-      execFile(
-        shell,
-        ['-lic', 'echo $PATH'],
-        { timeout: this.opts.loginPathTimeoutMs ?? LOGIN_PATH_TIMEOUT_MS, encoding: 'utf8' },
-        (err, stdout) => {
-          if (err !== null) return resolve(null);
-          const lines = stdout.split('\n').map((line) => line.trim()).filter((line) => line !== '');
-          const last = lines.at(-1);
-          resolve(last === undefined ? null : last);
-        },
-      );
+    return resolveLoginPath({
+      shell: this.opts.shell,
+      env: this.env,
+      timeoutMs: this.opts.loginPathTimeoutMs,
     });
   }
 
