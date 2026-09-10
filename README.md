@@ -8,7 +8,9 @@ Agentic code review and investigation sessions powered by AI. Launch isolated en
 
 A ground-up, tested rebuild of this tool is under way in `cgremlin/core` (the headless engine) and
 `cgremlin/vscode` (its VS Code extension UI); see `cgremlin/core/README.md` and
-`cgremlin/vscode/README.md`. It does not share code or state with the legacy tool documented below.
+`cgremlin/vscode/README.md`. The extension carries the engine, so installing its `.vsix` is the
+whole setup — nothing to put on `PATH`, nothing to start by hand. It does not share code or state
+with the legacy tool documented below (its state lives in `~/.cgremlin-core`, never `~/.cgremlin`).
 
 ## Install
 

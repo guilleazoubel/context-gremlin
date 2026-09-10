@@ -17,59 +17,72 @@ Record the result in the table at the bottom and commit it on the phase branch.
 ## 0. Setup (once)
 
 The smoke state dir is **`~/.cgremlin-core-smoke`** — never `~/.cgremlin`, which is the legacy
-tool's state and must not be touched.
+tool's state and must not be touched, and never the real default `~/.cgremlin-core` either.
+
+The extension carries the engine. There is nothing to put on `PATH`, nothing to start by hand, and
+no socket setting: **install the `.vsix`, or press F5.**
 
 ```sh
-# The engine, from this worktree.
-cd cgremlin/core && pnpm install && pnpm build
-# `cgremlin-core` on PATH (the "Start it" action types a bare `cgremlin-core serve`):
-export PATH="$PWD/bin:$PATH"
-
-# The extension.
-cd ../vscode && pnpm install && pnpm build
+cd cgremlin/vscode && pnpm install
+pnpm package     # builds ../core's engine bundles, compiles the extension, writes the .vsix
+code --install-extension cgremlin-vscode-0.0.1.vsix
 ```
 
-`~/.cgremlin-core-smoke/core.json` already exists. Confirm it, and note the derived paths — the
-engine derives `sessions/`, `worktrees/`, `mirrors/`, `engine.sock`, `inventory.json` and
-`attention-acks.json` from `stateDir`:
+or, to smoke a working tree instead of an installed build: open **`cgremlin/vscode`** (that folder,
+not the repo root) in VS Code and press **F5** — `.vscode/launch.json` builds first (engine bundles
+included) and launches an Extension Development Host with `--extensionDevelopmentPath` on this
+package.
 
-```sh
-cat ~/.cgremlin-core-smoke/core.json          # stateDir must be ~/.cgremlin-core-smoke
-cgremlin-core sessions --config ~/.cgremlin-core-smoke/core.json
-```
-
-Open **`cgremlin/vscode`** (that folder, not the repo root) in VS Code and press **F5**. That uses
-`.vscode/launch.json`, which builds first and launches an Extension Development Host with
-`--extensionDevelopmentPath` pointing at this package.
-
-In the **Extension Development Host** window, set these three settings (Preferences → Settings →
-`cgremlin`, or its `settings.json`) so the extension talks to the smoke engine and not the legacy
-one:
+In the window under test, set **one** setting, and only because this is a smoke run against a
+throwaway state dir rather than your real one:
 
 ```jsonc
 {
-  "cgremlin.socketPath": "~/.cgremlin-core-smoke/engine.sock",
-  "cgremlin.configPath": "~/.cgremlin-core-smoke/core.json",
-  "cgremlin.notificationLevel": "all"
+  "cgremlin.configPath": "~/.cgremlin-core-smoke/core.json"
 }
 ```
 
+`cgremlin.notificationLevel` (default `all`) is the only other setting there is. **The socket
+setting is gone** — the socket, the log, the pid file, `sessions/` and `worktrees/` are all derived
+from `core.json`'s `stateDir` by the engine's own loader.
+
+- [ ] `~/.cgremlin-core-smoke/core.json` exists and its `stateDir` is `~/.cgremlin-core-smoke`. If
+      it does **not** exist, do not create it by hand — that is step 12's first-run test.
+- [ ] Within a few seconds of the window opening, the engine is running and the panel populates:
+      `~/.cgremlin-core-smoke/engine.sock`, `engine.json` and `engine.log` all exist.
+
+```sh
+ls -la ~/.cgremlin-core-smoke      # engine.sock, engine.json, engine.log
+cat ~/.cgremlin-core-smoke/engine.json   # {pid, version, socketPath, startedAt}
+tail -f ~/.cgremlin-core-smoke/engine.log
+```
+
+- [ ] `ls -la ~/.cgremlin` is unchanged by all of the above (or still absent) — nothing in this
+      phase reads or writes the legacy state dir.
+
 Throughout, `$S` means `~/.cgremlin-core-smoke` and `<id>` a session id from
-`cgremlin-core sessions --json --config $S/core.json`.
+`cgremlin-core sessions --json --config $S/core.json`. (`cgremlin-core` on `PATH` is only needed
+for these cross-checks, never by the extension: `export PATH="$PWD/../core/bin:$PATH"`.)
 
 ---
 
-## 1. Engine off
+## 1. The engine commands
 
-- [ ] With no engine running (`pkill -f 'cgremlin-core serve'`; `rm -f $S/engine.sock` if a stale
-      file remains), reload the Extension Development Host.
-- [ ] The status bar reads **`cgremlin: offline`**.
-- [ ] A warning appears naming the engine as not running, offering **`Start it`** and `Settings`.
-      (v1 carries the not-running message as a notification — one per outage — rather than as a
-      placeholder inside the panel; the four lists simply read `(0)`.)
-- [ ] `Start it` opens a terminal running `cgremlin-core serve --config ~/.cgremlin-core-smoke/core.json`.
-- [ ] Within ~2 s of the socket appearing, the panel populates and the status bar shows
-      `N need you`.
+- [ ] **`cgremlin: Stop the engine`** asks first, in a confirmation that names the shared-daemon
+      fact and the **number of running items** — then the status bar reads `cgremlin: offline` and
+      `$S/engine.sock` and `$S/engine.json` are both gone.
+- [ ] Dismissing that confirmation stops nothing.
+- [ ] **`cgremlin: Start the engine`** brings it back; within ~2 s the panel populates and the
+      status bar shows `N need you`. No terminal is opened at any point.
+- [ ] **`cgremlin: Restart the engine`** — the status bar passes through `starting…`, and
+      `engine.json`'s `pid`/`startedAt` both change.
+- [ ] **`cgremlin: Show the engine log`** reveals the cgremlin output channel and offers to open
+      `$S/engine.log`.
+- [ ] Open a **second** window on the same `configPath`: it adopts the running engine — no second
+      pid, `engine.json` unchanged, one boot's worth of output in the log. **Close** that window:
+      the engine keeps running (it is shared; closing a window never stops it).
+- [ ] With the engine stopped, `rm -f $S/engine.sock` is **not** needed and a leftover stale socket
+      recovers on its own — the extension never unlinks a socket.
 
 ## 2. Four lists
 
@@ -178,16 +191,48 @@ R20's four recovery paths, by hand:
 
 ## 10. Resilience
 
-- [ ] `kill -9` the engine mid-session → the status bar flips to `offline` within ~15 s (the SSE
-      heartbeat), with **no** error-dialog storm (one warning per outage).
-- [ ] Restart it → the client resyncs on a fresh epoch and the lists are correct, with **no**
-      duplicate rows.
+- [ ] `kill -9` the engine mid-session → the status bar flips to `engine failed — see log` (the
+      manager sees its child exit) or `offline` within ~15 s (the SSE heartbeat), with **no**
+      error-dialog storm (one warning per outage). A `kill -9` leaves `engine.json` behind; the
+      next start takes that provably dead lock over rather than refusing.
+- [ ] **`cgremlin: Start the engine`** → the client resyncs on a fresh epoch and the lists are
+      correct, with **no** duplicate rows.
 
 ## 11. Secrets
 
 - [ ] With `environments.<repo>.vercel.bypassSecret` set in `core.json`, run a review and confirm
       the raw secret appears in **no** `/events` frame, **no** notification and **no** tree label.
       (`GET /config`'s redaction is already pinned by the automated integration test.)
+
+## 12. The bundled engine, end to end
+
+**First run, on a machine with no `core.json`** (use a scratch path so nothing real is touched:
+set `cgremlin.configPath` to `~/.cgremlin-core-firstrun/core.json`, and `rm -rf` that dir
+afterwards):
+
+- [ ] The extension asks `gh` who you are, has the **engine** write the template, and opens the new
+      `core.json` in an editor. The file is mode `0600` (`stat -f '%Lp' <path>` → `600`) and its
+      `repos` is `[]`.
+- [ ] With `gh` unavailable (`PATH= code ...`, or `gh auth logout`), an input box asks for the
+      login instead — and **cancelling it writes nothing** and warns, naming the setting.
+- [ ] Add a repo to `repos`, save. The engine restarts by itself (silently, if nothing is running)
+      and the parking lot fills.
+- [ ] Introduce a typo (a trailing comma), save. One warning carries the **engine's own wording**
+      verbatim with an `Open core.json` action, the engine is **left running and untouched**, and
+      fixing the file and saving again restarts it — the watcher is still armed.
+
+**The version handshake:**
+
+- [ ] Stop the engine, start an *older or newer* one by hand
+      (`cgremlin-core serve --config $S/core.json` from a different checkout), reload the window.
+      With nothing running, the extension restarts it silently and says so in the output channel.
+      With a run in flight, it shows a **modal** naming both versions and the number of items a
+      restart would stop; `Not now` leaves it alone and does not ask again in that window.
+
+**Ownership:**
+
+- [ ] Edit `$S/engine.json` and change `pid` to your own shell's pid. `cgremlin: Stop the engine`
+      **refuses**, says so, and your shell is still alive. Put the file back.
 
 ---
 

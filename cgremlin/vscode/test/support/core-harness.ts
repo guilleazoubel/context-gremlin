@@ -1,46 +1,56 @@
 /**
- * Boots a REAL cgremlin engine for the integration tests.
+ * Boots a REAL cgremlin engine for the integration tests — through the REAL manager.
  *
- * Nothing here is a stub of the core: the engine is `cgremlin-core serve`, spawned as a child
- * process from the core's own built output, listening on a real Unix socket in a throwaway state
- * dir. The extension then talks to it through the very same `CoreClient` / `SseClient` /
- * `RefreshCoordinator` that ship.
+ * Nothing here is a stub of the core, and since Phase 8 nothing here is a stub of the launch path
+ * either: the engine is the **bundled** `engine/engine.js` this package ships, started by the
+ * shipping `EngineManager` + `NodeEngineProcess` exactly as the editor starts it — probe, resolve
+ * a login-shell PATH, rotate, spawn detached, poll `GET /version`. The extension then talks to it
+ * through the very same `CoreClient` / `SseClient` / `RefreshCoordinator` that ship.
  *
  * What IS faked, and only outside the engine:
  *  - `gh`, by a committed script on PATH that answers `pr list`/`pr view` from fixtures and exits 1
  *    for every write (test/support/fake-gh/gh);
  *  - `claude`, by a no-op script on PATH, purely as a backstop — no test here starts a stage, and
- *    the assertions say so.
+ *    the assertions say so;
+ *  - the login shell R20 asks for `PATH`, by a script that echoes the throwaway bin dir first, so
+ *    the fake `gh` is what the engine finds.
  *
  * The legacy `~/.cgremlin` state dir is never touched: HOME itself is redirected into the temp dir.
  */
-import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { chmod, mkdir, mkdtemp, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { CoreClient } from '../../src/core-client';
+import { loadBridge, type EngineBridge } from '../../src/engine/bridge';
+import { EngineManager, type EngineState } from '../../src/engine/manager';
+import { NodeEngineProcess } from '../../src/engine/node-engine-process';
 import type { SessionView } from '../../src/model/items';
 
 const REPO_SLUG = 'fake/repo';
-const CORE_DIR = path.resolve(__dirname, '../../../core');
 const FAKE_GH_DIR = path.join(__dirname, 'fake-gh');
 
-/** The engine entry point the harness spawns. Absent until `pnpm --dir ../core build` has run. */
-export const CORE_ENTRY = path.join(CORE_DIR, 'bin/cgremlin-core');
-export const CORE_DIST_MAIN = path.join(CORE_DIR, 'dist/cli/main.js');
+/** The installed extension's root — where `engine/engine.js` and `engine/bridge.js` sit. */
+export const EXTENSION_ROOT = path.resolve(__dirname, '../..');
+export const ENGINE_BUNDLE = path.join(EXTENSION_ROOT, 'engine', 'engine.js');
+export const BRIDGE_BUNDLE = path.join(EXTENSION_ROOT, 'engine', 'bridge.js');
 
 export const SKIP_REASON =
-  `cgremlin/core is not built (${CORE_DIST_MAIN} is missing) — ` +
-  'run `pnpm --dir ../core build`, or `pnpm test:integration`, which does it for you.';
+  `the engine bundle is not built (${ENGINE_BUNDLE} is missing) — ` +
+  'run `pnpm build`, or `pnpm test:integration`, which does it for you.';
 
 let built: boolean | null = null;
 
-/** True when the core's built entry point exists, so the integration suite can run at all. */
+/** True when both bundles exist, so the integration suite can run at all. */
 export function coreIsBuilt(): boolean {
   // Sync on purpose: `describe.skipIf` needs an answer before any test body runs.
-  built ??= existsSync(CORE_DIST_MAIN);
+  built ??= existsSync(ENGINE_BUNDLE) && existsSync(BRIDGE_BUNDLE);
   return built;
+}
+
+/** The bundled bridge, loaded the way the extension loads it. */
+export function loadEngineBridge(): EngineBridge {
+  return loadBridge(EXTENSION_ROOT);
 }
 
 /** The 40-hex head sha of the PR fixture the seeded review session points at. */
@@ -52,23 +62,38 @@ export interface SeededSessions {
   review: string;
 }
 
-export interface CoreHarness {
-  socketPath: string;
+/** A throwaway state dir with a loadable `core.json` and three seeded sessions in it. */
+export interface SeededStateDir {
   stateDir: string;
   sessionsDir: string;
   worktreesDir: string;
   binDir: string;
+  socketPath: string;
+  configPath: string;
+  /** `<stateDir>/engine.json` — asserted against the engine's own derivation, never trusted. */
+  enginePidPath: string;
+  engineLogPath: string;
+  /** The fake `$SHELL` R20's `PATH` probe runs. */
+  loginShell: string;
+  /** The environment the engine is spawned with, before the adapter's own scrubbing. */
+  env: NodeJS.ProcessEnv;
   repoSlug: string;
-  /** The bypass secret written into `core.json` — `GET /config` must never echo it. */
   bypassSecret: string;
   humanTurnTtlMs: number;
-  client: CoreClient;
   seeded: SeededSessions;
-  /** The engine's stderr, which is where `serve()` writes its JSON event log. */
+}
+
+export interface CoreHarness extends SeededStateDir {
+  client: CoreClient;
+  /** The manager that owns this engine — the only thing allowed to signal it. */
+  manager: EngineManager;
+  /** Everything the manager logged (R20's fallback line, R26's refusals). */
+  managerLog(): readonly string[];
+  /** The engine's own JSON event log: its stderr, redirected into `engine.log` by the spawn. */
   stderr(): string;
-  /** SIGTERM, wait for exit, and assert the socket file is gone. */
+  /** Stop through the manager's two-part proof, and assert socket and `engine.json` are gone. */
   stop(): Promise<void>;
-  /** Spawns the engine again on the same socket and state dir (R20's boot clear). */
+  /** Stop and start again on the same socket and state dir (R20's boot clear). */
   restart(): Promise<void>;
   /** Removes the whole temp state dir. */
   cleanup(): Promise<void>;
@@ -79,7 +104,7 @@ export interface StartEngineOptions {
   humanTurnTtlMs?: number;
 }
 
-export async function startEngine(opts: StartEngineOptions = {}): Promise<CoreHarness> {
+export async function seedStateDir(opts: StartEngineOptions = {}): Promise<SeededStateDir> {
   const stateDir = await mkdtemp(path.join(tmpdir(), 'cgvsc-'));
   const sessionsDir = path.join(stateDir, 'sessions');
   const worktreesDir = path.join(stateDir, 'worktrees');
@@ -96,6 +121,16 @@ export async function startEngine(opts: StartEngineOptions = {}): Promise<CoreHa
   // exists so that a future assertion which does start one cannot reach the real agent CLI.
   await writeFile(path.join(binDir, 'claude'), '#!/bin/bash\nexit 0\n', 'utf8');
   await chmod(path.join(binDir, 'claude'), 0o755);
+
+  // R20's login shell, faked so the engine's PATH really does come through `$SHELL -lic` and
+  // really does find the fake `gh` first.
+  const loginShell = path.join(binDir, 'login-shell');
+  await writeFile(
+    loginShell,
+    `#!/bin/bash\necho "${binDir}:${process.env.PATH ?? ''}"\n`,
+    'utf8',
+  );
+  await chmod(loginShell, 0o755);
 
   const configPath = path.join(stateDir, 'core.json');
   await writeFile(
@@ -127,77 +162,133 @@ export async function startEngine(opts: StartEngineOptions = {}): Promise<CoreHa
 
   const seeded = await seedSessions(sessionsDir, worktreesDir);
 
-  const harness: CoreHarness = {
-    socketPath,
+  return {
     stateDir,
     sessionsDir,
     worktreesDir,
     binDir,
+    socketPath,
+    configPath,
+    enginePidPath: path.join(stateDir, 'engine.json'),
+    engineLogPath: path.join(stateDir, 'engine.log'),
+    loginShell,
+    env: {
+      ...process.env,
+      // The legacy state dir must be unreachable even by accident.
+      HOME: stateDir,
+      FAKE_GH_FIXTURES: FAKE_GH_DIR,
+    },
     repoSlug: REPO_SLUG,
     bypassSecret,
     humanTurnTtlMs,
-    client: new CoreClient(socketPath),
     seeded,
-    stderr: () => stderr,
+  };
+}
+
+export interface ManagerOptions {
+  /** Override to drive the version handshake (R2/R21) against a real engine. */
+  bundledVersion?: string;
+  /** R25 supplies the editor's own `Code Helper (Plugin)` here. */
+  execPath?: string;
+  env?: NodeJS.ProcessEnv;
+  log?: (line: string) => void;
+}
+
+/** A manager wired the way the editor wires one, over a seeded state dir. */
+export function createManager(seed: SeededStateDir, opts: ManagerOptions = {}): EngineManager {
+  return new EngineManager({
+    process: new NodeEngineProcess({ env: opts.env ?? seed.env, shell: seed.loginShell }),
+    bundledVersion: opts.bundledVersion ?? loadEngineBridge().ENGINE_VERSION,
+    paths: () => ({
+      configPath: seed.configPath,
+      socketPath: seed.socketPath,
+      enginePidPath: seed.enginePidPath,
+      engineLogPath: seed.engineLogPath,
+    }),
+    launch: () => ({
+      execPath: opts.execPath ?? process.execPath,
+      enginePath: ENGINE_BUNDLE,
+      cwd: seed.stateDir,
+    }),
+    log: opts.log ?? (() => {}),
+  });
+}
+
+/** Reads `engine.log` — where the spawn sends both of the engine's streams. */
+export function readEngineLog(logPath: string): string {
+  try {
+    return readFileSync(logPath, 'utf8');
+  } catch {
+    return '';
+  }
+}
+
+export async function startEngineViaManager(opts: StartEngineOptions = {}): Promise<CoreHarness> {
+  const seed = await seedStateDir(opts);
+  const logged: string[] = [];
+  const manager = createManager(seed, { log: (line) => logged.push(line) });
+  let live = false;
+
+  function describeFailure(state: EngineState): string {
+    return `${JSON.stringify(state)}\nengine.log:\n${readEngineLog(seed.engineLogPath)}`;
+  }
+
+  async function start(): Promise<void> {
+    const state = await manager.ensureRunning('user');
+    if (state.kind !== 'running') {
+      throw new Error(`the engine did not come up: ${describeFailure(state)}`);
+    }
+    live = true;
+  }
+
+  async function stop(): Promise<void> {
+    if (!live) return;
+    const state = await manager.stop();
+    if (state.kind !== 'stopped') {
+      throw new Error(`the engine did not stop: ${describeFailure(state)}`);
+    }
+    live = false;
+    // The engine unlinks its socket and removes its lock in `close()`'s finally, just after it
+    // stops answering — so this is a short wait, not a loosened assertion.
+    await waitForGone(seed.socketPath, 'the socket file');
+    await waitForGone(seed.enginePidPath, 'engine.json');
+  }
+
+  async function restart(): Promise<void> {
+    await stop();
+    await start();
+  }
+
+  async function cleanup(): Promise<void> {
+    await stop();
+    await rm(seed.stateDir, { recursive: true, force: true });
+  }
+
+  const harness: CoreHarness = {
+    ...seed,
+    client: new CoreClient(seed.socketPath),
+    manager,
+    managerLog: () => logged,
+    stderr: () => readEngineLog(seed.engineLogPath),
     stop,
     restart,
     cleanup,
   };
 
-  let child: ChildProcess | null = null;
-  let stderr = '';
-  let exited: Promise<void> = Promise.resolve();
-
-  async function spawnEngine(): Promise<void> {
-    const proc = spawn(process.execPath, [CORE_ENTRY, 'serve', '--config', configPath], {
-      cwd: stateDir,
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        // The legacy state dir must be unreachable even by accident.
-        HOME: stateDir,
-        PATH: `${binDir}:${process.env.PATH ?? ''}`,
-        FAKE_GH_FIXTURES: FAKE_GH_DIR,
-      },
-    });
-    child = proc;
-    proc.stdout?.setEncoding('utf8');
-    proc.stderr?.setEncoding('utf8');
-    proc.stderr?.on('data', (chunk: string) => {
-      stderr += chunk;
-    });
-    exited = new Promise<void>((resolve) => proc.once('exit', () => resolve()));
-    proc.once('exit', (code, signal) => {
-      if (code !== 0 && signal === null) {
-        stderr += `\n[engine exited with code ${String(code)}]\n`;
-      }
-    });
-    await waitForSocket(socketPath, () => stderr, proc);
-  }
-
-  async function stop(): Promise<void> {
-    const proc = child;
-    child = null;
-    if (proc === null) return;
-    proc.kill('SIGTERM');
-    await withTimeout(exited, 10_000, () => `engine did not exit after SIGTERM. stderr:\n${stderr}`);
-    if (await exists(socketPath)) {
-      throw new Error(`engine left its socket file behind at ${socketPath}`);
-    }
-  }
-
-  async function restart(): Promise<void> {
-    await stop();
-    await spawnEngine();
-  }
-
-  async function cleanup(): Promise<void> {
-    await stop();
-    await rm(stateDir, { recursive: true, force: true });
-  }
-
-  await spawnEngine();
+  await start();
   return harness;
+}
+
+/** Waits for a path the engine owns to disappear. */
+export async function waitForGone(target: string, what: string, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    if (!(await exists(target))) return;
+    if (Date.now() >= deadline) {
+      throw new Error(`the engine left ${what} behind at ${target} after ${timeoutMs}ms`);
+    }
+    await sleep(25);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -341,34 +432,6 @@ async function exists(target: string): Promise<boolean> {
     return true;
   } catch {
     return false;
-  }
-}
-
-async function waitForSocket(socketPath: string, stderr: () => string, proc: ChildProcess): Promise<void> {
-  const deadline = Date.now() + 10_000;
-  for (;;) {
-    if (await exists(socketPath)) return;
-    if (proc.exitCode !== null) {
-      throw new Error(`engine exited before listening (code ${String(proc.exitCode)}). stderr:\n${stderr()}`);
-    }
-    if (Date.now() >= deadline) {
-      throw new Error(`engine never created its socket at ${socketPath}. stderr:\n${stderr()}`);
-    }
-    await sleep(25);
-  }
-}
-
-async function withTimeout<T>(work: Promise<T>, ms: number, message: () => string): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race([
-      work,
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new Error(message())), ms);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timer);
   }
 }
 

@@ -1,8 +1,9 @@
 /**
  * Integration: the extension's real client layer against a REAL engine.
  *
- * Nothing in the core is stubbed. `cgremlin-core serve` runs as a child process on a Unix socket
- * in a throwaway state dir (test/support/core-harness.ts), and every assertion below goes over
+ * Nothing in the core is stubbed. the bundled `engine/engine.js` runs as a detached child on a
+ * Unix socket in a throwaway state dir, started by the shipping `EngineManager`
+ * (test/support/core-harness.ts), and every assertion below goes over
  * real HTTP through the very modules that ship: `CoreClient`, `SseClient`, and the whole host
  * wiring (`createUi` → `RefreshCoordinator` → tree/status bar/notifications) driven by the same
  * `FakeHost` the unit tests use.
@@ -31,7 +32,7 @@ import {
   PR3_SHA,
   SKIP_REASON,
   sleep,
-  startEngine,
+  startEngineViaManager,
   waitUntil,
   type CoreHarness,
 } from '../support/core-harness';
@@ -84,7 +85,7 @@ describe.skipIf(!coreIsBuilt())('integration: the extension against a real engin
   let h: CoreHarness;
 
   beforeAll(async () => {
-    h = await startEngine();
+    h = await startEngineViaManager();
   }, TIMEOUT);
 
   afterAll(async () => {
@@ -596,13 +597,13 @@ describe.skipIf(!coreIsBuilt())('integration: the extension against a real engin
 
 /**
  * Its own engine, because R20's TTL is a config value and this is the only thing that needs a
- * short one. `cgremlin-core serve` boots in well under a second, so a second one is cheap.
+ * short one. the bundled engine boots in well under a second, so a second one is cheap.
  */
 describe.skipIf(!coreIsBuilt())('integration: an expiring human turn (R20)', () => {
   let h: CoreHarness;
 
   beforeAll(async () => {
-    h = await startEngine({ humanTurnTtlMs: 1_200 });
+    h = await startEngineViaManager({ humanTurnTtlMs: 1_200 });
   }, TIMEOUT);
 
   afterAll(async () => {

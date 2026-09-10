@@ -301,7 +301,14 @@ export class EngineManager {
     const probe = await this.probeOrRetry(paths.socketPath);
     if (probe === 'foreign') return this.setState({ kind: 'foreign' });
     const adopted = this.classify(probe, true);
-    if (adopted !== null) return adopted;
+    // An engine that answers is not a failed start, whoever started it: the backoff bounds
+    // failures to come up, and nothing here has failed. (`foreign` is not that answer — after
+    // `probeOrRetry` it also stands for three probes that said nothing at all, and a silence
+    // must not clear a gate that failed spawns earned.)
+    if (adopted !== null) {
+      this.attempts = 0;
+      return adopted;
+    }
     if (trigger === 'user') this.attempts = 0;
     const refusal = this.backoffRefusal(trigger);
     if (refusal !== null) {
@@ -381,6 +388,10 @@ export class EngineManager {
       const state = typeof probe === 'string' ? null : this.classify(probe, false);
       if (state !== null) {
         this.lastAttemptEndedAt = proc.now();
+        // The engine came up. R26's gate exists to bound spawns that *fail*; counting a
+        // successful one would make the next automatic start (R21's silent restart, a config
+        // save) wait out a backoff it never earned — and three of them exhaust it for good.
+        this.attempts = 0;
         return state;
       }
       if (proc.now() >= deadline) {

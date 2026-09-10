@@ -1,0 +1,15 @@
+# Exclude-only, .gitignore-style (R28). Everything not excluded here ships:
+# out/**/*.js, engine/** (the bundled engine and its bridge), README.md and package.json.
+src/**
+test/**
+node_modules/**
+docs/**
+.vscode/**
+**/*.ts
+tsconfig*.json
+vitest.config.ts
+eslint.config.js
+pnpm-lock.yaml
+**/*.map
+.gitignore
+.vscodeignore

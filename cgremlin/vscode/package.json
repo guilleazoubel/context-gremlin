@@ -6,6 +6,10 @@
   "private": true,
   "publisher": "cgremlin",
   "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/guilleazoubel/context-gremlin.git"
+  },
   "engines": {
     "vscode": "^1.85.0",
     "node": ">=20"
@@ -236,10 +240,12 @@
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "pnpm --dir ../core build:engine && tsc -p tsconfig.json",
+    "vscode:prepublish": "pnpm build",
+    "package": "vsce package --no-dependencies",
     "typecheck": "tsc -p tsconfig.typecheck.json --noEmit",
     "test": "vitest run",
-    "test:integration": "pnpm --dir ../core build && vitest run test/integration",
+    "test:integration": "pnpm --dir ../core build && pnpm --dir ../core build:engine && vitest run test/integration",
     "test:watch": "vitest",
     "lint": "eslint ."
   },
@@ -247,6 +253,7 @@
     "@eslint/js": "^9.13.0",
     "@types/node": "^20.19.43",
     "@types/vscode": "1.85.0",
+    "@vscode/vsce": "3.9.2",
     "eslint": "^9.13.0",
     "typescript": "^5.6.3",
     "typescript-eslint": "^8.11.0",
