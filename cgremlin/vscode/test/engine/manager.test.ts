@@ -184,20 +184,84 @@ describe('starting an engine', () => {
     expect(state.logTail).toEqual(fake.tail);
   });
 
-  it('fails the moment the child exits, without waiting for a probe (R26)', async () => {
+  it('adopts the engine that answers the post-exit probe, without spawning a second child', async () => {
+    // The race the finding describes: a *different* window's engine already holds the socket by
+    // the time this window's own spawn dies, so the one probe `handleChildExit` now takes finds it
+    // and adopts it rather than reporting a stale failure.
+    fake.spawnedAnswer = identity();
+    await withClock(manager.ensureRunning(), 1_000);
+    expect(manager.state().kind).toBe('running');
+    expect(fake.spawns).toHaveLength(1);
+    const probesBefore = fake.calls.filter((c) => c.kind === 'probe').length;
+
+    await fake.exit(1);
+    expect(manager.state()).toEqual({ kind: 'running', version: '0.0.1', pid: 4242, adopted: true });
+    expect(fake.spawns).toHaveLength(1); // no second child spawned
+    expect(fake.calls.filter((c) => c.kind === 'probe').length).toBe(probesBefore + 1);
+  });
+
+  it('fails with the log tail when the post-exit probe finds nothing (R26)', async () => {
     fake.spawnedAnswer = identity();
     await withClock(manager.ensureRunning(), 1_000);
     expect(manager.state().kind).toBe('running');
     expect(fake.spawns).toHaveLength(1);
 
+    // Nothing is there any more: the one post-exit probe is asked and answers silence.
+    fake.spawnedAnswer = undefined;
+    fake.probes = [null];
     const before = fake.now();
     await fake.exit(1);
-    expect(fake.now()).toBe(before);
+    expect(fake.now()).toBe(before); // a flat `null` answer needs no retry/sleep
     const state = manager.state();
     expect(state.kind).toBe('failed');
     if (state.kind !== 'failed') throw new Error('unreachable');
     expect(state.reason).toContain('exited with code 1');
     expect(state.logTail).toEqual(fake.tail);
+    expect(fake.spawns).toHaveLength(1);
+  });
+
+  it('never loops or retries beyond the single post-exit probe', async () => {
+    fake.spawnedAnswer = identity();
+    await withClock(manager.ensureRunning(), 1_000);
+    fake.spawnedAnswer = undefined;
+    fake.probes = ['unreachable']; // would retry up to PROBE_ATTEMPTS if this were a fresh ensure
+    await withClock(fake.exit(1), 1_000);
+    // probeOrRetry's own retry-on-timeout still applies (it is the *one* probe mechanism), but
+    // nothing beyond it: the child is not respawned and no second post-exit probe follows.
+    expect(fake.spawns).toHaveLength(1);
+    expect(manager.state().kind).toBe('failed');
+  });
+});
+
+describe('a child exit does not interleave with an in-flight stop', () => {
+  it('queues the post-exit probe behind an in-flight stop, which wins', async () => {
+    fake.spawnedAnswer = identity();
+    await withClock(manager.ensureRunning(), 1_000);
+    expect(manager.state().kind).toBe('running');
+    states.length = 0;
+
+    // The engine is genuinely being stopped: the socket still answers while SIGTERM is in flight.
+    fake.spawnedAnswer = undefined;
+    fake.probes = [identity()];
+    fake.pidFiles = [pidFile()];
+    const stop = manager.stop();
+    await flush();
+
+    // The child now exits (the very process the stop just signalled) while the stop is mid-flight.
+    void fake.exit(0);
+    await flush();
+
+    fake.probes = [null];
+    await fake.advance(2_000);
+    expect(await stop).toEqual({ kind: 'stopped' });
+    await flush();
+    await flush();
+
+    // The exit-handling was queued behind the stop, ran only after it settled, saw `stopped`
+    // already decided, and took no action of its own: no `running` or `failed` ever appeared.
+    expect(states.map((s) => s.kind)).toEqual(['stopped']);
+    expect(manager.state()).toEqual({ kind: 'stopped' });
+    expect(fake.spawns).toHaveLength(1);
   });
 });
 

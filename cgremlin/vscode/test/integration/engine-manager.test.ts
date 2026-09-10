@@ -132,18 +132,16 @@ describe.skipIf(!coreIsBuilt())('integration: the bundled engine through its man
     // Whatever each manager concluded, the machine may hold only one engine for this state dir.
     expect(engineProcessCount(seed.configPath)).toBe(1);
 
-    // A loser that reported `failed` (its own child lost the lock and exited 1) adopts on the
-    // next call rather than trying again — the winner is already there.
-    const settled = [];
-    for (const manager of managers) settled.push(await manager.ensureRunning('user'));
-    expect(settled.every((s) => s.kind === 'running')).toBe(true);
-    const pids = new Set(settled.map((s) => (s.kind === 'running' ? s.pid : -1)));
+    // The loser's own child lost the lock and exited non-zero — but `handleChildExit`'s one
+    // post-exit probe finds the winner's engine already answering and adopts it right there, in
+    // the very same `ensureRunning` call. Nobody needs to ask again.
+    expect(raced.every((s) => s.kind === 'running')).toBe(true);
+    const pids = new Set(raced.map((s) => (s.kind === 'running' ? s.pid : -1)));
     expect(pids.size).toBe(1);
     expect(engineProcessCount(seed.configPath)).toBe(1);
 
     const pidFile = JSON.parse(readFileSync(seed.enginePidPath, 'utf8')) as { pid: number };
     expect(pidFile.pid).toBe([...pids][0]);
-    expect(raced.length).toBe(2);
   }, TIMEOUT);
 
   it('stops the engine it can prove is its own, and leaves no socket and no engine.json', async () => {
