@@ -6,6 +6,7 @@ import type { LocalAppStatus } from '../env/environment-service';
 import type { SessionWatchEvent, SessionWatcher } from '../fs/session-watcher';
 import type { Session, SessionMode } from '../schema/session';
 import { repoSlugFromUrl } from '../gh/repo-slug';
+import { isClaimed } from '../pipeline/pipeline-service';
 import { TERMINAL_PHASES_BY_MODE } from '../workspace/workspace-in-use';
 import {
   deriveSessionReasons,
@@ -66,8 +67,9 @@ export interface AttentionItem extends Item {
   stageStatus: string | null;
   running: boolean;
   /**
-   * humanTurn !== null AND not expired (R12 as amended by R20). A1 leaves it
-   * false; A4, which introduces `agent.humanTurn` and `isClaimed`, wires it.
+   * humanTurn !== null AND not expired (R12 as amended by R20) — decided by
+   * `isClaimed`, the one definition of "claimed". Always false for a source
+   * that has no claim concept.
    */
   claimed: boolean;
 }
@@ -127,6 +129,7 @@ export interface SessionSourceAdapterDeps {
   isRunning(id: string): boolean;
   /** The GLOBAL local-app status; attributed to its owner only (R22). */
   localStatus?: () => Promise<LocalAppStatus>;
+  now?: () => Date;
 }
 
 export class SessionSourceAdapter implements SourceAdapter {
@@ -191,7 +194,9 @@ export class SessionSourceAdapter implements SourceAdapter {
       mode: session.mode,
       stageStatus: session.stageStatus,
       running: this.deps.isRunning(session.id),
-      claimed: false, // A4 wires this to isClaimed(session, now)
+      // R20: a claim counts only while it is unexpired, and `isClaimed` is
+      // the one place that decides that — never `humanTurn !== null` here.
+      claimed: isClaimed(session, this.deps.now ? this.deps.now() : new Date()),
       links: {
         ...emptyLinks(),
         sessionId: session.id,

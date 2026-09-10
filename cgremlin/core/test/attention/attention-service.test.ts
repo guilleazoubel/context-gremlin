@@ -15,11 +15,19 @@ import { mapErrorToHttp } from '../../src/api/http-errors';
 import type { Inventory, InventoryEntry } from '../../src/inventory/inventory';
 import type { LocalAppStatus } from '../../src/env/environment-service';
 import type { Session } from '../../src/schema/session';
+import type { HumanTurn } from '../../src/schema/stage';
 import { createHarness, SESSIONS_DIR, type PipelineHarness } from '../support/pipeline-harness';
 import { FakeSessionWatcher } from '../support/fake-session-watcher';
 
 const ACKS_PATH = '/state/attention-acks.json';
 const NOW = new Date('2026-09-10T12:00:00.000Z');
+/** A human-turn claim that is still live at NOW, and one that ran out before it. */
+const LIVE: HumanTurn = { claimedAt: '2026-09-10T11:55:00.000Z', expiresAt: '2026-09-10T12:05:00.000Z' };
+const EXPIRED: HumanTurn = { claimedAt: '2026-09-10T11:00:00.000Z', expiresAt: '2026-09-10T11:10:00.000Z' };
+
+function withClaim(session: Session, humanTurn: HumanTurn | null): Session {
+  return { ...session, agent: { runner: 'claude-code', resumeId: 'resume-1', humanTurn } };
+}
 
 class LoggingLock extends KeyedLock {
   readonly calls: string[] = [];
@@ -132,6 +140,7 @@ async function makeFixture(extraAdapters: SourceAdapter[] = []): Promise<Fixture
     sessionsDir: SESSIONS_DIR,
     isRunning: (id) => running.includes(id),
     localStatus: async () => localStatus,
+    now: () => NOW,
   });
   const prAdapter = new PrSourceAdapter({ inventory: { load: async () => inv } });
   const service = new AttentionService({
@@ -184,11 +193,31 @@ describe('AttentionService.list', () => {
     expect(item.stageStatus).toBe('plan_ready');
     expect(item.running).toBe(false);
     expect(item.repoOrContext).toBe('acme/app');
-    // A1 placeholders: A2 wires primaryArtifact, A4 wires claimed.
+    // A1 placeholder: A2 wires primaryArtifact.
     expect(item.links.primaryArtifact).toBeNull();
-    expect(item.claimed).toBe(false);
     expect(item.links.worktreePath).toBe('/worktrees/loud');
     expect(item.links.ticket).toBe('APP-1');
+  });
+
+  // R20: `claimed` is `isClaimed`, never `humanTurn !== null`.
+  it('reports claimed: true for a session whose human-turn claim is still live', async () => {
+    await fx.h.store.save(withClaim(investigation('claimed-live'), LIVE));
+    const all = await fx.service.list({ all: true });
+    expect(all.items.find((i) => i.ref === 'session:claimed-live')!.claimed).toBe(true);
+  });
+
+  it('reports claimed: false for a session whose human-turn claim has expired', async () => {
+    await fx.h.store.save(withClaim(investigation('claimed-expired'), EXPIRED));
+    const all = await fx.service.list({ all: true });
+    expect(all.items.find((i) => i.ref === 'session:claimed-expired')!.claimed).toBe(false);
+  });
+
+  it('reports claimed: false for a session with no claim, and for a non-session source', async () => {
+    await fx.h.store.save(withClaim(investigation('claimed-none'), null));
+    fx.setInventory(inventory([entry({ number: 7 })]));
+    const all = await fx.service.list({ all: true });
+    expect(all.items.find((i) => i.ref === 'session:claimed-none')!.claimed).toBe(false);
+    expect(all.items.find((i) => i.ref === 'pr:acme/app#7')!.claimed).toBe(false);
   });
 
   it('emits a session that also has an inventory row exactly once, as a session, with the PR links merged', async () => {
