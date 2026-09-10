@@ -296,6 +296,9 @@ export class EngineSurface {
   // --- state, prompts and the log -----------------------------------------
 
   private onEngineState(state: EngineState): void {
+    // The warning is once per *episode*, not once per window: a socket that stopped being foreign
+    // and became foreign again is news, and the manager re-probes rather than latching.
+    if (state.kind !== 'foreign') this.foreignWarned = false;
     const status: EngineStatus =
       state.kind === 'stopping' ? { kind: state.kind, elapsedMs: state.elapsedMs } : { kind: state.kind };
     for (const listener of [...this.stateListeners]) listener(status);

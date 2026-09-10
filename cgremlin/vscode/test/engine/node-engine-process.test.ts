@@ -82,6 +82,21 @@ describe('probe', () => {
     expect(await new NodeEngineProcess().probe(socketPath)).toBe('foreign');
   });
 
+  it('reports a socket that never answers as unreachable, not foreign', async () => {
+    const socketPath = path.join(tempDir(), 'engine.sock');
+    // Accepts the connection and then says nothing: a wedged engine, not a stranger's server, and
+    // certainly not "nobody home". Only the retry above this can tell which.
+    const server = http.createServer(() => {
+      /* deliberately never answers */
+    });
+    await new Promise<void>((resolve) => server.listen(socketPath, () => resolve()));
+    cleanups.push(() => server.closeAllConnections());
+    cleanups.push(() => server.close());
+
+    const proc = new NodeEngineProcess({ probeTimeoutMs: 150 });
+    expect(await proc.probe(socketPath)).toBe('unreachable');
+  });
+
   it('returns null for a socket path that does not exist, and creates nothing', async () => {
     const socketPath = path.join(tempDir(), 'engine.sock');
     expect(await new NodeEngineProcess().probe(socketPath)).toBeNull();

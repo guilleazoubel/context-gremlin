@@ -128,10 +128,13 @@ export class NodeEngineProcess implements EngineProcessPort {
         },
       );
       req.setTimeout(this.opts.probeTimeoutMs ?? PROBE_TIMEOUT_MS, () => {
+        // Something holds the socket and will not answer *yet*. That is not "nobody home", and it
+        // is certainly not something to start a second engine against — but neither is it proof of
+        // a stranger: an engine still booting, or one busy under load, reads exactly like this.
+        // The outcome is latched before the destroy, so the `error` the destroy raises cannot
+        // overwrite it with `foreign`. The caller decides how many of these make a `foreign`.
+        done('unreachable');
         req.destroy();
-        // Something holds the socket and will not answer. That is not "nobody home", and it is
-        // certainly not something to start a second engine against.
-        done('foreign');
       });
       req.on('error', (err: NodeJS.ErrnoException) => {
         done(OFFLINE_CODES.has(err.code ?? '') ? null : 'foreign');

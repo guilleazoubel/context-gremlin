@@ -222,6 +222,17 @@ describe('a foreign server on the socket', () => {
     expect(warnings[0].args[2]).toEqual([SHOW_LOG, 'Settings']);
     expect(manager.calls).toEqual([]);
   });
+
+  it('warns again after the socket stops being foreign and becomes foreign anew', async () => {
+    host.files.set(CONFIG, '{}');
+    await surface.bootstrap();
+    manager.emit({ kind: 'foreign' });
+    manager.emit({ kind: 'running', version: '0.0.1', pid: 10, adopted: true });
+    manager.emit({ kind: 'foreign' });
+    await surface.settled();
+
+    expect(host.callsOf('showWarningMessage')).toHaveLength(2);
+  });
 });
 
 describe('the engine commands', () => {

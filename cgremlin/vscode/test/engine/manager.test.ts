@@ -82,6 +82,33 @@ describe('MG-C1 no-second-engine', () => {
   });
 });
 
+describe('a probe that times out (unreachable)', () => {
+  it('retries a transient timeout and adopts the engine that answers next', async () => {
+    fake.probes = ['unreachable', identity({ pid: 77 })];
+    const state = await withClock(manager.ensureRunning(), 1_000);
+    expect(state).toEqual({ kind: 'running', version: '0.0.1', pid: 77, adopted: true });
+    expect(fake.spawns).toHaveLength(0);
+  });
+
+  it('gives up as foreign only after three timeouts', async () => {
+    fake.probes = ['unreachable'];
+    const state = await withClock(manager.ensureRunning(), 1_000);
+    expect(state).toEqual({ kind: 'foreign' });
+    expect(fake.calls.filter((c) => c.kind === 'probe')).toHaveLength(3);
+    expect(fake.spawns).toHaveLength(0);
+  });
+
+  it('re-probes on a user action rather than trusting the foreign state', async () => {
+    fake.probes = ['unreachable'];
+    expect((await withClock(manager.ensureRunning(), 1_000)).kind).toBe('foreign');
+
+    fake.probes = [identity({ pid: 88 })];
+    const state = await manager.ensureRunning('user');
+    expect(state).toEqual({ kind: 'running', version: '0.0.1', pid: 88, adopted: true });
+    expect(fake.spawns).toHaveLength(0);
+  });
+});
+
 describe('starting an engine', () => {
   it('reports starting before the first poll and running on the first answer', async () => {
     fake.spawnedAnswer = identity();
