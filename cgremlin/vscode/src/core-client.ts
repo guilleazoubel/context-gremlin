@@ -101,21 +101,34 @@ export function assertPrNumber(number: number): string {
   return String(number);
 }
 
+/**
+ * Where the engine's socket is. A function is resolved on **every** request, which is what lets a
+ * settings change take effect without rebuilding the client layer — and therefore without tearing
+ * down the tree, the status bar and every outstanding chat claim (R7).
+ */
+export type SocketPathSource = string | (() => string);
+
+export function resolveSocketPath(source: SocketPathSource): string {
+  return typeof source === 'function' ? source() : source;
+}
+
 export class CoreClient {
-  constructor(private readonly socketPath: string) {}
+  constructor(private readonly socketPath: SocketPathSource) {}
 
   // Every id-bearing method is `async` on purpose: its path-parameter check must surface as a
   // *rejected promise*, not a synchronous throw, so one call site can handle both failure modes.
 
   request(method: string, path: string, body?: unknown): Promise<HttpResult> {
     const payload = body === undefined ? undefined : Buffer.from(JSON.stringify(body), 'utf8');
+    // Resolved per request, never captured in the constructor (R7).
+    const socketPath = resolveSocketPath(this.socketPath);
     return new Promise<HttpResult>((resolve, reject) => {
       const headers: Record<string, string> = { Accept: 'application/json' };
       if (payload !== undefined) {
         headers['Content-Type'] = 'application/json';
         headers['Content-Length'] = String(payload.byteLength);
       }
-      const req = http.request({ socketPath: this.socketPath, path, method, headers }, (res) => {
+      const req = http.request({ socketPath, path, method, headers }, (res) => {
         const chunks: Buffer[] = [];
         res.on('data', (chunk: Buffer) => chunks.push(chunk));
         res.on('error', reject);
@@ -125,7 +138,7 @@ export class CoreClient {
         });
       });
       req.on('error', (err: NodeJS.ErrnoException) => {
-        reject(OFFLINE_CODES.has(err.code ?? '') ? new EngineNotRunningError(this.socketPath) : err);
+        reject(OFFLINE_CODES.has(err.code ?? '') ? new EngineNotRunningError(socketPath) : err);
       });
       if (payload !== undefined) req.write(payload);
       req.end();

@@ -5,8 +5,10 @@
  * which is why this file has no unit test of its own and `ui/wiring.ts` has one.
  */
 import fs from 'node:fs';
+import os from 'node:os';
 import * as vscode from 'vscode';
 import { CoreClient } from './core-client';
+import { loadBridge } from './engine/bridge';
 import { SseClient } from './sse';
 import { readSettings } from './settings';
 import { createUi, type Ui } from './ui/wiring';
@@ -32,7 +34,11 @@ export function activate(context: vscode.ExtensionContext): void {
   context.subscriptions.push(output);
   const settings = readSettings();
   const host = buildHost((line) => output.appendLine(line));
-  const client = new CoreClient(settings.socketPath);
+  // The socket path is not a setting: it is derived from `core.json` by the engine's own loader
+  // (MG-C6), and it is handed to the client layer as a provider so a settings change can re-point
+  // it without rebuilding the UI and releasing every chat claim (R7).
+  const paths = { socketPath: '' };
+  const client = new CoreClient(() => paths.socketPath);
 
   const created = createUi({
     host,
@@ -43,7 +49,7 @@ export function activate(context: vscode.ExtensionContext): void {
   });
   ui = created;
 
-  const sse = new SseClient({ socketPath: settings.socketPath });
+  const sse = new SseClient({ socketPath: () => paths.socketPath });
   stream = sse;
   // Every frame is a hint that something changed; the coordinator coalesces a burst into one
   // refetch, so the extension never trusts a frame's payload to be the whole truth.
@@ -52,9 +58,21 @@ export function activate(context: vscode.ExtensionContext): void {
   sse.on('open', () => created.coordinator.schedule());
   sse.on('offline', () => void created.offline());
 
-  void created.connect();
-  // The stream retries with backoff regardless of whether the first connect succeeded.
-  sse.start();
+  // B3 owns the engine's lifecycle, the first-run flow and the `ConfigError` surface; until then
+  // resolving the config is all that stands between activation and a socket to talk to.
+  void (async () => {
+    try {
+      const bridge = loadBridge(context.extensionPath);
+      const resolved = await bridge.loadResolvedConfig(settings.configPath, os.homedir());
+      paths.socketPath = resolved.socketPath;
+    } catch (err) {
+      output.appendLine(`cgremlin: could not resolve ${settings.configPath}: ${String(err)}`);
+      return;
+    }
+    void created.connect();
+    // The stream retries with backoff regardless of whether the first connect succeeded.
+    sse.start();
+  })();
 
   context.subscriptions.push({ dispose: () => sse.stop() });
   context.subscriptions.push({

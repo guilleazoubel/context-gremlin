@@ -111,15 +111,10 @@
     "configuration": {
       "title": "cgremlin",
       "properties": {
-        "cgremlin.socketPath": {
-          "type": "string",
-          "default": "~/.cgremlin/engine.sock",
-          "description": "Path to the cgremlin engine's Unix socket."
-        },
         "cgremlin.configPath": {
           "type": "string",
-          "default": "~/.cgremlin/core.json",
-          "description": "Path to core.json, used only when starting the engine from the extension."
+          "default": "~/.cgremlin-core/core.json",
+          "description": "Path to the engine's core.json. Every other path — the socket, the log, the sessions and worktrees directories — is derived from it by the engine itself."
         },
         "cgremlin.notificationLevel": {
           "type": "string",

@@ -68,8 +68,7 @@ before calling a change to this package verified.
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `cgremlin.socketPath` | `~/.cgremlin/engine.sock` | the engine's socket |
-| `cgremlin.configPath` | `~/.cgremlin/core.json` | used only when starting the engine from the extension |
+| `cgremlin.configPath` | `~/.cgremlin-core/core.json` | the engine's `core.json`; every other path (socket, log, sessions, worktrees) is derived from it by the engine's own config loader |
 | `cgremlin.notificationLevel` | `all` | `all` \| `needs-you-only` \| `off` |
 
 ## Commands

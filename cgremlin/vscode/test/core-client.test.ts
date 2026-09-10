@@ -35,6 +35,32 @@ describe('CoreClient — the engine is not running', () => {
   });
 });
 
+describe('CoreClient — the socket path is resolved per request (R7)', () => {
+  it('re-reads a provider on every request, so a settings change needs no reload', async () => {
+    const first = await startStubServer();
+    const second = await startStubServer();
+    servers.push(first, second);
+    let socketPath = first.socketPath;
+    const core = new CoreClient(() => socketPath);
+
+    await core.sessions();
+    expect(first.requests).toHaveLength(1);
+    expect(second.requests).toHaveLength(0);
+
+    socketPath = second.socketPath;
+    await core.sessions();
+    expect(first.requests).toHaveLength(1);
+    expect(second.requests).toHaveLength(1);
+  });
+
+  it('names the resolved path, not the provider, when nothing is listening', async () => {
+    const core = new CoreClient(() => '/tmp/cgremlin-does-not-exist-4b7a.sock');
+    const err = (await core.sessions().catch((e: unknown) => e)) as EngineNotRunningError;
+    expect(err).toBeInstanceOf(EngineNotRunningError);
+    expect(err.socketPath).toBe('/tmp/cgremlin-does-not-exist-4b7a.sock');
+  });
+});
+
 describe('CoreClient — reads', () => {
   it('unwraps GET /config', async () => {
     const { core, server } = await client();
