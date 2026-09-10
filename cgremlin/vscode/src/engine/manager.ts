@@ -368,19 +368,27 @@ export class EngineManager {
     }
     this.child = child;
     let exited = false;
+    let exitCode: number | null = null;
     child.onExit((code) => {
       exited = true;
-      void this.handleChildExit(child, code);
+      exitCode = code;
+      // While this spawn's own poll loop below is still watching (`starting`), it is the one
+      // still holding the lane — it resolves the exit itself, inline, the moment it notices. Only
+      // an exit *after* that (the engine was already `running`) needs its own lane entry, so it
+      // can never jump ahead of a `stop` that is already in flight.
+      if (this.current.kind !== 'starting') {
+        void this.enqueue(() => this.resolveChildExit(child, code));
+      }
     });
 
     const deadline = proc.now() + START_TIMEOUT_MS;
     for (;;) {
       await proc.sleep(START_POLL_MS);
-      // The child died before the socket came up: `handleChildExit` has already said so, and
-      // polling on would only replace its reason with a less useful timeout (R26).
+      // The child died before the socket came up: one probe (not a wait for the full timeout)
+      // decides whether this is the loser of a spawn race — another window's engine already
+      // answering — or a genuine failure to start (R26, and the finding this fixes).
       if (exited) {
-        this.lastAttemptEndedAt = proc.now();
-        return this.current;
+        return await this.resolveChildExit(child, exitCode);
       }
       const probe = await proc.probe(paths.socketPath);
       // Neither a stranger nor a silence ends the wait: the socket we are waiting on may still be
@@ -403,13 +411,35 @@ export class EngineManager {
     }
   }
 
-  /** R26: an exit while we believe it is running is a failure now, not at the next poll. */
-  private async handleChildExit(child: SpawnedEngine, code: number | null): Promise<void> {
-    if (this.child !== child) return;
+  /**
+   * R26, and the fix for the two-window spawn race: an exit while we believe the engine is ours
+   * (`running` or `starting`) is resolved with exactly one probe, not believed as a failure
+   * outright. A dead spawn whose socket is answered by someone else's engine — the loser of a
+   * race two windows just ran — is adopted here the same way `runEnsure` adopts one (MG-C1); one
+   * that answers nothing is the genuine failure R26 always reported.
+   *
+   * Reached two ways: inline from `spawnAndWait`'s own poll loop while it is still the operation
+   * holding the lane, or queued via `enqueue` for an exit discovered once the engine was already
+   * `running` — which is why the guard below re-checks `this.current.kind`: queued behind an
+   * in-flight `stop`, this may run only after that stop already decided `stopped`, and must not
+   * clobber it.
+   */
+  private async resolveChildExit(child: SpawnedEngine, code: number | null): Promise<EngineState> {
+    if (this.child !== child) return this.current;
     this.child = null;
-    if (this.current.kind !== 'running' && this.current.kind !== 'starting') return;
+    if (this.current.kind !== 'running' && this.current.kind !== 'starting') return this.current;
+    const paths = this.opts.paths();
+    const probe = await this.probeOrRetry(paths.socketPath);
+    if (probe !== 'foreign') {
+      const adopted = this.classify(probe, true);
+      if (adopted !== null) {
+        this.attempts = 0;
+        this.lastAttemptEndedAt = this.opts.process.now();
+        return adopted;
+      }
+    }
     this.lastAttemptEndedAt = this.opts.process.now();
-    await this.failed(`the engine exited with code ${code === null ? 'unknown' : String(code)}`);
+    return await this.failed(`the engine exited with code ${code === null ? 'unknown' : String(code)}`);
   }
 
   private async runStop(): Promise<EngineState> {
