@@ -8,15 +8,15 @@ export interface CommandWriter {
 export interface CommandIO {
   stdout: CommandWriter;
   stderr: CommandWriter;
-  /** Real home directory — used to resolve `~/.cgremlin/...` defaults. */
+  /** Real home directory — used to resolve `~/.cgremlin-core/...` defaults. */
   home: string;
   fs: SessionFileSystem;
-  /** Overrides the default `${home}/.cgremlin/core.json`, e.g. from a `--config` flag. */
+  /** Overrides the default `${home}/.cgremlin-core/core.json`, e.g. from a `--config` flag. */
   configPath?: string;
 }
 
 export function defaultConfigPath(home: string): string {
-  return `${home}/.cgremlin/core.json`;
+  return `${home}/.cgremlin-core/core.json`;
 }
 
 export function configPathFor(io: CommandIO): string {

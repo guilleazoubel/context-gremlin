@@ -28,9 +28,9 @@ describe('config import-legacy command', () => {
     const { io, out } = testIo(fs);
     const code = await configCommand(['import-legacy'], io);
     expect(code).toBe(0);
-    expect(out()).toContain(`${HOME}/.cgremlin/core.json`);
+    expect(out()).toContain(`${HOME}/.cgremlin-core/core.json`);
 
-    const written = await loadCoreConfig(fs, `${HOME}/.cgremlin/core.json`, HOME);
+    const written = await loadCoreConfig(fs, `${HOME}/.cgremlin-core/core.json`, HOME);
     expect(written.repos).toEqual(['acme/app', 'acme/other']);
     expect(written.watchAuthors).toEqual(['bob', 'carol']);
     expect(written.me).toBe('me-user');
@@ -56,7 +56,7 @@ describe('config import-legacy command', () => {
 
     const { io } = testIo(fs);
     expect(await configCommand(['import-legacy'], io)).toBe(0);
-    expect(await fs.statMode(`${HOME}/.cgremlin/core.json`)).toBe(0o600);
+    expect(await fs.statMode(`${HOME}/.cgremlin-core/core.json`)).toBe(0o600);
   });
 
   it('refuses to overwrite an existing core.json without --force', async () => {

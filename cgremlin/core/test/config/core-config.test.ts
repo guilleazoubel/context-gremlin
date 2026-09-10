@@ -30,12 +30,16 @@ describe('resolveCoreConfig', () => {
     expect(cfg.reviewSkillCommand).toBe('/APFM:apfm-review');
     expect(cfg.includeLiveUiCheck).toBe(true);
     expect(cfg.defaultBaseRef).toBe('origin/main');
-    expect(cfg.stateDir).toBe(`${HOME}/.cgremlin`);
-    expect(cfg.sessionsDir).toBe(`${HOME}/.cgremlin/sessions`);
-    expect(cfg.worktreesDir).toBe(`${HOME}/.cgremlin/worktrees`);
-    expect(cfg.mirrorsDir).toBe(`${HOME}/.cgremlin/mirrors`);
-    expect(cfg.socketPath).toBe(`${HOME}/.cgremlin/engine.sock`);
-    expect(cfg.inventoryPath).toBe(`${HOME}/.cgremlin/inventory.json`);
+    expect(cfg.stateDir).toBe(`${HOME}/.cgremlin-core`);
+    expect(cfg.sessionsDir).toBe(`${HOME}/.cgremlin-core/sessions`);
+    expect(cfg.worktreesDir).toBe(`${HOME}/.cgremlin-core/worktrees`);
+    expect(cfg.mirrorsDir).toBe(`${HOME}/.cgremlin-core/mirrors`);
+    expect(cfg.socketPath).toBe(`${HOME}/.cgremlin-core/engine.sock`);
+    expect(cfg.inventoryPath).toBe(`${HOME}/.cgremlin-core/inventory.json`);
+    expect(cfg.localAppStatePath).toBe(`${HOME}/.cgremlin-core/local-app.json`);
+    expect(cfg.attentionAcksPath).toBe(`${HOME}/.cgremlin-core/attention-acks.json`);
+    expect(cfg.enginePidPath).toBe(`${HOME}/.cgremlin-core/engine.json`);
+    expect(cfg.engineLogPath).toBe(`${HOME}/.cgremlin-core/engine.log`);
   });
 
   it('expands a leading ~ in stateDir against the given home', () => {
@@ -47,7 +51,7 @@ describe('resolveCoreConfig', () => {
   it('keeps explicit derived-path overrides instead of deriving them from stateDir', () => {
     const cfg = resolveCoreConfig({ repos: ['acme/app'], me: 'me', sessionsDir: '/custom/sessions' }, HOME);
     expect(cfg.sessionsDir).toBe('/custom/sessions');
-    expect(cfg.worktreesDir).toBe(`${HOME}/.cgremlin/worktrees`);
+    expect(cfg.worktreesDir).toBe(`${HOME}/.cgremlin-core/worktrees`);
   });
 
   it('rejects a repo slug without an owner/name shape', () => {
@@ -149,7 +153,9 @@ describe('writeCoreConfig / loadCoreConfig', () => {
   it('throws ConfigError for a schema-invalid config on disk', async () => {
     const fs = new InMemoryFileSystem();
     await fs.mkdir('/state', { recursive: true });
-    await fs.writeFile('/state/core.json', JSON.stringify({ repos: [], me: 'me' }));
+    // `repos: []` is valid since R4, so the schema-invalid example is a
+    // slug that is not owner/name.
+    await fs.writeFile('/state/core.json', JSON.stringify({ repos: ['not-a-slug'], me: 'me' }));
     await expect(loadCoreConfig(fs, '/state/core.json', HOME)).rejects.toThrow(ConfigError);
   });
 
@@ -207,8 +213,8 @@ describe('environments schema', () => {
     expect(loaded.me).toBe('me');
     expect(loaded.runner).toBe('claude-code');
     expect(loaded.pollIntervalMs).toBe(60_000);
-    expect(loaded.sessionsDir).toBe(`${HOME}/.cgremlin/sessions`);
-    expect(loaded.inventoryPath).toBe(`${HOME}/.cgremlin/inventory.json`);
+    expect(loaded.sessionsDir).toBe(`${HOME}/.cgremlin-core/sessions`);
+    expect(loaded.inventoryPath).toBe(`${HOME}/.cgremlin-core/inventory.json`);
   });
 
   it('applies every RepoEnvironment default', () => {
@@ -255,7 +261,7 @@ describe('environments schema', () => {
 
   it('derives localAppStatePath under stateDir and omits it when persisting the default', async () => {
     const cfg = resolveCoreConfig(BASE, HOME);
-    expect(cfg.localAppStatePath).toBe(`${HOME}/.cgremlin/local-app.json`);
+    expect(cfg.localAppStatePath).toBe(`${HOME}/.cgremlin-core/local-app.json`);
     const fs = new InMemoryFileSystem();
     await writeCoreConfig(fs, '/state/core.json', cfg, { force: false });
     const raw = JSON.parse(await fs.readFile('/state/core.json')) as Record<string, unknown>;
@@ -264,7 +270,7 @@ describe('environments schema', () => {
 
   it('derives attentionAcksPath under stateDir, in both places, and keeps an override', async () => {
     const cfg = resolveCoreConfig(BASE, HOME);
-    expect(cfg.attentionAcksPath).toBe(`${HOME}/.cgremlin/attention-acks.json`);
+    expect(cfg.attentionAcksPath).toBe(`${HOME}/.cgremlin-core/attention-acks.json`);
     const fs = new InMemoryFileSystem();
     await writeCoreConfig(fs, '/state/core.json', cfg, { force: false });
     const raw = JSON.parse(await fs.readFile('/state/core.json')) as Record<string, unknown>;
@@ -549,5 +555,59 @@ describe('humanTurnTtlMs (R20)', () => {
   it('rejects a zero or negative value', () => {
     expect(() => resolveCoreConfig({ repos: ['acme/app'], me: 'me', humanTurnTtlMs: 0 }, HOME)).toThrow();
     expect(() => resolveCoreConfig({ repos: ['acme/app'], me: 'me', humanTurnTtlMs: -1 }, HOME)).toThrow();
+  });
+});
+
+describe('the ~/.cgremlin-core default, the repos default, and the two engine paths (Phase 8 A1)', () => {
+  it('an explicit stateDir of ~/.cgremlin still resolves every path under it (the rename is a default change, not a hard-coded path change)', () => {
+    const cfg = resolveCoreConfig({ repos: ['acme/app'], me: 'me', stateDir: '~/.cgremlin' }, HOME);
+    expect(cfg.stateDir).toBe(`${HOME}/.cgremlin`);
+    expect(cfg.sessionsDir).toBe(`${HOME}/.cgremlin/sessions`);
+    expect(cfg.worktreesDir).toBe(`${HOME}/.cgremlin/worktrees`);
+    expect(cfg.mirrorsDir).toBe(`${HOME}/.cgremlin/mirrors`);
+    expect(cfg.socketPath).toBe(`${HOME}/.cgremlin/engine.sock`);
+    expect(cfg.inventoryPath).toBe(`${HOME}/.cgremlin/inventory.json`);
+    expect(cfg.localAppStatePath).toBe(`${HOME}/.cgremlin/local-app.json`);
+    expect(cfg.attentionAcksPath).toBe(`${HOME}/.cgremlin/attention-acks.json`);
+    expect(cfg.enginePidPath).toBe(`${HOME}/.cgremlin/engine.json`);
+    expect(cfg.engineLogPath).toBe(`${HOME}/.cgremlin/engine.log`);
+  });
+
+  it('parses a config with no repos key at all, defaulting repos to [] (R4)', () => {
+    const cfg = resolveCoreConfig({ me: 'x' }, HOME);
+    expect(cfg.repos).toEqual([]);
+  });
+
+  it('parses an explicitly empty repos array', () => {
+    expect(resolveCoreConfig({ me: 'x', repos: [] }, HOME).repos).toEqual([]);
+  });
+
+  it('still refuses a config with no me, naming me in the error (R4 asymmetry)', () => {
+    expect(() => resolveCoreConfig({ repos: ['acme/app'] }, HOME)).toThrow(/me/);
+  });
+
+  it('derives enginePidPath and engineLogPath under stateDir and omits both when persisting the derived default', async () => {
+    const cfg = resolveCoreConfig({ me: 'me', repos: ['acme/app'] }, HOME);
+    expect(cfg.enginePidPath).toBe(`${HOME}/.cgremlin-core/engine.json`);
+    expect(cfg.engineLogPath).toBe(`${HOME}/.cgremlin-core/engine.log`);
+    const fs = new InMemoryFileSystem();
+    await writeCoreConfig(fs, '/state/core.json', cfg, { force: false });
+    const raw = JSON.parse(await fs.readFile('/state/core.json')) as Record<string, unknown>;
+    expect(raw.enginePidPath).toBeUndefined();
+    expect(raw.engineLogPath).toBeUndefined();
+  });
+
+  it('expands ~ in an explicit enginePidPath/engineLogPath and persists both', async () => {
+    const cfg = resolveCoreConfig(
+      { me: 'me', repos: ['acme/app'], enginePidPath: '~/elsewhere/e.json', engineLogPath: '~/elsewhere/e.log' },
+      HOME,
+    );
+    expect(cfg.enginePidPath).toBe(`${HOME}/elsewhere/e.json`);
+    expect(cfg.engineLogPath).toBe(`${HOME}/elsewhere/e.log`);
+    const fs = new InMemoryFileSystem();
+    await writeCoreConfig(fs, '/state/core.json', cfg, { force: false });
+    const raw = JSON.parse(await fs.readFile('/state/core.json')) as Record<string, unknown>;
+    expect(raw.enginePidPath).toBe(`${HOME}/elsewhere/e.json`);
+    expect(raw.engineLogPath).toBe(`${HOME}/elsewhere/e.log`);
   });
 });

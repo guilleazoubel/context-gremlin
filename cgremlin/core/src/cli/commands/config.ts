@@ -1,7 +1,8 @@
 import { importLegacyConfig, resolveCoreConfig, writeCoreConfig } from '../../config/core-config';
 import { configPathFor, type CommandIO } from '../command-io';
 
-function legacyConfigPath(home: string): string {
+/** The legacy tool's config file — the one path that deliberately still points at `~/.cgremlin`. */
+export function legacyConfigPath(home: string): string {
   return `${home}/.cgremlin/config`;
 }
 

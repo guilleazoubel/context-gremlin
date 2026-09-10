@@ -18,7 +18,7 @@ Commands:
   review <pr-url>                     Start (or report) a review for a PR
   sessions [--json]                   List all sessions
   scan [--json]                       Run one inventory scan now
-  config import-legacy [--force]      Import ~/.cgremlin/config into core.json
+  config import-legacy [--force]      Import the legacy ~/.cgremlin/config into core.json
   local start|stop|status [session]   Control the local dev app the engine owns
   release <session-id>                Drop a human-turn claim on a session's conversation
 `;

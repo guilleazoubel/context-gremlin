@@ -53,7 +53,7 @@ export const RepoEnvironmentSchema = z.object({
 export type RepoEnvironment = z.infer<typeof RepoEnvironmentSchema>;
 
 export const CoreConfigSchema = z.object({
-  repos: z.array(z.string().regex(/^[^/\s]+\/[^/\s]+$/)).min(1),
+  repos: z.array(z.string().regex(/^[^/\s]+\/[^/\s]+$/)).default([]),
   watchAuthors: z.array(z.string().min(1)).default([]),
   me: z.string().min(1),
   runner: z.enum(['claude-code', 'codex']).default('claude-code'),
@@ -66,7 +66,7 @@ export const CoreConfigSchema = z.object({
     .default({}),
   pollIntervalMs: z.number().int().positive().default(60_000),
   prListLimit: z.number().int().positive().max(100).default(50),
-  stateDir: z.string().min(1).default('~/.cgremlin'),
+  stateDir: z.string().min(1).default('~/.cgremlin-core'),
   sessionsDir: z.string().optional(),
   worktreesDir: z.string().optional(),
   mirrorsDir: z.string().optional(),
@@ -78,6 +78,11 @@ export const CoreConfigSchema = z.object({
   environments: z.record(z.string().regex(/^[^/\s]+\/[^/\s]+$/), RepoEnvironmentSchema).default({}),
   localAppStatePath: z.string().optional(),
   attentionAcksPath: z.string().optional(),
+  // R13: the engine's identity/lock file and its log, derived like every
+  // other per-state-dir path so the extension asks the core where they are
+  // instead of joining paths itself.
+  enginePidPath: z.string().optional(),
+  engineLogPath: z.string().optional(),
   // R20: how long a human-turn claim stays live before any stage that trips
   // over it reaps it. Optional-with-a-default, so every core.json on disk
   // keeps loading.
@@ -108,6 +113,8 @@ export function resolveCoreConfig(raw: unknown, home: string): CoreConfig {
     inventoryPath: expandOrDerive(parsed.inventoryPath, 'inventory.json'),
     localAppStatePath: expandOrDerive(parsed.localAppStatePath, 'local-app.json'),
     attentionAcksPath: expandOrDerive(parsed.attentionAcksPath, 'attention-acks.json'),
+    enginePidPath: expandOrDerive(parsed.enginePidPath, 'engine.json'),
+    engineLogPath: expandOrDerive(parsed.engineLogPath, 'engine.log'),
   };
 }
 
@@ -262,6 +269,8 @@ const DERIVED_PATH_SUFFIXES: Record<string, string> = {
   inventoryPath: 'inventory.json',
   localAppStatePath: 'local-app.json',
   attentionAcksPath: 'attention-acks.json',
+  enginePidPath: 'engine.json',
+  engineLogPath: 'engine.log',
 };
 
 export async function writeCoreConfig(

@@ -12,7 +12,7 @@ import { createHarness, SESSIONS_DIR, type PipelineHarness } from '../support/pi
 import type { Session } from '../../src/schema/session';
 
 const HOME = '/home/api-local';
-const STATE_PATH = `${HOME}/.cgremlin/local-app.json`;
+const STATE_PATH = `${HOME}/.cgremlin-core/local-app.json`;
 const REPO_URL = 'https://github.com/acme/app.git';
 const SLUG = 'acme/app';
 const WT = '/worktrees/s1';
