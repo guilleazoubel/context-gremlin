@@ -96,6 +96,42 @@ function findEntry(inv: Inventory, repo: string, number: number): InventoryEntry
   return inv.entries.find((e) => e.repo === repo && e.number === number);
 }
 
+// Shared by both review-session entry points (POST /reviews and POST
+// /prs/:owner/:repo/:n/review): a session already tracking this PR is
+// restarted when it is not genuinely live — queued, failed, or a
+// 'reviewing' session whose lastRun is not actually in activeSessionIds
+// (the on-disk state left behind by a crashed host) — and left alone (200)
+// only when it truly is live already. Both routes must reach identical
+// conclusions for the same session state.
+async function respondForExistingReviewSession(
+  res: ServerResponse,
+  deps: ApiServerDeps,
+  existing: Session,
+): Promise<void> {
+  const isLive = deps.pipeline.activeSessionIds().includes(existing.id);
+  if (!isLive) {
+    if (existing.stageStatus === 'queued' || existing.stageStatus === 'failed') {
+      await awaitRunStart(deps.events, existing.id, deps.pipeline.runReview(existing.id));
+      const session = await deps.sessionStore.load(existing.id);
+      sendJson(res, 202, { session, created: false, started: true });
+      return;
+    }
+    if (existing.stageStatus === 'reviewing') {
+      // No live run for a session that claims to be 'reviewing' means the
+      // host crashed mid-run — the on-disk phase is stale. Mark it failed
+      // (a legal transition from 'reviewing') before restarting, rather
+      // than leaving it stuck forever or silently resuming as if nothing
+      // happened.
+      await deps.pipeline.transition(existing.id, 'failed');
+      await awaitRunStart(deps.events, existing.id, deps.pipeline.runReview(existing.id));
+      const session = await deps.sessionStore.load(existing.id);
+      sendJson(res, 202, { session, created: false, started: true });
+      return;
+    }
+  }
+  sendJson(res, 200, { session: existing, created: false, started: false });
+}
+
 async function handleReviewStart(
   res: ServerResponse,
   deps: ApiServerDeps,
@@ -128,28 +164,7 @@ async function handleReviewStart(
   );
 
   if (existing) {
-    const isLive = deps.pipeline.activeSessionIds().includes(existing.id);
-    if (!isLive) {
-      if (existing.stageStatus === 'queued' || existing.stageStatus === 'failed') {
-        await awaitRunStart(deps.events, existing.id, deps.pipeline.runReview(existing.id));
-        const session = await deps.sessionStore.load(existing.id);
-        sendJson(res, 202, { session, created: false, started: true });
-        return;
-      }
-      if (existing.stageStatus === 'reviewing') {
-        // No live run for a session that claims to be 'reviewing' means the
-        // host crashed mid-run — the on-disk phase is stale. Mark it failed
-        // (a legal transition from 'reviewing') before restarting, rather
-        // than leaving it stuck forever or silently resuming as if nothing
-        // happened.
-        await deps.pipeline.transition(existing.id, 'failed');
-        await awaitRunStart(deps.events, existing.id, deps.pipeline.runReview(existing.id));
-        const session = await deps.sessionStore.load(existing.id);
-        sendJson(res, 202, { session, created: false, started: true });
-        return;
-      }
-    }
-    sendJson(res, 200, { session: existing, created: false, started: false });
+    await respondForExistingReviewSession(res, deps, existing);
     return;
   }
 
@@ -565,11 +580,12 @@ async function handleRequest(
             s.pr.number === ref.number,
         );
         if (existing) {
-          // R23: 200, exactly like the inventory-originated route answers for
-          // the same situation — the caller's intent is satisfied by the
-          // session that already exists. A terminal one is not a match and
-          // falls through to a fresh session below.
-          sendJson(res, 200, { session: existing, created: false, started: false });
+          // R23: identical semantics to the inventory-originated route for
+          // the same session state — genuinely live/active already gets 200,
+          // otherwise (queued/failed/orphaned-reviewing) it is restarted and
+          // gets 202. A terminal session is not a match and falls through to
+          // a fresh session below.
+          await respondForExistingReviewSession(res, deps, existing);
           return;
         }
         const created = await inv.factory.createFromPrUrl(ref.url, { refuseAuthor: inv.config.me });

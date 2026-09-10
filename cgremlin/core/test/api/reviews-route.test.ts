@@ -122,6 +122,25 @@ function reviewSessionAt(id: string, slug: string, number: number, stageStatus: 
   };
 }
 
+// A 'reviewing' session whose lastRun claims to be running but which has no
+// live pipeline run behind it — the on-disk state left behind by a crashed
+// host, distinct from a genuinely live in-flight review.
+function orphanedReviewingSessionAt(id: string, slug: string, number: number): ReviewSession {
+  const base = reviewSessionAt(id, slug, number, 'reviewing');
+  return {
+    ...base,
+    lastRun: {
+      stage: 'review',
+      startedAt: '2026-09-04T10:00:00.000Z',
+      finishedAt: null,
+      exitCode: null,
+      signal: null,
+      outcome: 'running',
+      error: null,
+    },
+  };
+}
+
 async function startServer(name: string, harness: ReturnType<typeof createInventoryHarness>): Promise<{
   sock: string;
   close: () => Promise<void>;
@@ -226,6 +245,100 @@ describe('POST /reviews (R17/R23)', () => {
     expect((viaUrl.body as { session: Session }).session.id).toBe('pr-app-10-x');
     expect((await ih.h.store.list()).length).toBe(1);
     expect(() => ih.h.runner.lastHandle()).toThrow(); // nothing was started by either route
+  });
+
+  it('F4: an existing failed session with no live run is restarted via POST /reviews: 202 { created:false, started:true }', async () => {
+    const existing = reviewSessionAt('pr-app-10-x', 'acme/app', 10, 'failed');
+    await ih.h.store.save(existing);
+    const started: string[] = [];
+    ih.h.events.on('run.started', (e) => started.push(e.session.id));
+
+    const res = await request('POST', '/reviews', { prUrl: 'https://github.com/acme/app/pull/10' });
+
+    expect(res.status).toBe(202);
+    const body = res.body as { session: Session; created: boolean; started: boolean };
+    expect(body.created).toBe(false);
+    expect(body.started).toBe(true);
+    expect(body.session.id).toBe('pr-app-10-x');
+    expect(body.session.stageStatus).toBe('reviewing');
+    expect((await ih.h.store.list()).length).toBe(1); // reused, not duplicated
+    expect(started).toEqual(['pr-app-10-x']); // a run was actually kicked off, not just claimed in the response
+  });
+
+  it('F4: an existing queued session with no live run is restarted via POST /reviews: 202 { created:false, started:true }', async () => {
+    const existing = reviewSessionAt('pr-app-10-x', 'acme/app', 10, 'queued');
+    await ih.h.store.save(existing);
+    const started: string[] = [];
+    ih.h.events.on('run.started', (e) => started.push(e.session.id));
+
+    const res = await request('POST', '/reviews', { prUrl: 'https://github.com/acme/app/pull/10' });
+
+    expect(res.status).toBe(202);
+    const body = res.body as { session: Session; created: boolean; started: boolean };
+    expect(body.created).toBe(false);
+    expect(body.started).toBe(true);
+    expect(body.session.id).toBe('pr-app-10-x');
+    expect(body.session.stageStatus).toBe('reviewing');
+    expect(started).toEqual(['pr-app-10-x']);
+  });
+
+  it('F4: an orphaned reviewing session (lastRun not actually live) is restarted via POST /reviews: 202 { created:false, started:true }', async () => {
+    const existing = orphanedReviewingSessionAt('pr-app-10-x', 'acme/app', 10);
+    await ih.h.store.save(existing);
+    expect(ih.h.service.activeSessionIds()).not.toContain('pr-app-10-x'); // no live run on disk-only state
+    const started: string[] = [];
+    ih.h.events.on('run.started', (e) => started.push(e.session.id));
+
+    const res = await request('POST', '/reviews', { prUrl: 'https://github.com/acme/app/pull/10' });
+
+    expect(res.status).toBe(202);
+    const body = res.body as { session: Session; created: boolean; started: boolean };
+    expect(body.created).toBe(false);
+    expect(body.started).toBe(true);
+    expect(body.session.id).toBe('pr-app-10-x');
+    expect(body.session.stageStatus).toBe('reviewing');
+    expect(started).toEqual(['pr-app-10-x']);
+  });
+
+  it('guard: POST /reviews and POST /prs/:owner/:repo/:n/review give the same answer for the same non-live session state', async () => {
+    for (const [i, status] of (['failed', 'queued', 'reviewing'] as const).entries()) {
+      const viaUrlHarness = createInventoryHarness();
+      viaUrlHarness.gh.queueResponse({ stdout: JSON.stringify([prsFixtureItem(10, 'bob')]) });
+      await viaUrlHarness.scanner.run();
+      await viaUrlHarness.h.store.save(
+        status === 'reviewing'
+          ? orphanedReviewingSessionAt('pr-app-10-x', 'acme/app', 10)
+          : reviewSessionAt('pr-app-10-x', 'acme/app', 10, status),
+      );
+      const viaUrlServer = await startServer(`g${i}a.sock`, viaUrlHarness);
+
+      const viaInvHarness = createInventoryHarness();
+      viaInvHarness.gh.queueResponse({ stdout: JSON.stringify([prsFixtureItem(10, 'bob')]) });
+      await viaInvHarness.scanner.run();
+      await viaInvHarness.h.store.save(
+        status === 'reviewing'
+          ? orphanedReviewingSessionAt('pr-app-10-x', 'acme/app', 10)
+          : reviewSessionAt('pr-app-10-x', 'acme/app', 10, status),
+      );
+      const viaInvServer = await startServer(`g${i}b.sock`, viaInvHarness);
+
+      try {
+        const viaUrl = await requestOn(viaUrlServer.sock, 'POST', '/reviews', {
+          prUrl: 'https://github.com/acme/app/pull/10',
+        });
+        const viaInv = await requestOn(viaInvServer.sock, 'POST', '/prs/acme/app/10/review');
+
+        expect(viaInv.status).toBe(viaUrl.status);
+        const urlBody = viaUrl.body as { session: Session; created: boolean; started: boolean };
+        const invBody = viaInv.body as { session: Session; created: boolean; started: boolean };
+        expect(invBody.created).toBe(urlBody.created);
+        expect(invBody.started).toBe(urlBody.started);
+        expect(invBody.session.stageStatus).toBe(urlBody.session.stageStatus);
+      } finally {
+        await viaUrlServer.close();
+        await viaInvServer.close();
+      }
+    }
   });
 
   it('a terminal review session for that PR is not a match: a new session is created', async () => {
