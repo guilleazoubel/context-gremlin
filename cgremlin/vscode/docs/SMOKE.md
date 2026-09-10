@@ -42,13 +42,12 @@ Open **`cgremlin/vscode`** (that folder, not the repo root) in VS Code and press
 `.vscode/launch.json`, which builds first and launches an Extension Development Host with
 `--extensionDevelopmentPath` pointing at this package.
 
-In the **Extension Development Host** window, set these three settings (Preferences → Settings →
+In the **Extension Development Host** window, set these two settings (Preferences → Settings →
 `cgremlin`, or its `settings.json`) so the extension talks to the smoke engine and not the legacy
 one:
 
 ```jsonc
 {
-  "cgremlin.socketPath": "~/.cgremlin-core-smoke/engine.sock",
   "cgremlin.configPath": "~/.cgremlin-core-smoke/core.json",
   "cgremlin.notificationLevel": "all"
 }

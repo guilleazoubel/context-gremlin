@@ -211,6 +211,22 @@ describe('R26 respawn backoff', () => {
     expect(logs.some((l) => l.startsWith('engine.respawn_exhausted'))).toBe(true);
   });
 
+  it('does not hold a successful spawn against the next automatic start (R21, R26)', async () => {
+    // The bug C2 found against a real engine: after a *successful* start, an automatic start
+    // moments later — R21's silent restart on a version mismatch, or a config save — was refused
+    // by a gate only failed spawns are supposed to earn (and three of them exhausted it for good).
+    fake.nextPid = 4_242;
+    fake.probes = [null, identity()];
+    expect((await withClock(manager.ensureRunning('auto'), 1_000)).kind).toBe('running');
+    expect(fake.spawns).toHaveLength(1);
+
+    // The clock now stands 900 ms after that spawn ended — inside the first 1 s gate.
+    fake.probes = [null, identity()];
+    expect((await withClock(manager.ensureRunning('auto'), 1_000)).kind).toBe('running');
+    expect(fake.spawns).toHaveLength(2);
+    expect(logs.filter((l) => l.startsWith('engine.respawn_deferred'))).toHaveLength(0);
+  });
+
   it('always lets the user start, and resets the backoff', async () => {
     await failedSpawn(0);
     await failedSpawn(1_500);

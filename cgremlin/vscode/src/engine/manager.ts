@@ -236,7 +236,12 @@ export class EngineManager {
   private async runEnsure(trigger: Trigger): Promise<EngineState> {
     const paths = this.opts.paths();
     const adopted = this.classify(await this.opts.process.probe(paths.socketPath), true);
-    if (adopted !== null) return adopted;
+    // An engine that answers is not a failed start, whoever started it: the backoff bounds
+    // failures to come up, and nothing here has failed.
+    if (adopted !== null) {
+      this.attempts = 0;
+      return adopted;
+    }
     if (trigger === 'user') this.attempts = 0;
     const refusal = this.backoffRefusal(trigger);
     if (refusal !== null) {
@@ -314,6 +319,10 @@ export class EngineManager {
       const state = probe === 'foreign' ? null : this.classify(probe, false);
       if (state !== null) {
         this.lastAttemptEndedAt = proc.now();
+        // The engine came up. R26's gate exists to bound spawns that *fail*; counting a
+        // successful one would make the next automatic start (R21's silent restart, a config
+        // save) wait out a backoff it never earned — and three of them exhaust it for good.
+        this.attempts = 0;
         return state;
       }
       if (proc.now() >= deadline) {
