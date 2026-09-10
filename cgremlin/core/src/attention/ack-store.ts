@@ -11,6 +11,9 @@ export type AckMap = Record<ItemRef, AckEntry>;
 
 const AckMapSchema = z.record(z.string(), z.object({ signature: z.string(), ackedAt: z.string() }));
 
+/** Engine state, never world-readable — the same posture as `core.json`. */
+const ACK_FILE_MODE = 0o600;
+
 function randomSuffix(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
@@ -73,7 +76,9 @@ export class AckStore {
   private async write(acks: AckMap): Promise<void> {
     await this.fs.mkdir(dirnameOf(this.path), { recursive: true });
     const tmpPath = `${this.path}.${randomSuffix()}.tmp`;
-    await this.fs.writeFile(tmpPath, JSON.stringify(acks, null, 2));
+    // Mode is set on the tmp file before the rename, so the store is never
+    // briefly world-readable.
+    await this.fs.writeFile(tmpPath, JSON.stringify(acks, null, 2), { mode: ACK_FILE_MODE });
     await this.fs.rename(tmpPath, this.path);
   }
 }

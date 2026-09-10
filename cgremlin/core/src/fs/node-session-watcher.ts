@@ -48,7 +48,7 @@ export class NodeSessionWatcher implements SessionWatcher {
     try {
       this.watcher = factory(this.sessionsDir, { recursive: true }, (_event, filename) => {
         if (filename === null) return;
-        this.report(filename);
+        this.onWatchPath(filename);
       });
       // A watcher that dies later (the directory went away, the platform gave
       // up) must degrade rather than take the engine down with it.
@@ -75,6 +75,57 @@ export class NodeSessionWatcher implements SessionWatcher {
       this.timer = null;
     }
     this.onChange = null;
+    this.lastEmitted.clear();
+    this.mtimes.clear();
+  }
+
+  /**
+   * Test seam: the `<sessionId>/<name>` pairs this watcher still remembers.
+   * A long-lived engine sees sessions come and go, so this must not grow
+   * without bound — the pruning below is what keeps it honest.
+   */
+  get trackedKeys(): string[] {
+    return [...new Set([...this.lastEmitted.keys(), ...this.mtimes.keys()])].sort();
+  }
+
+  /**
+   * A one-segment report is the sessions dir's own basename or a session
+   * directory (created OR removed); a two-segment one is an artifact. Either
+   * can mean "gone", which is when the remembered state for it is dropped.
+   */
+  private onWatchPath(relative: string): void {
+    const segments = relative.split('/');
+    if (segments.length === 1) {
+      void this.forgetIfMissing(segments[0], null);
+      return;
+    }
+    if (segments.length !== 2) return;
+    this.report(relative);
+    void this.forgetIfMissing(segments[0], segments[1]);
+  }
+
+  private async forgetIfMissing(sessionId: string, name: string | null): Promise<void> {
+    if (sessionId.length === 0) return;
+    const target =
+      name === null
+        ? `${this.sessionsDir}/${sessionId}`
+        : `${this.sessionsDir}/${sessionId}/${name}`;
+    try {
+      await stat(target);
+      return; // still there
+    } catch {
+      // gone: fall through
+    }
+    this.forget(name === null ? `${sessionId}/` : `${sessionId}/${name}`);
+  }
+
+  /** Drops every remembered key that is, or lives under, `prefix`. */
+  private forget(prefix: string): void {
+    for (const map of [this.lastEmitted, this.mtimes]) {
+      for (const key of [...map.keys()]) {
+        if (key === prefix || key.startsWith(prefix)) map.delete(key);
+      }
+    }
   }
 
   /** Keeps only `<sessionId>/<artifact>`, coalesced per pair. */
@@ -112,6 +163,7 @@ export class NodeSessionWatcher implements SessionWatcher {
     } catch {
       return;
     }
+    const present = new Set<string>();
     for (const id of ids) {
       let names: string[];
       try {
@@ -132,9 +184,17 @@ export class NodeSessionWatcher implements SessionWatcher {
           continue;
         }
         const key = `${id}/${name}`;
+        present.add(key);
         const previous = this.mtimes.get(key);
         this.mtimes.set(key, mtimeMs);
         if (emit && previous !== mtimeMs) this.report(key);
+      }
+    }
+    // A session (or one of its artifacts) that vanished between scans is
+    // forgotten, so neither map tracks the whole history of the engine.
+    for (const map of [this.lastEmitted, this.mtimes]) {
+      for (const key of [...map.keys()]) {
+        if (!present.has(key)) map.delete(key);
       }
     }
   }

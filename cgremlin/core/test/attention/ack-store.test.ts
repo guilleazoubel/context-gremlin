@@ -42,6 +42,11 @@ describe('AckStore', () => {
     expect(Object.keys(await store.load())).toEqual(['pr:o/r#12']);
   });
 
+  it('writes the store 0600 — it is engine state, not world-readable', async () => {
+    await store.put(sessionRef('a'), { signature: 's', ackedAt: 't' });
+    expect(await fs.statMode(PATH)).toBe(0o600);
+  });
+
   it('prunes acks for items that no longer exist', async () => {
     await store.put(sessionRef('a'), { signature: 's1', ackedAt: 't1' });
     await store.put(prRef('o/r', 1), { signature: 's2', ackedAt: 't2' });

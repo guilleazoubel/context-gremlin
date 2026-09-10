@@ -87,6 +87,40 @@ describe('NodeSessionWatcher', () => {
     expect(seen).toEqual([]);
   });
 
+  it('prunes tracked state for a session directory that disappears (poll path)', async () => {
+    const seen: SessionWatchEvent[] = [];
+    watcher = new NodeSessionWatcher(dir, {
+      pollIntervalMs: 20,
+      watchFactory: () => {
+        throw Object.assign(new Error('not supported'), { code: 'ENOSYS' });
+      },
+    });
+    await mkdir(path.join(dir, 's1'), { recursive: true });
+    watcher.start((e) => seen.push(e));
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    await writeFile(path.join(dir, 's1', 'AGENT_STATE'), 'blocked');
+    await waitFor(() => seen.length > 0, 'the polled event');
+    expect(watcher.trackedKeys).toContain('s1/AGENT_STATE');
+
+    await rm(path.join(dir, 's1'), { recursive: true, force: true });
+    await waitFor(() => watcher!.trackedKeys.length === 0, 'the pruned tracking state');
+    expect(watcher.trackedKeys).toEqual([]);
+  });
+
+  it('prunes tracked state for a session directory that disappears (watch path)', async () => {
+    const seen: SessionWatchEvent[] = [];
+    watcher = new NodeSessionWatcher(dir);
+    watcher.start((e) => seen.push(e));
+    await mkdir(path.join(dir, 's1'), { recursive: true });
+    await writeFile(path.join(dir, 's1', 'AGENT_STATE'), 'needs-input');
+    await waitFor(() => seen.length > 0, 'the AGENT_STATE event');
+    expect(watcher.trackedKeys).toContain('s1/AGENT_STATE');
+
+    await rm(path.join(dir, 's1'), { recursive: true, force: true });
+    await waitFor(() => watcher!.trackedKeys.length === 0, 'the pruned tracking state');
+    expect(watcher.trackedKeys).toEqual([]);
+  });
+
   it('a missing sessions dir neither throws nor reports', async () => {
     watcher = new NodeSessionWatcher(path.join(dir, 'nope'), { pollIntervalMs: 20 });
     const seen: SessionWatchEvent[] = [];
