@@ -16,7 +16,16 @@ import { DiscoveryScheduler, type Clock, type Tickable } from '../discovery/sche
 import { InventoryScanner, type ScanReport } from '../inventory/inventory-scanner';
 import { InventoryStore } from '../inventory/inventory-store';
 import { createApiServer } from '../api/server';
+import { EventRing, attachEventRing } from '../api/event-stream';
+import { NodeSessionWatcher } from '../fs/node-session-watcher';
+import type { SessionWatcher } from '../fs/session-watcher';
 import { EnvironmentService } from '../env/environment-service';
+import { AckStore } from '../attention/ack-store';
+import {
+  AttentionService,
+  PrSourceAdapter,
+  SessionSourceAdapter,
+} from '../attention/attention-service';
 import type { LocalAppRunner } from '../env/local-app-runner';
 
 export interface EngineAdapters {
@@ -31,6 +40,8 @@ export interface EngineAdapters {
   now?: () => Date;
   /** Where prereq checks read `HOME` and the required env vars from; defaults to the real process environment. */
   env?: NodeJS.ProcessEnv;
+  /** Overrides the real recursive `fs.watch` over the sessions dir — a test seam. */
+  sessionWatcher?: SessionWatcher;
 }
 
 export interface Engine {
@@ -43,6 +54,8 @@ export interface Engine {
   lock: KeyedLock;
   config: CoreConfig;
   environment: EnvironmentService | null;
+  attention: AttentionService;
+  eventRing: EventRing;
 }
 
 export interface TickableParts {
@@ -79,6 +92,7 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
   const worktreesDir = config.worktreesDir!;
   const mirrorsDir = config.mirrorsDir!;
   const inventoryPath = config.inventoryPath!;
+  const attentionAcksPath = config.attentionAcksPath!;
 
   const store = new SessionStore(adapters.fs, sessionsDir);
   const workspace = new WorkspaceManager(adapters.git, adapters.fs, mirrorsDir);
@@ -155,6 +169,33 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     now: adapters.now,
   });
 
+  // The attention model: one adapter per source (R18), an ack store of its
+  // own (R10), and a service that takes no session lock (MG-A3). It starts
+  // nothing — `serve()` owns subscribing it, exactly as it owns every other
+  // side effect buildEngine deliberately leaves out.
+  // Every engine event feeds the replay ring exactly once, at build time, so
+  // a client that connects later still replays what it missed.
+  const eventRing = new EventRing();
+  attachEventRing(events, eventRing);
+  const sessionWatcher = adapters.sessionWatcher ?? new NodeSessionWatcher(sessionsDir);
+
+  const attention = new AttentionService({
+    adapters: [
+      new SessionSourceAdapter({
+        store,
+        fs: adapters.fs,
+        sessionsDir,
+        isRunning: (id) => pipeline.activeSessionIds().includes(id),
+        ...(environment ? { localStatus: () => environment.status() } : {}),
+      }),
+      new PrSourceAdapter({ inventory: inventoryStore }),
+    ],
+    acks: new AckStore(adapters.fs, attentionAcksPath),
+    events,
+    watcher: sessionWatcher,
+    now: adapters.now,
+  });
+
   const tickable = opts.makeTickable
     ? opts.makeTickable({ gh: adapters.gh, store, pipeline, events, lock, inventoryStore, scanner })
     : scanner;
@@ -168,9 +209,11 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     sessionsDir,
     events,
     inventory: { scanner, scheduler, factory, inventoryStore, config: { me: config.me } },
+    attention,
+    eventRing,
     lock,
     ...(environment ? { environment } : {}),
   });
 
-  return { server, scheduler, scanner, pipeline, events, store, lock, config, environment };
+  return { server, scheduler, scanner, pipeline, events, store, lock, config, environment, attention, eventRing };
 }

@@ -2,6 +2,7 @@ import type { Session } from '../schema/session';
 import type { StageName, RunOutcome } from '../schema/stage';
 import type { AgentOutput } from '../agent/agent-runner';
 import type { Inventory } from '../inventory/inventory';
+import type { AttentionItem } from '../attention/attention-service';
 
 export interface EngineEventMap {
   'session.created': { session: Session };
@@ -10,7 +11,34 @@ export interface EngineEventMap {
   'run.output': { sessionId: string; stage: StageName; chunk: AgentOutput };
   'run.finished': { session: Session; stage: StageName; outcome: RunOutcome };
   'inventory.updated': { inventory: Inventory };
+  /**
+   * Emitted by AttentionService when a recompute produces a state a client
+   * has not seen yet. In-process only, like every other engine event.
+   */
+  'attention.changed': { item: AttentionItem };
+  /**
+   * A session artifact changed on disk, reported by the SessionWatcher — the
+   * agent writes its artifacts directly, inside its turn, with no engine
+   * involvement (R7), so the watch is the only thing that can see it.
+   */
+  'artifact.changed': { sessionId: string; name: string; mtime: string };
 }
+
+/**
+ * Every EngineEventMap key, exactly once — what the event ring subscribes to
+ * at engine build time. A new event must be added here too, or `/events`
+ * silently never carries it.
+ */
+export const ENGINE_EVENT_TYPES = [
+  'session.created',
+  'session.transitioned',
+  'run.started',
+  'run.output',
+  'run.finished',
+  'inventory.updated',
+  'attention.changed',
+  'artifact.changed',
+] as const satisfies readonly (keyof EngineEventMap)[];
 
 type Listener<K extends keyof EngineEventMap> = (payload: EngineEventMap[K]) => void;
 

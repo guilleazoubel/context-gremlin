@@ -72,7 +72,7 @@ export async function serve(config: CoreConfig, adapters: EngineAdapters, opts: 
   await adapters.fs.mkdir(mirrorsDir, { recursive: true });
 
   const engine = buildEngine(config, adapters, { makeTickable: opts.makeTickable });
-  const { server, scheduler, pipeline, events, environment } = engine;
+  const { server, scheduler, pipeline, events, environment, attention } = engine;
 
   const unsubscribers: Array<() => void> = [
     events.on('session.created', (e) => logLine(opts.log, 'session.created', { sessionId: e.session.id })),
@@ -85,6 +85,16 @@ export async function serve(config: CoreConfig, adapters: EngineAdapters, opts: 
     ),
     events.on('inventory.updated', (e) =>
       logLine(opts.log, 'inventory.updated', { entries: e.inventory.entries.length, errors: e.inventory.errors.length }),
+    ),
+    events.on('attention.changed', (e) =>
+      logLine(opts.log, 'attention.changed', {
+        ref: e.item.ref,
+        reasons: e.item.attention.reasons,
+        needsYou: e.item.attention.needsYou,
+      }),
+    ),
+    events.on('artifact.changed', (e) =>
+      logLine(opts.log, 'artifact.changed', { sessionId: e.sessionId, name: e.name, mtime: e.mtime }),
     ),
   ];
   if (opts.verbose) {
@@ -124,6 +134,9 @@ export async function serve(config: CoreConfig, adapters: EngineAdapters, opts: 
 
   await listenOnSocket(server, socketPath);
   scheduler.start();
+  // Subscribes the attention model to the engine events and starts the
+  // session-directory watch it owns (R7). Nothing here starts an agent.
+  attention.start();
 
   const signals = opts.signals ?? (['SIGINT', 'SIGTERM'] as const);
   const signalHandler = (sig: NodeJS.Signals): void => {
@@ -193,6 +206,9 @@ export async function serve(config: CoreConfig, adapters: EngineAdapters, opts: 
       // Everything below must run even if the above threw, so a shutdown
       // never leaves the socket file, process listeners, or a hung server
       // behind — that would break a later `serve()` on the same socket.
+      // Detached first, so a failed shutdown still leaves no watch behind and
+      // no refresh racing the teardown.
+      attention.stop();
       server.closeAllConnections();
       await closeServerWithTimeout(server, opts.serverCloseTimeoutMs ?? DEFAULT_SERVER_CLOSE_TIMEOUT_MS, opts.log);
       await unlink(socketPath).catch((err: NodeJS.ErrnoException) => {

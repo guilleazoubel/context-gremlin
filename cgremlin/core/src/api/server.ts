@@ -25,6 +25,9 @@ import { groupInventory, type Inventory, type InventoryEntry } from '../inventor
 import type { ReviewSessionFactory, CandidatePR } from '../pipeline/review-session-factory';
 import type { EnvironmentService, LocalAppStatus } from '../env/environment-service';
 import { redactBypassUrls } from '../config/core-config';
+import { handleEventStream, type EventRing } from './event-stream';
+import type { AttentionService } from '../attention/attention-service';
+import { ITEM_SOURCES, parseItemRef, prRef, sessionRef, type ItemRef, type ItemSource } from '../attention/item-ref';
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
@@ -68,6 +71,10 @@ export interface ApiServerDeps {
   lock?: KeyedLock;
   /** Absent for a wiring with no local-app adapter: every /local route then 404s. */
   environment?: EnvironmentService;
+  /** Absent for a wiring with no attention model: every /attention route (and both ack aliases) then 404s. */
+  attention?: AttentionService;
+  /** Absent for a wiring with no event ring: GET /events then 404s. */
+  eventRing?: EventRing;
 }
 
 export class OwnPrError extends Error {
@@ -344,6 +351,39 @@ function localActionFor(
   return null;
 }
 
+
+/**
+ * `/attention`, `/attention/ack`, and the two named ack aliases. The aliases
+ * only format an ItemRef and delegate to the same `AttentionService.ack`, so
+ * no client has to learn the ref grammar and no future source needs a bespoke
+ * ack route (R18).
+ */
+async function handleAck(
+  res: ServerResponse,
+  attention: AttentionService,
+  ref: ItemRef,
+): Promise<void> {
+  const item = await attention.ack(ref);
+  sendJson(res, 200, { item });
+}
+
+function parseAckBody(body: unknown): ItemRef {
+  const ref = (body as { ref?: unknown } | undefined)?.ref;
+  if (typeof ref !== 'string') {
+    throw new ValidationError("Invalid ack request: expected { ref: string }");
+  }
+  parseItemRef(ref); // grammar check only — the adapters decide what exists
+  return ref;
+}
+
+function parseSourceFilter(raw: string | null): ItemSource | null {
+  if (raw === null) return null;
+  if (!(ITEM_SOURCES as readonly string[]).includes(raw)) {
+    throw new ValidationError(`Invalid source '${raw}': expected one of ${ITEM_SOURCES.join(', ')}`);
+  }
+  return raw as ItemSource;
+}
+
 async function handleRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -354,6 +394,18 @@ async function handleRequest(
     const url = new URL(req.url ?? '/', 'http://localhost');
     const parts = url.pathname.split('/').filter(Boolean);
     const method = req.method;
+
+    // The server-sent event stream. First branch in the chain, and the only
+    // one that hijacks the response: it writes SSE frames and returns without
+    // ever reaching sendJson or the 404 fall-through.
+    if (method === 'GET' && parts.length === 1 && parts[0] === 'events') {
+      if (!deps.eventRing) {
+        sendJson(res, 404, { error: 'events not configured' });
+        return;
+      }
+      handleEventStream(req, res, { ring: deps.eventRing });
+      return;
+    }
 
     if (method === 'GET' && parts.length === 1 && parts[0] === 'sessions') {
       const sessions = await deps.sessionStore.list();
@@ -371,6 +423,46 @@ async function handleRequest(
       const id = parts[1];
       await lock.withLock(id, () => handleArtifactRead(res, deps, id, parts[3]));
       return;
+    }
+
+    // The attention surface: the generic route plus the two named aliases.
+    // Placed ahead of the /prs and /local gates so an unwired attention model
+    // answers 'attention not configured' rather than another gate's message.
+    const isAttentionRoute =
+      parts[0] === 'attention' ||
+      (parts[0] === 'sessions' && parts.length === 3 && parts[2] === 'ack') ||
+      (parts[0] === 'prs' && parts.length === 5 && parts[4] === 'ack');
+    if (isAttentionRoute) {
+      if (!deps.attention) {
+        sendJson(res, 404, { error: 'attention not configured' });
+        return;
+      }
+      const attention = deps.attention;
+
+      if (method === 'GET' && parts.length === 1 && parts[0] === 'attention') {
+        const source = parseSourceFilter(url.searchParams.get('source'));
+        const { evaluatedAt, items } = await attention.list({ all: url.searchParams.get('all') === '1' });
+        sendJson(res, 200, {
+          evaluatedAt,
+          items: source === null ? items : items.filter((item) => item.source === source),
+        });
+        return;
+      }
+
+      if (method === 'POST' && parts.length === 2 && parts[0] === 'attention' && parts[1] === 'ack') {
+        await handleAck(res, attention, parseAckBody(await readJsonBody(req)));
+        return;
+      }
+
+      if (method === 'POST' && parts[0] === 'sessions') {
+        await handleAck(res, attention, sessionRef(parts[1]));
+        return;
+      }
+
+      if (method === 'POST' && parts[0] === 'prs') {
+        await handleAck(res, attention, prRef(`${parts[1]}/${parts[2]}`, Number(parts[3])));
+        return;
+      }
     }
 
     const localAction = localActionFor(parts);

@@ -15,6 +15,7 @@ import { FakeClock } from '../support/fake-clock';
 import { migrateV1ToV2 } from '../../src/schema/session';
 import { FakeLocalAppRunner } from '../support/fake-local-app-runner';
 import { EnvironmentService } from '../../src/env/environment-service';
+import { AttentionService } from '../../src/attention/attention-service';
 
 function testConfig(): CoreConfig {
   return resolveCoreConfig(
@@ -261,6 +262,29 @@ describe('buildEngine', () => {
       const res = await requestOn(socketPath, 'GET', '/local');
       expect(res.status).toBe(200);
       expect(res.body).toEqual({ status: expect.objectContaining({ state: 'stopped' }) });
+    } finally {
+      await new Promise<void>((resolve) => engine.server.close(() => resolve()));
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('wires an AttentionService the API server serves GET /attention from', async () => {
+    const engine = buildEngine(testConfig(), testAdapters());
+    expect(engine.attention).toBeInstanceOf(AttentionService);
+    const session = await engine.pipeline.createInvestigationSession({
+      repoUrl: '/origin/acme-app',
+      ticket: 'APP-2',
+      intent: 'investigate_only',
+      driveToCompletion: false,
+    });
+    const dir = await mkdtemp(path.join(tmpdir(), 'cgremlin-core-build-engine-attention-'));
+    const socketPath = path.join(dir, 'x.sock');
+    await new Promise<void>((resolve) => engine.server.listen(socketPath, resolve));
+    try {
+      const res = await requestOn(socketPath, 'GET', '/attention?all=1');
+      expect(res.status).toBe(200);
+      const body = res.body as { items: { ref: string }[] };
+      expect(body.items.map((i) => i.ref)).toEqual([`session:${session.id}`]);
     } finally {
       await new Promise<void>((resolve) => engine.server.close(() => resolve()));
       await rm(dir, { recursive: true, force: true });
