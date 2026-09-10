@@ -4,14 +4,15 @@
 
 ```
 Frontends (thin clients)
-  - CLI (cgremlin-core: serve, prs, review, sessions, scan, config, local)
-  - (future) plugin-style UI
-        │  HTTP-over-Unix-socket API (JSON)
+  - CLI (cgremlin-core: serve, prs, review, sessions, scan, config, local, release)
+  - cgremlin/vscode (VS Code extension)
+        │  HTTP-over-Unix-socket API (JSON), GET /events (SSE)
         ▼
 Engine (one process, built by src/host/build-engine.ts, run by src/host/serve.ts)
   - SessionStore, WorkspaceManager, PipelineService, StageRunner
   - InventoryScanner + DiscoveryScheduler + ReconciliationTick
   - EnvironmentService (local dev app + Vercel preview)
+  - AttentionService (SourceAdapters + AckStore), EventRing, SessionWatcher
   - EngineEvents, KeyedLock
         │  AgentRunner interface
         ▼
@@ -58,11 +59,16 @@ Every session (v2) carries, beyond the v1 base (`id`, `createdAt`, `workspace`, 
 `mode`, `stageStatus`):
 
 ```ts
-agent: { runner: 'claude-code' | 'codex'; resumeId: string | null } | null
+agent: { runner: 'claude-code' | 'codex'; resumeId: string | null;
+         humanTurn: { claimedAt: string; expiresAt: string } | null } | null
 lastRun: { stage, startedAt, finishedAt, exitCode, signal,
            outcome: 'running'|'succeeded'|'failed'|'stopped', error } | null
 pr: { repo, number, url, headSha, reviewedSha, title, author } | null
 ```
+
+`agent.humanTurn` is an additive, defaulted field (`HumanTurnSchema.nullable().default(null)`,
+`src/schema/stage.ts`) — a Phase-7 addition, see "Human-turn claim" below — so every `session.json`
+on disk keeps loading.
 
 Mode-specific: investigation adds `intent: 'investigate_only' | 'development'` and
 `driveToCompletion: boolean`; review adds `reviewVersion: number` and
@@ -239,11 +245,132 @@ engine may run, and the Vercel preview URL lookup, per session.
 | `run.output` | `{ sessionId, stage, chunk }` |
 | `run.finished` | `{ session, stage, outcome }` |
 | `inventory.updated` | `{ inventory }` |
+| `attention.changed` | `{ item: AttentionItem }` — emitted by `AttentionService` only on a real delta a client hasn't seen |
+| `artifact.changed` | `{ sessionId, name, mtime }` — emitted from the session-directory watch, for a non-`AGENT_STATE` artifact write |
 
 `serve()` logs one JSON line per event to stderr; `--verbose` also logs `run.output`
 (redacted). `awaitRunStart` (`src/pipeline/run-start.ts`) is the primitive every
 "detached" API route uses to respond as soon as `run.started` fires rather than waiting
-for the whole agent turn.
+for the whole agent turn. `GET /events` (below) fans every one of these events out over SSE.
+
+## Attention
+
+`src/attention/` computes, for every trackable item, whether it `needsAttention` and whether
+it `needsYou` — a rule the engine owns once so the CLI, the VS Code extension and any future
+client agree (R18: `cgremlin/core/docs/superpowers/specs/2026-09-10-cgremlin-phase7-vscode-ui-v1-design.md`
+§2, §4.1).
+
+- **`Item`/`ItemRef`** (`src/attention/item-ref.ts`, `src/attention/attention-service.ts`): every
+  item is generic over a `source: 'pr' | 'session'` (future: `'jira' | 'slack'`), addressed by a
+  stable, parseable `ItemRef` string (`'session:<id>'` / `'pr:<owner>/<repo>#<n>'`), which is also
+  the acknowledgement key.
+- **`SourceAdapter`** (`src/attention/attention-service.ts`): one per `ItemSource` —
+  `SessionSourceAdapter` and `PrSourceAdapter` — each `collect()`s its items and calls its own pure
+  `derive*Reasons` function (`deriveSessionReasons`/`derivePrReasons`, `src/attention/attention.ts`).
+  **A new item source is an adapter plus a `derive*Reasons`, nothing more** — the shared,
+  source-agnostic `evaluateAttention` (ordering, the `signature`, the ack comparison) never changes.
+- `ATTENTION_REASONS` (`src/attention/attention.ts`) is the ordered `as const` list every item's
+  `reasons[]` is sorted into (never `.sort()`ed — dedup and order come from iterating this list); the
+  subset `NEEDS_YOU_REASONS` decides `AttentionState.needsYou`, and lives only here — no client
+  re-derives it.
+- **`AttentionService`** (`src/attention/attention-service.ts`) composes the adapters plus an
+  `AckStore` (`<stateDir>/attention-acks.json`, keyed by `ItemRef`) and subscribes to both the
+  engine's own events and the `SessionWatcher`; `refresh(scope)` coalesces bursts by joining an
+  in-flight recompute for the same scope and scheduling at most one trailing recompute behind it
+  (not a fixed-window timer), and emits `attention.changed` only on a real delta — dedup compares
+  the reasons/`since`/claimed/running/mode/title shape of an item, not its `ItemLinks`.
+  `AttentionService.refresh` reads `session.json` **without taking the per-session lock** —
+  `SessionStore.save` is tmp-then-rename, so an unlocked read never sees a torn document, and
+  attention must never block a stage run.
+- **Routes**: `GET /attention` (`?all=1` for every evaluated item, `?source=session|pr` to filter;
+  default is only items with `needsAttention`), `POST /attention/ack { ref }` (the one ack path),
+  and the two named aliases `POST /sessions/:id/ack` / `POST /prs/:owner/:repo/:number/ack`.
+
+## Session-directory watcher
+
+The founding "artifact-driven completion, not agent callbacks" rule (above, and `docs/DECISIONS.md`)
+means the agent writes `FINDINGS.md`/`PLAN.md`/`AGENT_STATE` directly, inside its own turn, with no
+engine involvement — so a mid-turn "the agent is asking a question" is invisible to the engine unless
+something watches the filesystem.
+
+`SessionWatcher` (`src/fs/session-watcher.ts`) is a port; `NodeSessionWatcher`
+(`src/fs/node-session-watcher.ts`) is the real implementation: `fs.watch(sessionsDir, { recursive:
+true })` when available, falling back to a `pollIntervalMs` (default 2000 ms) mtime scan on
+`ENOSYS`/`ERR_FEATURE_UNAVAILABLE_ON_PLATFORM`. It maps a relative `<sessionId>/<name>` path to a
+`SessionWatchEvent { sessionId, name }`, discards anything not exactly two path segments and anything
+whose `name` isn't in the artifact allow-list plus `AGENT_STATE`/`AGENT_NOTE`, coalesces duplicate
+reports of the same `<sessionId>/<name>` within 100 ms, and never reads file *contents* — only
+`AttentionService`, subscribed as the consumer, does that. A watch event for `AGENT_STATE` triggers an
+attention recompute for that session (may emit `attention.changed`); any other allow-listed artifact
+emits `artifact.changed` directly.
+
+## Event ring and `/events` (SSE)
+
+`GET /events` streams every `EngineEventMap` event as Server-Sent Events over the same Unix socket.
+
+- **`EventRing`** (`src/api/event-stream.ts`) is a bounded in-memory ring buffer, capacity 256
+  (`EVENT_RING_CAPACITY`), carrying an incrementing id per pushed event and an `epoch` string
+  (`<process-start-ISO>-<random>`) that changes on every engine restart.
+- **Replay + live handover, no gap and no duplicate**: a connection opens with `retry: 2000` then
+  `event: hello\ndata: {epoch, lastEventId}`; if it carries a `Last-Event-ID` header (or
+  `?lastEventId=`), the handler reads `ring.since(id)` as a snapshot, writes those frames, records the
+  last id written, and only then subscribes live — the live callback discards anything with an id
+  at-or-before that point, so an event pushed during the handover is delivered exactly once.
+- **Resync**: `since(n)` reports `complete: false` — and the connection gets an `event: resync` frame
+  instead — when `n` is older than the ring's oldest id, when `n` is *greater* than the ring's current
+  max (the engine restarted and reused the id space), or when a supplied `?epoch=` no longer matches;
+  a client that sees `resync` must refetch `/prs`, `/sessions`, `/attention` rather than wait for ids
+  that will never arrive.
+- **`run.output` is opt-in and always redacted**: sent only with `?include=run.output`, through the
+  same `redactBypassUrls` call `serve()` itself uses (R8) — one turn emits hundreds of these chunks
+  and they can carry a bypass URL.
+- **Backpressure**: when `res.write` returns `false` the connection is marked lagging; while lagging,
+  `run.output` frames are dropped (they're opt-in and replayable from the ring) while every other
+  frame is still queued; if the queue passes 256 pending frames (`MAX_PENDING_FRAMES`) the connection
+  is destroyed — a stalled reader must never grow the engine's heap. `'drain'` clears the lagging flag.
+- **Cleanup**: a 15 s heartbeat (`: ping`) is `clearInterval`ed, and every per-connection `events.on`
+  subscription is removed, in the same `req.on('close')` handler.
+- **The stream is global** — there is no `?session=` filter. A client subscribes before the sessions
+  it cares about exist (a fresh window has no id to filter by yet, and `POST /sessions/developments`
+  must be observable on a connection that predates it); per-session filtering is client-side, on
+  `sessionId`/`ItemRef`.
+
+## Human-turn claim
+
+A human can take over an agent conversation (`claude --resume <id>` in a terminal) without racing the
+engine's own headless pipeline. `session.agent.humanTurn: { claimedAt, expiresAt } | null`
+(`HumanTurnSchema`, `src/schema/stage.ts`) is a **claim, not a flag** — it expires
+(`CoreConfig.humanTurnTtlMs`, default 10 minutes) so an extension that crashes, or a terminal on a
+machine that reboots, can never wedge a session's pipeline forever.
+
+- `isClaimed(session, now)` (`src/pipeline/pipeline-service.ts`) is the **one** definition of
+  "claimed" — present and `expiresAt > now` — used by both refusal sites below, `conversation()`,
+  `AttentionItem.claimed`, the `sessions` CLI table, and the reconciliation tick.
+- **Checked twice.** An **advisory, unlocked** check — `if (isClaimed(session, this.now())) throw new
+  HumanTurnInProgressError(id);` — is the first statement after each `run*` method's existing mode
+  check (and in `promote()`), on the snapshot already loaded, so a refusal costs no environment setup
+  and no git work. The **authoritative, locked** check, `assertNoHumanTurn(fresh)`, is the first
+  statement after the fresh load inside each stage's locked pre-run (and inside `promote()`'s own
+  lock) — it is the one that actually blocks a headless turn: a claimed conversation blocks every
+  headless turn, checked **authoritatively inside** the per-session lock (the unlocked advisory copy
+  runs earlier, and is never a substitute), and every claim expires. Being on the write path, the
+  authoritative check also **reaps** an expired claim (`agent.humanTurn = null`, saved under the lock
+  it is already inside) rather than merely ignoring it.
+- **Claiming while a run is live is refused** (`claimConversation` → 409 `RunInProgressError` when
+  `pipeline.activeSessionIds()` contains the id) — two `claude --resume` processes on one transcript
+  is unrecoverable corruption.
+- **Four paths clear an orphaned claim**: expiry (reaped by the first authoritative check that trips
+  over it); `serve()` clears every session's claim before it starts listening (logs one
+  `conversation.claims_cleared` line); a `transition` into a phase in `TERMINAL_PHASES_BY_MODE`
+  (`src/workspace/workspace-in-use.ts`) clears it in the same locked write; and
+  `cgremlin-core release <session-id>` (→ `POST /sessions/:id/conversation/release`) clears it by
+  hand.
+- **Reconciliation skips, not errors**: a claimed review session that would otherwise get a
+  `rereview` action instead gets a `SkippedTransition` — the tick never files a `report.errors` entry
+  for a claim, and merge/close/approve transitions still apply on schedule (and clear the claim) —
+  a claim delays a re-review, never the truth about a PR.
+- **Routes**: `GET /sessions/:id/conversation` → `{ runner, resumeId, worktreePath, claimed }`;
+  `POST /sessions/:id/conversation/claim` / `.../release`.
 
 ## API route table
 
@@ -251,34 +378,46 @@ All routes are on the Unix socket at `config.socketPath`, JSON in/out.
 
 | Method | Path | Purpose | Notable status codes |
 |---|---|---|---|
+| GET | `/events` | global SSE event stream — every `EngineEventMap` event; `Last-Event-ID`/`?lastEventId=` replay, `?include=run.output` opt-in | see "Event ring" above |
 | GET | `/sessions` | list all sessions | |
 | GET | `/sessions/:id` | load one session | 404 unknown id |
+| GET | `/sessions/:id/artifacts` | list a session's artifacts, with mtimes and the core-chosen `primary` | 200, 404 unknown session |
 | GET | `/sessions/:id/artifacts/:name` | read an allow-listed file from the session dir | 400 bad name, 404 not found |
+| GET | `/attention` | `?all=1` for every evaluated item (default: only `needsAttention`); `?source=session\|pr` to filter | 200 |
+| POST | `/attention/ack` `{ref}` | acknowledge one item by `ItemRef` | 200, 400 unparseable ref, 404 |
+| POST | `/sessions/:id/ack` | alias for `{ref: sessionRef(id)}` | 200, 404 |
+| POST | `/prs/:owner/:repo/:number/ack` | alias for `{ref: prRef(slug, n)}` | 200, 404 |
+| GET | `/config` | the resolved, redacted `CoreConfig` | 200 |
 | POST | `/sessions` | save a raw session record | |
 | POST | `/sessions/investigations` | create an investigation session (+ workspace) | 201 |
+| POST | `/sessions/developments` `{repoUrl, ticket, baseRef?}` | create a development session directly — its own fresh worktree, self-rooted lineage, **starts nothing** | 201, 400 validation |
 | POST | `/sessions/:id/transition` `{to}` | force a phase transition | 409 illegal transition |
-| POST | `/sessions/:id/run` `{stage}` | run one stage | 202 (after `run.started`), 409 run in progress / unsupported stage |
+| POST | `/sessions/:id/run` `{stage}` | run one stage | 202 (after `run.started`), 409 run in progress / unsupported stage / human-turn claimed |
 | POST | `/sessions/:id/approve-plan` | human approves a ready plan | 409 wrong phase |
-| POST | `/sessions/:id/promote` | promote to development, start `develop` | 202 `{investigation, development}`, 409 plan gate |
+| POST | `/sessions/:id/promote` | promote to development, start `develop` | 202 `{investigation, development}`, 409 plan gate / claimed |
 | POST | `/sessions/:id/rereview` | re-review a review session | 202 |
 | POST | `/sessions/:id/stop` | stop the active run, if any | 200 `{stopped: boolean}` |
 | POST | `/sessions/:id/retry` | re-run the last stage | 202 |
+| GET | `/sessions/:id/conversation` | `{runner, resumeId, worktreePath, claimed}` | 200, 404 |
+| POST | `/sessions/:id/conversation/claim` | claim the agent conversation for a human | 200 `{session}`, 404, 409 run in progress |
+| POST | `/sessions/:id/conversation/release` | release the claim | 200 `{session}`, 404 |
 | POST | `/workspaces` | create a bare workspace (mirror + worktree) | 201 |
 | DELETE | `/workspaces` | remove a workspace | 409 still in use |
 | GET | `/prs` | `{inventory, groups}` from the last scan | 404 no scan yet |
 | POST | `/prs/scan` | run one scan now | 409 scan already running |
 | GET | `/prs/status` | scheduler status | |
 | GET | `/prs/:owner/:repo/:number` | one inventory entry | 404 |
-| POST | `/prs/:owner/:repo/:number/review` | start (or report) a review; `?refresh=1` forces a scan first | 202/200, 404 not in inventory, 409 own PR |
+| POST | `/prs/:owner/:repo/:number/review` | start (or report) a review; `?refresh=1` forces a scan first | 202/201/200, 404 not in inventory, 409 own PR |
+| POST | `/reviews` `{prUrl}` | start (or report) a review for **any** PR URL, including a repo outside `config.repos` — the only way to review an off-config repo | 202/201 created, 200 already tracked (R23), 400 bad URL, 409 own PR |
 | GET | `/local`, `GET /sessions/:id/local` | local-app status (id-less form: whichever session owns it) | 404 no environment configured |
 | POST | `/local/stop`, `POST /sessions/:id/local/stop` | stop the local app | |
 | POST | `/sessions/:id/local/start` `?fresh=1` | start the local app for this session | 409 unavailable (busy port/prereq/unhealthy) |
 
 `mapErrorToHttp` (`src/api/http-errors.ts`) is the single place error names become status
-codes: `SessionNotFoundError`/`ArtifactNotFoundError`/`NoScanYetError` → 404;
-`InvalidSessionIdError`/`ValidationError` → 400; `IllegalTransitionError`,
-`PlanGateError`, `RunInProgressError`, `WorkspaceInUseError`, `UnsupportedStageError`,
-`WorkspaceMissingError`, `TickInProgressError`, `OwnPrError`, and every
+codes: `SessionNotFoundError`/`ArtifactNotFoundError`/`NoScanYetError`/`ItemNotFoundError` → 404;
+`InvalidSessionIdError`/`ValidationError`/`InvalidPrUrlError` → 400; `IllegalTransitionError`,
+`PlanGateError`, `RunInProgressError`, `WorkspaceInUseError`, `HumanTurnInProgressError`,
+`UnsupportedStageError`, `WorkspaceMissingError`, `TickInProgressError`, `OwnPrError`, and every
 `LocalAppPortBusyError`/`LocalAppPrereqError`/`LocalAppUnhealthyError`/`LocalAppSetupError`
 → 409; `SessionCorruptError` and anything unrecognized → 500.
 
@@ -293,6 +432,10 @@ codes: `SessionNotFoundError`/`ArtifactNotFoundError`/`NoScanYetError` → 404;
 | `scan [--json]` | `POST /prs/scan` |
 | `config import-legacy [--force]` | read `~/.cgremlin/config`, write `~/.cgremlin/core.json` |
 | `local start <session-id> [--fresh]` / `local stop\|status [session-id]` [--json] | the `/local*` routes |
+| `release <session-id>` | `POST /sessions/:id/conversation/release` — the by-hand human-turn recovery path |
+
+`sessions [--json]` gains a `claimed` column (text and JSON), computed by `isClaimed` — never by
+`humanTurn !== null` alone — so an expired claim reads as unclaimed there too.
 
 Every command but `serve`/`config` calls `runSocketCommand` (`src/cli/command-io.ts`),
 which loads config, makes the request, and maps a connection failure (no socket) to the
@@ -385,9 +528,42 @@ and `resolveCoreConfig`'s `expandOrDerive` calls so it participates in `stateDir
 derivation and is omitted from a persisted file when it's just the default. Never make a
 new field required — every existing `core.json` on disk must keep loading.
 
+**Add an event**: add it to `EngineEventMap` and `ENGINE_EVENT_TYPES` (`src/engine/events.ts`) — the
+`/events` route and its `EventRing` need no change, since `handleEventStream` subscribes to every
+`EngineEventMap` key generically. If the event is attention-relevant, wire the emitting code to call
+`AttentionService.refresh(scope)` rather than emitting `attention.changed` directly — that keeps the
+"only on a real delta" and debounce guarantees in one place.
+
 **Invariants any change must keep**: the locking invariant above; environment preparation
 never takes a session lock and never writes session state; a foreign process (on a port,
 or holding a local-app record this engine can't prove is its own) is never signalled;
 the Vercel bypass secret is representable only as a file path in a brief's params, never
 as a string value; the reconciliation tick never creates a session or starts a first
-review.
+review; a claimed conversation blocks every headless turn, checked **authoritatively
+inside** the per-session lock (an unlocked advisory copy runs earlier, and is never a
+substitute for it), and every claim expires.
+
+## Frontends: VS Code extension
+
+`cgremlin/vscode` is the reference UI (`cgremlin/vscode/README.md`). It is a **pure client of the
+socket API** — every rule in the "layer split" that phase's spec lays out
+(`cgremlin/core/docs/superpowers/specs/2026-09-10-cgremlin-phase7-vscode-ui-v1-design.md` §2) reduces
+to: **core owns state, rules and side effects; the extension owns presentation and intent.** In
+particular the extension never scans GitHub, never spawns an agent, and never re-derives anything the
+core already answers — most visibly, `needsYou` (whether an item should interrupt) is computed once
+by `AttentionService` and the extension only reads `AttentionItem.attention.needsYou`; it carries no
+copy of `NEEDS_YOU_REASONS`.
+
+- **One worktree folder at a time.** The extension manages a multi-root `cgremlin.code-workspace`
+  file that holds exactly one repo folder — the worktree of the most recently opened session; opening
+  a different session swaps it via a single `updateWorkspaceFolders(0, 1, {uri})` call, never a
+  single-folder→multi-root transition (which would restart the extension host). There is no pinning
+  or LRU in v1.
+- **Chat is `claude --resume <id>` in a plain VS Code terminal** (`createTerminal({ cwd:
+  worktreePath }).sendText(...)`) — the engine itself "never spawns a terminal" (above), and no VS
+  Code extension API accepts a `cwd` for a resume, so a terminal with an explicit `cwd` is the only
+  correct mechanism. The extension re-claims the conversation (`POST
+  .../conversation/claim`) every `humanTurnTtlMs / 3` while that terminal is open, so a live
+  conversation never expires its claim.
+- **`needsYou` is computed by the core, once.** The extension's notification policy filters on
+  `item.attention.needsYou` and the user's `cgremlin.notificationLevel` setting — nothing else.

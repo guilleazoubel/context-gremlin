@@ -132,3 +132,115 @@ conversation's report for the specific discrepancies found while writing this do
 - **On shutdown, sessions stop before the local app does.** Pulling the dev server out from
   under an agent still mid-run would look like an app crash rather than a clean shutdown.
   *R16.*
+
+## 2026-09-10 — Phase 7 (VS Code UI v1)
+
+Pointer: `cgremlin/core/docs/superpowers/specs/2026-09-10-cgremlin-phase7-vscode-ui-v1-design.md`.
+
+- **The VS Code extension is the UI; two layers only.** Core owns state, rules and side effects;
+  the extension owns presentation and intent. Anything the UI needs that the core cannot answer
+  becomes a core feature, never a UI workaround. *R1.*
+- **v1 scope is fixed at stream A items 1–9 and stream B items 10–16**; v2 items (own chat pane,
+  structured findings, an MCP server, inline screenshots, GitHub posting, legacy migration,
+  multi-repo workspace, a Jira parking lot) are out, and no v1 decision may preclude them. *R2.*
+- **A managed multi-root `cgremlin.code-workspace` file**, never a plain single-folder window —
+  so adding a worktree is an `updateWorkspaceFolders` call inside an already-multi-root workspace,
+  never the single-folder→multi-root transition that restarts the extension host. *R3.*
+- **Chat is a plain terminal**: `createTerminal({ cwd }).sendText('claude --resume <id>')`, never
+  the Claude Code extension's undocumented `claude-vscode.*` commands or URI handler — neither
+  accepts a `cwd` for a resume. *R4.*
+- **The locking invariant and "no automatic review start" rule are untouched.** Nothing in Phase 7
+  starts an agent that was not explicitly asked for. *R5.*
+- **A live run's `AGENT_STATE` is authoritative even mid-run.** Core has one state file
+  (`AGENT_STATE`), written by `StageRunner` at run start and overwritten by the agent only at a
+  deliberate gate — so a mid-run `needs-input`/`blocked` is a real agent statement, not stale
+  activity, and is reported alongside a separate `running: true` flag rather than suppressed until
+  the turn ends. *R6.*
+- **`artifact.changed` and watch-driven `attention.changed` come only from the filesystem watch;
+  everything session-record-derived recomputes on existing engine events** — emitting on both the
+  engine's own writes and the watch would double-emit, since the watch covers the same directory
+  those writes land in. *R7.*
+- **`run.output` is excluded from `/events` unless requested (`?include=run.output`), and always
+  redacted** — one turn emits hundreds of chunks and they can carry a bypass URL; this is the v2
+  chat-pane hook. *R8.*
+- **Claiming a conversation is refused while a run is in flight** (409, `stop` first — two
+  `claude --resume` processes on one transcript is unrecoverable corruption); the converse (the
+  pipeline refusing a claimed session) is authoritative only inside the locked pre-run check, never
+  the pre-lock advisory copy alone. *R9.*
+- **Acknowledgement lives in its own store** (`attention-acks.json`, keyed by `ItemRef`), not on
+  the session record — an ack must exist for inventory items with no session, the session schema is
+  versioned/migration-bearing and an ack isn't pipeline state, and an ack write must never contend
+  with the per-session lock. *R10.*
+- **The primary artifact is chosen by the core** (`pickPrimaryArtifact`), not the UI — a per-mode
+  rule identical for every frontend. *R11.*
+- **`claimed` is exposed on the attention item and on `GET /sessions/:id/conversation`; the
+  inventory schema is not changed** — adding a field there would touch the scanner and every
+  persisted `inventory.json` for no benefit, since the UI already fetches `/attention?all=1`. *R12.*
+- **The extension builds with `tsc`, has zero runtime dependencies, and no bundler** — `out/*.js`
+  loads directly in the extension host, and vitest imports the same sources with no build step.
+  *R13.*
+- **Pure modules in the extension must not import `vscode`** — the request/mapping/policy layer is
+  unit-tested without an Electron harness; only `extension.ts` and `src/ui/*` touch the editor API,
+  enforced by a source-grep guard (MG-B1). *R14.*
+- **One worktree folder at a time, no pinning or LRU in v1.** Opening a session swaps the managed
+  workspace's single folder; the status bar names the session whose repo is open because that is
+  now load-bearing information. *R15.*
+- **A development session can be created directly, and the develop stage's plan gate is
+  preserved** — it stops at the existing `needs-input` gate in the develop brief; there is
+  deliberately no new phase, and approving that plan happens through Chat, not a new headless route.
+  *R16.*
+- **A review can be started from any PR URL, including a repo the scan does not watch**
+  (`POST /reviews`) — reconciliation already covers these sessions unchanged, since it iterates
+  sessions and fetches each one's own PR rather than consulting `config.repos`; only the "PRs we
+  are reviewing" list needed to become session-derived rather than inventory-derived. *R17.*
+- **Every item is a generic `Item` with a `source`**, and both the attention model and the panel's
+  view model are defined over it — the roadmap's Jira/Slack sources are added as an adapter plus a
+  `derive*Reasons`, touching neither the shared evaluator nor the view model's list-building.
+  *R18.*
+- **The human-turn refusal is checked twice**: an unlocked advisory check, first statement after
+  each stage's existing mode check (so a refusal costs no environment setup or git work), and the
+  authoritative locked check inside each stage's `preRun` — necessary because `prepareEnvironment`
+  and (for rereview) a `git fetch`/`reset --hard` both happen before the locked check would
+  otherwise run. *R19.*
+- **A claim expires, and four paths clear one that gets orphaned**: expiry (reaped by the first
+  authoritative check that trips over it), a boot-time clear of every session's claim, a terminal
+  phase transition, and `cgremlin-core release`. The reconciliation tick skips (not errors) a
+  claimed session's re-review, while merge/close/approve transitions still apply on schedule and
+  clear the claim. *R20.*
+- **`/events`' fan-out is explicit, ordered, bounded and back-pressured**: replay hands over to a
+  live ring subscription with no gap and no duplicate; `since(n)` past the ring's bounds triggers an
+  explicit resync frame rather than silent waiting; a lagging connection drops only `run.output`
+  frames and is destroyed past a bounded pending-frame ceiling. *R21.*
+- **The core says whether an item needs *you*; the extension only decides whether that pops.**
+  `AttentionState.needsYou` is the one source of truth; the extension's notify policy filters on it
+  and the user's setting, and carries no copy of `NEEDS_YOU_REASONS`. An engine-died run
+  (`lastRun.outcome === 'running'` with nothing actually running) derives `run_failed` rather than
+  showing no indicator at all. *R22.*
+- **`POST /reviews` on an already-tracked PR answers 200, exactly like the inventory-originated
+  review route** — the caller's intent ("get me a review of this PR") is satisfied by the session
+  that already exists, and two routes with one meaning must not disagree on a status code; a PR
+  authored by `config.me` still answers 409. *R23.*
+
+**Accepted deviations found while executing the plan**, kept because the code they describe is what
+actually runs (see this file's header):
+
+- **A review session in `changes_requested` is non-terminal, not terminal.** The review phase table
+  (`src/schema/pipeline.ts`) allows `changes_requested → reviewing | dismissed | approved`, and
+  `TERMINAL_PHASES_BY_MODE.review` (`src/workspace/workspace-in-use.ts`) is `{approved, dismissed}`
+  only — `changes_requested` stays open specifically so the re-review path (a PR updated after
+  changes were requested) can still fire.
+- **`promote()` checks the human-turn claim under its own lock**, not via a shared call from
+  `runDevelop`'s pre-run: promoting is itself the write the human's conversation is about, and no
+  stage's own check can protect it (the terminal-transition clear that `transition` performs would
+  itself un-claim the session), so `promote()` carries its own advisory-then-authoritative pair
+  ahead of `assertCanPromote`.
+- **SSE delivery to a live client goes only through the `EventRing`'s subscription**, never a
+  second, parallel event path — `handleEventStream` subscribes to `ring`, not to `EngineEvents`
+  directly, so the ring's ordering and bounding guarantees (R21) cover every frame a client sees.
+- **`AttentionService.refresh` debounces as in-flight coalescing plus one trailing recompute**, not
+  a fixed-window debounce: a burst of triggers for the same scope collapses to at most one recompute
+  already running and one more queued behind it, rather than a timer restarted on every trigger.
+- **Delta detection (`attention.changed`'s "only on a real change" guarantee) ignores `links`** —
+  it compares the reasons/since/claimed/running shape of an item, not its `ItemLinks`, so a
+  `primaryArtifact` or `worktreePath` value settling in does not itself count as the delta that
+  justifies an event.

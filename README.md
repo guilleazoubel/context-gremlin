@@ -6,6 +6,10 @@
 
 Agentic code review and investigation sessions powered by AI. Launch isolated environments for PR reviews, code investigations, and development — with a web dashboard for managing sessions.
 
+A ground-up, tested rebuild of this tool is under way in `cgremlin/core` (the headless engine) and
+`cgremlin/vscode` (its VS Code extension UI); see `cgremlin/core/README.md` and
+`cgremlin/vscode/README.md`. It does not share code or state with the legacy tool documented below.
+
 ## Install
 
 ```bash

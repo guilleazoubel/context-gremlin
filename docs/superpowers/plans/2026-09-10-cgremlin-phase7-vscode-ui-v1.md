@@ -459,3 +459,40 @@ Rationale for the tiers: A1 introduces a new persisted state file and a new serv
 - `grep -rn "humanTurn" cgremlin/core/src | grep -v "isClaimed\|humanTurn: null\|HumanTurnSchema"` shows no site treating a non-null `humanTurn` as claimed without going through `isClaimed` (R20).
 - The manual smoke checklist (spec §8) has been run end to end and its result recorded on the phase branch — including step 4, whose failure would mean re-opening the Chat mechanism (R4) rather than shipping it.
 - Not in scope: our own chat pane, structured finding cards, a core MCP server, inline screenshots, posting to GitHub, legacy session migration, multi-folder/pinned workspaces, a formal development plan gate, **the Jira parking lot and Jira comment scanning, and the Slack mentions inbox** (spec §10 — deferred pending an auth grounding pass; v1 ships only the generic shape they will plug into).
+
+## Errata (post-execution)
+
+Recorded while writing C2's documentation, against the shipped code:
+
+- **B2's test-list wording that `changes_requested` is a terminal review phase is wrong.**
+  `TERMINAL_PHASES_BY_MODE.review` (`src/workspace/workspace-in-use.ts`) is `{approved, dismissed}`
+  only; `changes_requested` stays non-terminal specifically so the re-review path (a PR updated
+  after changes were requested) can still transition it back to `reviewing`.
+- **MG-A7 drives `StageRunner` directly, not `PipelineService`.** The guard
+  (`test/pipeline/stage-runner.test.ts`, `describe('MG-A7 human-turn-survives-a-run')`) writes the
+  claim through the store under the shared lock, then calls `sr.run(...)` on a `StageRunner`
+  instance directly and asserts the claim survives both the `run.started` seed and the post-exit
+  merge — it does not go through a `PipelineService.runFindings`-style call.
+- **The `promote()` 409 for a claimed session comes from `promote()`'s own advisory-then-locked
+  checks, not from a call shared with `runDevelop`.** `promote()` (`src/pipeline/pipeline-service.ts`)
+  has its own unlocked advisory `isClaimed` check and its own locked `assertNoHumanTurn(fresh)` call,
+  ahead of `assertCanPromote`, because the transition it performs would itself clear a claim via the
+  terminal-phase rule and because `transition` must stay un-refusable for reconciliation's
+  merge/close path.
+- **A1 owns emitting `attention.changed`, not A3.** `AttentionService.emitOnDelta`
+  (`src/attention/attention-service.ts`) is the only place `attention.changed` is emitted; A3's
+  `EventRing`/`handleEventStream` only fan out whatever `EngineEvents` already carries.
+- **`ItemNotFoundError` was added** (`src/attention/attention-service.ts`, mapped to 404 in
+  `src/api/http-errors.ts`) — thrown by `AttentionService.ack` when a ref names nothing found by any
+  adapter. Not called out explicitly in §4.2/§4.5's interface lists above.
+- **`PlanReconciliationInput` and `ReconciliationTickDeps` both got `now`.** Not just the pure
+  `planReconciliation` input (as §3/R20 describes) — `ReconciliationTickDeps` also gained an optional
+  `now?: () => Date` (defaulting to the real clock) so the tick can pass a consistent clock through
+  to the pure function.
+- **`clearAllHumanTurns` was added** as a `PipelineService` method
+  (`src/pipeline/pipeline-service.ts`) — `serve()`'s boot-time claim clear (§4.5's "Boot clears
+  everything") calls this one method rather than iterating sessions and clearing each individually
+  inline in `serve.ts`.
+- **`PipelineConfig.runnerKind` and `PipelineConfig.humanTurnTtlMs` are required fields**, not
+  optional-with-a-default — `buildEngine` always supplies both, and nothing constructs a
+  `PipelineService` without them.

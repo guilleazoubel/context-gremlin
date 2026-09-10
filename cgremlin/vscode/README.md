@@ -33,17 +33,28 @@ four) keeps a single `onDidChangeTreeData`, so an applied refresh is exactly one
 lists changed. Row actions are bound by `contextValue` (`<list>:<source>:<mode>`), so a fifth
 source needs a `LIST_ORDER` entry and a `when` clause — not a restructuring.
 
-## Development
+## Install / build / run
 
 ```sh
 pnpm install
-pnpm test        # vitest, no editor harness
 pnpm build       # tsc -p tsconfig.json -> out/
-pnpm lint
 ```
 
-There are **no runtime dependencies** and there is no bundler: `out/*.js` loads directly in the
-extension host.
+Then either:
+
+- **F5** in VS Code (with this folder open) launches an Extension Development Host with the built
+  extension loaded, or
+- package it and install it into a real VS Code: `npx vsce package` (from this directory), then
+  `code --install-extension cgremlin-vscode-<version>.vsix`.
+
+`pnpm test` runs vitest with no editor harness; `pnpm lint` runs eslint. There are **no runtime
+dependencies** (`package.json` has no `dependencies` key) and there is no bundler: `out/*.js` loads
+directly in the extension host, unmodified.
+
+**No `@vscode/test-electron`.** This package has no Electron-hosted test suite — the purity split
+above is what makes that unnecessary for the policy layer, but the actual VS Code surface (tree
+rendering, the workspace swap, the terminal) still needs a human pass: run the manual smoke
+checklist in `docs/SMOKE.md` before calling a change to this package verified.
 
 ## Settings
 
@@ -52,3 +63,38 @@ extension host.
 | `cgremlin.socketPath` | `~/.cgremlin/engine.sock` | the engine's socket |
 | `cgremlin.configPath` | `~/.cgremlin/core.json` | used only when starting the engine from the extension |
 | `cgremlin.notificationLevel` | `all` | `all` \| `needs-you-only` \| `off` |
+
+## Commands
+
+All under the `cgremlin` category (command palette + the tree's row/title actions); most are bound
+to a tree row via `contextValue` rather than exposed in the command palette (`when: "false"` there).
+
+| Command | What |
+|---|---|
+| Open item | opens the item's primary artifact as a markdown preview, and swaps the managed workspace to its worktree |
+| Chat with the agent | opens a terminal in the item's worktree running `claude --resume <id>` (or `codex resume <id>`), claiming the conversation and re-claiming it every `humanTurnTtlMs / 3` while the terminal stays open |
+| Start review | starts (or opens) a review for a parking-lot/reviewing row |
+| Approve plan | approves a ready investigation plan |
+| Stop run | stops the active run on a session |
+| Retry stage | re-runs the last stage |
+| Acknowledge | posts `{ ref }` to `/attention/ack` for any row |
+| Refresh inventory | triggers `POST /prs/scan` |
+| New investigation… / New development session… / New review from PR URL… | the three session-creation flows (quick-picks / an input box; repo choices come from `GET /config`'s `repos`) |
+| Refresh preview | re-runs the built-in `markdown.preview.refresh` |
+| Start the engine | opens a terminal running `cgremlin-core serve --config <configPath>` — offered by the not-running UX below |
+
+## One worktree folder at a time
+
+The extension manages a multi-root `cgremlin.code-workspace` file that holds **exactly one** repo
+folder — the worktree of the most recently opened session. Opening a different session **swaps** it
+(`updateWorkspaceFolders(0, 1, {uri})` in one call: the old folder is removed, closing its editors,
+and the new one added) rather than accumulating folders. There is no pinning or LRU in v1, which is
+why the status bar always names the session whose repo the window currently holds — that is
+load-bearing, not decoration. A dirty editor inside the folder being removed triggers a confirmation
+modal before the swap; the preview still opens either way.
+
+## Engine not running
+
+Every request that can't reach the socket (`ENOENT`/`ECONNREFUSED`) becomes an `EngineNotRunningError`
+rather than a stack trace: the status bar shows `$(circle-slash) cgremlin: offline`, and its command
+offers **Start the engine** (a terminal running `cgremlin-core serve`) instead of opening the panel.
