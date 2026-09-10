@@ -243,6 +243,45 @@ describe.skipIf(process.platform === 'win32')('NodeLocalAppRunner (real subproce
     }
   });
 
+  it('W8 stop treats an EPERM group as not ours: it neither throws nor escalates to SIGKILL', async () => {
+    const port = await getFreePort();
+    const calls: Array<[number, NodeJS.Signals | number | undefined]> = [];
+    const spy = vi.spyOn(process, 'kill').mockImplementation(((pid: number, signal?: NodeJS.Signals | number) => {
+      calls.push([pid, signal]);
+      const err: NodeJS.ErrnoException = new Error('kill EPERM');
+      err.code = 'EPERM';
+      throw err;
+    }) as typeof process.kill);
+    try {
+      // The pid was reused: -pgid now names a group belonging to somebody else.
+      const proc: LocalAppProcess = { pid: 4242, pgid: 4242, startedAt: new Date().toISOString() };
+      await expect(runner.stop(proc, { port })).resolves.toEqual({ freed: true });
+      // Exactly one signal attempt, and no SIGKILL follow-up at a foreign group.
+      expect(calls).toEqual([[-4242, 'SIGTERM']]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('W8 stop reports an EPERM listener as foreign instead of failing the stop', async () => {
+    const port = await getFreePort();
+    const server = createServer();
+    await new Promise<void>((resolve) => server.listen(port, resolve));
+    const spy = vi.spyOn(process, 'kill').mockImplementation((() => {
+      const err: NodeJS.ErrnoException = new Error('kill EPERM');
+      err.code = 'EPERM';
+      throw err;
+    }) as typeof process.kill);
+    try {
+      // The recorded pid still holds the port, but every signal comes back EPERM.
+      const proc: LocalAppProcess = { pid: process.pid, pgid: process.pid, startedAt: new Date().toISOString() };
+      await expect(runner.stop(proc, { port })).resolves.toEqual({ freed: false, foreignListener: process.pid });
+    } finally {
+      spy.mockRestore();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  }, 20_000);
+
   it('exec runs a command and reports its exit code without rejecting', async () => {
     const ok = await runner.exec('echo hi', { cwd: tmpDir });
     expect(ok).toEqual({ code: 0, stdout: 'hi\n', stderr: '' });

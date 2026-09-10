@@ -43,6 +43,9 @@ function sleep(ms: number, signal?: AbortSignal): Promise<void> {
   });
 }
 
+/** Outcome of one signal attempt: delivered, target already gone, or not ours to signal (EPERM). */
+type SignalOutcome = 'signalled' | 'gone' | 'foreign';
+
 function isErrnoException(err: unknown): err is NodeJS.ErrnoException {
   return err instanceof Error;
 }
@@ -170,29 +173,48 @@ export class NodeLocalAppRunner implements LocalAppRunner {
   }
 
   async stop(proc: LocalAppProcess, opts: { port: number }): Promise<LocalAppStopResult> {
-    this.killGroup(proc.pgid, 'SIGTERM');
-    const deadline = Date.now() + STOP_GRACE_MS;
-    while (Date.now() < deadline && (await this.isAlive(proc))) {
-      await sleep(STOP_POLL_INTERVAL_MS);
+    // W8: only a group we can actually signal is ours. 'gone' means it already
+    // exited; 'foreign' means the pgid now names a group we do not own (our
+    // child exited and the pid was reused) — in neither case is there anything
+    // of ours left to escalate against, and a foreign group must never be
+    // signalled again.
+    if (this.killGroup(proc.pgid, 'SIGTERM') === 'signalled') {
+      const deadline = Date.now() + STOP_GRACE_MS;
+      while (Date.now() < deadline && (await this.isAlive(proc))) {
+        await sleep(STOP_POLL_INTERVAL_MS);
+      }
+      // A dev command that traps SIGTERM only lets go of the port here.
+      this.killGroup(proc.pgid, 'SIGKILL');
     }
-    // A dev command that traps SIGTERM only lets go of the port here.
-    this.killGroup(proc.pgid, 'SIGKILL');
     let listenerPid = await this.waitForPortRelease(opts.port);
     if (listenerPid === null) return { freed: true };
 
-    // R6: the lingering listener is only ours to kill when it is the process
-    // we recorded or sits in the group we just signalled. Anything else is a
-    // foreign process on the port — report it, never signal it.
-    const listenerPgid = await this.pgidOf(listenerPid);
-    if (listenerPid !== proc.pid && listenerPgid !== proc.pgid) {
-      return { freed: false, foreignListener: listenerPid };
+    // R6/W8: the lingering listener is only ours to kill when it is the process
+    // we recorded or sits in the group we started — re-checked before every
+    // signal, because each poll can name a different pid. Anything else is a
+    // foreign process on the port: report it, never signal it.
+    for (const signal of ['SIGTERM', 'SIGKILL'] as const) {
+      if (!(await this.isOurListener(listenerPid, proc))) {
+        return { freed: false, foreignListener: listenerPid };
+      }
+      if (this.killPid(listenerPid, signal) === 'foreign') {
+        return { freed: false, foreignListener: listenerPid };
+      }
+      const remaining = await this.waitForPortRelease(opts.port);
+      if (remaining === null) return { freed: true };
+      listenerPid = remaining;
     }
-    this.killPid(listenerPid, 'SIGTERM');
-    listenerPid = await this.waitForPortRelease(opts.port);
-    if (listenerPid === null) return { freed: true };
-    this.killPid(listenerPid, 'SIGKILL');
-    listenerPid = await this.waitForPortRelease(opts.port);
-    return listenerPid === null ? { freed: true } : { freed: false, foreignListener: listenerPid };
+    return { freed: false, foreignListener: listenerPid };
+  }
+
+  /**
+   * W8: is `pid` the process we recorded, or a member of the group we started?
+   * A pgid re-derived through `ps` is only trusted once it matches the group we
+   * spawned — after pid reuse it can just as easily name a stranger's.
+   */
+  private async isOurListener(pid: number, proc: LocalAppProcess): Promise<boolean> {
+    if (pid === proc.pid) return true;
+    return (await this.pgidOf(pid)) === proc.pgid;
   }
 
   /** Polls until nothing listens on `port`, or ~PORT_RELEASE_MS elapses; returns the holder or null. */
@@ -214,19 +236,28 @@ export class NodeLocalAppRunner implements LocalAppRunner {
     return this.sliceLog(logPath, lines, 'head');
   }
 
-  private killGroup(pgid: number, signal: NodeJS.Signals): void {
-    try {
-      process.kill(-pgid, signal);
-    } catch (err) {
-      if (!isErrnoException(err) || err.code !== 'ESRCH') throw err;
-    }
+  private killGroup(pgid: number, signal: NodeJS.Signals): SignalOutcome {
+    return this.signal(-pgid, signal);
   }
 
-  private killPid(pid: number, signal: NodeJS.Signals): void {
+  private killPid(pid: number, signal: NodeJS.Signals): SignalOutcome {
+    return this.signal(pid, signal);
+  }
+
+  /**
+   * W8: EPERM means the target is not ours — never a failure of our stop, and
+   * never something to retry with a harder signal. ESRCH means it is already
+   * gone. Anything else is a real fault and still throws.
+   */
+  private signal(target: number, signal: NodeJS.Signals): SignalOutcome {
     try {
-      process.kill(pid, signal);
+      process.kill(target, signal);
+      return 'signalled';
     } catch (err) {
-      if (!isErrnoException(err) || err.code !== 'ESRCH') throw err;
+      if (!isErrnoException(err)) throw err;
+      if (err.code === 'ESRCH') return 'gone';
+      if (err.code === 'EPERM') return 'foreign';
+      throw err;
     }
   }
 
