@@ -37,6 +37,10 @@ export class FakeLocalAppRunner implements LocalAppRunner {
   private alive = false;
   private startedProcess: LocalAppProcess = DEFAULT_STARTED_PROCESS;
   private stopResult: LocalAppStopResult = { freed: true };
+  private deferredHealth: {
+    entered: () => void;
+    release?: (result: HealthResult) => void;
+  } | null = null;
 
   constructor(options: FakeLocalAppRunnerOptions = {}) {
     this.callLog = options.callLog;
@@ -48,6 +52,23 @@ export class FakeLocalAppRunner implements LocalAppRunner {
 
   queueHealth(response: HealthResult | Error): void {
     this.healthResponses.push(response);
+  }
+
+  /**
+   * Arms the next `healthcheck()` to hang — as a real one does while it polls —
+   * until `release(...)` is called or the abort signal it was handed fires.
+   * `entered` resolves once the healthcheck has actually been called.
+   */
+  deferHealth(): { entered: Promise<void>; release: (result: HealthResult) => void } {
+    let enteredResolve!: () => void;
+    const entered = new Promise<void>((resolve) => {
+      enteredResolve = resolve;
+    });
+    const handle: { entered: () => void; release?: (result: HealthResult) => void } = {
+      entered: enteredResolve,
+    };
+    this.deferredHealth = handle;
+    return { entered, release: (result) => handle.release?.(result) };
   }
 
   setPortListener(pid: number | null): void {
@@ -110,8 +131,28 @@ export class FakeLocalAppRunner implements LocalAppRunner {
 
   async healthcheck(
     _url: string,
-    _opts: { timeoutMs: number; intervalMs: number; insecureTls: boolean; proc?: LocalAppProcess },
+    _opts: {
+      timeoutMs: number;
+      intervalMs: number;
+      insecureTls: boolean;
+      proc?: LocalAppProcess;
+      signal?: AbortSignal;
+    },
   ): Promise<HealthResult> {
+    const deferred = this.deferredHealth;
+    if (deferred !== null) {
+      this.deferredHealth = null;
+      this.callLog?.push('local.healthcheck');
+      const signal = _opts.signal;
+      return new Promise<HealthResult>((resolve) => {
+        const aborted = (): void =>
+          resolve({ ok: false, status: null, reason: 'aborted', exited: false });
+        deferred.release = resolve;
+        if (signal?.aborted === true) aborted();
+        else signal?.addEventListener('abort', aborted, { once: true });
+        deferred.entered();
+      });
+    }
     const next = this.healthResponses.shift();
     if (next instanceof Error) {
       throw next;

@@ -62,6 +62,8 @@ export interface EnvironmentServiceDeps {
 }
 
 export const BYPASS_SECRET_FILE = '.bypass-secret';
+/** W4: what `start()` reports when a shutdown aborted it mid-flight. */
+export const ABORTED_REASON = 'aborted';
 const SECRET_FILE_MODE = 0o600;
 /** R11: the head of the dev log is what carries the repo's own refusal message. */
 const PREREQ_LOG_LINES = 40;
@@ -100,9 +102,19 @@ function procOf(state: LocalAppState): LocalAppProcess {
   return { pid: state.pid, pgid: state.pgid, startedAt: state.startedAt };
 }
 
+/** W4: a `start()` the engine aborted while shutting down — the stage must not carry on. */
+export class EnvironmentAbortedError extends Error {
+  constructor(sessionId: string) {
+    super(`environment preparation for session '${sessionId}' was aborted (the engine is shutting down)`);
+    this.name = 'EnvironmentAbortedError';
+  }
+}
+
 export class EnvironmentService {
   /** The most recent `start()` outcome, so `briefContext` can report R5's degrade reason. */
   private lastStart: { sessionId: string; status: LocalAppStatus } | null = null;
+  /** W4: `start()` calls still in flight, so a shutdown can abort one that is still waiting on a healthcheck. */
+  private readonly inFlight = new Map<string, { abort: () => void; done: Promise<void> }>();
 
   constructor(private readonly deps: EnvironmentServiceDeps) {}
 
@@ -328,7 +340,10 @@ export class EnvironmentService {
   // ---- start (legacy `run_local`, `bin/cgremlin:560-633`) ----
 
   async start(session: Session, opts: { fresh?: boolean } = {}): Promise<LocalAppStatus> {
-    const status = await this.startInner(session, opts).catch((err: unknown) => {
+    const controller = new AbortController();
+    // Registered synchronously (no await before the `set`) so an `abortAll()`
+    // racing this call can never miss it.
+    const run = this.startInner(session, opts, controller.signal).catch((err: unknown) => {
       if (
         err instanceof LocalAppPortBusyError ||
         err instanceof LocalAppPrereqError ||
@@ -339,11 +354,42 @@ export class EnvironmentService {
       }
       throw err;
     });
-    this.lastStart = { sessionId: session.id, status };
-    return status;
+    const entry = {
+      abort: () => controller.abort(),
+      done: run.then(
+        () => undefined,
+        () => undefined,
+      ),
+    };
+    this.inFlight.set(session.id, entry);
+    try {
+      const status = await run;
+      this.lastStart = { sessionId: session.id, status };
+      return status;
+    } finally {
+      // Only clear our own entry — a later start for the same session may
+      // already have taken the slot.
+      if (this.inFlight.get(session.id) === entry) this.inFlight.delete(session.id);
+    }
   }
 
-  private async startInner(session: Session, opts: { fresh?: boolean }): Promise<LocalAppStatus> {
+  /**
+   * W4: abort every `start()` still in flight and wait for each to unwind.
+   * Until this exists, `close()` cannot stop a start that has spawned a dev
+   * server and is sitting in its healthcheck: there is no active run to stop
+   * and (before the record below) nothing on disk for `stop()` to find.
+   */
+  async abortAll(): Promise<void> {
+    const entries = [...this.inFlight.values()];
+    for (const entry of entries) entry.abort();
+    await Promise.all(entries.map((entry) => entry.done));
+  }
+
+  private async startInner(
+    session: Session,
+    opts: { fresh?: boolean },
+    signal: AbortSignal,
+  ): Promise<LocalAppStatus> {
     const env = this.environmentFor(session.workspace.repoUrl);
     const local = env?.localApp;
     if (env === undefined || local === undefined) {
@@ -367,7 +413,7 @@ export class EnvironmentService {
     await this.ensureSetup(session, env, logPath, opts.fresh === true);
 
     return this.deps.lock.withLock(`local-app:${local.port}`, () =>
-      this.startLocked(session, env, cwd, logPath),
+      this.startLocked(session, env, cwd, logPath, signal),
     );
   }
 
@@ -386,6 +432,7 @@ export class EnvironmentService {
     env: RepoEnvironment,
     cwd: string,
     logPath: string,
+    signal: AbortSignal,
   ): Promise<LocalAppStatus> {
     const local = env.localApp!;
     const { port, url } = local;
@@ -427,42 +474,16 @@ export class EnvironmentService {
       if (listener !== null) throw new LocalAppPortBusyError(port, listener, false);
     }
 
+    // W4: nothing has been spawned yet — an abort here costs nothing to honour.
+    if (signal.aborted) return unavailable(ABORTED_REASON);
+
     const proc = await this.deps.local.start({
       cwd,
       command: local.devCommand,
       nodeVersion: local.nodeVersion,
       logPath,
     });
-    const health = await this.deps.local.healthcheck(url, {
-      timeoutMs: local.healthTimeoutMs,
-      intervalMs: local.healthIntervalMs,
-      insecureTls: local.insecureTls,
-      proc,
-    });
-    if (health.exited) {
-      // R11: the dev command refused to start — report its own message, do not work around it.
-      const head = await this.deps.local.headLog(logPath, PREREQ_LOG_LINES);
-      throw new LocalAppPrereqError(
-        `the dev command exited before ${url} answered. First ${PREREQ_LOG_LINES} log lines:\n${head}`,
-      );
-    }
-    if (!health.ok) {
-      await this.deps.local.stop(proc, { port });
-      const tail = await this.deps.local.tailLog(logPath, TIMEOUT_LOG_LINES);
-      throw new LocalAppUnhealthyError(
-        `${url} did not come up within ${Math.round(local.healthTimeoutMs / 1000)}s. Last log lines:\n${tail}`,
-      );
-    }
-
-    // R16: the pnpm wrapper forks, so the listener — not the spawned child — is what we must record.
-    let pid = proc.pid;
-    let pgid = proc.pgid;
-    const listener = await this.deps.local.portListenerPid(port);
-    if (listener !== null && listener !== proc.pid) {
-      pid = listener;
-      pgid = (await this.deps.local.pgidOf(listener)) ?? proc.pgid;
-    }
-    const state: LocalAppState = {
+    const recordOf = (pid: number, pgid: number): LocalAppState => ({
       sessionId: session.id,
       repoSlug: repoSlugFromUrl(session.workspace.repoUrl),
       url,
@@ -471,9 +492,57 @@ export class EnvironmentService {
       pgid,
       logPath,
       startedAt: proc.startedAt,
-    };
-    await this.writeState(state);
-    return this.runningStatus(state);
+    });
+    // W4: record the process the moment it exists — BEFORE the healthcheck.
+    // An engine that dies mid-wait must leave the next boot's reap something
+    // to kill, rather than an unrecorded dev server nobody owns.
+    await this.writeState(recordOf(proc.pid, proc.pgid));
+    try {
+      const health = await this.deps.local.healthcheck(url, {
+        timeoutMs: local.healthTimeoutMs,
+        intervalMs: local.healthIntervalMs,
+        insecureTls: local.insecureTls,
+        proc,
+        signal,
+      });
+      if (signal.aborted) {
+        // Shutting down: the app we just spawned is ours to take back down.
+        await this.deps.local.stop(proc, { port });
+        await this.deps.fs.remove(this.deps.statePath);
+        return unavailable(ABORTED_REASON);
+      }
+      if (health.exited) {
+        // R11: the dev command refused to start — report its own message, do not work around it.
+        const head = await this.deps.local.headLog(logPath, PREREQ_LOG_LINES);
+        throw new LocalAppPrereqError(
+          `the dev command exited before ${url} answered. First ${PREREQ_LOG_LINES} log lines:\n${head}`,
+        );
+      }
+      if (!health.ok) {
+        await this.deps.local.stop(proc, { port });
+        const tail = await this.deps.local.tailLog(logPath, TIMEOUT_LOG_LINES);
+        throw new LocalAppUnhealthyError(
+          `${url} did not come up within ${Math.round(local.healthTimeoutMs / 1000)}s. Last log lines:\n${tail}`,
+        );
+      }
+
+      // R16: the pnpm wrapper forks, so the listener — not the spawned child — is what we must record.
+      let pid = proc.pid;
+      let pgid = proc.pgid;
+      const listener = await this.deps.local.portListenerPid(port);
+      if (listener !== null && listener !== proc.pid) {
+        pid = listener;
+        pgid = (await this.deps.local.pgidOf(listener)) ?? proc.pgid;
+      }
+      const state = recordOf(pid, pgid);
+      await this.writeState(state);
+      return this.runningStatus(state);
+    } catch (err) {
+      // The pre-healthcheck record must not outlive a start that failed —
+      // it would make `status` claim a dead app is running.
+      await this.deps.fs.remove(this.deps.statePath).catch(() => undefined);
+      throw err;
+    }
   }
 
   // ---- stop / reap ----

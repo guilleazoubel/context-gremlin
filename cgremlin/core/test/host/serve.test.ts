@@ -408,6 +408,49 @@ describe('serve — local app wiring', () => {
     }
   });
 
+  it('W4 close() aborts an environment start still in its healthcheck: no run ever starts and nothing is left behind', async () => {
+    const lines: string[] = [];
+    const fs = new InMemoryFileSystem();
+    const localApp = new FakeLocalAppRunner();
+    const runner = new FakeAgentRunner();
+    const config = envConfig();
+    await seedWorktree(fs);
+    const handle = await serve(config, testAdapters({ fs, runner, localApp }), { log: (l) => lines.push(l) });
+    let run: Promise<unknown> | undefined;
+    try {
+      await handle.engine.store.save(devSession('dev-1'));
+      const deferred = localApp.deferHealth();
+      run = requestOn(handle.socketPath, 'POST', '/sessions/dev-1/run', { stage: 'develop' });
+      run.catch(() => undefined);
+      await deferred.entered;
+      // (b) the spawned dev server is on record while the healthcheck waits.
+      expect(await fs.exists(config.localAppStatePath!)).toBe(true);
+      expect(handle.engine.pipeline.activeSessionIds()).toEqual([]);
+
+      await handle.close();
+
+      expect(localApp.stopCalls).toHaveLength(1);
+      expect(await fs.exists(config.localAppStatePath!)).toBe(false);
+      expect(lines.some((l) => l.includes('run.started'))).toBe(false);
+      // The request unwinds (its socket is torn down with the server) rather
+      // than hanging on a healthcheck nobody can stop.
+      const settled = await Promise.race([
+        run.then(
+          () => 'settled',
+          () => 'settled',
+        ),
+        new Promise((resolve) => setTimeout(() => resolve('hung'), 1000)),
+      ]);
+      expect(settled).toBe('settled');
+      // And no agent was ever spawned against the engine we just shut down.
+      expect(() => runner.lastHandle()).toThrow();
+      expect(lines.some((l) => l.includes('run.started'))).toBe(false);
+    } finally {
+      await run?.catch(() => undefined);
+      await handle.close();
+    }
+  });
+
   it('a localApp adapter with a config that has NO environments still serves exactly as before', async () => {
     const localApp = new FakeLocalAppRunner();
     const handle = await serve(testConfig(), testAdapters({ localApp }), { log: () => {} });

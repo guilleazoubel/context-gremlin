@@ -170,6 +170,17 @@ export async function serve(config: CoreConfig, adapters: EngineAdapters, opts: 
         // running stage would look like an app crash rather than a shutdown.
         // environment.stop() must run even if a pipeline.stop() above threw,
         // or a failed session stop would leave the local app running forever.
+        //
+        // W4: abort first. A stage still PREPARING its environment has no
+        // active run for pipeline.stop() to find, and its dev server may not
+        // be on record yet — without this, close() would return while a
+        // healthcheck kept waiting, and the stage would go on to spawn an
+        // agent against an engine that is already gone.
+        try {
+          await environment?.abortAll();
+        } catch (err) {
+          firstError ??= err;
+        }
         try {
           await environment?.stop();
         } catch (err) {

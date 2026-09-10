@@ -35,7 +35,7 @@ import {
   STAGE_ENTRY_PROMPT,
   type EnvironmentBriefContext,
 } from './prompts';
-import type { EnvironmentService } from '../env/environment-service';
+import { ABORTED_REASON, EnvironmentAbortedError, type EnvironmentService } from '../env/environment-service';
 import { evaluateFindings, evaluatePlan, evaluateRereview, evaluateReview, nextReviewVersion, readNonEmpty } from './artifacts';
 import { assertCanPromote } from './plan-gate';
 import { WorkspaceMissingError, type StageRunResult } from './stage-runner';
@@ -200,6 +200,12 @@ export class PipelineService {
         // A failed start degrades (R5): `start` reports it as 'unavailable'
         // rather than throwing, and the brief says so.
         const status = await environment.start(session);
+        // W4: an aborted start means the engine is shutting down — degrading
+        // here would run the stage's agent against an engine that is already
+        // gone, so the stage does not start at all.
+        if (status.state === 'unavailable' && status.reason === ABORTED_REASON) {
+          throw new EnvironmentAbortedError(id);
+        }
         startedHere = status.state === 'running';
       }
       // The context is read AFTER the start, so the brief reflects what

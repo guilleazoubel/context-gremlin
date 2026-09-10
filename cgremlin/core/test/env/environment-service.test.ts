@@ -554,6 +554,67 @@ describe('EnvironmentService — start, single instance', () => {
   });
 });
 
+describe('EnvironmentService — W4 abortable start', () => {
+  it('records the spawned process BEFORE the healthcheck, so a crash mid-wait leaves something to reap', async () => {
+    const h = await harness();
+    const deferred = h.local.deferHealth();
+    const pending = h.service.start(devSession());
+    await deferred.entered;
+    const state = await readState(h.fs);
+    expect(state).toMatchObject({ sessionId: 's1', port: 8080, pid: 1234, pgid: 1234, logPath: DEV_LOG });
+    deferred.release({ ok: true, status: 200, reason: null, exited: false });
+    expect((await pending).state).toBe('running');
+  });
+
+  it('a failed healthcheck clears the record it wrote before the wait', async () => {
+    const h = await harness();
+    h.local.queueHealth({ ok: false, status: null, reason: 'timeout', exited: false });
+    const status = await h.service.start(devSession());
+    expect(status.state).toBe('unavailable');
+    expect(await h.fs.exists(STATE_PATH)).toBe(false);
+  });
+
+  it('abortAll stops the app spawned by a start still in its healthcheck and resolves it aborted', async () => {
+    const h = await harness();
+    const deferred = h.local.deferHealth();
+    const pending = h.service.start(devSession());
+    await deferred.entered;
+    expect(await h.fs.exists(STATE_PATH)).toBe(true);
+
+    await h.service.abortAll();
+
+    const status = await pending;
+    expect(status.state).toBe('unavailable');
+    expect(status.reason).toBe('aborted');
+    expect(h.local.stopCalls).toHaveLength(1);
+    expect(h.local.stopCalls[0].proc.pid).toBe(1234);
+    expect(await h.fs.exists(STATE_PATH)).toBe(false);
+  });
+
+  it('abortAll waits for the in-flight start to unwind before it resolves', async () => {
+    const h = await harness();
+    const deferred = h.local.deferHealth();
+    let settled = false;
+    const pending = h.service.start(devSession()).then((s) => {
+      settled = true;
+      return s;
+    });
+    await deferred.entered;
+    await h.service.abortAll();
+    expect(settled).toBe(true);
+    expect((await pending).reason).toBe('aborted');
+  });
+
+  it('abortAll with nothing in flight is a no-op and leaves a started app alone', async () => {
+    const h = await harness();
+    const status = await h.service.start(devSession());
+    expect(status.state).toBe('running');
+    await h.service.abortAll();
+    expect(h.local.stopCalls).toEqual([]);
+    expect(await h.fs.exists(STATE_PATH)).toBe(true);
+  });
+});
+
 describe('EnvironmentService — stop and reap', () => {
   it('stop with no owner reports stopped and kills nothing', async () => {
     const h = await harness();

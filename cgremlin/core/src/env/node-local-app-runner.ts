@@ -26,8 +26,21 @@ function wrap(command: string, nodeVersion?: string): string {
     : `export NVM_DIR="$HOME/.nvm"; . "$NVM_DIR/nvm.sh" 2>/dev/null; nvm use ${nodeVersion} >/dev/null 2>&1 || exit 78; ${command}`;
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+/** Resolves after `ms`, or as soon as `signal` aborts — whichever comes first (W4). */
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    if (signal?.aborted === true) {
+      resolve();
+      return;
+    }
+    const finish = (): void => {
+      clearTimeout(timer);
+      signal?.removeEventListener('abort', finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, ms);
+    signal?.addEventListener('abort', finish, { once: true });
+  });
 }
 
 function isErrnoException(err: unknown): err is NodeJS.ErrnoException {
@@ -101,11 +114,22 @@ export class NodeLocalAppRunner implements LocalAppRunner {
 
   async healthcheck(
     url: string,
-    opts: { timeoutMs: number; intervalMs: number; insecureTls: boolean; proc?: LocalAppProcess },
+    opts: {
+      timeoutMs: number;
+      intervalMs: number;
+      insecureTls: boolean;
+      proc?: LocalAppProcess;
+      signal?: AbortSignal;
+    },
   ): Promise<HealthResult> {
     const deadline = Date.now() + opts.timeoutMs;
     let lastReason: string | null = null;
     for (;;) {
+      // W4: checked between polls, so a shutdown mid-wait is honoured in one
+      // interval rather than after the full timeout.
+      if (opts.signal?.aborted === true) {
+        return { ok: false, status: null, exited: false, reason: 'aborted' };
+      }
       if (opts.proc && !(await this.isAlive(opts.proc))) {
         return {
           ok: false,
@@ -128,7 +152,7 @@ export class NodeLocalAppRunner implements LocalAppRunner {
         };
       }
       const remaining = deadline - Date.now();
-      await sleep(Math.max(0, Math.min(opts.intervalMs, remaining)));
+      await sleep(Math.max(0, Math.min(opts.intervalMs, remaining)), opts.signal);
     }
   }
 

@@ -43,11 +43,19 @@ export interface LocalAppRunner {
   portListenerPid(port: number): Promise<number | null>;
   pgidOf(pid: number): Promise<number | null>;
   start(spec: LocalAppSpec): Promise<LocalAppProcess>;
-  /** Polls the URL until 2xx, the timeout, or `proc` exits — whichever comes first;
-   *  `exited: true` means the dev command died before the port ever answered (R11). */
+  /** Polls the URL until 2xx, the timeout, `proc` exits, or `signal` aborts — whichever
+   *  comes first; `exited: true` means the dev command died before the port ever
+   *  answered (R11). W4: `signal` is checked between polls so a shutdown does not
+   *  have to wait out the whole healthcheck timeout. */
   healthcheck(
     url: string,
-    opts: { timeoutMs: number; intervalMs: number; insecureTls: boolean; proc?: LocalAppProcess },
+    opts: {
+      timeoutMs: number;
+      intervalMs: number;
+      insecureTls: boolean;
+      proc?: LocalAppProcess;
+      signal?: AbortSignal;
+    },
   ): Promise<HealthResult>;
   isAlive(proc: LocalAppProcess): Promise<boolean>;
   /** R6: kills only `proc`'s own group; a lingering listener from another group is reported, never killed. */
