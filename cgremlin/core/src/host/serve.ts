@@ -6,6 +6,8 @@ import { ClaudeCodeRunner } from '../agent/claude-code-runner';
 import { CodexRunner } from '../agent/codex-runner';
 import type { AgentRunner } from '../agent/agent-runner';
 import type { CoreConfig } from '../config/core-config';
+import { redactBypassUrls } from '../config/core-config';
+import { NodeLocalAppRunner } from '../env/node-local-app-runner';
 import { listenOnSocket } from '../api/listen';
 import { buildEngine, type BuildEngineOptions, type Engine, type EngineAdapters } from './build-engine';
 
@@ -70,7 +72,7 @@ export async function serve(config: CoreConfig, adapters: EngineAdapters, opts: 
   await adapters.fs.mkdir(mirrorsDir, { recursive: true });
 
   const engine = buildEngine(config, adapters, { makeTickable: opts.makeTickable });
-  const { server, scheduler, pipeline, events } = engine;
+  const { server, scheduler, pipeline, events, environment } = engine;
 
   const unsubscribers: Array<() => void> = [
     events.on('session.created', (e) => logLine(opts.log, 'session.created', { sessionId: e.session.id })),
@@ -87,8 +89,37 @@ export async function serve(config: CoreConfig, adapters: EngineAdapters, opts: 
   ];
   if (opts.verbose) {
     unsubscribers.push(
-      events.on('run.output', (e) => logLine(opts.log, 'run.output', { sessionId: e.sessionId, stage: e.stage, chunk: e.chunk })),
+      // R3: an agent that echoes a bypass URL must never write the secret
+      // into the engine's own log.
+      events.on('run.output', (e) =>
+        logLine(opts.log, 'run.output', {
+          sessionId: e.sessionId,
+          stage: e.stage,
+          chunk: { ...e.chunk, data: redactBypassUrls(e.chunk.data) },
+        }),
+      ),
     );
+  }
+
+  // R13: before anything can reach us, reap the process group a previous
+  // engine recorded and then died without stopping — and only that one. A
+  // failure here (e.g. a stuck `ps`/kill call) must not abort boot — the
+  // engine should still come up and serve, just without having reaped.
+  try {
+    const reap = await environment?.reconcileOrphans();
+    if (reap?.reaped) {
+      const { sessionId, pid, pgid, port } = reap.reaped;
+      logLine(opts.log, 'local.reaped', { sessionId, pid, pgid, port, alreadyDead: reap.alreadyDead });
+    }
+    // W3: a record we can no longer prove is ours (it predates this boot and
+    // does not own its port) was dropped without signalling anything — say so,
+    // because a pid recorded before a reboot may now belong to anybody.
+    if (reap?.stale) {
+      const { sessionId, pid, pgid, port } = reap.stale;
+      logLine(opts.log, 'local.reap_stale', { sessionId, pid, pgid, port });
+    }
+  } catch (err) {
+    logLine(opts.log, 'local.reap_failed', { error: err instanceof Error ? err.message : String(err) });
   }
 
   await listenOnSocket(server, socketPath);
@@ -125,12 +156,36 @@ export async function serve(config: CoreConfig, adapters: EngineAdapters, opts: 
       // rereview/agent after we've already begun tearing everything down,
       // leaving it running forever with nothing left to stop it.
       await scheduler.stop();
-      // StageRunner's in-memory active map is the only trustworthy source
-      // of "what's actually running" — an on-disk lastRun.outcome==='running'
-      // can be stale (a crashed engine, a session nobody ever resumed) and
-      // stopping by that alone would be a no-op at best, misleading at worst.
-      for (const id of pipeline.activeSessionIds()) {
-        await pipeline.stop(id);
+      try {
+        // StageRunner's in-memory active map is the only trustworthy source
+        // of "what's actually running" — an on-disk lastRun.outcome==='running'
+        // can be stale (a crashed engine, a session nobody ever resumed) and
+        // stopping by that alone would be a no-op at best, misleading at worst.
+        for (const id of pipeline.activeSessionIds()) {
+          await pipeline.stop(id);
+        }
+      } finally {
+        // R16: sessions first, local app second — an agent still mid-turn may
+        // be talking to the dev server, so pulling it out from under a
+        // running stage would look like an app crash rather than a shutdown.
+        // environment.stop() must run even if a pipeline.stop() above threw,
+        // or a failed session stop would leave the local app running forever.
+        //
+        // W4: abort first. A stage still PREPARING its environment has no
+        // active run for pipeline.stop() to find, and its dev server may not
+        // be on record yet — without this, close() would return while a
+        // healthcheck kept waiting, and the stage would go on to spawn an
+        // agent against an engine that is already gone.
+        try {
+          await environment?.abortAll();
+        } catch (err) {
+          firstError ??= err;
+        }
+        try {
+          await environment?.stop();
+        } catch (err) {
+          firstError ??= err;
+        }
       }
     } catch (err) {
       firstError = err;
@@ -165,5 +220,5 @@ export function realAdapters(config: CoreConfig): EngineAdapters {
     config.runner === 'codex'
       ? new CodexRunner({ model: config.runnerOptions.model, sandbox: config.runnerOptions.sandbox })
       : new ClaudeCodeRunner({ model: config.runnerOptions.model, permissionMode: config.runnerOptions.permissionMode });
-  return { fs, git, gh, runner, runnerKind: config.runner };
+  return { fs, git, gh, runner, runnerKind: config.runner, localApp: new NodeLocalAppRunner() };
 }

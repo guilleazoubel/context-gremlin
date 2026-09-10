@@ -128,4 +128,8 @@ describe('parseArtifactName', () => {
     expect(() => parseArtifactName('../secrets')).toThrow(ValidationError);
     expect(() => parseArtifactName('REVIEW-vX.md')).toThrow(ValidationError);
   });
+
+  it('MG-2: parseArtifactName rejects .bypass-secret', () => {
+    expect(() => parseArtifactName('.bypass-secret')).toThrow(ValidationError);
+  });
 });

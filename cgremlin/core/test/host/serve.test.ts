@@ -15,7 +15,10 @@ import { FakeGitRunner } from '../support/fake-git-runner';
 import { FakeGhRunner } from '../support/fake-gh-runner';
 import { FakeAgentRunner } from '../support/fake-agent-runner';
 import { FakeClock } from '../support/fake-clock';
-import { migrateV1ToV2 } from '../../src/schema/session';
+import { migrateV1ToV2, type Session } from '../../src/schema/session';
+import { FakeLocalAppRunner } from '../support/fake-local-app-runner';
+import { redactCoreConfig } from '../../src/config/core-config';
+import { existsSync } from 'node:fs';
 
 function requestOn(
   socketPath: string,
@@ -120,6 +123,348 @@ function testAdapters(overrides: Partial<EngineAdapters> = {}): EngineAdapters {
     ...overrides,
   };
 }
+
+const ENV_REPO_URL = 'https://github.com/acme/app.git';
+const ENV_WT = '/worktrees/dev-1';
+const APP_URL = 'https://local.example.test';
+const SECRET = 'S3CRET-VALUE';
+
+function envConfig(): CoreConfig {
+  return resolveCoreConfig(
+    {
+      repos: ['acme/app'],
+      me: 'me-user',
+      watchAuthors: ['bob'],
+      sessionsDir: '/sessions',
+      worktreesDir: '/worktrees',
+      mirrorsDir: '/mirrors',
+      socketPath: path.join(dir, 'engine.sock'),
+      stateDir: '/state',
+      environments: {
+        'acme/app': {
+          localApp: { url: APP_URL, port: 8080, stages: ['develop'] },
+          vercel: { scope: 'sc', project: 'pr', previewProject: 'pr', bypassSecret: SECRET },
+        },
+      },
+    },
+    '/home/e2e',
+  );
+}
+
+function devSession(id: string): Session {
+  return {
+    schemaVersion: 2,
+    id,
+    createdAt: '2020-01-01T00:00:00.000Z',
+    mode: 'development',
+    stageStatus: 'active',
+    workspace: { repoUrl: ENV_REPO_URL, worktreePath: ENV_WT, branch: 'feat/x' },
+    lineage: { pipelineId: 'p1', parentSessionId: null, ticket: 'GS-1' },
+    agent: null,
+    lastRun: null,
+    pr: null,
+  };
+}
+
+const RECORDED_STATE = {
+  sessionId: 'dev-1',
+  repoSlug: 'acme/app',
+  url: APP_URL,
+  port: 8080,
+  pid: 4321,
+  pgid: 4321,
+  logPath: '/sessions/dev-1/logs/dev-server.log',
+  // Written by the engine that just died — i.e. after this machine booted, so
+  // the pid-reuse guard (W3) trusts it.
+  startedAt: new Date().toISOString(),
+};
+
+async function seedLocalAppState(fs: InMemoryFileSystem, config: CoreConfig): Promise<void> {
+  await fs.mkdir('/state', { recursive: true });
+  await fs.writeFile(config.localAppStatePath!, JSON.stringify(RECORDED_STATE));
+}
+
+/** A worktree the local app can actually be started from. */
+async function seedWorktree(fs: InMemoryFileSystem): Promise<void> {
+  await fs.mkdir(ENV_WT, { recursive: true });
+  await fs.writeFile(`${ENV_WT}/package.json`, JSON.stringify({ scripts: { dev: 'next dev' } }));
+  await fs.writeFile(`${ENV_WT}/.env.local`, 'A=1\n');
+  await fs.mkdir(`${ENV_WT}/node_modules`, { recursive: true });
+}
+
+describe('serve — local app wiring', () => {
+  it('reaps the recorded process group before it listens or starts the scheduler, and logs local.reaped', async () => {
+    const lines: string[] = [];
+    const fs = new InMemoryFileSystem();
+    const clock = new FakeClock();
+    const localApp = new FakeLocalAppRunner();
+    const config = envConfig();
+    await seedLocalAppState(fs, config);
+    localApp.setAlive(true);
+
+    let clockRunningAtReap: boolean | undefined;
+    let socketExistedAtReap: boolean | undefined;
+    const realStop = localApp.stop.bind(localApp);
+    vi.spyOn(localApp, 'stop').mockImplementation(async (proc, opts) => {
+      clockRunningAtReap = clock.isRunning;
+      socketExistedAtReap = existsSync(config.socketPath!);
+      return realStop(proc, opts);
+    });
+
+    const handle = await serve(config, testAdapters({ fs, clock, localApp }), { log: (l) => lines.push(l) });
+    try {
+      expect(clockRunningAtReap).toBe(false);
+      expect(socketExistedAtReap).toBe(false);
+      const reaped = lines
+        .map((l) => JSON.parse(l) as Record<string, unknown>)
+        .filter((e) => e.type === 'local.reaped');
+      expect(reaped).toHaveLength(1);
+      expect(reaped[0]).toMatchObject({ sessionId: 'dev-1', pid: 4321, pgid: 4321, port: 8080, alreadyDead: false });
+      expect(await fs.exists(config.localAppStatePath!)).toBe(false);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('boots and serves even when reconcileOrphans() rejects, logging local.reap_failed', async () => {
+    const lines: string[] = [];
+    const fs = new InMemoryFileSystem();
+    const localApp = new FakeLocalAppRunner();
+    const config = envConfig();
+    await seedLocalAppState(fs, config);
+    vi.spyOn(localApp, 'isAlive').mockRejectedValue(new Error('reap boom'));
+
+    const handle = await serve(config, testAdapters({ fs, localApp }), { log: (l) => lines.push(l) });
+    try {
+      expect(existsSync(config.socketPath!)).toBe(true);
+      const parsed = lines.map((l) => JSON.parse(l) as Record<string, unknown>);
+      const failed = parsed.filter((e) => e.type === 'local.reap_failed');
+      expect(failed).toHaveLength(1);
+      expect(failed[0]).toMatchObject({ error: 'reap boom' });
+
+      const res = await requestOn(handle.socketPath, 'GET', '/sessions');
+      expect(res.status).toBe(200);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('with no recorded state at boot it logs no local.reaped line and kills nothing', async () => {
+    const lines: string[] = [];
+    const localApp = new FakeLocalAppRunner();
+    const handle = await serve(envConfig(), testAdapters({ localApp }), { log: (l) => lines.push(l) });
+    try {
+      expect(lines.map((l) => JSON.parse(l) as { type: string }).some((e) => e.type === 'local.reaped')).toBe(false);
+      expect(localApp.stopCalls).toHaveLength(0);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('W3 logs local.reap_stale and kills nothing when the recorded group predates the last boot', async () => {
+    const lines: string[] = [];
+    const fs = new InMemoryFileSystem();
+    const localApp = new FakeLocalAppRunner();
+    const config = envConfig();
+    await fs.mkdir('/state', { recursive: true });
+    await fs.writeFile(
+      config.localAppStatePath!,
+      JSON.stringify({ ...RECORDED_STATE, startedAt: '2020-01-01T00:00:00.000Z' }),
+    );
+    localApp.setAlive(true);
+
+    const handle = await serve(config, testAdapters({ fs, localApp }), { log: (l) => lines.push(l) });
+    try {
+      const stale = lines.map((l) => JSON.parse(l) as Record<string, unknown>).filter((e) => e.type === 'local.reap_stale');
+      expect(stale).toHaveLength(1);
+      expect(stale[0]).toMatchObject({ sessionId: 'dev-1', pid: 4321, pgid: 4321, port: 8080 });
+      expect(lines.some((l) => l.includes('local.reaped'))).toBe(false);
+      expect(localApp.stopCalls).toEqual([]);
+      expect(await fs.exists(config.localAppStatePath!)).toBe(false);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('close() stops every active session BEFORE it stops the local app, exactly once', async () => {
+    const order: string[] = [];
+    const fs = new InMemoryFileSystem();
+    const localApp = new FakeLocalAppRunner({ callLog: order });
+    const config = envConfig();
+    const handle = await serve(config, testAdapters({ fs, localApp }), { log: () => {} });
+    try {
+      const id = await createInvestigation(handle.socketPath);
+      await requestOn(handle.socketPath, 'POST', `/sessions/${id}/run`, { stage: 'findings' });
+      await new Promise((r) => setTimeout(r, 20));
+      await seedLocalAppState(fs, config);
+      localApp.setAlive(true);
+      vi.spyOn(handle.engine.pipeline, 'stop').mockImplementation(async () => {
+        order.push('pipeline.stop');
+        return true;
+      });
+
+      await handle.close();
+      expect(order).toEqual(['pipeline.stop', 'local.stop']);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('close() rejects when environment.stop() throws, and still removes the socket and its signal handlers', async () => {
+    const sigintBefore = process.listenerCount('SIGINT');
+    const localApp = new FakeLocalAppRunner();
+    const handle = await serve(envConfig(), testAdapters({ localApp }), { log: () => {} });
+    vi.spyOn(handle.engine.environment!, 'stop').mockRejectedValue(new Error('local stop boom'));
+
+    await expect(handle.close()).rejects.toThrow('local stop boom');
+    await expect(stat(handle.socketPath)).rejects.toThrow();
+    expect(process.listenerCount('SIGINT')).toBe(sigintBefore);
+  });
+
+  it('close() still stops the local app when pipeline.stop rejects, then rethrows that error', async () => {
+    const fs = new InMemoryFileSystem();
+    const localApp = new FakeLocalAppRunner();
+    const config = envConfig();
+    const handle = await serve(config, testAdapters({ fs, localApp }), { log: () => {} });
+    try {
+      const id = await createInvestigation(handle.socketPath);
+      await requestOn(handle.socketPath, 'POST', `/sessions/${id}/run`, { stage: 'findings' });
+      await new Promise((r) => setTimeout(r, 20));
+      await seedLocalAppState(fs, config);
+      localApp.setAlive(true);
+      vi.spyOn(handle.engine.pipeline, 'stop').mockRejectedValue(new Error('pipeline stop boom'));
+      const environmentStopSpy = vi.spyOn(handle.engine.environment!, 'stop');
+
+      await expect(handle.close()).rejects.toThrow('pipeline stop boom');
+      expect(environmentStopSpy).toHaveBeenCalled();
+      await expect(stat(handle.socketPath)).rejects.toThrow();
+    } finally {
+      await handle.close().catch(() => undefined);
+    }
+  });
+
+  it('MG-3 secret-never-leaves-the-process: a full start/status/stop cycle with verbose output never emits the bypass secret', async () => {
+    const lines: string[] = [];
+    const bodies: string[] = [];
+    const fs = new InMemoryFileSystem();
+    const runner = new FakeAgentRunner();
+    const localApp = new FakeLocalAppRunner();
+    const config = envConfig();
+    await seedWorktree(fs);
+    // W1: all three shapes the secret can take in free text — URL param, curl
+    // request header, and a JSON headers object.
+    localApp.setLogTail(
+      `open https://h/?x-vercel-protection-bypass=${SECRET}&x-vercel-set-bypass-cookie=true\n` +
+        `curl -H "x-vercel-protection-bypass: ${SECRET}" https://h/\n` +
+        `{"headers":{"x-vercel-protection-bypass":"${SECRET}"}}\n`,
+    );
+
+    const handle = await serve(config, testAdapters({ fs, runner, localApp }), {
+      log: (l) => lines.push(l),
+      verbose: true,
+    });
+    try {
+      await handle.engine.store.save(devSession('dev-1'));
+
+      const started = await requestOn(handle.socketPath, 'POST', '/sessions/dev-1/local/start');
+      bodies.push(JSON.stringify(started.body));
+      expect(started.status).toBe(200);
+
+      const status = await requestOn(handle.socketPath, 'GET', '/sessions/dev-1/local');
+      bodies.push(JSON.stringify(status.body));
+      const logTail = (status.body as { status: { logTail: string } }).status.logTail;
+      expect(logTail).toContain('x-vercel-protection-bypass=<redacted>');
+      expect(logTail).toContain('x-vercel-protection-bypass: <redacted>');
+      expect(logTail).toContain('"x-vercel-protection-bypass":"<redacted>"');
+      expect(logTail).not.toContain(SECRET);
+
+      // A stage run whose agent prints a live bypass URL to stdout.
+      const id = await createInvestigation(handle.socketPath);
+      await requestOn(handle.socketPath, 'POST', `/sessions/${id}/run`, { stage: 'findings' });
+      await new Promise((r) => setTimeout(r, 20));
+      runner.emitOutput(runner.lastHandle(), {
+        stream: 'stdout',
+        data:
+          `visit https://h/?x-vercel-protection-bypass=${SECRET}&x-vercel-set-bypass-cookie=true\n` +
+          `curl -H "x-vercel-protection-bypass: ${SECRET}" https://h/\n` +
+          `{"headers":{"x-vercel-protection-bypass":"${SECRET}"}}\n`,
+      });
+      await new Promise((r) => setTimeout(r, 20));
+
+      const stopped = await requestOn(handle.socketPath, 'POST', '/sessions/dev-1/local/stop');
+      bodies.push(JSON.stringify(stopped.body));
+
+      const everything = [...lines, ...bodies];
+      expect(everything.some((t) => t.includes(SECRET))).toBe(false);
+      expect(everything.some((t) => t.includes('x-vercel-protection-bypass=<redacted>'))).toBe(true);
+      // W1: the run.output logger redacts the header and JSON forms too. The
+      // log line is JSON, so the inner quotes come back escaped.
+      const outputLines = lines.filter((l) => l.includes('run.output'));
+      expect(outputLines.some((t) => t.includes('x-vercel-protection-bypass: <redacted>'))).toBe(true);
+      expect(outputLines.some((t) => t.includes('x-vercel-protection-bypass\\":\\"<redacted>'))).toBe(true);
+      expect(JSON.stringify(redactCoreConfig(config))).toContain('[redacted]');
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('W4 close() aborts an environment start still in its healthcheck: no run ever starts and nothing is left behind', async () => {
+    const lines: string[] = [];
+    const fs = new InMemoryFileSystem();
+    const localApp = new FakeLocalAppRunner();
+    const runner = new FakeAgentRunner();
+    const config = envConfig();
+    await seedWorktree(fs);
+    const handle = await serve(config, testAdapters({ fs, runner, localApp }), { log: (l) => lines.push(l) });
+    let run: Promise<unknown> | undefined;
+    try {
+      await handle.engine.store.save(devSession('dev-1'));
+      const deferred = localApp.deferHealth();
+      run = requestOn(handle.socketPath, 'POST', '/sessions/dev-1/run', { stage: 'develop' });
+      run.catch(() => undefined);
+      await deferred.entered;
+      // (b) the spawned dev server is on record while the healthcheck waits.
+      expect(await fs.exists(config.localAppStatePath!)).toBe(true);
+      expect(handle.engine.pipeline.activeSessionIds()).toEqual([]);
+
+      await handle.close();
+
+      expect(localApp.stopCalls).toHaveLength(1);
+      expect(await fs.exists(config.localAppStatePath!)).toBe(false);
+      expect(lines.some((l) => l.includes('run.started'))).toBe(false);
+      // The request unwinds (its socket is torn down with the server) rather
+      // than hanging on a healthcheck nobody can stop.
+      const settled = await Promise.race([
+        run.then(
+          () => 'settled',
+          () => 'settled',
+        ),
+        new Promise((resolve) => setTimeout(() => resolve('hung'), 1000)),
+      ]);
+      expect(settled).toBe('settled');
+      // And no agent was ever spawned against the engine we just shut down.
+      expect(() => runner.lastHandle()).toThrow();
+      expect(lines.some((l) => l.includes('run.started'))).toBe(false);
+    } finally {
+      await run?.catch(() => undefined);
+      await handle.close();
+    }
+  });
+
+  it('a localApp adapter with a config that has NO environments still serves exactly as before', async () => {
+    const localApp = new FakeLocalAppRunner();
+    const handle = await serve(testConfig(), testAdapters({ localApp }), { log: () => {} });
+    try {
+      const res = await requestOn(handle.socketPath, 'GET', '/sessions');
+      expect(res).toEqual({ status: 200, body: { sessions: [] } });
+      const local = await requestOn(handle.socketPath, 'GET', '/local');
+      expect(local.status).toBe(200);
+      expect(localApp.startCalls).toHaveLength(0);
+    } finally {
+      await handle.close();
+    }
+  });
+});
 
 describe('serve', () => {
   it('answers GET /sessions over the configured socket', async () => {

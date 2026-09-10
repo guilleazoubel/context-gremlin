@@ -887,6 +887,16 @@ describe('API server', () => {
     expect(res.status).toBe(400);
   });
 
+  it('MG-2 secret-not-an-artifact: .bypass-secret is never readable through the artifact route', async () => {
+    const session = makeSession();
+    await request('POST', '/sessions', session);
+    await h.fs.writeFile(`${SESSIONS_DIR}/${session.id}/.bypass-secret`, 'S3CRET-VALUE\n');
+
+    const res = await request('GET', `/sessions/${session.id}/artifacts/.bypass-secret`);
+    expect(res.status).toBe(400);
+    expect(JSON.stringify(res.body)).not.toContain('S3CRET-VALUE');
+  });
+
   it('GET /sessions/:id/artifacts/:name 404s an unknown session id even when a stray file exists at that path', async () => {
     // A leftover file on disk with no corresponding saved session — the
     // route must still 404 via sessionStore.load(id), not just check the

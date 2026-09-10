@@ -117,6 +117,7 @@ async function harness(opts: {
   lock?: KeyedLock;
   prereqsOk?: boolean;
   setUp?: boolean;
+  bootTimeMs?: () => number;
 } = {}): Promise<Harness> {
   const fs = new InMemoryFileSystem();
   const gh = new FakeGhRunner();
@@ -156,6 +157,7 @@ async function harness(opts: {
     lock,
     env: opts.prereqsOk === false ? { HOME } : { HOME, NODE_AUTH_TOKEN: 'tok' },
     now: () => new Date('2020-02-02T03:04:05.000Z'),
+    ...(opts.bootTimeMs === undefined ? {} : { bootTimeMs: opts.bootTimeMs }),
   });
 
   return { fs, gh, git, local, lock, config, service: new EnvironmentService(deps()), make: () => new EnvironmentService(deps()) };
@@ -411,6 +413,21 @@ describe('EnvironmentService — start, single instance', () => {
     expect(h.local.stopCalls).toEqual([]);
   });
 
+  it('W9 the ours port-busy message names the owning session', async () => {
+    const h = await harness();
+    await h.fs.writeFile(
+      STATE_PATH,
+      JSON.stringify({ sessionId: 'other', repoSlug: SLUG, url: 'https://local.findcare.dev.aplaceformom.com', port: 8080, pid: 4242, pgid: 4242, logPath: DEV_LOG, startedAt: '2020-01-01T00:00:00.000Z' }),
+    );
+    h.local.setPortListener(4242);
+    const status = await h.service.start(devSession());
+    expect(status.state).toBe('unavailable');
+    expect(status.reason).toContain('session other');
+    expect(status.reason).toBe(
+      "port 8080 is held by a local app this engine started (pid 4242, session other) — run 'cgremlin-core local stop' to release it",
+    );
+  });
+
   it('reuses a healthy app already owned by this session', async () => {
     const h = await harness();
     await h.fs.writeFile(
@@ -423,6 +440,30 @@ describe('EnvironmentService — start, single instance', () => {
     expect(status.state).toBe('running');
     expect(status.pid).toBe(4242);
     expect(h.local.startCalls).toEqual([]);
+  });
+
+  it('W6 restarts an app of ours that is alive but wedged: one stop, then one start', async () => {
+    const callLog: string[] = [];
+    const h = await harness({ local: new FakeLocalAppRunner({ callLog }) });
+    await h.fs.writeFile(
+      STATE_PATH,
+      JSON.stringify({ sessionId: 's1', repoSlug: SLUG, url: 'https://local.findcare.dev.aplaceformom.com', port: 8080, pid: 4242, pgid: 4242, logPath: DEV_LOG, startedAt: '2020-01-01T00:00:00.000Z' }),
+    );
+    h.local.setAlive(true);
+    // Ours, still running, but the URL answers non-2xx: wedged, not reusable.
+    h.local.queueHealth({ ok: false, status: 502, reason: 'status 502', exited: false });
+    h.local.queueHealth({ ok: true, status: 200, reason: null, exited: false });
+
+    const status = await h.service.start(devSession());
+
+    expect(status.state).toBe('running');
+    expect(h.local.stopCalls).toEqual([
+      { proc: { pid: 4242, pgid: 4242, startedAt: '2020-01-01T00:00:00.000Z' }, opts: { port: 8080 } },
+    ]);
+    expect(h.local.startCalls).toHaveLength(1);
+    // Exactly one stop, and it happens before the replacement is spawned.
+    expect(callLog).toEqual(['local.stop', 'local.start']);
+    expect((await readState(h.fs)).pid).toBe(1234);
   });
 
   it('clears a stale state file for this session and starts fresh', async () => {
@@ -552,6 +593,67 @@ describe('EnvironmentService — start, single instance', () => {
   });
 });
 
+describe('EnvironmentService — W4 abortable start', () => {
+  it('records the spawned process BEFORE the healthcheck, so a crash mid-wait leaves something to reap', async () => {
+    const h = await harness();
+    const deferred = h.local.deferHealth();
+    const pending = h.service.start(devSession());
+    await deferred.entered;
+    const state = await readState(h.fs);
+    expect(state).toMatchObject({ sessionId: 's1', port: 8080, pid: 1234, pgid: 1234, logPath: DEV_LOG });
+    deferred.release({ ok: true, status: 200, reason: null, exited: false });
+    expect((await pending).state).toBe('running');
+  });
+
+  it('a failed healthcheck clears the record it wrote before the wait', async () => {
+    const h = await harness();
+    h.local.queueHealth({ ok: false, status: null, reason: 'timeout', exited: false });
+    const status = await h.service.start(devSession());
+    expect(status.state).toBe('unavailable');
+    expect(await h.fs.exists(STATE_PATH)).toBe(false);
+  });
+
+  it('abortAll stops the app spawned by a start still in its healthcheck and resolves it aborted', async () => {
+    const h = await harness();
+    const deferred = h.local.deferHealth();
+    const pending = h.service.start(devSession());
+    await deferred.entered;
+    expect(await h.fs.exists(STATE_PATH)).toBe(true);
+
+    await h.service.abortAll();
+
+    const status = await pending;
+    expect(status.state).toBe('unavailable');
+    expect(status.reason).toBe('aborted');
+    expect(h.local.stopCalls).toHaveLength(1);
+    expect(h.local.stopCalls[0].proc.pid).toBe(1234);
+    expect(await h.fs.exists(STATE_PATH)).toBe(false);
+  });
+
+  it('abortAll waits for the in-flight start to unwind before it resolves', async () => {
+    const h = await harness();
+    const deferred = h.local.deferHealth();
+    let settled = false;
+    const pending = h.service.start(devSession()).then((s) => {
+      settled = true;
+      return s;
+    });
+    await deferred.entered;
+    await h.service.abortAll();
+    expect(settled).toBe(true);
+    expect((await pending).reason).toBe('aborted');
+  });
+
+  it('abortAll with nothing in flight is a no-op and leaves a started app alone', async () => {
+    const h = await harness();
+    const status = await h.service.start(devSession());
+    expect(status.state).toBe('running');
+    await h.service.abortAll();
+    expect(h.local.stopCalls).toEqual([]);
+    expect(await h.fs.exists(STATE_PATH)).toBe(true);
+  });
+});
+
 describe('EnvironmentService — stop and reap', () => {
   it('stop with no owner reports stopped and kills nothing', async () => {
     const h = await harness();
@@ -578,6 +680,17 @@ describe('EnvironmentService — stop and reap', () => {
     expect(await h.fs.exists(STATE_PATH)).toBe(false);
   });
 
+  it('W2/R6 stop that leaves a foreign process on the port reports it instead of claiming stopped', async () => {
+    const h = await harness();
+    await h.service.start(devSession('s1'));
+    h.local.setStopResult({ freed: false, foreignListener: 9999 });
+    const status = await h.service.stop('s1');
+    expect(status.state).toBe('unavailable');
+    expect(status.reason).toContain('9999');
+    expect(status.reason).toContain('port 8080');
+    expect(await h.fs.exists(STATE_PATH)).toBe(false);
+  });
+
   it('MG-11 reap-only-our-own: a live recorded group is stopped and the state cleared', async () => {
     const h = await harness();
     await h.service.start(devSession('s1'));
@@ -600,11 +713,75 @@ describe('EnvironmentService — stop and reap', () => {
     expect(await h.fs.exists(STATE_PATH)).toBe(false);
   });
 
+  it('W3 pid-reuse: a record predating the last boot that no longer owns the port is cleared, not signalled', async () => {
+    const h = await harness({ bootTimeMs: () => Date.parse('2021-01-01T00:00:00.000Z') });
+    await h.fs.writeFile(
+      STATE_PATH,
+      JSON.stringify({ sessionId: 's1', repoSlug: SLUG, url: 'https://local.findcare.dev.aplaceformom.com', port: 8080, pid: 4242, pgid: 4242, logPath: DEV_LOG, startedAt: '2020-01-01T00:00:00.000Z' }),
+    );
+    h.local.setAlive(true);
+    h.local.setPortListener(null);
+
+    const result = await h.service.reconcileOrphans();
+
+    expect(h.local.stopCalls).toEqual([]);
+    expect(result.reaped).toBeNull();
+    expect(result.stale?.sessionId).toBe('s1');
+    expect(await h.fs.exists(STATE_PATH)).toBe(false);
+  });
+
+  it('W3 pid-reuse: a record predating the boot that still owns the port is reaped', async () => {
+    const h = await harness({ bootTimeMs: () => Date.parse('2021-01-01T00:00:00.000Z') });
+    await h.fs.writeFile(
+      STATE_PATH,
+      JSON.stringify({ sessionId: 's1', repoSlug: SLUG, url: 'https://local.findcare.dev.aplaceformom.com', port: 8080, pid: 4242, pgid: 4242, logPath: DEV_LOG, startedAt: '2020-01-01T00:00:00.000Z' }),
+    );
+    h.local.setAlive(true);
+    h.local.setPortListener(4242);
+
+    const result = await h.service.reconcileOrphans();
+
+    expect(result.reaped?.sessionId).toBe('s1');
+    expect(result.stale).toBeNull();
+    expect(h.local.stopCalls).toHaveLength(1);
+  });
+
+  it('W3 pid-reuse: a record started after the last boot is reaped even with nothing on the port', async () => {
+    const h = await harness({ bootTimeMs: () => Date.parse('2019-01-01T00:00:00.000Z') });
+    await h.fs.writeFile(
+      STATE_PATH,
+      JSON.stringify({ sessionId: 's1', repoSlug: SLUG, url: 'https://local.findcare.dev.aplaceformom.com', port: 8080, pid: 4242, pgid: 4242, logPath: DEV_LOG, startedAt: '2020-01-01T00:00:00.000Z' }),
+    );
+    h.local.setAlive(true);
+    h.local.setPortListener(null);
+
+    const result = await h.service.reconcileOrphans();
+
+    expect(result.reaped?.sessionId).toBe('s1');
+    expect(h.local.stopCalls).toHaveLength(1);
+  });
+
+  it('W3 pid-reuse: stop refuses to signal a group recorded before the last boot and just clears the state', async () => {
+    const h = await harness({ bootTimeMs: () => Date.parse('2021-01-01T00:00:00.000Z') });
+    await h.fs.writeFile(
+      STATE_PATH,
+      JSON.stringify({ sessionId: 's1', repoSlug: SLUG, url: 'https://local.findcare.dev.aplaceformom.com', port: 8080, pid: 4242, pgid: 4242, logPath: DEV_LOG, startedAt: '2020-01-01T00:00:00.000Z' }),
+    );
+    h.local.setAlive(true);
+    h.local.setPortListener(null);
+
+    const status = await h.service.stop('s1');
+
+    expect(status.state).toBe('stopped');
+    expect(h.local.stopCalls).toEqual([]);
+    expect(await h.fs.exists(STATE_PATH)).toBe(false);
+  });
+
   it('MG-11 reap-only-our-own: a foreign listener with no state file is untouched', async () => {
     const h = await harness();
     h.local.setPortListener(9999);
     const result = await h.service.reconcileOrphans();
-    expect(result).toEqual({ reaped: null, alreadyDead: false });
+    expect(result).toEqual({ reaped: null, alreadyDead: false, stale: null });
     expect(h.local.stopCalls).toEqual([]);
     expect(await h.fs.exists(STATE_PATH)).toBe(false);
   });

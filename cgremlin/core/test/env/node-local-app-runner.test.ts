@@ -1,5 +1,6 @@
-import { describe, expect, it, afterEach } from 'vitest';
+import { describe, expect, it, afterEach, vi } from 'vitest';
 import { createServer } from 'node:net';
+import { spawn } from 'node:child_process';
 import { mkdtempSync, readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -174,10 +175,133 @@ describe.skipIf(process.platform === 'win32')('NodeLocalAppRunner (real subproce
     expect(await runner.portListenerPid(port)).toBeNull();
   });
 
+  it('W2/R6 stop frees the port for a server we started and reports freed', async () => {
+    const port = await getFreePort();
+    const logPath = join(tmpDir, 'stop-freed.log');
+    const proc = await runner.start({ cwd: tmpDir, command: `env FIXTURE_PORT=${port} node ${FIXTURE}`, logPath });
+    await waitUntil(async () => (await runner.portListenerPid(port)) !== null, 2000);
+
+    const result = await runner.stop(proc, { port });
+
+    expect(result).toEqual({ freed: true });
+    expect(await runner.portListenerPid(port)).toBeNull();
+  });
+
+  it('W2/R6 stop leaves a foreign listener on the port alive and reports it instead of killing it', async () => {
+    const port = await getFreePort();
+    // A server in its own process group, which this engine did not start.
+    const foreign = spawn('node', [FIXTURE], {
+      env: { ...process.env, FIXTURE_PORT: String(port) },
+      detached: true,
+      stdio: 'ignore',
+    });
+    foreign.unref();
+    try {
+      expect(await waitUntil(async () => (await runner.portListenerPid(port)) !== null, 5000)).toBe(true);
+      const foreignPid = (await runner.portListenerPid(port))!;
+      // Our own process holds no port at all — the lingering listener on the
+      // port we are stopping belongs to somebody else.
+      const ours = await runner.start({
+        cwd: tmpDir,
+        command: 'node -e "setTimeout(() => {}, 60000)"',
+        logPath: join(tmpDir, 'stop-foreign.log'),
+      });
+
+      const result = await runner.stop(ours, { port });
+
+      expect(() => process.kill(foreignPid, 0)).not.toThrow();
+      expect(await runner.portListenerPid(port)).toBe(foreignPid);
+      expect(result).toEqual({ freed: false, foreignListener: foreignPid });
+    } finally {
+      if (foreign.pid !== undefined) {
+        try {
+          process.kill(-foreign.pid, 'SIGKILL');
+        } catch {
+          // already gone
+        }
+      }
+      await waitUntil(async () => (await runner.portListenerPid(port)) === null, 5000);
+    }
+  }, 20_000);
+
+  it('W7 stop escalates to SIGKILL for a dev command that traps SIGTERM and frees the port within ~6s', async () => {
+    const port = await getFreePort();
+    const logPath = join(tmpDir, 'trap-sigterm.log');
+    const proc = await runner.start({
+      cwd: tmpDir,
+      command: `env FIXTURE_PORT=${port} FIXTURE_TRAP_SIGTERM=1 node ${FIXTURE}`,
+      logPath,
+    });
+    expect(await waitUntil(async () => (await runner.portListenerPid(port)) !== null, 5000)).toBe(true);
+
+    const start = Date.now();
+    const result = await runner.stop(proc, { port });
+    const elapsed = Date.now() - start;
+
+    expect(result).toEqual({ freed: true });
+    expect(await runner.portListenerPid(port)).toBeNull();
+    // The SIGTERM grace window is spent, then the group SIGKILL frees the port
+    // straight away — no second, slower pass over the lingering listener.
+    expect(elapsed).toBeLessThan(6500);
+  }, 20_000);
+
   it('stop on an already-dead process resolves without throwing', async () => {
     const proc: LocalAppProcess = { pid: 999998, pgid: 999998, startedAt: new Date().toISOString() };
-    await expect(runner.stop(proc, { port: await getFreePort() })).resolves.toBeUndefined();
+    await expect(runner.stop(proc, { port: await getFreePort() })).resolves.toEqual({ freed: true });
   });
+
+  it('W3 isAlive treats EPERM (a group we do not own) as not ours, not as alive', async () => {
+    const spy = vi.spyOn(process, 'kill').mockImplementation(() => {
+      const err: NodeJS.ErrnoException = new Error('kill EPERM');
+      err.code = 'EPERM';
+      throw err;
+    });
+    try {
+      const proc: LocalAppProcess = { pid: 4242, pgid: 4242, startedAt: new Date().toISOString() };
+      expect(await runner.isAlive(proc)).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('W8 stop treats an EPERM group as not ours: it neither throws nor escalates to SIGKILL', async () => {
+    const port = await getFreePort();
+    const calls: Array<[number, NodeJS.Signals | number | undefined]> = [];
+    const spy = vi.spyOn(process, 'kill').mockImplementation(((pid: number, signal?: NodeJS.Signals | number) => {
+      calls.push([pid, signal]);
+      const err: NodeJS.ErrnoException = new Error('kill EPERM');
+      err.code = 'EPERM';
+      throw err;
+    }) as typeof process.kill);
+    try {
+      // The pid was reused: -pgid now names a group belonging to somebody else.
+      const proc: LocalAppProcess = { pid: 4242, pgid: 4242, startedAt: new Date().toISOString() };
+      await expect(runner.stop(proc, { port })).resolves.toEqual({ freed: true });
+      // Exactly one signal attempt, and no SIGKILL follow-up at a foreign group.
+      expect(calls).toEqual([[-4242, 'SIGTERM']]);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('W8 stop reports an EPERM listener as foreign instead of failing the stop', async () => {
+    const port = await getFreePort();
+    const server = createServer();
+    await new Promise<void>((resolve) => server.listen(port, resolve));
+    const spy = vi.spyOn(process, 'kill').mockImplementation((() => {
+      const err: NodeJS.ErrnoException = new Error('kill EPERM');
+      err.code = 'EPERM';
+      throw err;
+    }) as typeof process.kill);
+    try {
+      // The recorded pid still holds the port, but every signal comes back EPERM.
+      const proc: LocalAppProcess = { pid: process.pid, pgid: process.pid, startedAt: new Date().toISOString() };
+      await expect(runner.stop(proc, { port })).resolves.toEqual({ freed: false, foreignListener: process.pid });
+    } finally {
+      spy.mockRestore();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  }, 20_000);
 
   it('exec runs a command and reports its exit code without rejecting', async () => {
     const ok = await runner.exec('echo hi', { cwd: tmpDir });

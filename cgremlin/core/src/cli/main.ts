@@ -7,6 +7,7 @@ import { reviewCommand } from './commands/review';
 import { sessionsCommand } from './commands/sessions';
 import { scanCommand } from './commands/scan';
 import { configCommand } from './commands/config';
+import { localCommand } from './commands/local';
 
 export const USAGE = `Usage: cgremlin-core <command> [options]
 
@@ -17,6 +18,7 @@ Commands:
   sessions [--json]                   List all sessions
   scan [--json]                       Run one inventory scan now
   config import-legacy [--force]      Import ~/.cgremlin/config into core.json
+  local start|stop|status [session]   Control the local dev app the engine owns
 `;
 
 type Command = (args: readonly string[], io: CommandIO) => Promise<number>;
@@ -28,6 +30,7 @@ const COMMANDS: Record<string, Command> = {
   sessions: sessionsCommand,
   scan: scanCommand,
   config: configCommand,
+  local: localCommand,
 };
 
 const CONFIG_FLAG_PREFIX = '--config=';

@@ -13,6 +13,8 @@ import { FakeGhRunner } from '../support/fake-gh-runner';
 import { FakeAgentRunner } from '../support/fake-agent-runner';
 import { FakeClock } from '../support/fake-clock';
 import { migrateV1ToV2 } from '../../src/schema/session';
+import { FakeLocalAppRunner } from '../support/fake-local-app-runner';
+import { EnvironmentService } from '../../src/env/environment-service';
 
 function testConfig(): CoreConfig {
   return resolveCoreConfig(
@@ -191,4 +193,85 @@ describe('buildEngine', () => {
       expect(updated.stageStatus).toBe('reviewing');
     },
   );
+
+  it('wires no EnvironmentService at all when there is no localApp adapter', () => {
+    const engine = buildEngine(testConfig(), testAdapters());
+    expect(engine.environment).toBeNull();
+  });
+
+  it('builds an EnvironmentService from the localApp adapter, sharing the engine KeyedLock', async () => {
+    const localApp = new FakeLocalAppRunner();
+    const fs = new InMemoryFileSystem();
+    const config = testConfig();
+    const engine = buildEngine(config, testAdapters({ localApp, fs }));
+    expect(engine.environment).toBeInstanceOf(EnvironmentService);
+    await fs.mkdir('/home/e2e/.cgremlin', { recursive: true });
+    await fs.writeFile(
+      config.localAppStatePath!,
+      JSON.stringify({
+        sessionId: 's1', repoSlug: 'acme/app', url: 'http://x', port: 8080,
+        pid: 5, pgid: 5, logPath: '/l', startedAt: '2020-01-01T00:00:00.000Z',
+      }),
+    );
+
+    // The SAME lock: hold `local-app:8080` on engine.lock and the service's
+    // own stop() must queue behind it rather than using a private lock.
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const lockPromise = engine.lock.withLock('local-app:8080', () => held);
+    let stopped = false;
+    const stopPromise = engine.environment!.stop().then(() => {
+      stopped = true;
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(stopped).toBe(false);
+    release();
+    await lockPromise;
+    await stopPromise;
+    expect(stopped).toBe(true);
+  });
+
+  it('the EnvironmentService reads and writes the configured localAppStatePath', async () => {
+    const localApp = new FakeLocalAppRunner();
+    const fs = new InMemoryFileSystem();
+    const config = testConfig();
+    const engine = buildEngine(config, testAdapters({ localApp, fs }));
+    await fs.mkdir('/home/e2e/.cgremlin', { recursive: true });
+    await fs.writeFile(
+      config.localAppStatePath!,
+      JSON.stringify({
+        sessionId: 's1', repoSlug: 'acme/app', url: 'http://x', port: 8080,
+        pid: 5, pgid: 5, logPath: '/l', startedAt: '2020-01-01T00:00:00.000Z',
+      }),
+    );
+    const status = await engine.environment!.status();
+    expect(status.state).toBe('running');
+    expect(status.sessionId).toBe('s1');
+  });
+
+  it('the API server serves the local routes when an environment is wired', async () => {
+    const localApp = new FakeLocalAppRunner();
+    const engine = buildEngine(testConfig(), testAdapters({ localApp }));
+    const dir = await mkdtemp(path.join(tmpdir(), 'cgremlin-core-build-engine-local-'));
+    const socketPath = path.join(dir, 'x.sock');
+    await new Promise<void>((resolve) => engine.server.listen(socketPath, resolve));
+    try {
+      const res = await requestOn(socketPath, 'GET', '/local');
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ status: expect.objectContaining({ state: 'stopped' }) });
+    } finally {
+      await new Promise<void>((resolve) => engine.server.close(() => resolve()));
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('the pipeline gets the same EnvironmentService instance the engine exposes', () => {
+    const localApp = new FakeLocalAppRunner();
+    const engine = buildEngine(testConfig(), testAdapters({ localApp }));
+    const wired = (engine.pipeline as unknown as { deps: { environment?: unknown } }).deps.environment;
+    expect(wired).toBeInstanceOf(EnvironmentService);
+    expect(wired).toBe(engine.environment);
+  });
 });
