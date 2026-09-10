@@ -57,8 +57,51 @@ function errorTextOf(body: unknown): string {
 
 const OFFLINE_CODES = new Set(['ENOENT', 'ECONNREFUSED']);
 
+/** A path parameter that cannot be spliced into a request path. Never reaches the socket. */
+export class InvalidPathParamError extends Error {
+  constructor(kind: string, value: unknown) {
+    super(`Refusing to address the engine with an unsafe ${kind}: ${JSON.stringify(value)}`);
+    this.name = 'InvalidPathParamError';
+  }
+}
+
+/**
+ * One path segment, verbatim. The engine matches raw path segments, but it re-parses the request
+ * target with `new URL(...)` first — so a `?` or `#` inside an id would silently truncate the path
+ * and address a *different* route. `\w` covers `[A-Za-z0-9_]`; `.`, `:`, `@` and `-` are the only
+ * other characters a core-derived session id can carry (ids are built from a repo slug and a ticket,
+ * and the ticket allow-list is `/^[A-Za-z0-9._-]+$/`), and `:` is explicitly legal in a session id.
+ */
+const SAFE_SEGMENT = /^[\w.:@-]+$/;
+
+export function assertSessionId(id: string): string {
+  if (typeof id !== 'string' || !SAFE_SEGMENT.test(id) || id === '.' || id === '..') {
+    throw new InvalidPathParamError('session id', id);
+  }
+  return id;
+}
+
+const REPO_SLUG = /^[\w.-]+\/[\w.-]+$/;
+
+export function assertRepoSlug(repo: string): string {
+  if (typeof repo !== 'string' || !REPO_SLUG.test(repo) || repo.includes('..')) {
+    throw new InvalidPathParamError('repo slug', repo);
+  }
+  return repo;
+}
+
+export function assertPrNumber(number: number): string {
+  if (!Number.isInteger(number) || number <= 0) {
+    throw new InvalidPathParamError('PR number', number);
+  }
+  return String(number);
+}
+
 export class CoreClient {
   constructor(private readonly socketPath: string) {}
+
+  // Every id-bearing method is `async` on purpose: its path-parameter check must surface as a
+  // *rejected promise*, not a synchronous throw, so one call site can handle both failure modes.
 
   request(method: string, path: string, body?: unknown): Promise<HttpResult> {
     const payload = body === undefined ? undefined : Buffer.from(JSON.stringify(body), 'utf8');
@@ -85,7 +128,6 @@ export class CoreClient {
     });
   }
 
-  /** Session ids and repo slugs go into the path verbatim: the engine matches raw path segments. */
   private async expect<T>(method: string, path: string, body?: unknown): Promise<T> {
     const result = await this.request(method, path, body);
     if (result.status < 200 || result.status >= 300) {
@@ -111,40 +153,40 @@ export class CoreClient {
     return this.expect('GET', all === true ? '/attention?all=1' : '/attention');
   }
 
-  artifacts(id: string): Promise<ArtifactListingResponse> {
-    return this.expect('GET', `/sessions/${id}/artifacts`);
+  async artifacts(id: string): Promise<ArtifactListingResponse> {
+    return await this.expect('GET', `/sessions/${assertSessionId(id)}/artifacts`);
   }
 
-  conversation(id: string): Promise<ConversationView> {
-    return this.expect('GET', `/sessions/${id}/conversation`);
+  async conversation(id: string): Promise<ConversationView> {
+    return await this.expect('GET', `/sessions/${assertSessionId(id)}/conversation`);
   }
 
   async claim(id: string): Promise<void> {
-    await this.expect('POST', `/sessions/${id}/conversation/claim`);
+    await this.expect('POST', `/sessions/${assertSessionId(id)}/conversation/claim`);
   }
 
   async release(id: string): Promise<void> {
-    await this.expect('POST', `/sessions/${id}/conversation/release`);
+    await this.expect('POST', `/sessions/${assertSessionId(id)}/conversation/release`);
   }
 
-  startReview(repo: string, number: number): Promise<HttpResult> {
-    return this.request('POST', `/prs/${repo}/${number}/review`);
+  async startReview(repo: string, number: number): Promise<HttpResult> {
+    return await this.request('POST', `/prs/${assertRepoSlug(repo)}/${assertPrNumber(number)}/review`);
   }
 
-  approvePlan(id: string): Promise<HttpResult> {
-    return this.request('POST', `/sessions/${id}/approve-plan`);
+  async approvePlan(id: string): Promise<HttpResult> {
+    return await this.request('POST', `/sessions/${assertSessionId(id)}/approve-plan`);
   }
 
-  stop(id: string): Promise<HttpResult> {
-    return this.request('POST', `/sessions/${id}/stop`);
+  async stop(id: string): Promise<HttpResult> {
+    return await this.request('POST', `/sessions/${assertSessionId(id)}/stop`);
   }
 
-  retry(id: string): Promise<HttpResult> {
-    return this.request('POST', `/sessions/${id}/retry`);
+  async retry(id: string): Promise<HttpResult> {
+    return await this.request('POST', `/sessions/${assertSessionId(id)}/retry`);
   }
 
-  run(id: string, stage: string): Promise<HttpResult> {
-    return this.request('POST', `/sessions/${id}/run`, { stage });
+  async run(id: string, stage: string): Promise<HttpResult> {
+    return await this.request('POST', `/sessions/${assertSessionId(id)}/run`, { stage });
   }
 
   /** The generic, source-agnostic ack path — preferred over the two aliases below. */
@@ -152,12 +194,12 @@ export class CoreClient {
     return this.request('POST', '/attention/ack', { ref });
   }
 
-  ackSession(id: string): Promise<HttpResult> {
-    return this.request('POST', `/sessions/${id}/ack`);
+  async ackSession(id: string): Promise<HttpResult> {
+    return await this.request('POST', `/sessions/${assertSessionId(id)}/ack`);
   }
 
-  ackPr(repo: string, number: number): Promise<HttpResult> {
-    return this.request('POST', `/prs/${repo}/${number}/ack`);
+  async ackPr(repo: string, number: number): Promise<HttpResult> {
+    return await this.request('POST', `/prs/${assertRepoSlug(repo)}/${assertPrNumber(number)}/ack`);
   }
 
   scan(): Promise<HttpResult> {

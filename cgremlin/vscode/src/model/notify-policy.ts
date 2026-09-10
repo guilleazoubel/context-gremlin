@@ -7,6 +7,7 @@
  *
  * Pure module — no editor API (MG-B1).
  */
+import { displayTitle } from './items';
 import type { AttentionItem, AttentionReason, ItemRef, ItemSource } from './items';
 
 export type NotificationLevel = 'all' | 'needs-you-only' | 'off';
@@ -43,7 +44,7 @@ export function decideNotifications(
     popups.push({
       ref: item.ref,
       source: item.source,
-      message: `${item.title} — ${item.attention.reasons.join(', ')}`,
+      message: `${displayTitle(item)} — ${item.attention.reasons.join(', ')}`,
       reasons: [...item.attention.reasons],
     });
   }

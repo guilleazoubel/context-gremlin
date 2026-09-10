@@ -64,6 +64,14 @@ export interface Item {
   links: ItemLinks;
 }
 
+/**
+ * The label an item shows. A source that gave the item no title (an inventory row seen before its
+ * first scan, a session whose PR has none) falls back to the id, which is never empty.
+ */
+export function displayTitle(item: Pick<Item, 'title' | 'id'>): string {
+  return item.title === '' ? item.id : item.title;
+}
+
 export interface AttentionItem extends Item {
   mode: SessionMode | null;
   stageStatus: string | null;

@@ -115,3 +115,12 @@ describe('MG-B2 only-needs-you-pops', () => {
     expect(offenders).toEqual([]);
   });
 });
+
+describe('popup text', () => {
+  it('falls back to the id when the source gave the item no title', () => {
+    const item = make('pr:acme/web#7', ['changes_requested']);
+    item.title = '';
+    const popups = decideNotifications([], [item], 'all');
+    expect(popups.map((p) => p.message)).toEqual(['acme/web#7 — changes_requested']);
+  });
+});

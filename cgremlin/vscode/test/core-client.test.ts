@@ -1,5 +1,10 @@
 import { describe, expect, it, afterEach } from 'vitest';
-import { CoreClient, CoreHttpError, EngineNotRunningError } from '../src/core-client';
+import {
+  CoreClient,
+  CoreHttpError,
+  EngineNotRunningError,
+  InvalidPathParamError,
+} from '../src/core-client';
 import { fixtures, startStubServer, type StubHandler, type StubServerHandle } from './support/stub-server';
 
 const servers: StubServerHandle[] = [];
@@ -184,5 +189,55 @@ describe('the committed fixtures', () => {
     const attention = fixtures.attention as { items: { ref: string }[] };
     expect(attention.items.length).toBe(10);
     expect(new Set(attention.items.map((i) => i.ref)).size).toBe(10);
+  });
+});
+
+describe('path parameters can never truncate the request path', () => {
+  it('refuses a session id carrying a query or fragment delimiter', async () => {
+    const { core } = await client();
+    for (const id of ['s1?x=1', 's1#frag', 'a/b', '..', '', 's 1', 's1%2f']) {
+      await expect(core.artifacts(id)).rejects.toBeInstanceOf(InvalidPathParamError);
+      await expect(core.conversation(id)).rejects.toBeInstanceOf(InvalidPathParamError);
+      await expect(core.claim(id)).rejects.toBeInstanceOf(InvalidPathParamError);
+      await expect(core.release(id)).rejects.toBeInstanceOf(InvalidPathParamError);
+      await expect(core.approvePlan(id)).rejects.toBeInstanceOf(InvalidPathParamError);
+      await expect(core.stop(id)).rejects.toBeInstanceOf(InvalidPathParamError);
+      await expect(core.retry(id)).rejects.toBeInstanceOf(InvalidPathParamError);
+      await expect(core.run(id, 'findings')).rejects.toBeInstanceOf(InvalidPathParamError);
+      await expect(core.ackSession(id)).rejects.toBeInstanceOf(InvalidPathParamError);
+    }
+  });
+
+  it('never reaches the socket for a rejected id', async () => {
+    const { core, server } = await client();
+    await expect(core.stop('s1?x=1')).rejects.toBeInstanceOf(InvalidPathParamError);
+    expect(server.requests).toEqual([]);
+  });
+
+  it('accepts every id shape the core can derive', async () => {
+    const { core, server } = await client();
+    for (const id of ['pr-acme-web-102', 'inv-acme_api-ING.4-1a2b', 'has:colon', 'a@b']) {
+      await core.stop(id);
+    }
+    expect(server.requests.map((r) => r.path)).toEqual([
+      '/sessions/pr-acme-web-102/stop',
+      '/sessions/inv-acme_api-ING.4-1a2b/stop',
+      '/sessions/has:colon/stop',
+      '/sessions/a@b/stop',
+    ]);
+  });
+
+  it('refuses an unsafe repo slug or PR number', async () => {
+    const { core, server } = await client();
+    for (const repo of ['acme', 'acme/web?x=1', 'acme/../web', 'acme/web/extra']) {
+      await expect(core.startReview(repo, 7)).rejects.toBeInstanceOf(InvalidPathParamError);
+      await expect(core.ackPr(repo, 7)).rejects.toBeInstanceOf(InvalidPathParamError);
+    }
+    for (const number of [0, -1, 1.5, Number.NaN]) {
+      await expect(core.startReview('acme/web', number)).rejects.toBeInstanceOf(InvalidPathParamError);
+    }
+    expect(server.requests).toEqual([]);
+    await core.startReview('acme/web', 102);
+    expect(server.requests.map((r) => r.path)).toEqual(['/prs/acme/web/102/review']);
   });
 });

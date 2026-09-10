@@ -9,6 +9,7 @@
  *
  * Pure module — no editor API (MG-B1).
  */
+import { displayTitle } from './items';
 import type {
   AttentionItem,
   InventoryEntry,
@@ -101,7 +102,7 @@ function toListItem(kind: ListKind, item: AttentionItem, entry: InventoryEntry |
   return {
     kind,
     item,
-    label: item.title === '' ? item.id : item.title,
+    label: displayTitle(item),
     description: describe(item, entry),
     indicator: indicatorFor(item),
     contextValue: `${kind}:${item.source}:${item.mode ?? 'none'}`,
