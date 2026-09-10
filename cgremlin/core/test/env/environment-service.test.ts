@@ -427,6 +427,30 @@ describe('EnvironmentService — start, single instance', () => {
     expect(h.local.startCalls).toEqual([]);
   });
 
+  it('W6 restarts an app of ours that is alive but wedged: one stop, then one start', async () => {
+    const callLog: string[] = [];
+    const h = await harness({ local: new FakeLocalAppRunner({ callLog }) });
+    await h.fs.writeFile(
+      STATE_PATH,
+      JSON.stringify({ sessionId: 's1', repoSlug: SLUG, url: 'https://local.findcare.dev.aplaceformom.com', port: 8080, pid: 4242, pgid: 4242, logPath: DEV_LOG, startedAt: '2020-01-01T00:00:00.000Z' }),
+    );
+    h.local.setAlive(true);
+    // Ours, still running, but the URL answers non-2xx: wedged, not reusable.
+    h.local.queueHealth({ ok: false, status: 502, reason: 'status 502', exited: false });
+    h.local.queueHealth({ ok: true, status: 200, reason: null, exited: false });
+
+    const status = await h.service.start(devSession());
+
+    expect(status.state).toBe('running');
+    expect(h.local.stopCalls).toEqual([
+      { proc: { pid: 4242, pgid: 4242, startedAt: '2020-01-01T00:00:00.000Z' }, opts: { port: 8080 } },
+    ]);
+    expect(h.local.startCalls).toHaveLength(1);
+    // Exactly one stop, and it happens before the replacement is spawned.
+    expect(callLog).toEqual(['local.stop', 'local.start']);
+    expect((await readState(h.fs)).pid).toBe(1234);
+  });
+
   it('clears a stale state file for this session and starts fresh', async () => {
     const h = await harness();
     await h.fs.writeFile(

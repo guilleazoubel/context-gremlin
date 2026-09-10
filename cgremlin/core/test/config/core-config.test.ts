@@ -359,6 +359,15 @@ describe('MG-8 config-file-is-0600 (real filesystem)', () => {
     expect(await fsys.statMode(configPath)).toBe(0o600);
   });
 
+  it('loadCoreConfig rejects a real 0640 file holding a secret — group-readable already leaks it (W5)', async () => {
+    await fsys.mkdir(dir, { recursive: true });
+    await fsys.writeFile(configPath, JSON.stringify(SECRET_CONFIG_INPUT), { mode: 0o640 });
+    expect(await fsys.statMode(configPath)).toBe(0o640);
+    await expect(loadCoreConfig(fsys, configPath, HOME)).rejects.toThrow(ConfigError);
+    await expect(loadCoreConfig(fsys, configPath, HOME)).rejects.toThrow('mode 0640');
+    await expect(loadCoreConfig(fsys, configPath, HOME)).rejects.toThrow('chmod 600');
+  });
+
   it('loadCoreConfig rejects a real 0644 file holding a secret with a ConfigError naming the path', async () => {
     await fsys.mkdir(dir, { recursive: true });
     await fsys.writeFile(configPath, JSON.stringify(SECRET_CONFIG_INPUT), { mode: 0o644 });

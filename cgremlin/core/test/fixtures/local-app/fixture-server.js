@@ -13,6 +13,11 @@ server.listen(port, () => {
   console.log(`fixture-server listening on ${port}`);
 });
 
+// A dev command that swallows SIGTERM: only SIGKILL gets the port back.
+if (process.env.FIXTURE_TRAP_SIGTERM) {
+  process.on('SIGTERM', () => {});
+}
+
 if (process.env.FIXTURE_SPAWN_CHILD) {
   const child = spawn('sleep', ['300'], { stdio: 'ignore' });
   if (process.env.FIXTURE_CHILD_PID_FILE) {

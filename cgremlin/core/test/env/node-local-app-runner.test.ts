@@ -224,6 +224,27 @@ describe.skipIf(process.platform === 'win32')('NodeLocalAppRunner (real subproce
     }
   }, 20_000);
 
+  it('W7 stop escalates to SIGKILL for a dev command that traps SIGTERM and frees the port within ~6s', async () => {
+    const port = await getFreePort();
+    const logPath = join(tmpDir, 'trap-sigterm.log');
+    const proc = await runner.start({
+      cwd: tmpDir,
+      command: `env FIXTURE_PORT=${port} FIXTURE_TRAP_SIGTERM=1 node ${FIXTURE}`,
+      logPath,
+    });
+    expect(await waitUntil(async () => (await runner.portListenerPid(port)) !== null, 5000)).toBe(true);
+
+    const start = Date.now();
+    const result = await runner.stop(proc, { port });
+    const elapsed = Date.now() - start;
+
+    expect(result).toEqual({ freed: true });
+    expect(await runner.portListenerPid(port)).toBeNull();
+    // The SIGTERM grace window is spent, then the group SIGKILL frees the port
+    // straight away — no second, slower pass over the lingering listener.
+    expect(elapsed).toBeLessThan(6500);
+  }, 20_000);
+
   it('stop on an already-dead process resolves without throwing', async () => {
     const proc: LocalAppProcess = { pid: 999998, pgid: 999998, startedAt: new Date().toISOString() };
     await expect(runner.stop(proc, { port: await getFreePort() })).resolves.toEqual({ freed: true });
