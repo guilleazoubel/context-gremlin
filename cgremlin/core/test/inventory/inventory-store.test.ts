@@ -48,6 +48,7 @@ describe('InventoryStore', () => {
       readFile: (p) => inner.readFile(p),
       writeFile: (p, c, o) => inner.writeFile(p, c, o),
       statMode: (p) => inner.statMode(p),
+      statMtimeMs: (p) => inner.statMtimeMs(p),
       remove: (p) => inner.remove(p),
       rename: (from, to) => {
         renameCalls.push({ from, to });

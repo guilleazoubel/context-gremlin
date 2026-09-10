@@ -169,6 +169,7 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     events,
     inventory: { scanner, scheduler, factory, inventoryStore, config: { me: config.me } },
     lock,
+    config,
     ...(environment ? { environment } : {}),
   });
 

@@ -16,7 +16,7 @@ import {
   ValidationError,
 } from './validation';
 import { assertWorktreeNotInUse, TERMINAL_PHASES_BY_MODE } from '../workspace/workspace-in-use';
-import { ArtifactNotFoundError } from './artifacts';
+import { ArtifactNotFoundError, pickPrimaryArtifact, type ArtifactListing } from './artifacts';
 import type { DiscoveryScheduler } from '../discovery/scheduler';
 import { awaitRunStart } from '../pipeline/run-start';
 import type { InventoryScanner, ScanReport } from '../inventory/inventory-scanner';
@@ -24,7 +24,7 @@ import type { InventoryStore } from '../inventory/inventory-store';
 import { groupInventory, type Inventory, type InventoryEntry } from '../inventory/inventory';
 import type { ReviewSessionFactory, CandidatePR } from '../pipeline/review-session-factory';
 import type { EnvironmentService, LocalAppStatus } from '../env/environment-service';
-import { redactBypassUrls } from '../config/core-config';
+import { redactBypassUrls, redactCoreConfig, type CoreConfig } from '../config/core-config';
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
@@ -68,6 +68,8 @@ export interface ApiServerDeps {
   lock?: KeyedLock;
   /** Absent for a wiring with no local-app adapter: every /local route then 404s. */
   environment?: EnvironmentService;
+  /** Absent for a wiring built without one (every test server that doesn't need it): `GET /config` then 404s. */
+  config?: CoreConfig;
 }
 
 export class OwnPrError extends Error {
@@ -243,6 +245,46 @@ async function handleArtifactRead(
 }
 
 /**
+ * The artifact listing. The name filter is `parseArtifactName` itself, called
+ * in a try/catch — there is deliberately no second allow-list, so widening
+ * what is listable stays a one-regex edit in src/api/validation.ts and can
+ * never drift from what the single-artifact read accepts.
+ */
+async function handleArtifactList(res: ServerResponse, deps: ApiServerDeps, id: string): Promise<void> {
+  const session = await deps.sessionStore.load(id); // SessionNotFoundError -> 404
+  const sessionDir = `${deps.sessionsDir}/${id}`;
+  let names: string[];
+  try {
+    names = await deps.fs.readdir(sessionDir);
+  } catch {
+    // A session whose directory was never created (nothing has run yet) has
+    // no artifacts — not an error.
+    names = [];
+  }
+  const artifacts: ArtifactListing[] = [];
+  for (const name of [...names].sort()) {
+    try {
+      parseArtifactName(name);
+    } catch {
+      continue;
+    }
+    const filePath = `${sessionDir}/${name}`;
+    const mtimeMs = await deps.fs.statMtimeMs(filePath);
+    if (mtimeMs === null) continue;
+    let content: string;
+    try {
+      content = await deps.fs.readFile(filePath);
+    } catch {
+      // An allow-listed name that isn't a readable file (a directory, say):
+      // omit it rather than failing the whole listing.
+      continue;
+    }
+    artifacts.push({ name, mtime: new Date(mtimeMs).toISOString(), size: Buffer.byteLength(content, 'utf8') });
+  }
+  sendJson(res, 200, { artifacts, primary: pickPrimaryArtifact(session, artifacts) });
+}
+
+/**
  * 'unavailable' is how EnvironmentService reports a precondition failure it
  * degraded on (busy port, missing prereq, app never answered) — the same
  * class of thing `mapErrorToHttp` turns into a 409, so the status drives the
@@ -367,9 +409,24 @@ async function handleRequest(
       return;
     }
 
+    if (method === 'GET' && parts.length === 3 && parts[0] === 'sessions' && parts[2] === 'artifacts') {
+      const id = parts[1];
+      await lock.withLock(id, () => handleArtifactList(res, deps, id));
+      return;
+    }
+
     if (method === 'GET' && parts.length === 4 && parts[0] === 'sessions' && parts[2] === 'artifacts') {
       const id = parts[1];
       await lock.withLock(id, () => handleArtifactRead(res, deps, id, parts[3]));
+      return;
+    }
+
+    if (method === 'GET' && parts.length === 1 && parts[0] === 'config') {
+      if (!deps.config) {
+        sendJson(res, 404, { error: 'config not available' });
+        return;
+      }
+      sendJson(res, 200, { config: redactCoreConfig(deps.config) });
       return;
     }
 

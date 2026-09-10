@@ -25,6 +25,9 @@ import type { Inventory } from '../../src/inventory/inventory';
 import { ReviewSessionFactory } from '../../src/pipeline/review-session-factory';
 import { FakeGhRunner } from '../support/fake-gh-runner';
 import type { GhRunner } from '../../src/gh/gh-runner';
+import { readFileSync } from 'node:fs';
+import { resolveCoreConfig, type CoreConfig } from '../../src/config/core-config';
+import { parseArtifactName, ValidationError } from '../../src/api/validation';
 
 const APPROVED_PLAN = `## Review Status
 - PM: ✅ Approved — solves exactly the ticket
@@ -116,6 +119,11 @@ class DelayedFileSystem implements SessionFileSystem {
   async statMode(path: string): Promise<number | null> {
     await this.delay();
     return this.inner.statMode(path);
+  }
+
+  async statMtimeMs(path: string): Promise<number | null> {
+    await this.delay();
+    return this.inner.statMtimeMs(path);
   }
 
   async remove(path: string): Promise<void> {
@@ -1280,4 +1288,124 @@ it('F5/M1 + F7: GET /prs and GET /prs/status fall back to inventoryStore.load() 
     await new Promise<void>((resolve) => freshServer.close(() => resolve()));
     await rm(freshSocketPath, { force: true });
   }
+});
+
+describe('artifact listing and GET /config', () => {
+  let listSocketPath: string;
+  let listServer: http.Server;
+  let lh: PipelineHarness;
+
+  const RAW_CONFIG = {
+    repos: ['acme/app'],
+    me: 'me-user',
+    stateDir: '/state',
+    environments: {
+      'acme/app': {
+        vercel: { scope: 's', project: 'p', previewProject: 'pp', bypassSecret: 'S3CRET-VALUE' },
+      },
+    },
+  };
+
+  function listRequest(method: string, urlPath: string, body?: unknown) {
+    return requestOn(listSocketPath, method, urlPath, body);
+  }
+
+  beforeEach(async () => {
+    lh = createHarness();
+    listServer = createApiServer({
+      sessionStore: lh.store,
+      workspaceManager: lh.workspace,
+      pipeline: lh.service,
+      fs: lh.fs,
+      sessionsDir: SESSIONS_DIR,
+      events: lh.events,
+      lock: lh.lock,
+      config: resolveCoreConfig(RAW_CONFIG, '/home/u'),
+    });
+    listSocketPath = path.join(dir, 'artifacts.sock');
+    await new Promise<void>((resolve) => listServer.listen(listSocketPath, resolve));
+  });
+
+  afterEach(async () => {
+    await new Promise<void>((resolve) => listServer.close(() => resolve()));
+    await rm(listSocketPath, { force: true });
+  });
+
+  it('GET /sessions/:id/artifacts returns every listable artifact with an ISO mtime and a size, plus the primary', async () => {
+    const session = makeSession();
+    await lh.store.save(session);
+    await lh.fs.writeFile(`${SESSIONS_DIR}/${session.id}/BRIEF.md`, 'brief');
+    await lh.fs.writeFile(`${SESSIONS_DIR}/${session.id}/PLAN.md`, '# Plan text');
+    await lh.fs.writeFile(`${SESSIONS_DIR}/${session.id}/REVIEW-v2.md`, 'archived');
+
+    const res = await listRequest('GET', `/sessions/${session.id}/artifacts`);
+    expect(res.status).toBe(200);
+    const body = res.body as { artifacts: Array<{ name: string; mtime: string; size: number }>; primary: string | null };
+    expect([...body.artifacts].map((a) => a.name).sort()).toEqual(['BRIEF.md', 'PLAN.md', 'REVIEW-v2.md']);
+    const plan = body.artifacts.find((a) => a.name === 'PLAN.md')!;
+    expect(plan.size).toBe('# Plan text'.length);
+    expect(plan.mtime).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    expect(body.primary).toBe('PLAN.md');
+  });
+
+  it('GET /sessions/:id/artifacts 404s an unknown session', async () => {
+    const res = await listRequest('GET', '/sessions/does-not-exist/artifacts');
+    expect(res.status).toBe(404);
+  });
+
+  it('MG-A10 artifact-listing-respects-the-allow-list', async () => {
+    const session = makeSession();
+    await lh.store.save(session);
+    const sessionDir = `${SESSIONS_DIR}/${session.id}`;
+    await lh.fs.writeFile(`${sessionDir}/BRIEF.md`, 'brief');
+    await lh.fs.writeFile(`${sessionDir}/.bypass-secret`, 'S3CRET-VALUE\n');
+    await lh.fs.writeFile(`${sessionDir}/BRIEF.md.tmp`, 'half-written');
+    await lh.fs.writeFile(`${sessionDir}/notes.txt`, 'scratch');
+    await lh.fs.mkdir(`${sessionDir}/logs`, { recursive: true });
+    await lh.fs.writeFile(`${sessionDir}/logs/dev-server.log`, 'noise');
+
+    const res = await listRequest('GET', `/sessions/${session.id}/artifacts`);
+    expect(res.status).toBe(200);
+    const body = res.body as { artifacts: Array<{ name: string }>; primary: string | null };
+    expect(body.artifacts.map((a) => a.name)).toEqual(['BRIEF.md']);
+    expect(JSON.stringify(res.body)).not.toContain('S3CRET-VALUE');
+
+    // The one allow-list is still the one in src/api/validation.ts, and it is
+    // still the only gate on the single-artifact read.
+    expect(() => parseArtifactName('.bypass-secret')).toThrow(ValidationError);
+    const readRes = await listRequest('GET', `/sessions/${session.id}/artifacts/.bypass-secret`);
+    expect(readRes.status).toBe(400);
+
+    // ...and the listing reaches it by calling that same gate per readdir
+    // entry, rather than through a second allow-list of its own.
+    const serverSource = readFileSync(path.join(__dirname, '../../src/api/server.ts'), 'utf8');
+    expect(serverSource).toMatch(/parseArtifactName\(name\)/);
+  });
+
+  it('GET /config returns the resolved config with every bypass secret redacted', async () => {
+    const res = await listRequest('GET', '/config');
+    expect(res.status).toBe(200);
+    const { config } = res.body as { config: CoreConfig };
+    expect(config.stateDir).toBe('/state');
+    expect(config.sessionsDir).toBe('/state/sessions');
+    expect(config.worktreesDir).toBe('/state/worktrees');
+    expect(config.socketPath).toBe('/state/engine.sock');
+    expect(config.repos).toEqual(['acme/app']);
+    expect(config.me).toBe('me-user');
+    for (const env of Object.values(config.environments)) {
+      if (env.vercel !== undefined) expect(env.vercel.bypassSecret).toBe('[redacted]');
+    }
+    expect(JSON.stringify(res.body)).not.toContain('S3CRET-VALUE');
+  });
+
+  it('GET /config 404s on a server built without a config', async () => {
+    const srv = await createDelayedServer('no-config.sock');
+    try {
+      const res = await requestOn(srv.sock, 'GET', '/config');
+      expect(res.status).toBe(404);
+      expect(res.body).toEqual({ error: 'config not available' });
+    } finally {
+      await srv.close();
+    }
+  });
 });

@@ -6,11 +6,20 @@ const DEFAULT_DIR_MODE = 0o755;
 interface MemFile {
   content: string;
   mode: number;
+  mtimeMs: number;
+}
+
+interface MemDir {
+  mode: number;
+  mtimeMs: number;
 }
 
 export class InMemoryFileSystem implements SessionFileSystem {
   private files = new Map<string, MemFile>();
-  private dirs = new Map<string, number>();
+  private dirs = new Map<string, MemDir>();
+
+  /** `now` drives the mtime every write records, so a test can order two writes without sleeping. */
+  constructor(private readonly now: () => number = () => Date.now()) {}
 
   private parentOf(path: string): string {
     const idx = path.lastIndexOf('/');
@@ -23,7 +32,7 @@ export class InMemoryFileSystem implements SessionFileSystem {
       let current = '';
       for (const segment of segments) {
         current += `/${segment}`;
-        if (!this.dirs.has(current)) this.dirs.set(current, DEFAULT_DIR_MODE);
+        if (!this.dirs.has(current)) this.dirs.set(current, { mode: DEFAULT_DIR_MODE, mtimeMs: this.now() });
       }
       return;
     }
@@ -31,7 +40,7 @@ export class InMemoryFileSystem implements SessionFileSystem {
     if (!this.dirs.has(parent)) {
       throw new Error(`ENOENT: no such directory: ${parent}`);
     }
-    if (!this.dirs.has(path)) this.dirs.set(path, DEFAULT_DIR_MODE);
+    if (!this.dirs.has(path)) this.dirs.set(path, { mode: DEFAULT_DIR_MODE, mtimeMs: this.now() });
   }
 
   async exists(path: string): Promise<boolean> {
@@ -44,7 +53,7 @@ export class InMemoryFileSystem implements SessionFileSystem {
       throw new Error(`ENOENT: no such directory: ${parent}`);
     }
     const mode = options?.mode ?? this.files.get(path)?.mode ?? DEFAULT_FILE_MODE;
-    this.files.set(path, { content, mode });
+    this.files.set(path, { content, mode, mtimeMs: this.now() });
   }
 
   async readFile(path: string): Promise<string> {
@@ -58,9 +67,13 @@ export class InMemoryFileSystem implements SessionFileSystem {
   async statMode(path: string): Promise<number | null> {
     const file = this.files.get(path);
     if (file !== undefined) return file.mode & 0o777;
-    const dirMode = this.dirs.get(path);
-    if (dirMode !== undefined) return dirMode & 0o777;
+    const dir = this.dirs.get(path);
+    if (dir !== undefined) return dir.mode & 0o777;
     return null;
+  }
+
+  async statMtimeMs(path: string): Promise<number | null> {
+    return this.files.get(path)?.mtimeMs ?? this.dirs.get(path)?.mtimeMs ?? null;
   }
 
   async remove(path: string): Promise<void> {
@@ -73,7 +86,7 @@ export class InMemoryFileSystem implements SessionFileSystem {
       throw new Error(`ENOENT: no such file: ${from}`);
     }
     this.files.delete(from);
-    this.files.set(to, file);
+    this.files.set(to, { ...file, mtimeMs: this.now() });
   }
 
   async readdir(path: string): Promise<string[]> {

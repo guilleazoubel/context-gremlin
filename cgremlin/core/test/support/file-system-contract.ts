@@ -113,6 +113,44 @@ export function testFileSystemContract(
       expect(mode! & 0o700).toBe(0o700);
     });
 
+    it('statMtimeMs of a missing path is null', async () => {
+      const fs = await createFs();
+      expect(await fs.statMtimeMs(makePath('no-such-mtime.txt'))).toBeNull();
+    });
+
+    it('statMtimeMs after writeFile is a finite number within 5s of now', async () => {
+      const fs = await createFs();
+      const path = makePath('mtime.txt');
+      const before = Date.now();
+      await fs.writeFile(path, 'x');
+      const mtime = await fs.statMtimeMs(path);
+      expect(mtime).not.toBeNull();
+      expect(Number.isFinite(mtime!)).toBe(true);
+      expect(Math.abs(mtime! - before)).toBeLessThan(5_000);
+    });
+
+    it('a second writeFile yields a mtime greater than or equal to the first', async () => {
+      const fs = await createFs();
+      const path = makePath('mtime-twice.txt');
+      await fs.writeFile(path, 'first');
+      const first = await fs.statMtimeMs(path);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      await fs.writeFile(path, 'second');
+      const second = await fs.statMtimeMs(path);
+      expect(first).not.toBeNull();
+      expect(second).not.toBeNull();
+      expect(second!).toBeGreaterThanOrEqual(first!);
+    });
+
+    it('statMtimeMs of a directory is non-null', async () => {
+      const fs = await createFs();
+      const dir = makePath('mtime-dir');
+      await fs.mkdir(dir, { recursive: true });
+      const mtime = await fs.statMtimeMs(dir);
+      expect(mtime).not.toBeNull();
+      expect(Number.isFinite(mtime!)).toBe(true);
+    });
+
     it('remove deletes a file so exists() is false', async () => {
       const fs = await createFs();
       const path = makePath('to-remove.txt');
