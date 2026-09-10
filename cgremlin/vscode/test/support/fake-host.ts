@@ -61,6 +61,15 @@ export class FakeHost implements Host {
   readonly statusBarItems: FakeStatusBarItem[] = [];
   readonly files = new Map<string, string>();
   readonly logs: string[] = [];
+  /** The output channel's lines, kept apart from `logs` so a test can tell them apart. */
+  readonly output: string[] = [];
+  readonly outputShown: number[] = [];
+  /** Watches by path, so a test can fire the one it means. */
+  readonly watches = new Map<string, { callback: () => void; disposed: number }>();
+  /** Answers handed to the next `spawnCapture` calls, keyed by the command. */
+  spawnResults = new Map<string, { code: number; stdout: string; stderr: string }>();
+  /** Set to make `chmod` reject. */
+  chmodError: Error | null = null;
   /** Answers handed to the next `showQuickPick` / `showInputBox` / message, in order. */
   quickPickAnswers: (string | undefined)[] = [];
   inputBoxAnswers: (string | undefined)[] = [];
@@ -249,6 +258,69 @@ export class FakeHost implements Host {
   writeFile(path: string, content: string): void {
     this.record('writeFile', path, content);
     this.files.set(path, content);
+  }
+
+  fileSize(path: string): number {
+    return Buffer.byteLength(this.files.get(path) ?? '', 'utf8');
+  }
+
+  readFileSlice(path: string, from: number): { text: string; end: number } {
+    const buffer = Buffer.from(this.files.get(path) ?? '', 'utf8');
+    const slice = buffer.subarray(Math.min(from, buffer.byteLength));
+    return { text: slice.toString('utf8'), end: buffer.byteLength };
+  }
+
+  watchFile(path: string, callback: () => void): DisposableLike {
+    this.record('watchFile', path);
+    const entry = { callback, disposed: 0 };
+    this.watches.set(path, entry);
+    return {
+      dispose: () => {
+        entry.disposed += 1;
+        this.record('disposeWatch', path);
+        if (this.watches.get(path) === entry) this.watches.delete(path);
+      },
+    };
+  }
+
+  /** Simulates the file changing on disk. */
+  touch(path: string, content?: string): void {
+    if (content !== undefined) this.files.set(path, content);
+    this.watches.get(path)?.callback();
+  }
+
+  /** Simulates the engine appending to its log. */
+  append(path: string, text: string): void {
+    this.files.set(path, (this.files.get(path) ?? '') + text);
+    this.watches.get(path)?.callback();
+  }
+
+  async chmod(path: string, mode: number): Promise<void> {
+    this.record('chmod', path, mode);
+    if (this.chmodError !== null) throw this.chmodError;
+  }
+
+  async openTextDocument(path: string): Promise<void> {
+    this.record('openTextDocument', path);
+  }
+
+  async spawnCapture(
+    command: string,
+    args: readonly string[],
+    options?: { cwd?: string; timeoutMs?: number },
+  ): Promise<{ code: number; stdout: string; stderr: string }> {
+    this.record('spawnCapture', command, [...args], options);
+    return this.spawnResults.get(command) ?? { code: 0, stdout: '', stderr: '' };
+  }
+
+  appendOutput(line: string): void {
+    this.record('appendOutput', line);
+    this.output.push(line);
+  }
+
+  showOutput(): void {
+    this.record('showOutput');
+    this.outputShown.push(this.output.length);
   }
 
   // --- timers ---------------------------------------------------------------

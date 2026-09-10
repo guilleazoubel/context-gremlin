@@ -255,7 +255,6 @@ describe.skipIf(!coreIsBuilt())('integration: the extension against a real engin
         host,
         client: h.client,
         notificationLevel: () => 'all',
-        configPath: () => path.join(h.stateDir, 'core.json'),
         coalesceMs: 0,
       });
       sse = new SseClient({ socketPath: h.socketPath, backoffMs: [25] });

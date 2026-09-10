@@ -68,8 +68,7 @@ before calling a change to this package verified.
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `cgremlin.socketPath` | `~/.cgremlin/engine.sock` | the engine's socket |
-| `cgremlin.configPath` | `~/.cgremlin/core.json` | used only when starting the engine from the extension |
+| `cgremlin.configPath` | `~/.cgremlin-core/core.json` | the engine's `core.json`; every other path (socket, log, sessions, worktrees) is derived from it by the engine's own config loader |
 | `cgremlin.notificationLevel` | `all` | `all` \| `needs-you-only` \| `off` |
 
 ## Commands
@@ -89,7 +88,10 @@ to a tree row via `contextValue` rather than exposed in the command palette (`wh
 | Refresh inventory | triggers `POST /prs/scan` |
 | New investigation… / New development session… / New review from PR URL… | the three session-creation flows (quick-picks / an input box; repo choices come from `GET /config`'s `repos`) |
 | Refresh preview | re-runs the built-in `markdown.preview.refresh` |
-| Start the engine | opens a terminal running `cgremlin-core serve --config <configPath>` — offered by the not-running UX below |
+| Start the engine | starts the bundled engine, detached, if nothing answers on its socket — offered by the not-running UX below |
+| Stop the engine | asks first (the engine is shared by every window, and stopping it stops whatever is running), then sends one `SIGTERM` to a pid it has just proved is the engine's |
+| Restart the engine | stop, then start; it never spawns while the socket still answers |
+| Show the engine log | reveals the output channel and offers to open `engine.log` |
 
 ## One worktree folder at a time
 
@@ -105,4 +107,11 @@ modal before the swap; the preview still opens either way.
 
 Every request that can't reach the socket (`ENOENT`/`ECONNREFUSED`) becomes an `EngineNotRunningError`
 rather than a stack trace: the status bar shows `$(circle-slash) cgremlin: offline`, and its command
-offers **Start the engine** (a terminal running `cgremlin-core serve`) instead of opening the panel.
+offers **Start the engine** instead of opening the panel — which starts the engine this extension
+ships, detached, rather than asking the user to have `cgremlin-core` on their `PATH`.
+
+The extension starts that engine itself on activation, and the engine is a machine-wide singleton
+keyed by its socket: a window that finds one already answering **adopts** it, and closing a window
+never stops it. The status bar carries the engine's own state while it is not simply healthy —
+`starting…`, `stopping… Ns`, `engine failed — see log`, `version mismatch`, `another server on this
+socket` — and a click goes to the engine log or to **Start the engine**.

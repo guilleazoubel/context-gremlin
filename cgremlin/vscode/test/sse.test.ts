@@ -112,6 +112,25 @@ describe('SseClient', () => {
     expect(client.lastEventId).toBe(2);
   });
 
+  it('re-reads a socket-path provider on every connection attempt (R7, D5)', async () => {
+    const first = await stub();
+    const second = await stub();
+    let socketPath = first.socketPath;
+    const client = track(new SseClient({ socketPath: () => socketPath, backoffMs: [20] }));
+    const opens: unknown[] = [];
+    client.on('open', (p) => opens.push(p));
+    client.start();
+
+    await waitFor(() => opens.length === 1);
+    expect(first.eventRequests).toHaveLength(1);
+
+    // The setting changed: the old engine goes away and the provider now names another one.
+    await first.stop();
+    socketPath = second.socketPath;
+    await waitFor(() => opens.length === 2);
+    expect(second.eventRequests).toHaveLength(1);
+  });
+
   it('goes offline when the server dies and reconnects with Last-Event-ID', async () => {
     const server = await stub();
     const client = track(new SseClient({ socketPath: server.socketPath, backoffMs: [20] }));

@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { managedWorkspaceContent, planWorkspaceAction, type WorkspacePlan } from '../src/model/workspace-file';
 
-const managedPath = '/home/me/.cgremlin/cgremlin.code-workspace';
-const worktreePath = '/home/me/.cgremlin/worktrees/pr-acme-web-102';
-const otherWorktree = '/home/me/.cgremlin/worktrees/inv-acme-web-7f3';
+const managedPath = '/home/me/.cgremlin-core/cgremlin.code-workspace';
+const worktreePath = '/home/me/.cgremlin-core/worktrees/pr-acme-web-102';
+const otherWorktree = '/home/me/.cgremlin-core/worktrees/inv-acme-web-7f3';
 
 function plan(overrides: Partial<Parameters<typeof planWorkspaceAction>[0]> = {}): WorkspacePlan {
   return planWorkspaceAction({

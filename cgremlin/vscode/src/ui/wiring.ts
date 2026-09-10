@@ -14,6 +14,7 @@ import { RefreshCoordinator } from './refresh';
 import { ItemOpener } from './preview';
 import { ChatSessions } from './terminal';
 import { registerCommands } from './commands';
+import type { EngineSurface } from './engine';
 import type { DisposableLike, Host } from './host';
 
 /** The single tree view the four lists are roots of. Must match `contributes.views`. */
@@ -23,7 +24,11 @@ export interface UiOptions {
   host: Host;
   client: CoreClient;
   notificationLevel: () => NotificationLevel;
-  configPath: () => string;
+  /**
+   * The engine's own surface: its four commands and the status bar's engine half. Optional only
+   * so a test can compose the rest of the UI without one.
+   */
+  engine?: EngineSurface;
   coalesceMs?: number;
 }
 
@@ -70,8 +75,14 @@ export function createUi(options: UiOptions): Ui {
   const disposables: DisposableLike[] = [
     host.registerTreeDataProvider(VIEW_ID, tree),
     host.onDidCloseTerminal((terminal) => chat.handleClosed(terminal)),
-    ...registerCommands({ host, client, coordinator, opener, chat, configPath: options.configPath }),
+    ...registerCommands({ host, client, coordinator, opener, chat }),
   ];
+  if (options.engine !== undefined) {
+    const engine = options.engine;
+    disposables.push(...engine.register());
+    const unsubscribe = engine.onState((status) => statusBar.setEngine(status));
+    disposables.push({ dispose: unsubscribe });
+  }
 
   const offline = async (): Promise<void> => {
     coordinator.markOffline();
@@ -101,6 +112,7 @@ export function createUi(options: UiOptions): Ui {
     },
     offline,
     async settled() {
+      await options.engine?.settled();
       await coordinator.settled();
       await notifications.settled();
       await chat.settled();

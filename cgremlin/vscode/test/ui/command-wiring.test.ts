@@ -10,7 +10,9 @@ import { CoreClient } from '../../src/core-client';
 import { createUi, type Ui } from '../../src/ui/wiring';
 import { validatePrUrl, validateTicket } from '../../src/ui/commands';
 import { heartbeatIntervalMs } from '../../src/ui/terminal';
-import { FakeHost, type FakeTerminal } from '../support/fake-host';
+import { FakeHost } from '../support/fake-host';
+import { FakeBridge, FakeEngineManager } from '../support/fake-engine-manager';
+import { EngineSurface } from '../../src/ui/engine';
 import { fixtures, startStubServer, type StubHandler, type StubServerHandle } from '../support/stub-server';
 import type { AttentionItem } from '../../src/model/items';
 import type { NotificationLevel } from '../../src/model/notify-policy';
@@ -32,6 +34,7 @@ afterEach(async () => {
 
 interface Harness {
   host: FakeHost;
+  engine: FakeEngineManager;
   server: StubServerHandle;
   ui: Ui;
   level: { value: NotificationLevel };
@@ -53,11 +56,22 @@ async function harness(opts: { handler?: StubHandler; socketPath?: string } = {}
   }
   const host = new FakeHost();
   const level = { value: 'all' as NotificationLevel };
+  const engine = new FakeEngineManager();
+  const surface = new EngineSurface({
+    host,
+    manager: engine,
+    bridge: new FakeBridge(),
+    configPath: () => `${STATE_DIR}/core.json`,
+    home: '/home/me',
+    execPath: '/path/to/node',
+    enginePath: '/ext/engine/engine.js',
+    reconnect: async () => undefined,
+  });
   const ui = createUi({
     host,
     client: new CoreClient(opts.socketPath ?? server.socketPath),
     notificationLevel: () => level.value,
-    configPath: () => `${STATE_DIR}/core.json`,
+    engine: surface,
     coalesceMs: 5,
   });
   uis.push(ui);
@@ -65,6 +79,7 @@ async function harness(opts: { handler?: StubHandler; socketPath?: string } = {}
     host,
     server,
     ui,
+    engine,
     level,
     mark: () => server.requests.length,
     since: (m) => server.requests.slice(m).map((r) => ({ method: r.method, path: r.path, body: r.body })),
@@ -119,16 +134,16 @@ describe('activation and the not-running UX', () => {
     expect(h.host.statusBarItems[0].text).toBe('$(circle-slash) cgremlin: offline');
   });
 
-  it('runs cgremlin-core serve in a terminal when Start it is picked', async () => {
+  // MG-C7: the engine is started by the manager, never by typing a command into a terminal.
+  it('starts the engine through the manager when Start it is picked', async () => {
     const h = await harness();
     await h.server.dispose();
     servers.splice(servers.indexOf(h.server), 1);
     h.host.messageAnswers = ['Start it'];
     expect(await h.ui.connect()).toBe(false);
     await h.ui.settled();
-    const terminal = h.host.terminals.at(-1) as FakeTerminal;
-    expect(terminal.name).toBe('cgremlin-core');
-    expect(terminal.sent).toEqual([`cgremlin-core serve --config ${STATE_DIR}/core.json`]);
+    expect(h.engine.calls).toEqual(['ensureRunning:user']);
+    expect(h.host.terminals).toHaveLength(0);
   });
 });
 

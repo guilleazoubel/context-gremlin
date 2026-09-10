@@ -4,6 +4,7 @@
  * Pure module — Node stdlib only, no editor API (MG-B1).
  */
 import http from 'node:http';
+import { resolveSocketPath, type SocketPathSource } from './core-client';
 
 export interface SseFrame {
   id: number | null;
@@ -71,7 +72,8 @@ function decodeData(lines: readonly string[]): unknown {
 export type SseEventName = 'frame' | 'open' | 'resync' | 'offline';
 
 export interface SseClientOptions {
-  socketPath: string;
+  /** Resolved per connection *attempt* when it is a function, so a reconnect can land elsewhere. */
+  socketPath: SocketPathSource;
   /** Opt in to the engine's high-volume `run.output` frames (R8). */
   includeRunOutput?: boolean;
   /** Reconnect delays, one per consecutive failure; the last one repeats. */
@@ -153,7 +155,7 @@ export class SseClient {
     const headers: Record<string, string> = { Accept: 'text/event-stream' };
     if (this.lastId !== null) headers['Last-Event-ID'] = String(this.lastId);
     const request = http.request(
-      { socketPath: this.opts.socketPath, path: this.path(), method: 'GET', headers },
+      { socketPath: resolveSocketPath(this.opts.socketPath), path: this.path(), method: 'GET', headers },
       (res) => {
         if (res.statusCode !== 200) {
           res.resume();
