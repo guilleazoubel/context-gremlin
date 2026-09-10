@@ -68,17 +68,19 @@ export class LocalAppPortBusyError extends Error {
   readonly port: number;
   readonly pid: number;
   readonly ours: boolean;
+  readonly sessionId: string | null;
 
-  constructor(port: number, pid: number, ours: boolean) {
+  constructor(port: number, pid: number, ours: boolean, sessionId: string | null = null) {
     super(
       ours
-        ? `port ${port} is held by a local app this engine started (pid ${pid}) — run 'cgremlin-core local stop' to release it`
+        ? `port ${port} is held by a local app this engine started (pid ${pid}, session ${sessionId ?? '?'}) — run 'cgremlin-core local stop' to release it`
         : `port ${port} is held by pid ${pid}, which the engine did not start — it will not be killed; stop it yourself or change localApp.port`,
     );
     this.name = 'LocalAppPortBusyError';
     this.port = port;
     this.pid = pid;
     this.ours = ours;
+    this.sessionId = sessionId;
   }
 }
 

@@ -298,7 +298,25 @@ async function handleLocalRoute(
 
   const session = await deps.sessionStore.load(id);
   if (action === 'status') {
-    sendLocalStatus(res, await environment.status());
+    const status = await environment.status();
+    // W8: a session that did not start the currently-running app sees it as
+    // stopped, with ownedBy naming who actually owns it — the owner's own
+    // status call (and the id-less GET /local) still see the real state.
+    if (status.state === 'running' && status.sessionId !== null && status.sessionId !== id) {
+      sendLocalStatus(res, {
+        state: 'stopped',
+        sessionId: null,
+        url: null,
+        pid: null,
+        logPath: null,
+        startedAt: null,
+        reason: null,
+        logTail: null,
+        ownedBy: status.sessionId,
+      });
+      return true;
+    }
+    sendLocalStatus(res, status);
     return true;
   }
   const fresh = url.searchParams.get('fresh') === '1';

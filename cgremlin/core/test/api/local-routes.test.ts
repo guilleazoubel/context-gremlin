@@ -237,6 +237,39 @@ describe('local-app API routes', () => {
     expect((res.body as { status: LocalAppStatus }).status.state).toBe('stopped');
   });
 
+  it('W8 GET /sessions/:id/local reports stopped + ownedBy for a session that does not own the running app', async () => {
+    await startServer(true);
+    await h.store.save(devSession('s2'));
+    await requestOn('POST', '/sessions/s1/local/start');
+    const res = await requestOn('GET', '/sessions/s2/local');
+    expect(res.status).toBe(200);
+    const { status } = res.body as { status: LocalAppStatus };
+    expect(status.state).toBe('stopped');
+    expect(status.ownedBy).toBe('s1');
+  });
+
+  it('W8 GET /sessions/:id/local still reports the running state for the owner session', async () => {
+    await startServer(true);
+    await h.store.save(devSession('s2'));
+    await requestOn('POST', '/sessions/s1/local/start');
+    const res = await requestOn('GET', '/sessions/s1/local');
+    expect(res.status).toBe(200);
+    const { status } = res.body as { status: LocalAppStatus };
+    expect(status.state).toBe('running');
+    expect(status.sessionId).toBe('s1');
+    expect(status.ownedBy).toBeFalsy();
+  });
+
+  it('W8 GET /local (no session id) still reports the running state regardless of ownership', async () => {
+    await startServer(true);
+    await requestOn('POST', '/sessions/s1/local/start');
+    const res = await requestOn('GET', '/local');
+    expect(res.status).toBe(200);
+    const { status } = res.body as { status: LocalAppStatus };
+    expect(status.state).toBe('running');
+    expect(status.sessionId).toBe('s1');
+  });
+
   it('every local route 404s for an unknown session id', async () => {
     await startServer(true);
     expect((await requestOn('GET', '/sessions/nope/local')).status).toBe(404);

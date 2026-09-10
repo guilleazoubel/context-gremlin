@@ -178,6 +178,14 @@ describe('local command', () => {
     expect(local.stopCalls).toHaveLength(0);
   });
 
+  it('W8 local status <session> that is not the owner reports which session owns the app', async () => {
+    await h.store.save(devSession('s2'));
+    await localCommand(['start', 's1'], testIo().io);
+    const { io, out } = testIo();
+    expect(await localCommand(['status', 's2'], io)).toBe(0);
+    expect(out()).toBe('stopped (local app owned by s1)\n');
+  });
+
   it('local start with no session id exits 2 with usage', async () => {
     const { io, err } = testIo();
     expect(await localCommand(['start'], io)).toBe(2);

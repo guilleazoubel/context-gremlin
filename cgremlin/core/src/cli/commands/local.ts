@@ -12,6 +12,9 @@ export function formatLocalStatus(status: LocalAppStatus): string {
   if (status.state === 'unavailable') {
     return `unavailable — ${status.reason ?? 'no reason given'}`;
   }
+  if (status.ownedBy) {
+    return `stopped (local app owned by ${status.ownedBy})`;
+  }
   return 'stopped';
 }
 

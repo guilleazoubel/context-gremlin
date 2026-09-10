@@ -413,6 +413,21 @@ describe('EnvironmentService — start, single instance', () => {
     expect(h.local.stopCalls).toEqual([]);
   });
 
+  it('W9 the ours port-busy message names the owning session', async () => {
+    const h = await harness();
+    await h.fs.writeFile(
+      STATE_PATH,
+      JSON.stringify({ sessionId: 'other', repoSlug: SLUG, url: 'https://local.findcare.dev.aplaceformom.com', port: 8080, pid: 4242, pgid: 4242, logPath: DEV_LOG, startedAt: '2020-01-01T00:00:00.000Z' }),
+    );
+    h.local.setPortListener(4242);
+    const status = await h.service.start(devSession());
+    expect(status.state).toBe('unavailable');
+    expect(status.reason).toContain('session other');
+    expect(status.reason).toBe(
+      "port 8080 is held by a local app this engine started (pid 4242, session other) — run 'cgremlin-core local stop' to release it",
+    );
+  });
+
   it('reuses a healthy app already owned by this session', async () => {
     const h = await harness();
     await h.fs.writeFile(

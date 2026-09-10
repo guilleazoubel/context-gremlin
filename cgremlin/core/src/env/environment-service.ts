@@ -44,6 +44,13 @@ export interface LocalAppStatus {
   reason: string | null;
   /** Redacted (R3). */
   logTail: string | null;
+  /**
+   * W8: set only when the API masks a running app's status for a session
+   * that did not start it — names the session id that actually owns it,
+   * while `state` reports 'stopped' to that caller. Never set by
+   * EnvironmentService itself; the API layer fills it in.
+   */
+  ownedBy?: string | null;
 }
 
 export interface EnvironmentServiceDeps {
@@ -464,7 +471,7 @@ export class EnvironmentService {
             listener === existing.pid ||
             listener === existing.pgid ||
             (await this.deps.local.pgidOf(listener)) === existing.pgid;
-          throw new LocalAppPortBusyError(port, listener, ours);
+          throw new LocalAppPortBusyError(port, listener, ours, existing.sessionId);
         }
         await this.deps.fs.remove(this.deps.statePath);
       }
