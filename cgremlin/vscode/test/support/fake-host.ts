@@ -390,6 +390,7 @@ export class FakeStatusBarItem implements StatusBarItemLike {
   text = '';
   tooltip: string | undefined;
   command: string | undefined;
+  warning = false;
   shown = 0;
   hidden = 0;
   disposed = 0;

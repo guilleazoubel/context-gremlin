@@ -13,11 +13,19 @@ import {
   NOT_NOW,
   OPEN_CONFIG,
   OPEN_LOG,
+  RE_PROBE,
   RESTART,
   SHOW_LOG,
   STOP_ENGINE,
 } from '../../src/ui/engine';
-import { statusBarCommand, statusBarText, type EngineStatus } from '../../src/ui/status-bar';
+import {
+  statusBarCommand,
+  statusBarText,
+  statusBarTooltip,
+  statusBarWarning,
+  type EngineStatus,
+} from '../../src/ui/status-bar';
+import { troubleMessage } from '../../src/model/engine-trouble';
 import { FakeHost } from '../support/fake-host';
 import {
   ConfigErrorLike,
@@ -234,29 +242,102 @@ describe('a version mismatch (R2 as amended by R21)', () => {
 });
 
 describe('a foreign server on the socket', () => {
-  it('warns, offers the log and the settings, and changes nothing', async () => {
+  const FOREIGN_TEXT = troubleMessage({ kind: 'foreign', socketPath: FAKE_PATHS.socketPath });
+
+  beforeEach(async () => {
     host.files.set(CONFIG, '{}');
     await surface.bootstrap();
     manager.calls.length = 0;
+  });
+
+  it('explains which socket is held, offers a re-probe and the log, and changes nothing', async () => {
     manager.emit({ kind: 'foreign' });
     manager.emit({ kind: 'foreign' });
     await surface.settled();
 
     const warnings = host.callsOf('showWarningMessage');
     expect(warnings).toHaveLength(1);
-    expect(warnings[0].args[2]).toEqual([SHOW_LOG, 'Settings']);
+    expect(warnings[0].args[0]).toBe(FOREIGN_TEXT);
+    expect(String(warnings[0].args[0])).toContain(FAKE_PATHS.socketPath);
+    expect(warnings[0].args[2]).toEqual([RE_PROBE, SHOW_LOG]);
     expect(manager.calls).toEqual([]);
   });
 
-  it('warns again after the socket stops being foreign and becomes foreign anew', async () => {
-    host.files.set(CONFIG, '{}');
-    await surface.bootstrap();
-    manager.emit({ kind: 'foreign' });
-    manager.emit({ kind: 'running', version: '0.0.1', pid: 10, adopted: true });
+  it('re-probes when the user picks Re-probe', async () => {
+    host.messageAnswers = [RE_PROBE];
     manager.emit({ kind: 'foreign' });
     await surface.settled();
+    expect(manager.calls).toEqual(['ensureRunning:user']);
+  });
 
-    expect(host.callsOf('showWarningMessage')).toHaveLength(2);
+  it('shows the log when the user picks Show log', async () => {
+    host.messageAnswers = [SHOW_LOG, undefined];
+    manager.emit({ kind: 'foreign' });
+    await surface.settled();
+    expect(host.outputShown).toHaveLength(1);
+  });
+
+  it('warns again on every transition into foreign, however many times it happens', async () => {
+    for (let episode = 0; episode < 3; episode += 1) {
+      manager.emit({ kind: 'foreign' });
+      manager.emit({ kind: 'foreign' });
+      manager.emit({ kind: 'running', version: '0.0.1', pid: 10, adopted: true });
+    }
+    await surface.settled();
+    expect(host.callsOf('showWarningMessage')).toHaveLength(3);
+  });
+
+  it('reports its health as foreign, with the socket the config resolved', async () => {
+    manager.emit({ kind: 'foreign' });
+    await surface.settled();
+    expect(surface.health()).toEqual({ kind: 'foreign', socketPath: FAKE_PATHS.socketPath });
+  });
+
+  it('reconnects the panel when the probe finally adopts a usable engine', async () => {
+    manager.emit({ kind: 'foreign' });
+    await surface.settled();
+    manager.calls.length = 0;
+    manager.emit({ kind: 'running', version: '0.0.1', pid: 10, adopted: true });
+    await surface.settled();
+    expect(manager.calls).toEqual(['reconnect']);
+  });
+});
+
+describe('an engine that answers but is not one we can use (GET /config 404)', () => {
+  beforeEach(async () => {
+    host.files.set(CONFIG, '{}');
+    await surface.bootstrap();
+    manager.calls.length = 0;
+  });
+
+  it('surfaces exactly what a foreign probe does', async () => {
+    const seen: EngineStatus[] = [];
+    surface.onState((status) => seen.push(status));
+    surface.reportUnusable();
+    await surface.settled();
+
+    expect(surface.health()).toEqual({ kind: 'foreign', socketPath: FAKE_PATHS.socketPath });
+    expect(seen.at(-1)).toEqual({ kind: 'foreign', socketPath: FAKE_PATHS.socketPath });
+    const warnings = host.callsOf('showWarningMessage');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].args[0]).toBe(
+      troubleMessage({ kind: 'foreign', socketPath: FAKE_PATHS.socketPath }),
+    );
+    expect(warnings[0].args[2]).toEqual([RE_PROBE, SHOW_LOG]);
+  });
+
+  it('warns once, not once per failed connect attempt', async () => {
+    surface.reportUnusable();
+    surface.reportUnusable();
+    await surface.settled();
+    expect(host.callsOf('showWarningMessage')).toHaveLength(1);
+  });
+
+  it('is forgotten as soon as the manager reports a state of its own', async () => {
+    surface.reportUnusable();
+    await surface.settled();
+    manager.emit({ kind: 'running', version: '0.0.1', pid: 10, adopted: true });
+    expect(surface.health()).toMatchObject({ kind: 'running' });
   });
 });
 
@@ -483,11 +564,28 @@ describe('the status bar (R17, R23)', () => {
     expect(statusBarText(withEngine({ kind: 'stopped' }))).toContain('engine stopped');
     expect(statusBarCommand(withEngine({ kind: 'stopped' }))).toBe('cgremlin.engine.start');
 
-    expect(statusBarText(withEngine({ kind: 'failed' }))).toContain('see log');
-    expect(statusBarCommand(withEngine({ kind: 'failed' }))).toBe('cgremlin.engine.start');
-
     expect(statusBarText(withEngine({ kind: 'mismatch' }))).toContain('version mismatch');
-    expect(statusBarText(withEngine({ kind: 'foreign' }))).toContain('another server');
+  });
+
+  it('says the engine is not usable, and re-probes on a click, while it is foreign', () => {
+    const foreign = withEngine({ kind: 'foreign', socketPath: FAKE_PATHS.socketPath });
+    expect(statusBarText(foreign)).toBe('$(warning) cgremlin: engine not usable');
+    expect(statusBarCommand(foreign)).toBe('cgremlin.engine.start');
+    expect(statusBarWarning(foreign)).toBe(true);
+    expect(statusBarTooltip(foreign)).toContain(FAKE_PATHS.socketPath);
+  });
+
+  it('says the engine failed, and shows the log on a click', () => {
+    const failed = withEngine({ kind: 'failed', reason: 'boom' });
+    expect(statusBarText(failed)).toBe('$(warning) cgremlin: engine failed');
+    expect(statusBarCommand(failed)).toBe('cgremlin.engine.showLog');
+    expect(statusBarWarning(failed)).toBe(true);
+    expect(statusBarTooltip(failed)).toContain('boom');
+  });
+
+  it('colours nothing when the engine is merely busy or healthy', () => {
+    expect(statusBarWarning(withEngine({ kind: 'running' }))).toBe(false);
+    expect(statusBarWarning(withEngine({ kind: 'starting' }))).toBe(false);
   });
 
   it('is fed by the surface as the manager changes state', async () => {
@@ -496,7 +594,11 @@ describe('the status bar (R17, R23)', () => {
     surface.onState((status) => seen.push(status));
     await surface.bootstrap();
     manager.emit({ kind: 'stopping', since: 0, pid: 10, elapsedMs: 46_000 });
-    expect(seen.at(-1)).toEqual({ kind: 'stopping', elapsedMs: 46_000 });
+    expect(seen.at(-1)).toEqual({
+      kind: 'stopping',
+      elapsedMs: 46_000,
+      socketPath: FAKE_PATHS.socketPath,
+    });
   });
 });
 

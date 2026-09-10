@@ -8,6 +8,12 @@
  * Takes its editor surface as a parameter (no `vscode` import).
  */
 import { LIST_ORDER } from '../model/view-model';
+import {
+  troubleCommand,
+  troubleMessage,
+  troubleRowLabel,
+  type EngineTrouble,
+} from '../model/engine-trouble';
 import type { ListItem, ListKind } from '../model/items';
 import {
   COLLAPSIBLE_COLLAPSED,
@@ -22,11 +28,18 @@ import {
 
 export type TreeNode =
   | { kind: 'root'; list: ListKind; title: string; count: number }
-  | { kind: 'row'; row: ListItem };
+  | { kind: 'row'; row: ListItem }
+  /**
+   * The engine on the socket is not one this extension can use. Four empty lists say nothing
+   * about that, so while it holds, this single row replaces them and says what happened and
+   * what to do — the whole point of the fix this node exists for.
+   */
+  | { kind: 'trouble'; trouble: EngineTrouble };
 
 export class CgremlinTreeProvider implements TreeDataProviderLike<TreeNode> {
   private readonly emitter: EventEmitterLike<TreeNode | undefined>;
   private lists: Record<ListKind, ListItem[]> | null = null;
+  private trouble: EngineTrouble | null = null;
 
   constructor(private readonly host: Host) {
     this.emitter = host.createEventEmitter<TreeNode | undefined>();
@@ -41,6 +54,14 @@ export class CgremlinTreeProvider implements TreeDataProviderLike<TreeNode> {
     this.lists = lists;
   }
 
+  /**
+   * What the engine surface last said about an engine that cannot be used, or `null` when there
+   * is nothing wrong. Like `setLists`, it stores without announcing: the caller fires.
+   */
+  setEngineTrouble(trouble: EngineTrouble | null): void {
+    this.trouble = trouble;
+  }
+
   /** Exactly one `onDidChangeTreeData` per applied refresh. */
   refresh(): void {
     this.emitter.fire(undefined);
@@ -48,6 +69,7 @@ export class CgremlinTreeProvider implements TreeDataProviderLike<TreeNode> {
 
   getChildren(element?: TreeNode): TreeNode[] {
     if (element === undefined) {
+      if (this.trouble !== null) return [{ kind: 'trouble', trouble: this.trouble }];
       return LIST_ORDER.map((descriptor) => ({
         kind: 'root' as const,
         list: descriptor.kind,
@@ -62,6 +84,17 @@ export class CgremlinTreeProvider implements TreeDataProviderLike<TreeNode> {
   }
 
   getTreeItem(element: TreeNode): TreeItemLike {
+    if (element.kind === 'trouble') {
+      const item = this.host.createTreeItem(troubleRowLabel(element.trouble), COLLAPSIBLE_NONE);
+      item.id = 'engine:trouble';
+      item.contextValue = `engine:${element.trouble.kind}`;
+      item.tooltip = troubleMessage(element.trouble);
+      item.command = {
+        command: troubleCommand(element.trouble),
+        title: 'cgremlin engine',
+      };
+      return item;
+    }
     if (element.kind === 'root') {
       const item = this.host.createTreeItem(
         `${element.title} (${element.count})`,

@@ -8,7 +8,9 @@
  *    the ticket input and the PR-URL input validate with mirrors of the core's own rules.
  */
 import { engineErrorText, type CoreClient, type HttpResult } from '../core-client';
+import { refreshBlockedMessage } from '../model/engine-trouble';
 import { displayTitle } from '../model/items';
+import type { EngineHealthSource } from './engine';
 import type { AttentionItem, ListItem } from '../model/items';
 import type { DisposableLike, Host } from './host';
 import type { TreeNode } from './tree';
@@ -54,6 +56,11 @@ export interface CommandDeps {
   coordinator: RefreshCoordinator;
   opener: ItemOpener;
   chat: ChatSessions;
+  /**
+   * The engine's own surface, when there is one. Refresh consults it first: a scan sent to a
+   * socket with no usable engine on it fails invisibly, and the panel simply stays as it was.
+   */
+  engine?: EngineHealthSource;
 }
 
 export function registerCommands(deps: CommandDeps): DisposableLike[] {
@@ -142,6 +149,15 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
     }),
 
     host.registerCommand('cgremlin.refreshInventory', async () => {
+      // Nothing to refresh, and — the bug this replaces — no sign of why. The wording is the
+      // panel row's own, and the command re-probes so the fix (stopping an old engine) takes
+      // effect without hunting for a second command.
+      const blocked = deps.engine === undefined ? null : refreshBlockedMessage(deps.engine.health());
+      if (blocked !== null) {
+        void host.showInformationMessage(blocked, undefined);
+        await deps.engine?.reprobe();
+        return;
+      }
       if (surface(await client.scan())) coordinator.schedule();
     }),
 

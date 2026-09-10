@@ -5,14 +5,20 @@
  * `N need you` is `items.filter(i => i.attention.needsYou).length` — the core's own flag (R22), the
  * same number the popup predicate uses, so the badge and the popups can never disagree.
  */
-import type { EngineState } from '../engine/manager';
+import {
+  troubleCommand,
+  troubleOf,
+  troubleStatusText,
+  troubleMessage,
+  type EngineHealth,
+} from '../model/engine-trouble';
 import type { Host, StatusBarItemLike } from './host';
 
-/** R17/R23: what the engine manager last said, and for how long it has been saying it. */
-export interface EngineStatus {
-  kind: EngineState['kind'];
-  elapsedMs?: number;
-}
+/**
+ * R17/R23: what the engine manager last said, for how long it has been saying it, and — for the
+ * two states that owe the user an explanation — the socket and the reason the wording needs.
+ */
+export type EngineStatus = EngineHealth;
 
 export interface StatusBarState {
   connected: boolean;
@@ -39,15 +45,19 @@ export function engineText(engine: EngineStatus): string | null {
       return `$(sync~spin) cgremlin: stopping… ${Math.round((engine.elapsedMs ?? 0) / 1000)}s`;
     case 'stopped':
       return '$(circle-slash) cgremlin: engine stopped';
-    case 'failed':
-      return '$(error) cgremlin: engine failed — see log';
     case 'mismatch':
       return '$(warning) cgremlin: engine version mismatch';
-    case 'foreign':
-      return '$(warning) cgremlin: another server on this socket';
-    default:
-      return null;
+    default: {
+      // `foreign` and `failed` are the two states the whole package words in one place.
+      const trouble = troubleOf(engine);
+      return trouble === null ? null : troubleStatusText(trouble);
+    }
   }
+}
+
+/** R17: the two states that are not simply news are painted in the editor's warning colour. */
+export function statusBarWarning(state: StatusBarState): boolean {
+  return troubleOf(state.engine) !== null;
 }
 
 export function statusBarText(state: StatusBarState): string {
@@ -62,9 +72,8 @@ export function statusBarText(state: StatusBarState): string {
 }
 
 export function statusBarTooltip(state: StatusBarState): string {
-  if (state.engine.kind === 'foreign') {
-    return 'Another server answers on this socket. cgremlin will not touch it.';
-  }
+  const trouble = troubleOf(state.engine);
+  if (trouble !== null) return troubleMessage(trouble);
   if (engineText(state.engine) !== null) return 'The cgremlin engine — click to see the log.';
   if (!state.connected) return 'The cgremlin engine is not reachable on its socket.';
   return [
@@ -80,14 +89,16 @@ export function statusBarTooltip(state: StatusBarState): string {
  * its log; a healthy one reveals the panel (R17).
  */
 export function statusBarCommand(state: StatusBarState): string {
+  const trouble = troubleOf(state.engine);
+  // A stranger on the socket is one click from a re-probe (the user has just stopped the old
+  // engine); a failure is one click from the log that says why.
+  if (trouble !== null) return troubleCommand(trouble);
   switch (state.engine.kind) {
     case 'stopped':
-    case 'failed':
       return 'cgremlin.engine.start';
     case 'starting':
     case 'stopping':
     case 'mismatch':
-    case 'foreign':
       return 'cgremlin.engine.showLog';
     default:
       return state.connected ? 'workbench.view.extension.cgremlin' : 'cgremlin.engine.start';
@@ -127,6 +138,7 @@ export class StatusBar {
     this.item.text = statusBarText(state);
     this.item.tooltip = statusBarTooltip(state);
     this.item.command = statusBarCommand(state);
+    this.item.warning = statusBarWarning(state);
   }
 
   dispose(): void {

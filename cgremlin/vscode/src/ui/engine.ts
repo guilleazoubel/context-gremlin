@@ -12,6 +12,13 @@
  *  - **the engine's own wording is shown verbatim** (the rule `ui/commands.ts` already follows):
  *    a `ConfigError` from the bundled loader is the engine's message, not a paraphrase of it.
  */
+import {
+  RE_PROBE,
+  SHOW_LOG,
+  healthOf,
+  troubleMessage,
+  type EngineHealth,
+} from '../model/engine-trouble';
 import type { ResolvedEnginePaths, EngineBridge } from '../engine/bridge';
 import type { EngineState, Trigger } from '../engine/manager';
 import type { DisposableLike, Host } from './host';
@@ -27,6 +34,15 @@ export interface EngineManagerLike {
   restart(trigger?: Trigger): Promise<EngineState>;
   /** `GET /version`'s `activeRuns`, or `null` when nothing answered (R21). */
   activeRuns(): Promise<number | null>;
+}
+
+/**
+ * The half of the engine surface the panel's Refresh command needs: what the engine is doing,
+ * and a way to ask again. A structural type so `ui/commands.ts` does not depend on the class.
+ */
+export interface EngineHealthSource {
+  health(): EngineHealth;
+  reprobe(): Promise<void>;
 }
 
 export interface EngineSurfaceDeps {
@@ -56,11 +72,12 @@ const CONFIG_MODE = 0o600;
 
 export const RESTART = 'Restart engine';
 export const NOT_NOW = 'Not now';
-export const SHOW_LOG = 'Show log';
 export const OPEN_CONFIG = 'Open core.json';
-export const SETTINGS = 'Settings';
 export const STOP_ENGINE = 'Stop the engine';
 export const OPEN_LOG = 'Open the log file';
+// The two actions an unusable engine offers are the package's shared wording, re-exported here
+// because every caller of this surface already imports its action labels from it.
+export { RE_PROBE, SHOW_LOG };
 
 function errorName(err: unknown): string {
   return err instanceof Error ? err.name : '';
@@ -83,7 +100,20 @@ export class EngineSurface {
   private unsubscribe: (() => void) | null = null;
   /** R2: a mismatch is asked about (or acted on) once per window, not once per state emission. */
   private mismatchHandled = false;
-  private foreignWarned = false;
+  /**
+   * The kind the last emission carried. The foreign warning is *edge*-triggered off this: every
+   * transition into `foreign` is news, however many episodes there are, while a socket that is
+   * still foreign is not news again. A once-per-window latch was the old behaviour, and it is
+   * exactly how a user comes to be staring at four empty lists with no explanation.
+   */
+  private lastKind: EngineState['kind'] = 'unknown';
+  /**
+   * Set when the engine answered the socket but is not one this extension can talk to — a
+   * `GET /config` that 404s, which is what an engine older than that route does. The manager
+   * cannot see it: it probes `GET /version` only, so this is the client layer telling the
+   * surface the same fact by hand. Cleared by the manager's next word on the subject.
+   */
+  private unusable = false;
   private disposed = false;
 
   constructor(private readonly deps: EngineSurfaceDeps) {
@@ -98,6 +128,42 @@ export class EngineSurface {
   onState(cb: (status: EngineStatus) => void): () => void {
     this.stateListeners.add(cb);
     return () => this.stateListeners.delete(cb);
+  }
+
+  /** What the engine is doing, as the panel, the status bar and Refresh all read it. */
+  health(): EngineHealth {
+    if (this.unusable) return { kind: 'foreign', socketPath: this.socketPath() };
+    return healthOf(this.deps.manager.state(), this.socketPath());
+  }
+
+  /** Ask the socket again. The manager adopts whatever answers, so this is the way out. */
+  async reprobe(): Promise<void> {
+    await this.deps.manager.ensureRunning('user');
+  }
+
+  /**
+   * The engine answered, and is not one we can use (`GET /config` 404s on an engine that predates
+   * the route). Surfaced exactly as a `foreign` probe is — same row, same status bar, same
+   * popup — because to the user it is the same problem with the same fix.
+   */
+  reportUnusable(): void {
+    const previous = this.lastKind;
+    this.unusable = true;
+    this.lastKind = 'foreign';
+    const status: EngineHealth = { kind: 'foreign', socketPath: this.socketPath() };
+    this.publish(status);
+    this.deps.host.appendOutput(
+      'cgremlin engine: something answers the socket but does not speak this engine\u2019s API.',
+    );
+    if (previous !== 'foreign') this.pending.track(this.warnForeign(status));
+  }
+
+  private socketPath(): string | null {
+    return this.resolved?.socketPath ?? null;
+  }
+
+  private publish(status: EngineStatus): void {
+    for (const listener of [...this.stateListeners]) listener(status);
   }
 
   register(): DisposableLike[] {
@@ -308,16 +374,26 @@ export class EngineSurface {
   // --- state, prompts and the log -----------------------------------------
 
   private onEngineState(state: EngineState): void {
-    // The warning is once per *episode*, not once per window: a socket that stopped being foreign
-    // and became foreign again is news, and the manager re-probes rather than latching.
-    if (state.kind !== 'foreign') this.foreignWarned = false;
-    const status: EngineStatus =
-      state.kind === 'stopping' ? { kind: state.kind, elapsedMs: state.elapsedMs } : { kind: state.kind };
-    for (const listener of [...this.stateListeners]) listener(status);
+    const previous = this.lastKind;
+    // The manager has just spoken about the socket; whatever the client layer reported about it
+    // before is superseded.
+    this.unusable = false;
+    this.lastKind = state.kind;
+    const status = healthOf(state, this.socketPath());
+    this.publish(status);
     this.deps.host.appendOutput(`cgremlin engine: ${describe(state)}`);
     if (state.kind === 'starting' || state.kind === 'running') this.startTail();
     if (state.kind === 'mismatch') this.pending.track(this.handleMismatch(state));
-    if (state.kind === 'foreign') this.pending.track(this.handleForeign());
+    // Edge-triggered, and every edge: entering `foreign` again after the socket was usable is
+    // news again, and a socket that has been foreign all along is not.
+    if (state.kind === 'foreign' && previous !== 'foreign') {
+      this.pending.track(this.warnForeign(status));
+    }
+    // The way out of the explanatory row: the probe adopted a usable engine, so the panel goes
+    // back to being a panel — which it can only do once it has refetched.
+    if (state.kind === 'running' && (previous === 'foreign' || previous === 'failed')) {
+      this.pending.track(this.deps.reconnect());
+    }
   }
 
   /** R2 as amended by R21: ask only when there is something to lose. */
@@ -344,19 +420,16 @@ export class EngineSurface {
     else if (answer === SHOW_LOG) await this.showLog();
   }
 
-  private async handleForeign(): Promise<void> {
-    if (this.foreignWarned) return;
-    this.foreignWarned = true;
+  /** The same sentence the panel's row and the status bar's tooltip show, plus its two actions. */
+  private async warnForeign(status: EngineHealth): Promise<void> {
     const answer = await this.deps.host.showWarningMessage(
-      'Another server answers on the cgremlin socket. cgremlin will not start, stop or restart it.',
+      troubleMessage({ kind: 'foreign', socketPath: status.socketPath ?? null }),
       undefined,
+      RE_PROBE,
       SHOW_LOG,
-      SETTINGS,
     );
-    if (answer === SHOW_LOG) await this.showLog();
-    else if (answer === SETTINGS) {
-      await this.deps.host.executeCommand('workbench.action.openSettings', 'cgremlin');
-    }
+    if (answer === RE_PROBE) await this.reprobe();
+    else if (answer === SHOW_LOG) await this.showLog();
   }
 
   /** R16/R21: the engine is shared by every window, and stopping it cancels what is running. */

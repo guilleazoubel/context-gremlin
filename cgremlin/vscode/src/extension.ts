@@ -207,6 +207,14 @@ function buildHost(output: vscode.OutputChannel): Host {
         set command(value: string | undefined) {
           item.command = value;
         },
+        get warning() {
+          return item.backgroundColor !== undefined;
+        },
+        set warning(value: boolean) {
+          item.backgroundColor = value
+            ? new vscode.ThemeColor('statusBarItem.warningBackground')
+            : undefined;
+        },
         show: () => item.show(),
         hide: () => item.hide(),
         dispose: () => item.dispose(),
