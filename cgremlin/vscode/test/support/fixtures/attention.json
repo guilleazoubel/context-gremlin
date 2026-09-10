@@ -1,0 +1,293 @@
+{
+  "evaluatedAt": "2026-09-10T09:05:00.000Z",
+  "items": [
+    {
+      "source": "session",
+      "ref": "session:pr-acme-web-102",
+      "id": "pr-acme-web-102",
+      "title": "Add rate limiting to the ingest endpoint",
+      "repoOrContext": "acme/web",
+      "attention": {
+        "needsAttention": true,
+        "needsYou": true,
+        "reasons": [
+          "review_ready"
+        ],
+        "since": "2026-09-10T08:20:00.000Z",
+        "signature": "review_ready|2026-09-10T08:20:00.000Z",
+        "acked": false
+      },
+      "links": {
+        "sessionId": "pr-acme-web-102",
+        "worktreePath": "/tmp/cgremlin-fixture/worktrees/pr-acme-web-102",
+        "prRepo": "acme/web",
+        "prNumber": 102,
+        "prUrl": "https://github.com/acme/web/pull/102",
+        "ticket": null,
+        "primaryArtifact": "REVIEW.md"
+      },
+      "mode": "review",
+      "stageStatus": "ready",
+      "running": false,
+      "claimed": false
+    },
+    {
+      "source": "session",
+      "ref": "session:pr-offcfg-lab-55",
+      "id": "pr-offcfg-lab-55",
+      "title": "Teach the lab about retries",
+      "repoOrContext": "offcfg/lab",
+      "attention": {
+        "needsAttention": false,
+        "needsYou": false,
+        "reasons": [],
+        "since": "2026-09-08T10:00:00.000Z",
+        "signature": "|2026-09-08T10:00:00.000Z",
+        "acked": false
+      },
+      "links": {
+        "sessionId": "pr-offcfg-lab-55",
+        "worktreePath": "/tmp/cgremlin-fixture/worktrees/pr-offcfg-lab-55",
+        "prRepo": "offcfg/lab",
+        "prNumber": 55,
+        "prUrl": "https://github.com/offcfg/lab/pull/55",
+        "ticket": null,
+        "primaryArtifact": "BRIEF.md"
+      },
+      "mode": "review",
+      "stageStatus": "reviewing",
+      "running": true,
+      "claimed": false
+    },
+    {
+      "source": "session",
+      "ref": "session:pr-acme-web-090",
+      "id": "pr-acme-web-090",
+      "title": "Drop the dead flag",
+      "repoOrContext": "acme/web",
+      "attention": {
+        "needsAttention": false,
+        "needsYou": false,
+        "reasons": [],
+        "since": "2026-09-08T10:00:00.000Z",
+        "signature": "|2026-09-08T10:00:00.000Z",
+        "acked": false
+      },
+      "links": {
+        "sessionId": "pr-acme-web-090",
+        "worktreePath": "/tmp/cgremlin-fixture/worktrees/pr-acme-web-090",
+        "prRepo": "acme/web",
+        "prNumber": 90,
+        "prUrl": "https://github.com/acme/web/pull/90",
+        "ticket": null,
+        "primaryArtifact": "REVIEW.md"
+      },
+      "mode": "review",
+      "stageStatus": "approved",
+      "running": false,
+      "claimed": false
+    },
+    {
+      "source": "session",
+      "ref": "session:inv-acme-web-7f3",
+      "id": "inv-acme-web-7f3",
+      "title": "ING-412",
+      "repoOrContext": "acme/web",
+      "attention": {
+        "needsAttention": true,
+        "needsYou": true,
+        "reasons": [
+          "plan_ready"
+        ],
+        "since": "2026-09-10T08:20:00.000Z",
+        "signature": "plan_ready|2026-09-10T08:20:00.000Z",
+        "acked": false
+      },
+      "links": {
+        "sessionId": "inv-acme-web-7f3",
+        "worktreePath": "/tmp/cgremlin-fixture/worktrees/inv-acme-web-7f3",
+        "prRepo": null,
+        "prNumber": null,
+        "prUrl": null,
+        "ticket": "ING-412",
+        "primaryArtifact": "PLAN.md"
+      },
+      "mode": "investigation",
+      "stageStatus": "plan_ready",
+      "running": false,
+      "claimed": false
+    },
+    {
+      "source": "session",
+      "ref": "session:inv-acme-api-old",
+      "id": "inv-acme-api-old",
+      "title": "ING-101",
+      "repoOrContext": "acme/api",
+      "attention": {
+        "needsAttention": false,
+        "needsYou": false,
+        "reasons": [],
+        "since": "2026-09-08T10:00:00.000Z",
+        "signature": "|2026-09-08T10:00:00.000Z",
+        "acked": false
+      },
+      "links": {
+        "sessionId": "inv-acme-api-old",
+        "worktreePath": "/tmp/cgremlin-fixture/worktrees/inv-acme-api-old",
+        "prRepo": null,
+        "prNumber": null,
+        "prUrl": null,
+        "ticket": "ING-101",
+        "primaryArtifact": "PLAN.md"
+      },
+      "mode": "investigation",
+      "stageStatus": "promoted_to_development",
+      "running": false,
+      "claimed": false
+    },
+    {
+      "source": "session",
+      "ref": "session:dev-acme-api-7",
+      "id": "dev-acme-api-7",
+      "title": "Extract the ingest client",
+      "repoOrContext": "acme/api",
+      "attention": {
+        "needsAttention": true,
+        "needsYou": true,
+        "reasons": [
+          "needs_input"
+        ],
+        "since": "2026-09-10T08:25:00.000Z",
+        "signature": "needs_input|2026-09-10T08:25:00.000Z",
+        "acked": false
+      },
+      "links": {
+        "sessionId": "dev-acme-api-7",
+        "worktreePath": "/tmp/cgremlin-fixture/worktrees/dev-acme-api-7",
+        "prRepo": "acme/api",
+        "prNumber": 7,
+        "prUrl": "https://github.com/acme/api/pull/7",
+        "ticket": "ING-101",
+        "primaryArtifact": "DEVELOPMENT.md"
+      },
+      "mode": "development",
+      "stageStatus": "pr_opened",
+      "running": false,
+      "claimed": false
+    },
+    {
+      "source": "session",
+      "ref": "session:dev-acme-web-done",
+      "id": "dev-acme-web-done",
+      "title": "ING-9",
+      "repoOrContext": "acme/web",
+      "attention": {
+        "needsAttention": false,
+        "needsYou": false,
+        "reasons": [],
+        "since": "2026-09-08T10:00:00.000Z",
+        "signature": "|2026-09-08T10:00:00.000Z",
+        "acked": false
+      },
+      "links": {
+        "sessionId": "dev-acme-web-done",
+        "worktreePath": "/tmp/cgremlin-fixture/worktrees/dev-acme-web-done",
+        "prRepo": null,
+        "prNumber": null,
+        "prUrl": null,
+        "ticket": "ING-9",
+        "primaryArtifact": "DEVELOPMENT.md"
+      },
+      "mode": "development",
+      "stageStatus": "merged",
+      "running": false,
+      "claimed": false
+    },
+    {
+      "source": "pr",
+      "ref": "pr:acme/web#101",
+      "id": "acme/web#101",
+      "title": "Bump the ingest batch size",
+      "repoOrContext": "acme/web",
+      "attention": {
+        "needsAttention": false,
+        "needsYou": false,
+        "reasons": [],
+        "since": "2026-09-10T09:00:00.000Z",
+        "signature": "|2026-09-10T09:00:00.000Z",
+        "acked": false
+      },
+      "links": {
+        "sessionId": null,
+        "worktreePath": null,
+        "prRepo": "acme/web",
+        "prNumber": 101,
+        "prUrl": "https://github.com/acme/web/pull/101",
+        "ticket": null,
+        "primaryArtifact": null
+      },
+      "mode": null,
+      "stageStatus": null,
+      "running": false,
+      "claimed": false
+    },
+    {
+      "source": "pr",
+      "ref": "pr:acme/web#103",
+      "id": "acme/web#103",
+      "title": "Fix the flaky worker test",
+      "repoOrContext": "acme/web",
+      "attention": {
+        "needsAttention": true,
+        "needsYou": true,
+        "reasons": [
+          "changes_requested"
+        ],
+        "since": "2026-09-10T06:00:00.000Z",
+        "signature": "changes_requested|2026-09-10T06:00:00.000Z",
+        "acked": false
+      },
+      "links": {
+        "sessionId": null,
+        "worktreePath": null,
+        "prRepo": "acme/web",
+        "prNumber": 103,
+        "prUrl": "https://github.com/acme/web/pull/103",
+        "ticket": null,
+        "primaryArtifact": null
+      },
+      "mode": null,
+      "stageStatus": null,
+      "running": false,
+      "claimed": false
+    },
+    {
+      "source": "pr",
+      "ref": "pr:acme/api#8",
+      "id": "acme/api#8",
+      "title": "Retry the webhook fan-out",
+      "repoOrContext": "acme/api",
+      "attention": {
+        "needsAttention": false,
+        "needsYou": false,
+        "reasons": [],
+        "since": "2026-09-10T09:00:00.000Z",
+        "signature": "|2026-09-10T09:00:00.000Z",
+        "acked": false
+      },
+      "links": {
+        "sessionId": null,
+        "worktreePath": null,
+        "prRepo": "acme/api",
+        "prNumber": 8,
+        "prUrl": "https://github.com/acme/api/pull/8",
+        "ticket": null,
+        "primaryArtifact": null
+      },
+      "mode": null,
+      "stageStatus": null,
+      "running": false,
+      "claimed": false
+    }
+  ]
+}

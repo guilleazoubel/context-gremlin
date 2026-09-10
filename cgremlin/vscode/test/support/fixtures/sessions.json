@@ -1,0 +1,274 @@
+{
+  "sessions": [
+    {
+      "schemaVersion": 2,
+      "id": "pr-acme-web-102",
+      "createdAt": "2026-09-08T10:00:00.000Z",
+      "workspace": {
+        "repoUrl": "https://github.com/acme/web.git",
+        "worktreePath": "/tmp/cgremlin-fixture/worktrees/pr-acme-web-102",
+        "branch": "main"
+      },
+      "lineage": {
+        "pipelineId": "pr-acme-web-102",
+        "parentSessionId": null,
+        "ticket": null
+      },
+      "agent": {
+        "runner": "claude-code",
+        "resumeId": "7c3f9a10-2b4d-4e51-9f00-8a1b2c3d4e5f",
+        "humanTurn": null
+      },
+      "lastRun": {
+        "stage": "review",
+        "startedAt": "2026-09-10T08:00:00.000Z",
+        "finishedAt": "2026-09-10T08:20:00.000Z",
+        "exitCode": 0,
+        "signal": null,
+        "outcome": "succeeded",
+        "error": null
+      },
+      "pr": {
+        "repo": "acme/web",
+        "number": 102,
+        "url": "https://github.com/acme/web/pull/102",
+        "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "reviewedSha": "cccccccccccccccccccccccccccccccccccccccc",
+        "title": "Add rate limiting to the ingest endpoint",
+        "author": "mona"
+      },
+      "mode": "review",
+      "stageStatus": "ready",
+      "reviewVersion": 1,
+      "lastRereviewSummary": null
+    },
+    {
+      "schemaVersion": 2,
+      "id": "pr-offcfg-lab-55",
+      "createdAt": "2026-09-08T10:00:00.000Z",
+      "workspace": {
+        "repoUrl": "https://github.com/offcfg/lab.git",
+        "worktreePath": "/tmp/cgremlin-fixture/worktrees/pr-offcfg-lab-55",
+        "branch": "main"
+      },
+      "lineage": {
+        "pipelineId": "pr-offcfg-lab-55",
+        "parentSessionId": null,
+        "ticket": null
+      },
+      "agent": {
+        "runner": "claude-code",
+        "resumeId": "7c3f9a10-2b4d-4e51-9f00-8a1b2c3d4e5f",
+        "humanTurn": null
+      },
+      "lastRun": {
+        "stage": "review",
+        "startedAt": "2026-09-10T08:00:00.000Z",
+        "finishedAt": "2026-09-10T08:20:00.000Z",
+        "exitCode": 1,
+        "signal": null,
+        "outcome": "running",
+        "error": null
+      },
+      "pr": {
+        "repo": "offcfg/lab",
+        "number": 55,
+        "url": "https://github.com/offcfg/lab/pull/55",
+        "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "reviewedSha": null,
+        "title": "Teach the lab about retries",
+        "author": "zed"
+      },
+      "mode": "review",
+      "stageStatus": "reviewing",
+      "reviewVersion": 0,
+      "lastRereviewSummary": null
+    },
+    {
+      "schemaVersion": 2,
+      "id": "pr-acme-web-090",
+      "createdAt": "2026-09-08T10:00:00.000Z",
+      "workspace": {
+        "repoUrl": "https://github.com/acme/web.git",
+        "worktreePath": "/tmp/cgremlin-fixture/worktrees/pr-acme-web-090",
+        "branch": "main"
+      },
+      "lineage": {
+        "pipelineId": "pr-acme-web-090",
+        "parentSessionId": null,
+        "ticket": null
+      },
+      "agent": {
+        "runner": "claude-code",
+        "resumeId": "7c3f9a10-2b4d-4e51-9f00-8a1b2c3d4e5f",
+        "humanTurn": null
+      },
+      "lastRun": {
+        "stage": "review",
+        "startedAt": "2026-09-10T08:00:00.000Z",
+        "finishedAt": "2026-09-10T08:20:00.000Z",
+        "exitCode": 0,
+        "signal": null,
+        "outcome": "succeeded",
+        "error": null
+      },
+      "pr": {
+        "repo": "acme/web",
+        "number": 90,
+        "url": "https://github.com/acme/web/pull/90",
+        "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "reviewedSha": null,
+        "title": "Drop the dead flag",
+        "author": "mona"
+      },
+      "mode": "review",
+      "stageStatus": "approved",
+      "reviewVersion": 2,
+      "lastRereviewSummary": {
+        "resolved": 3,
+        "total": 3,
+        "newFindings": 0
+      }
+    },
+    {
+      "schemaVersion": 2,
+      "id": "inv-acme-web-7f3",
+      "createdAt": "2026-09-08T10:00:00.000Z",
+      "workspace": {
+        "repoUrl": "https://github.com/acme/web.git",
+        "worktreePath": "/tmp/cgremlin-fixture/worktrees/inv-acme-web-7f3",
+        "branch": "main"
+      },
+      "lineage": {
+        "pipelineId": "inv-acme-web-7f3",
+        "parentSessionId": null,
+        "ticket": "ING-412"
+      },
+      "agent": {
+        "runner": "claude-code",
+        "resumeId": "7c3f9a10-2b4d-4e51-9f00-8a1b2c3d4e5f",
+        "humanTurn": null
+      },
+      "lastRun": {
+        "stage": "plan",
+        "startedAt": "2026-09-10T08:00:00.000Z",
+        "finishedAt": "2026-09-10T08:20:00.000Z",
+        "exitCode": 0,
+        "signal": null,
+        "outcome": "succeeded",
+        "error": null
+      },
+      "pr": null,
+      "mode": "investigation",
+      "stageStatus": "plan_ready",
+      "intent": "development",
+      "driveToCompletion": false
+    },
+    {
+      "schemaVersion": 2,
+      "id": "inv-acme-api-old",
+      "createdAt": "2026-09-08T10:00:00.000Z",
+      "workspace": {
+        "repoUrl": "https://github.com/acme/api.git",
+        "worktreePath": "/tmp/cgremlin-fixture/worktrees/inv-acme-api-old",
+        "branch": "main"
+      },
+      "lineage": {
+        "pipelineId": "inv-acme-api-old",
+        "parentSessionId": null,
+        "ticket": "ING-101"
+      },
+      "agent": {
+        "runner": "claude-code",
+        "resumeId": "7c3f9a10-2b4d-4e51-9f00-8a1b2c3d4e5f",
+        "humanTurn": null
+      },
+      "lastRun": {
+        "stage": "plan",
+        "startedAt": "2026-09-10T08:00:00.000Z",
+        "finishedAt": "2026-09-10T08:20:00.000Z",
+        "exitCode": 0,
+        "signal": null,
+        "outcome": "succeeded",
+        "error": null
+      },
+      "pr": null,
+      "mode": "investigation",
+      "stageStatus": "promoted_to_development",
+      "intent": "development",
+      "driveToCompletion": true
+    },
+    {
+      "schemaVersion": 2,
+      "id": "dev-acme-api-7",
+      "createdAt": "2026-09-08T10:00:00.000Z",
+      "workspace": {
+        "repoUrl": "https://github.com/acme/api.git",
+        "worktreePath": "/tmp/cgremlin-fixture/worktrees/dev-acme-api-7",
+        "branch": "main"
+      },
+      "lineage": {
+        "pipelineId": "inv-acme-api-old",
+        "parentSessionId": "inv-acme-api-old",
+        "ticket": "ING-101"
+      },
+      "agent": {
+        "runner": "claude-code",
+        "resumeId": "7c3f9a10-2b4d-4e51-9f00-8a1b2c3d4e5f",
+        "humanTurn": null
+      },
+      "lastRun": {
+        "stage": "develop",
+        "startedAt": "2026-09-10T08:00:00.000Z",
+        "finishedAt": "2026-09-10T08:20:00.000Z",
+        "exitCode": 0,
+        "signal": null,
+        "outcome": "succeeded",
+        "error": null
+      },
+      "pr": {
+        "repo": "acme/api",
+        "number": 7,
+        "url": "https://github.com/acme/api/pull/7",
+        "headSha": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "reviewedSha": null,
+        "title": "Extract the ingest client",
+        "author": "guille"
+      },
+      "mode": "development",
+      "stageStatus": "pr_opened"
+    },
+    {
+      "schemaVersion": 2,
+      "id": "dev-acme-web-done",
+      "createdAt": "2026-09-08T10:00:00.000Z",
+      "workspace": {
+        "repoUrl": "https://github.com/acme/web.git",
+        "worktreePath": "/tmp/cgremlin-fixture/worktrees/dev-acme-web-done",
+        "branch": "main"
+      },
+      "lineage": {
+        "pipelineId": "dev-acme-web-done",
+        "parentSessionId": null,
+        "ticket": "ING-9"
+      },
+      "agent": {
+        "runner": "claude-code",
+        "resumeId": "7c3f9a10-2b4d-4e51-9f00-8a1b2c3d4e5f",
+        "humanTurn": null
+      },
+      "lastRun": {
+        "stage": "develop",
+        "startedAt": "2026-09-10T08:00:00.000Z",
+        "finishedAt": "2026-09-10T08:20:00.000Z",
+        "exitCode": 0,
+        "signal": null,
+        "outcome": "succeeded",
+        "error": null
+      },
+      "pr": null,
+      "mode": "development",
+      "stageStatus": "merged"
+    }
+  ]
+}

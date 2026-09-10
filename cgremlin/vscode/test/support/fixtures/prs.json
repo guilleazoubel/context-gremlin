@@ -1,0 +1,222 @@
+{
+  "inventory": {
+    "scannedAt": "2026-09-10T09:00:00.000Z",
+    "repos": [
+      "acme/web",
+      "acme/api"
+    ],
+    "entries": [
+      {
+        "repo": "acme/web",
+        "number": 101,
+        "url": "https://github.com/acme/web/pull/101",
+        "title": "Bump the ingest batch size",
+        "author": "octo",
+        "isDraft": false,
+        "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "baseRef": "main",
+        "updatedAt": "2026-09-09T08:00:00.000Z",
+        "reviewDecision": "REVIEW_REQUIRED",
+        "isMine": false,
+        "teamActivity": [],
+        "ours": {
+          "status": "none"
+        },
+        "seenAt": "2026-09-10T09:00:00.000Z"
+      },
+      {
+        "repo": "acme/web",
+        "number": 102,
+        "url": "https://github.com/acme/web/pull/102",
+        "title": "Add rate limiting to the ingest endpoint",
+        "author": "mona",
+        "isDraft": false,
+        "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "baseRef": "main",
+        "updatedAt": "2026-09-10T07:30:00.000Z",
+        "reviewDecision": "REVIEW_REQUIRED",
+        "isMine": false,
+        "teamActivity": [],
+        "ours": {
+          "status": "reviewed",
+          "sessionId": "pr-acme-web-102",
+          "reviewedSha": "cccccccccccccccccccccccccccccccccccccccc",
+          "newCommits": true,
+          "phase": "ready"
+        },
+        "seenAt": "2026-09-10T09:00:00.000Z"
+      },
+      {
+        "repo": "acme/web",
+        "number": 103,
+        "url": "https://github.com/acme/web/pull/103",
+        "title": "Fix the flaky worker test",
+        "author": "guille",
+        "isDraft": false,
+        "headSha": "dddddddddddddddddddddddddddddddddddddddd",
+        "baseRef": "main",
+        "updatedAt": "2026-09-10T06:00:00.000Z",
+        "reviewDecision": "CHANGES_REQUESTED",
+        "isMine": true,
+        "teamActivity": [],
+        "ours": {
+          "status": "none"
+        },
+        "seenAt": "2026-09-10T09:00:00.000Z"
+      },
+      {
+        "repo": "acme/api",
+        "number": 7,
+        "url": "https://github.com/acme/api/pull/7",
+        "title": "Extract the ingest client",
+        "author": "guille",
+        "isDraft": false,
+        "headSha": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "baseRef": "main",
+        "updatedAt": "2026-09-09T18:00:00.000Z",
+        "reviewDecision": "REVIEW_REQUIRED",
+        "isMine": true,
+        "teamActivity": [],
+        "ours": {
+          "status": "none"
+        },
+        "seenAt": "2026-09-10T09:00:00.000Z"
+      },
+      {
+        "repo": "acme/api",
+        "number": 8,
+        "url": "https://github.com/acme/api/pull/8",
+        "title": "Retry the webhook fan-out",
+        "author": "hubot",
+        "isDraft": false,
+        "headSha": "ffffffffffffffffffffffffffffffffffffffff",
+        "baseRef": "main",
+        "updatedAt": "2026-09-10T05:00:00.000Z",
+        "reviewDecision": "REVIEW_REQUIRED",
+        "isMine": false,
+        "teamActivity": [
+          {
+            "login": "mona",
+            "kind": "comment",
+            "at": "2026-09-10T05:10:00.000Z"
+          }
+        ],
+        "ours": {
+          "status": "none"
+        },
+        "seenAt": "2026-09-10T09:00:00.000Z"
+      }
+    ],
+    "errors": []
+  },
+  "groups": {
+    "unreviewed": [
+      {
+        "repo": "acme/web",
+        "number": 101,
+        "url": "https://github.com/acme/web/pull/101",
+        "title": "Bump the ingest batch size",
+        "author": "octo",
+        "isDraft": false,
+        "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "baseRef": "main",
+        "updatedAt": "2026-09-09T08:00:00.000Z",
+        "reviewDecision": "REVIEW_REQUIRED",
+        "isMine": false,
+        "teamActivity": [],
+        "ours": {
+          "status": "none"
+        },
+        "seenAt": "2026-09-10T09:00:00.000Z"
+      }
+    ],
+    "teamOnIt": [
+      {
+        "repo": "acme/api",
+        "number": 8,
+        "url": "https://github.com/acme/api/pull/8",
+        "title": "Retry the webhook fan-out",
+        "author": "hubot",
+        "isDraft": false,
+        "headSha": "ffffffffffffffffffffffffffffffffffffffff",
+        "baseRef": "main",
+        "updatedAt": "2026-09-10T05:00:00.000Z",
+        "reviewDecision": "REVIEW_REQUIRED",
+        "isMine": false,
+        "teamActivity": [
+          {
+            "login": "mona",
+            "kind": "comment",
+            "at": "2026-09-10T05:10:00.000Z"
+          }
+        ],
+        "ours": {
+          "status": "none"
+        },
+        "seenAt": "2026-09-10T09:00:00.000Z"
+      }
+    ],
+    "ours": [
+      {
+        "repo": "acme/web",
+        "number": 102,
+        "url": "https://github.com/acme/web/pull/102",
+        "title": "Add rate limiting to the ingest endpoint",
+        "author": "mona",
+        "isDraft": false,
+        "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "baseRef": "main",
+        "updatedAt": "2026-09-10T07:30:00.000Z",
+        "reviewDecision": "REVIEW_REQUIRED",
+        "isMine": false,
+        "teamActivity": [],
+        "ours": {
+          "status": "reviewed",
+          "sessionId": "pr-acme-web-102",
+          "reviewedSha": "cccccccccccccccccccccccccccccccccccccccc",
+          "newCommits": true,
+          "phase": "ready"
+        },
+        "seenAt": "2026-09-10T09:00:00.000Z"
+      }
+    ],
+    "mine": [
+      {
+        "repo": "acme/web",
+        "number": 103,
+        "url": "https://github.com/acme/web/pull/103",
+        "title": "Fix the flaky worker test",
+        "author": "guille",
+        "isDraft": false,
+        "headSha": "dddddddddddddddddddddddddddddddddddddddd",
+        "baseRef": "main",
+        "updatedAt": "2026-09-10T06:00:00.000Z",
+        "reviewDecision": "CHANGES_REQUESTED",
+        "isMine": true,
+        "teamActivity": [],
+        "ours": {
+          "status": "none"
+        },
+        "seenAt": "2026-09-10T09:00:00.000Z"
+      },
+      {
+        "repo": "acme/api",
+        "number": 7,
+        "url": "https://github.com/acme/api/pull/7",
+        "title": "Extract the ingest client",
+        "author": "guille",
+        "isDraft": false,
+        "headSha": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+        "baseRef": "main",
+        "updatedAt": "2026-09-09T18:00:00.000Z",
+        "reviewDecision": "REVIEW_REQUIRED",
+        "isMine": true,
+        "teamActivity": [],
+        "ours": {
+          "status": "none"
+        },
+        "seenAt": "2026-09-10T09:00:00.000Z"
+      }
+    ]
+  }
+}
