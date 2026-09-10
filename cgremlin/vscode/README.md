@@ -37,24 +37,32 @@ source needs a `LIST_ORDER` entry and a `when` clause — not a restructuring.
 
 ```sh
 pnpm install
-pnpm build       # tsc -p tsconfig.json -> out/
+pnpm test              # vitest, no editor harness
+pnpm test:integration  # builds ../core, then drives a real engine on a temp socket
+pnpm build             # tsc -p tsconfig.json -> out/
+pnpm lint
 ```
+
+`test/integration/real-engine.test.ts` boots `cgremlin-core serve` as a child process and drives
+`CoreClient`, `SseClient` and the whole host wiring against it — that is what proves the structural
+`*View` types here match what the engine really returns. It skips itself with a clear message when
+`../core` has not been built.
 
 Then either:
 
-- **F5** in VS Code (with this folder open) launches an Extension Development Host with the built
-  extension loaded, or
+- **F5** in VS Code (with **this folder** open) launches an Extension Development Host with the built
+  extension loaded (`.vscode/launch.json`), or
 - package it and install it into a real VS Code: `npx vsce package` (from this directory), then
   `code --install-extension cgremlin-vscode-<version>.vsix`.
 
-`pnpm test` runs vitest with no editor harness; `pnpm lint` runs eslint. There are **no runtime
-dependencies** (`package.json` has no `dependencies` key) and there is no bundler: `out/*.js` loads
-directly in the extension host, unmodified.
+There are **no runtime dependencies** (`package.json` has no `dependencies` key) and there is no
+bundler: `out/*.js` loads directly in the extension host, unmodified.
 
 **No `@vscode/test-electron`.** This package has no Electron-hosted test suite — the purity split
-above is what makes that unnecessary for the policy layer, but the actual VS Code surface (tree
-rendering, the workspace swap, the terminal) still needs a human pass: run the manual smoke
-checklist in `docs/SMOKE.md` before calling a change to this package verified.
+above plus the integration suite cover the policy and client layers, but the actual VS Code surface
+(tree rendering, the workspace swap, the terminal) and the paths that need a real `gh` or a real
+agent still need a human pass: run the manual smoke checklist in [`docs/SMOKE.md`](docs/SMOKE.md)
+before calling a change to this package verified.
 
 ## Settings
 

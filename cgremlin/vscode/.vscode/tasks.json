@@ -1,0 +1,15 @@
+{
+  // The task `launch.json`'s `preLaunchTask` refers to. Spelled out here rather than relying on
+  // the built-in npm task provider, which does not pick up pnpm scripts reliably.
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "pnpm: build",
+      "type": "shell",
+      "command": "pnpm build",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": ["$tsc"],
+      "group": { "kind": "build", "isDefault": true }
+    }
+  ]
+}

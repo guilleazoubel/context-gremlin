@@ -1,0 +1,24 @@
+{
+  // Open THIS folder (cgremlin/vscode) in VS Code and press F5. Opening the repo root instead
+  // would point `--extensionDevelopmentPath` at the wrong directory and the extension would not
+  // load. See docs/SMOKE.md.
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run cgremlin extension",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": ["--extensionDevelopmentPath=${workspaceFolder}"],
+      "outFiles": ["${workspaceFolder}/out/**/*.js"],
+      "preLaunchTask": "pnpm: build"
+    },
+    {
+      // Same, but skips the build — for a second F5 when `out/` is already current.
+      "name": "Run cgremlin extension (no build)",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": ["--extensionDevelopmentPath=${workspaceFolder}"],
+      "outFiles": ["${workspaceFolder}/out/**/*.js"]
+    }
+  ]
+}

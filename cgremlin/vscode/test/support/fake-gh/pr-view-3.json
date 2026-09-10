@@ -1,0 +1,16 @@
+{
+  "number": 3,
+  "title": "Fixture PR three (we are reviewing it)",
+  "author": { "login": "mate" },
+  "headRefName": "mate/fixture-three",
+  "headRefOid": "3333333333333333333333333333333333333333",
+  "baseRefName": "main",
+  "url": "https://github.com/fake/repo/pull/3",
+  "state": "OPEN",
+  "isDraft": false,
+  "reviewDecision": "REVIEW_REQUIRED",
+  "mergedAt": null,
+  "closedAt": null,
+  "latestReviews": [],
+  "statusCheckRollup": []
+}
