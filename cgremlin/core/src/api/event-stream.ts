@@ -254,15 +254,27 @@ export function handleEventStream(req: IncomingMessage, res: ServerResponse, dep
     }
   }
 
+  // The replay itself can destroy the connection: a reader that stalls from
+  // the first byte fills the pending queue and trips the ceiling inside
+  // `send`, which already ran cleanup. Bailing out here is what keeps that
+  // path from re-installing a ring subscription and a 15 s interval that
+  // nothing would ever tear down (cleanedUp is already true).
+  if (cleanedUp || res.destroyed) return;
+
   // Replay first, subscribe second (R21) — then drain anything the ring
   // gained while the replay was being written, which is the only remaining
   // window in which an event could have been lost.
   unsubscribe = ring.subscribe((entry) => enqueue([entry]));
   for (let pass = 0; pass < MAX_CATCH_UP_PASSES; pass += 1) {
-    if (res.destroyed) break;
+    if (cleanedUp || res.destroyed) break;
     const missed = ring.since(lastSent);
     if (!missed.complete || missed.entries.length === 0) break;
     enqueue(missed.entries);
+  }
+  // Same story for the catch-up: it writes, so it too can trip the ceiling.
+  if (cleanedUp || res.destroyed) {
+    cleanup();
+    return;
   }
 
   heartbeat = setInterval(() => {

@@ -331,11 +331,42 @@ export class AttentionService {
     return this.deps.now ? this.deps.now() : new Date();
   }
 
+  /**
+   * Attention is a best-effort read over state other components own: one
+   * broken source (or an unreadable ack file) must degrade to "that source
+   * has nothing to say" rather than blank the whole panel or reject a
+   * fire-and-forget refresh. There is no logger in these deps, so the failure
+   * is swallowed deliberately — the next refresh retries from scratch.
+   */
+  private async loadAcks(): Promise<Record<ItemRef, { signature: string; ackedAt: string }>> {
+    try {
+      return await this.deps.acks.load();
+    } catch {
+      return {};
+    }
+  }
+
+  private async collectFrom(adapter: SourceAdapter): Promise<CollectedItem[]> {
+    try {
+      return await adapter.collect();
+    } catch {
+      return [];
+    }
+  }
+
+  private async collectOneFrom(adapter: SourceAdapter, ref: ItemRef): Promise<CollectedItem | null> {
+    try {
+      return await adapter.collectOne(ref);
+    } catch {
+      return null;
+    }
+  }
+
   async list(opts: { all?: boolean } = {}): Promise<{ evaluatedAt: string; items: AttentionItem[] }> {
-    const acks = await this.deps.acks.load();
+    const acks = await this.loadAcks();
     const collected: Array<{ source: ItemSource; item: CollectedItem }> = [];
     for (const adapter of this.deps.adapters) {
-      for (const item of await adapter.collect()) {
+      for (const item of await this.collectFrom(adapter)) {
         collected.push({ source: adapter.source, item });
       }
     }
@@ -349,14 +380,14 @@ export class AttentionService {
   /** The ONE ack path; 404 when the ref names nothing. */
   async ack(ref: ItemRef): Promise<AttentionItem> {
     for (const adapter of this.deps.adapters) {
-      const collected = await adapter.collectOne(ref);
+      const collected = await this.collectOneFrom(adapter, ref);
       if (collected === null) continue;
       const unacked = this.evaluate(adapter.source, collected, {});
       await this.deps.acks.put(ref, {
         signature: unacked.attention.signature,
         ackedAt: this.now().toISOString(),
       });
-      const acked = this.evaluate(adapter.source, collected, await this.deps.acks.load());
+      const acked = this.evaluate(adapter.source, collected, await this.loadAcks());
       // Remember what the ack made true, so the next refresh only reports a
       // real change rather than the ack itself.
       this.lastDelta.set(ref, deltaKeyOf(acked));
@@ -386,7 +417,13 @@ export class AttentionService {
         while (this.trailing.delete(key)) {
           await this.recompute(scope);
         }
+      } catch {
+        // Every caller is fire-and-forget (`void this.refresh(...)` from an
+        // engine event or the watch), so a rejection here would surface as an
+        // unhandled rejection and nothing would be better off. A recompute
+        // that failed simply leaves the last known state in place.
       } finally {
+        this.trailing.delete(key);
         this.inflight.delete(key);
       }
     })();
@@ -448,18 +485,22 @@ export class AttentionService {
    */
   private async artifactMtime(e: SessionWatchEvent): Promise<string> {
     for (const adapter of this.deps.adapters) {
-      const mtime = await adapter.artifactMtime?.(e);
-      if (mtime !== null && mtime !== undefined) return mtime;
+      try {
+        const mtime = await adapter.artifactMtime?.(e);
+        if (mtime !== null && mtime !== undefined) return mtime;
+      } catch {
+        // Ask the next source; the observation time is the fallback.
+      }
     }
     return this.now().toISOString();
   }
 
   private async recompute(scope: RefreshScope): Promise<void> {
-    const acks = await this.deps.acks.load();
+    const acks = await this.loadAcks();
     if (scope.kind === 'all') {
       const collected: Array<{ source: ItemSource; item: CollectedItem }> = [];
       for (const adapter of this.deps.adapters) {
-        for (const item of await adapter.collect()) {
+        for (const item of await this.collectFrom(adapter)) {
           collected.push({ source: adapter.source, item });
         }
       }
@@ -470,7 +511,7 @@ export class AttentionService {
     }
     const ref = scope.kind === 'session' ? sessionRef(scope.id) : prRef(scope.repo, scope.number);
     for (const adapter of this.deps.adapters) {
-      const collected = await adapter.collectOne(ref);
+      const collected = await this.collectOneFrom(adapter, ref);
       if (collected === null) continue;
       this.emitOnDelta(this.evaluate(adapter.source, collected, acks));
       return;

@@ -399,6 +399,61 @@ describe('AttentionService + SessionWatcher', () => {
   });
 });
 
+describe('AttentionService resilience', () => {
+  const broken: SourceAdapter = {
+    source: 'broken' as ItemSource,
+    collect: () => Promise.reject(new Error('adapter is down')),
+    collectOne: () => Promise.reject(new Error('adapter is down')),
+  };
+
+  it('lets one throwing adapter contribute nothing without failing the batch', async () => {
+    const fx2 = await makeFixture([broken]);
+    await fx2.h.store.save(investigation('a', { stageStatus: 'plan_ready' }));
+    fx2.setInventory(inventory([entry({ isMine: true, reviewDecision: 'CHANGES_REQUESTED' })]));
+
+    const all = await fx2.service.list({ all: true });
+    expect(all.items.map((i) => i.ref).sort()).toEqual(['pr:acme/app#12', 'session:a']);
+
+    await fx2.service.refresh({ kind: 'all' });
+    expect(fx2.changed.map((i) => i.ref).sort()).toEqual(['pr:acme/app#12', 'session:a']);
+
+    // A targeted refresh whose only candidate throws is a no-op, not a throw.
+    await expect(fx2.service.refresh({ kind: 'session', id: 'a' })).resolves.toBeUndefined();
+  });
+
+  it('survives an unreadable ack store and never leaks an unhandled rejection', async () => {
+    const rejections: unknown[] = [];
+    const onUnhandled = (err: unknown): void => {
+      rejections.push(err);
+    };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const h = createHarness();
+      const service = new AttentionService({
+        adapters: [broken],
+        acks: {
+          load: () => Promise.reject(new Error('acks unreadable')),
+          put: () => Promise.resolve(),
+          prune: () => Promise.resolve(),
+        } as unknown as AckStore,
+        events: h.events,
+        now: () => NOW,
+      });
+      service.start();
+      // The engine-event path is fire-and-forget: it must not surface here.
+      h.events.emit('session.created', { session: investigation('a') });
+      h.events.emit('inventory.updated', { inventory: inventory([]) });
+      await expect(service.refresh({ kind: 'all' })).resolves.toBeUndefined();
+      await expect(service.list()).resolves.toEqual({ evaluatedAt: NOW.toISOString(), items: [] });
+      await new Promise((resolve) => setImmediate(resolve));
+      service.stop();
+      expect(rejections).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
+  });
+});
+
 // MG-A3 attention-never-locks-a-session
 describe('MG-A3 attention-never-locks-a-session', () => {
   it('takes no session lock while listing or refreshing', async () => {

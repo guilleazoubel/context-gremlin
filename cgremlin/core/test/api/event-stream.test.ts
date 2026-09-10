@@ -313,6 +313,30 @@ describe('handleEventStream', () => {
     expect(ring.subscriberCount).toBe(0);
   });
 
+  it('R21 leaves no subscriber and no heartbeat when the replay itself overruns the ceiling', () => {
+    vi.useFakeTimers();
+    try {
+      const total = MAX_PENDING_FRAMES + 100;
+      const ring = new EventRing(total);
+      for (let i = 0; i < total; i += 1) ring.push('session.created', { i });
+      const res = stubRes();
+      // A reader that stalls from the very first byte: the replay alone is
+      // enough to hit the pending ceiling and destroy the connection.
+      res.blocked = true;
+      handleEventStream(stubReq('/events', { 'last-event-id': '0' }).as(), res.as(), { ring });
+      expect(res.destroyCalls).toBeGreaterThan(0);
+      expect(ring.subscriberCount).toBe(0);
+      expect(vi.getTimerCount()).toBe(0);
+      // And nothing keeps writing to it afterwards.
+      const after = res.writes.length;
+      ring.push('session.created', { late: true });
+      vi.advanceTimersByTime(60_000);
+      expect(res.writes.length).toBe(after);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   // MG-A4 events-never-leak-the-secret
   it('MG-A4 events-never-leak-the-secret', () => {
     const ring = new EventRing();
