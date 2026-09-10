@@ -499,3 +499,50 @@ describe('R20 — a claimed conversation skips the re-review, it never errors', 
     expect((await h.store.load(review.id)).stageStatus).toBe('ready');
   });
 });
+
+describe('R20 — a claim that races in AFTER planning is skipped, not errored', () => {
+  it('a rereview refused by the pipeline files a skipped entry, never a report.errors entry', async () => {
+    const { h, gh, lock } = tickHarness();
+    const review = reviewSession({ stageStatus: 'ready', repo: 'acme/app', number: 5, reviewedSha: 'b'.repeat(40) });
+    await h.store.save(review);
+    gh.queueResponse({ stdout: viewJson({ state: 'OPEN', reviewDecision: '' }) });
+
+    // The claim lands between the tick's locked PLANNING load (#2 — #1 is
+    // store.list()'s own) and runRereview's own snapshot, so
+    // planReconciliation still returns the rereview action and the refusal
+    // happens in the apply loop, which is the path under test.
+    const originalLoad = h.store.load.bind(h.store);
+    let loads = 0;
+    h.store.load = async (loadId: string) => {
+      const loaded = await originalLoad(loadId);
+      if (loadId === review.id) {
+        loads += 1;
+        if (loads === 2) await h.store.save(claimed(loaded as ReviewSession, LIVE_CLAIM));
+      }
+      return loaded;
+    };
+
+    const tick = new ReconciliationTick({ gh, store: h.store, pipeline: h.service, events: h.events, lock, now: () => NOW });
+    const report = await tick.run();
+
+    expect(report.errors).toEqual([]);
+    expect(report.skipped).toEqual([
+      { sessionId: review.id, to: 'reviewing', why: 'conversation claimed by a human turn' },
+    ]);
+    expect((await originalLoad(review.id)).agent?.humanTurn).toEqual(LIVE_CLAIM);
+  });
+
+  it('any OTHER rereview failure is still a report.errors entry (regression pin)', async () => {
+    const { h, gh, lock } = tickHarness();
+    const review = reviewSession({ stageStatus: 'ready', repo: 'acme/app', number: 5, reviewedSha: 'b'.repeat(40) });
+    await h.store.save({ ...review, workspace: { repoUrl: review.workspace.repoUrl } });
+    gh.queueResponse({ stdout: viewJson({ state: 'OPEN', reviewDecision: '' }) });
+
+    const tick = new ReconciliationTick({ gh, store: h.store, pipeline: h.service, events: h.events, lock, now: () => NOW });
+    const report = await tick.run();
+
+    expect(report.skipped).toEqual([]);
+    expect(report.errors).toHaveLength(1);
+    expect(report.errors[0]).toMatchObject({ where: review.id });
+  });
+});

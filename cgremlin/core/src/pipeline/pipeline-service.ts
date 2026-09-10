@@ -454,51 +454,66 @@ export class PipelineService {
   }
 
   async promote(id: string): Promise<{ investigation: Session; development: Session }> {
-    const inv = await this.deps.store.load(id);
-    // R19, advisory and UNLOCKED, and checked BEFORE eligibility so a claimed
-    // session is refused as claimed. Promoting is a write the human's
-    // conversation is about: it transitions the investigation to a TERMINAL
-    // phase (which would itself clear the claim) and hands its worktree to a
-    // brand-new development session, so the refusal has to happen here — the
-    // stages' own checks cannot see it. Advisory only: an authoritative check
-    // would have to live inside `transition`, and transitions must stay
-    // un-refusable so the reconciliation tick's merge/close still applies
-    // while claimed (R20).
-    if (isClaimed(inv, this.now())) {
+    const snapshot = await this.deps.store.load(id);
+    // R19, advisory and UNLOCKED — see runFindings for why both sites exist.
+    if (isClaimed(snapshot, this.now())) {
       throw new HumanTurnInProgressError(id);
     }
-    assertCanPromote(inv);
-    // Legal from either 'approved' (a human approved it) or 'plan_ready'
-    // (drive-to-completion) directly — the schema has both edges so this
-    // never has to synthesize an 'approved' step nobody actually took.
-    const investigation = await this.transition(id, 'promoted_to_development');
+    // Promoting is a write the human's conversation is about, and no stage's
+    // own check can protect it: the terminal transition below would itself
+    // CLEAR the claim (clearHumanTurnIfTerminal) and the development session
+    // it creates is unclaimed. So the authoritative check lives here, on a
+    // fresh load under this session's own lock — a claim landing after the
+    // advisory snapshot is still refused. It cannot live inside `transition`:
+    // transitions must stay un-refusable so the reconciliation tick's
+    // merge/close still applies (and clears the claim) while claimed (R20).
+    const { investigation, devId } = await this.lock.withLock(id, async () => {
+      const fresh = await this.deps.store.load(id);
+      await this.assertNoHumanTurn(fresh);
+      assertCanPromote(fresh);
+      // Legal from either 'approved' (a human approved it) or 'plan_ready'
+      // (drive-to-completion) directly — the schema has both edges so this
+      // never has to synthesize an 'approved' step nobody actually took.
+      // `transitionUnlocked`, not `transition`: we already hold this
+      // session's lock and KeyedLock is not re-entrant.
+      const promoted = await this.transitionUnlocked(id, 'promoted_to_development');
 
-    const slug = repoSlugFromUrl(inv.workspace.repoUrl);
-    const devId = this.newId('dev', slug, inv.lineage.ticket ?? inv.id);
-    const development: Session = {
-      schemaVersion: 2,
-      id: devId,
-      mode: 'development',
-      createdAt: this.now().toISOString(),
-      workspace: inv.workspace,
-      lineage: { pipelineId: inv.lineage.pipelineId, parentSessionId: inv.id, ticket: inv.lineage.ticket },
-      stageStatus: 'active',
-      agent: null,
-      lastRun: null,
-      pr: null,
-    };
-    await this.deps.store.save(development);
+      const slug = repoSlugFromUrl(fresh.workspace.repoUrl);
+      // The development session is a brand-new id nothing else can reference
+      // yet, so its own writes need no lock of their own (see the invariant
+      // above); doing them here keeps the whole promotion atomic against any
+      // concurrent action on the investigation.
+      const newDevId = this.newId('dev', slug, fresh.lineage.ticket ?? fresh.id);
+      const newDevelopment: Session = {
+        schemaVersion: 2,
+        id: newDevId,
+        mode: 'development',
+        createdAt: this.now().toISOString(),
+        workspace: fresh.workspace,
+        lineage: { pipelineId: fresh.lineage.pipelineId, parentSessionId: fresh.id, ticket: fresh.lineage.ticket },
+        stageStatus: 'active',
+        agent: null,
+        lastRun: null,
+        pr: null,
+      };
+      await this.deps.store.save(newDevelopment);
 
-    const invDir = this.sessionDir(id);
-    const devDir = this.sessionDir(devId);
-    for (const name of ['FINDINGS.md', 'PLAN.md']) {
-      const src = `${invDir}/${name}`;
-      if (await this.deps.fs.exists(src)) {
-        await this.deps.fs.writeFile(`${devDir}/${name}`, await this.deps.fs.readFile(src));
+      const invDir = this.sessionDir(id);
+      const devDir = this.sessionDir(newDevId);
+      for (const name of ['FINDINGS.md', 'PLAN.md']) {
+        const src = `${invDir}/${name}`;
+        if (await this.deps.fs.exists(src)) {
+          await this.deps.fs.writeFile(`${devDir}/${name}`, await this.deps.fs.readFile(src));
+        }
       }
-    }
 
-    this.deps.events.emit('session.created', { session: development });
+      this.deps.events.emit('session.created', { session: newDevelopment });
+      return { investigation: promoted, devId: newDevId };
+    });
+
+    // OUTSIDE the lock: runDevelop takes the development session's own lock,
+    // but it also awaits a whole agent turn, and holding the investigation's
+    // lock for that long would block every other action on it.
     await this.runDevelop(devId);
     const finalDevelopment = await this.deps.store.load(devId);
     return { investigation, development: finalDevelopment };

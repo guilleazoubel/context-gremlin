@@ -78,13 +78,17 @@ class RecordingEnvironment {
   }
 }
 
-function investigation(id: string, stageStatus: 'findings' | 'planning' | 'plan_ready' | 'approved'): Session {
+function investigation(
+  id: string,
+  stageStatus: 'findings' | 'planning' | 'plan_ready' | 'approved',
+  driveToCompletion = false,
+): Session {
   return {
     schemaVersion: 2, id, mode: 'investigation', createdAt: '2026-09-10T10:00:00.000Z',
     workspace: { repoUrl: REPO_URL, worktreePath: `${WORKTREES_DIR}/${id}`, branch: `investigate/${id}` },
     lineage: { pipelineId: id, parentSessionId: null, ticket: 'APP-1' },
     stageStatus, agent: null, lastRun: null, pr: null,
-    intent: 'investigate_only', driveToCompletion: false,
+    intent: 'investigate_only', driveToCompletion,
   };
 }
 
@@ -445,6 +449,35 @@ describe('promote and retry refuse a claimed session', () => {
     await h.store.save(withClaim(investigation('inv-p1', 'approved'), LIVE));
     await expectRefused(h, h.service.promote('inv-p1'));
     expect((await h.store.load('inv-p1')).stageStatus).toBe('approved');
+  });
+
+  it('promote takes the lock and re-checks: a claim landing after its first load is authoritative', async () => {
+    const h = createHarness({ now: () => NOW });
+    const id = 'inv-p2';
+    await h.store.save(investigation(id, 'plan_ready', true));
+    // The claim lands AFTER promote's own unlocked snapshot was handed out —
+    // only a locked re-check can see it. Without one, promote's terminal
+    // transition would WIPE the claim (clearHumanTurnIfTerminal) and promote
+    // would carry on into a brand-new development session.
+    const originalLoad = h.store.load.bind(h.store);
+    let loads = 0;
+    h.store.load = async (loadId: string) => {
+      const loaded = await originalLoad(loadId);
+      if (loadId === id) {
+        loads += 1;
+        if (loads === 1) await h.store.save(withClaim(loaded, LIVE));
+      }
+      return loaded;
+    };
+    const created: string[] = [];
+    h.events.on('session.created', (e) => created.push(e.session.id));
+
+    await expectRefused(h, h.service.promote(id));
+
+    const after = await originalLoad(id);
+    expect(after.stageStatus).toBe('plan_ready');
+    expect(after.agent?.humanTurn).toEqual(LIVE);
+    expect(created).toEqual([]);
   });
 
   it('retry on a claimed session is refused', async () => {

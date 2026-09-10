@@ -7,7 +7,7 @@ import type { ReviewSession, Session } from '../schema/session';
 import { canTransition, type DevelopmentPhase, type ReviewPhase } from '../schema/pipeline';
 import { TERMINAL_PHASES_BY_MODE } from '../workspace/workspace-in-use';
 import { awaitRunStart } from '../pipeline/run-start';
-import { isClaimed } from '../pipeline/pipeline-service';
+import { HumanTurnInProgressError, isClaimed } from '../pipeline/pipeline-service';
 import type { KeyedLock } from '../api/keyed-lock';
 
 export type ReconcileAction =
@@ -42,6 +42,8 @@ const REREVIEW_ELIGIBLE_REVIEW_PHASES: readonly ReviewPhase[] = ['ready', 'chang
 // development source can still be sitting at 'active' when its PR merges —
 // 'active' must be merge-eligible too, or that session is stranded forever.
 const MERGE_ELIGIBLE_DEVELOPMENT_PHASES: readonly DevelopmentPhase[] = ['active', 'pr_opened', 'superseded'];
+/** One string for both claim-skip sites (planning and the apply loop), so the two cannot drift. */
+const CLAIMED_SKIP_REASON = 'conversation claimed by a human turn';
 
 function canApplyTransition(mode: 'review' | 'development', from: string, to: string): boolean {
   return mode === 'review'
@@ -111,7 +113,7 @@ export function planReconciliation(input: PlanReconciliationInput): PlanReconcil
     // the conversation open. Merge/close transitions above are deliberately
     // NOT guarded: a claim delays a re-review, never the truth about the PR.
     if (isClaimed(review, now)) {
-      skipped.push({ sessionId: review.id, to: 'reviewing', why: 'conversation claimed by a human turn' });
+      skipped.push({ sessionId: review.id, to: 'reviewing', why: CLAIMED_SKIP_REASON });
     } else {
       actions.push({ type: 'rereview', sessionId: review.id, reason: 'rereview started — outcome reported on the session' });
     }
@@ -225,7 +227,18 @@ export class ReconciliationTick {
             try {
               await awaitRunStart(this.deps.events, action.sessionId, this.deps.pipeline.runRereview(action.sessionId));
             } catch (err) {
-              report.errors.push({ where: review.id, error: errorMessage(err) });
+              // A claim that raced in between planning (unclaimed, so the
+              // action was produced) and this unlocked apply is the same
+              // situation planReconciliation skips — so it is a `skipped`
+              // entry here too, never a report.errors one, or the tick would
+              // file an error every pollIntervalMs for as long as the human
+              // keeps the conversation open. Every OTHER failure is still an
+              // error.
+              if (err instanceof HumanTurnInProgressError) {
+                report.skipped.push({ sessionId: action.sessionId, to: 'reviewing', why: CLAIMED_SKIP_REASON });
+              } else {
+                report.errors.push({ where: review.id, error: errorMessage(err) });
+              }
             }
           }
         }
