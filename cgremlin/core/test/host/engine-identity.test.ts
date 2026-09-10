@@ -151,14 +151,57 @@ describe('the engine.json lock (R22)', () => {
     }
   });
 
-  it('refuses to take over an engine.json whose recorded pid is alive', async () => {
-    const config = testConfig();
+  /** A lock naming a pid that is alive (this very process) whose socket is dead. */
+  async function lockOnLivePidWithDeadSocket(config: CoreConfig): Promise<void> {
     await writeFile(
       config.enginePidPath!,
       JSON.stringify({ pid: process.pid, version: ENGINE_VERSION, socketPath: '/nope.sock', startedAt: 'x' }),
       { mode: 0o600 },
     );
-    await expect(serve(config, testAdapters(), { log: () => {} })).rejects.toBeInstanceOf(SocketInUseError);
+  }
+
+  it('refuses a lock whose pid is alive AND is a cgremlin engine still booting (its socket is not up yet)', async () => {
+    const config = testConfig();
+    await lockOnLivePidWithDeadSocket(config);
+    await expect(
+      serve(config, testAdapters(), {
+        log: () => {},
+        readProcessCommand: async () => '/usr/local/bin/node /opt/cg/bin/cgremlin-core serve --config /x/core.json',
+      }),
+    ).rejects.toBeInstanceOf(SocketInUseError);
+  });
+
+  it("names the lock owner's own recorded socketPath when it refuses, not ours", async () => {
+    const config = testConfig();
+    await lockOnLivePidWithDeadSocket(config);
+    await expect(
+      serve(config, testAdapters(), {
+        log: () => {},
+        readProcessCommand: async () => 'node /opt/cg/engine/engine.js serve --config /x/core.json',
+      }),
+    ).rejects.toThrow(/'\/nope\.sock'/);
+  });
+
+  it('takes over a lock whose pid the OS reused for an unrelated process', async () => {
+    const config = testConfig();
+    await lockOnLivePidWithDeadSocket(config);
+    const handle = await serve(config, testAdapters(), { log: () => {}, readProcessCommand: async () => '-zsh' });
+    try {
+      const record = JSON.parse(await readFile(config.enginePidPath!, 'utf8')) as Record<string, unknown>;
+      expect(record.pid).toBe(process.pid);
+      expect(record.socketPath).toBe(config.socketPath);
+      expect((await requestOn(config.socketPath!, '/version')).status).toBe(200);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('refuses, naming the lock path, when ps cannot say what the recorded pid is', async () => {
+    const config = testConfig();
+    await lockOnLivePidWithDeadSocket(config);
+    await expect(
+      serve(config, testAdapters(), { log: () => {}, readProcessCommand: async () => null }),
+    ).rejects.toThrow(config.enginePidPath!);
   });
 
   it('close() removes engine.json, and still removes it when a pipeline.stop() inside close() throws', async () => {

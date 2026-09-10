@@ -1,3 +1,4 @@
+import { execFile } from 'node:child_process';
 import { link, mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { NodeFileSystem } from '../fs/node-file-system';
@@ -40,6 +41,38 @@ function pidLiveness(pid: number): 'alive' | 'gone' | 'foreign' {
     if (code === 'EPERM') return 'foreign';
     throw err;
   }
+}
+
+/**
+ * Reads a pid's command line — the second half of "is this lock's owner
+ * really our engine?". `null` means we could not find out (ps failed, timed
+ * out, or the pid vanished mid-call), which callers treat conservatively.
+ */
+export type ProcessCommandReader = (pid: number) => Promise<string | null>;
+
+const PS_TIMEOUT_MS = 2000;
+
+const nodeProcessCommand: ProcessCommandReader = (pid) =>
+  new Promise((resolve) => {
+    execFile('ps', ['-o', 'command=', '-p', String(pid)], { timeout: PS_TIMEOUT_MS }, (err, stdout) => {
+      if (err) {
+        resolve(null);
+        return;
+      }
+      const command = stdout.trim();
+      resolve(command === '' ? null : command);
+    });
+  });
+
+/**
+ * A pid alone proves nothing: pids get reused, and a crashed engine leaves
+ * its `engine.json` behind. Without this check a recycled pid would make
+ * every later `serve` refuse forever until somebody deleted the file by hand.
+ * Both shapes the engine runs as: the CLI (`.../bin/cgremlin-core serve`) and
+ * the bundle the editor spawns (`... engine.js serve`).
+ */
+function looksLikeEngineCommand(command: string): boolean {
+  return command.includes('cgremlin-core') || command.includes('engine.js');
 }
 
 async function readLockRecord(lockPath: string): Promise<EngineLockRecord | null> {
@@ -86,7 +119,11 @@ async function writeLockRecord(lockPath: string, record: EngineLockRecord): Prom
  * its socket answer. Either signal positive refuses this boot with
  * `SocketInUseError`; provably negative on both takes the lock over, once.
  */
-async function acquireEngineLock(lockPath: string, record: EngineLockRecord): Promise<void> {
+async function acquireEngineLock(
+  lockPath: string,
+  record: EngineLockRecord,
+  readProcessCommand: ProcessCommandReader,
+): Promise<void> {
   await mkdir(dirname(lockPath), { recursive: true });
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
@@ -95,13 +132,30 @@ async function acquireEngineLock(lockPath: string, record: EngineLockRecord): Pr
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
     }
-    // Somebody beat us to the retake — they are alive by definition.
-    if (attempt > 0) throw new SocketInUseError(record.socketPath);
     const owner = await readLockRecord(lockPath);
+    // Somebody beat us to the retake — they are alive by definition. Report
+    // THEIR socket, not ours: ours is the one nobody is listening on.
+    if (attempt > 0) throw new SocketInUseError(owner?.socketPath ?? record.socketPath);
     // An unreadable or truncated file proves no live owner by itself, but its
     // socket still might be served — so the socket probe runs either way.
-    if (owner !== null && pidLiveness(owner.pid) !== 'gone') throw new SocketInUseError(record.socketPath);
-    if (await isSocketLive(owner?.socketPath ?? record.socketPath)) throw new SocketInUseError(record.socketPath);
+    const ownerSocket = owner?.socketPath ?? record.socketPath;
+    if (owner !== null && pidLiveness(owner.pid) !== 'gone') {
+      // Alive and serving: unambiguously the owner, no need to ask ps.
+      if (await isSocketLive(ownerSocket)) throw new SocketInUseError(ownerSocket);
+      // Alive but silent: either an engine still booting, or a stranger who
+      // inherited the pid after a crash left this file behind.
+      const command = await readProcessCommand(owner.pid);
+      if (command === null) {
+        throw new SocketInUseError(
+          ownerSocket,
+          `pid ${owner.pid} recorded in ${lockPath} could not be identified; delete that file if no engine is running`,
+        );
+      }
+      if (looksLikeEngineCommand(command)) throw new SocketInUseError(ownerSocket);
+      // Reused pid: the lock is stale, take it over.
+    } else if (await isSocketLive(ownerSocket)) {
+      throw new SocketInUseError(ownerSocket);
+    }
     await unlink(lockPath).catch((err: NodeJS.ErrnoException) => {
       if (err.code !== 'ENOENT') throw err;
     });
@@ -123,6 +177,8 @@ export interface ServeOptions {
   makeTickable?: BuildEngineOptions['makeTickable'];
   /** How long close() waits for server.close() before giving up and logging shutdown.timeout. Default 5000. */
   serverCloseTimeoutMs?: number;
+  /** Overrides the real `ps -o command= -p <pid>` the lock uses to tell an engine from a reused pid — a test seam. */
+  readProcessCommand?: ProcessCommandReader;
 }
 
 function logLine(log: (line: string) => void, type: string, payload: Record<string, unknown> = {}): void {
@@ -210,12 +266,16 @@ export async function serve(config: CoreConfig, adapters: EngineAdapters, opts: 
   // R22: the lock comes first — before the reap, before the claim clearing
   // and before we listen. A losing second engine must not clear the winner's
   // human-turn claims on its way to being refused.
-  await acquireEngineLock(lockPath, {
-    pid: engineInfo.pid,
-    version: engineInfo.version,
-    socketPath: engineInfo.socketPath,
-    startedAt: engineInfo.startedAt,
-  });
+  await acquireEngineLock(
+    lockPath,
+    {
+      pid: engineInfo.pid,
+      version: engineInfo.version,
+      socketPath: engineInfo.socketPath,
+      startedAt: engineInfo.startedAt,
+    },
+    opts.readProcessCommand ?? nodeProcessCommand,
+  );
   async function removeLock(): Promise<void> {
     await unlink(lockPath).catch((err: NodeJS.ErrnoException) => {
       if (err.code !== 'ENOENT') throw err;

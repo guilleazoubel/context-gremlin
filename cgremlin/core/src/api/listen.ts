@@ -3,8 +3,9 @@ import net from 'node:net';
 import type { Server } from 'node:http';
 
 export class SocketInUseError extends Error {
-  constructor(socketPath: string) {
-    super(`Another process is already listening on '${socketPath}'`);
+  /** `detail` appends a parenthesised explanation — e.g. which lock file named the owner we could not identify. */
+  constructor(socketPath: string, detail?: string) {
+    super(`Another process is already listening on '${socketPath}'${detail === undefined ? '' : ` (${detail})`}`);
     this.name = 'SocketInUseError';
   }
 }
