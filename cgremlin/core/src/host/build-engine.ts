@@ -15,7 +15,7 @@ import { ReconciliationTick } from '../discovery/reconciliation';
 import { DiscoveryScheduler, type Clock, type Tickable } from '../discovery/scheduler';
 import { InventoryScanner, type ScanReport } from '../inventory/inventory-scanner';
 import { InventoryStore } from '../inventory/inventory-store';
-import { createApiServer } from '../api/server';
+import { createApiServer, type EngineInfo } from '../api/server';
 import { EventRing, attachEventRing } from '../api/event-stream';
 import { NodeSessionWatcher } from '../fs/node-session-watcher';
 import type { SessionWatcher } from '../fs/session-watcher';
@@ -27,6 +27,7 @@ import {
   SessionSourceAdapter,
 } from '../attention/attention-service';
 import type { LocalAppRunner } from '../env/local-app-runner';
+import { ENGINE_NAME, ENGINE_VERSION } from '../version';
 
 export interface EngineAdapters {
   fs: SessionFileSystem;
@@ -56,6 +57,8 @@ export interface Engine {
   environment: EnvironmentService | null;
   attention: AttentionService;
   eventRing: EventRing;
+  /** What `GET /version` reports and what `serve()` records in its `engine.json` lock — one object, so the two can never disagree. */
+  engineInfo: EngineInfo;
 }
 
 export interface TickableParts {
@@ -203,6 +206,14 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     : scanner;
   const scheduler = new DiscoveryScheduler<ScanReport>(tickable, config.pollIntervalMs, adapters.clock);
 
+  const engineInfo: EngineInfo = {
+    name: ENGINE_NAME,
+    version: ENGINE_VERSION,
+    pid: process.pid,
+    startedAt: (adapters.now?.() ?? new Date()).toISOString(),
+    socketPath: config.socketPath!,
+  };
+
   const server = createApiServer({
     sessionStore: store,
     workspaceManager: workspace,
@@ -215,8 +226,9 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     eventRing,
     lock,
     config,
+    engineInfo,
     ...(environment ? { environment } : {}),
   });
 
-  return { server, scheduler, scanner, pipeline, events, store, lock, config, environment, attention, eventRing };
+  return { server, scheduler, scanner, pipeline, events, store, lock, config, environment, attention, eventRing, engineInfo };
 }

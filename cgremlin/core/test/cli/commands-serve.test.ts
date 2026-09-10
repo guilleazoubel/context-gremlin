@@ -39,6 +39,9 @@ async function testIo(socketPath: string): Promise<{ io: CommandIO; out: () => s
       worktreesDir: path.join(dir, 'worktrees'),
       mirrorsDir: path.join(dir, 'mirrors'),
       inventoryPath: path.join(dir, 'inventory.json'),
+      // The engine.json lock is written to the REAL filesystem (R22), so it
+      // has to live in the test's temp dir like every other real path here.
+      enginePidPath: path.join(dir, 'engine.json'),
     },
     HOME,
   );

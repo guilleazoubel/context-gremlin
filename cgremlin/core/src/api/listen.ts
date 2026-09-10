@@ -9,7 +9,8 @@ export class SocketInUseError extends Error {
   }
 }
 
-function isSocketLive(socketPath: string): Promise<boolean> {
+/** True when something is accepting connections on `socketPath` right now. Also the lock's "is the recorded owner still serving?" probe (R22). */
+export function isSocketLive(socketPath: string): Promise<boolean> {
   return new Promise((resolve) => {
     const client = net.createConnection(socketPath);
     client.once('connect', () => {

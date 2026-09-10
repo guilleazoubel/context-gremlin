@@ -125,6 +125,11 @@ export class EnvironmentService {
 
   constructor(private readonly deps: EnvironmentServiceDeps) {}
 
+  /** R21: how many `start()` calls are still in flight — the half of `activeRuns` the pipeline cannot see. */
+  inFlightCount(): number {
+    return this.inFlight.size;
+  }
+
   environmentFor(repoUrl: string): RepoEnvironment | undefined {
     return this.deps.config.environments[repoSlugFromUrl(repoUrl)];
   }
