@@ -37,10 +37,21 @@ source needs a `LIST_ORDER` entry and a `when` clause — not a restructuring.
 
 ```sh
 pnpm install
-pnpm test        # vitest, no editor harness
-pnpm build       # tsc -p tsconfig.json -> out/
+pnpm test              # vitest, no editor harness
+pnpm test:integration  # builds ../core, then drives a real engine on a temp socket
+pnpm build             # tsc -p tsconfig.json -> out/
 pnpm lint
 ```
+
+`test/integration/real-engine.test.ts` boots `cgremlin-core serve` as a child process and drives
+`CoreClient`, `SseClient` and the whole host wiring against it — that is what proves the structural
+`*View` types here match what the engine really returns. It skips itself with a clear message when
+`../core` has not been built. Everything it cannot reach (the editor surface, and the paths that
+need a real `gh` or a real agent) is in [`docs/SMOKE.md`](docs/SMOKE.md), the manual checklist from
+spec §8.
+
+Open **this folder** in VS Code and press F5 for an Extension Development Host
+(`.vscode/launch.json`).
 
 There are **no runtime dependencies** and there is no bundler: `out/*.js` loads directly in the
 extension host.

@@ -1,0 +1,57 @@
+#!/bin/bash
+#
+# A `gh` stand-in for the integration harness: it answers exactly the two
+# read-only invocations the engine makes (`pr list` and `pr view`) from
+# committed fixtures, and exits 1 for everything else.
+#
+# The mutating-token guard is the same protection `FakeGhRunner` gives the
+# core's own tests (test/support/fake-gh-runner.ts): no integration run may
+# ever review, comment on, merge or close a real PR, even by accident.
+#
+# Fixtures are read from $FAKE_GH_FIXTURES so the harness can put this script
+# (or a symlink to it) on PATH from a temp directory.
+set -u
+
+FIXTURES="${FAKE_GH_FIXTURES:-$(cd "$(dirname "$0")" && pwd)}"
+
+for arg in "$@"; do
+  case "$arg" in
+    review|comment|merge|close|edit|create|ready|reopen|lock|unlock|update-branch|delete|sync|--method|-X|-F|-f|--input)
+      echo "fake gh: refusing mutating invocation: gh $*" >&2
+      exit 1
+      ;;
+  esac
+done
+
+repo_of() {
+  local prev=""
+  for arg in "$@"; do
+    if [ "$prev" = "--repo" ]; then echo "$arg"; return 0; fi
+    prev="$arg"
+  done
+  return 1
+}
+
+emit() {
+  local file="$FIXTURES/$1"
+  if [ ! -f "$file" ]; then
+    echo "fake gh: no fixture at $file (gh $*)" >&2
+    exit 1
+  fi
+  cat "$file"
+}
+
+case "${1:-} ${2:-}" in
+  "pr list")
+    repo="$(repo_of "$@")" || { echo "fake gh: pr list without --repo" >&2; exit 1; }
+    emit "pr-list-${repo//\//-}.json"
+    ;;
+  "pr view")
+    number="${3:-}"
+    emit "pr-view-${number}.json"
+    ;;
+  *)
+    echo "fake gh: unsupported invocation: gh $*" >&2
+    exit 1
+    ;;
+esac

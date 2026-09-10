@@ -1,0 +1,47 @@
+[
+  {
+    "number": 3,
+    "url": "https://github.com/fake/repo/pull/3",
+    "author": { "login": "mate" },
+    "isDraft": false,
+    "reviewDecision": "REVIEW_REQUIRED",
+    "headRefOid": "3333333333333333333333333333333333333333",
+    "headRefName": "mate/fixture-three",
+    "baseRefName": "main",
+    "title": "Fixture PR three (we are reviewing it)",
+    "updatedAt": "2026-09-09T12:00:00Z",
+    "latestReviews": [],
+    "reviews": [],
+    "comments": []
+  },
+  {
+    "number": 4,
+    "url": "https://github.com/fake/repo/pull/4",
+    "author": { "login": "stranger" },
+    "isDraft": false,
+    "reviewDecision": "REVIEW_REQUIRED",
+    "headRefOid": "4444444444444444444444444444444444444444",
+    "headRefName": "stranger/fixture-four",
+    "baseRefName": "main",
+    "title": "Fixture PR four (parking lot)",
+    "updatedAt": "2026-09-09T12:05:00Z",
+    "latestReviews": [],
+    "reviews": [],
+    "comments": []
+  },
+  {
+    "number": 5,
+    "url": "https://github.com/fake/repo/pull/5",
+    "author": { "login": "me" },
+    "isDraft": false,
+    "reviewDecision": "CHANGES_REQUESTED",
+    "headRefOid": "5555555555555555555555555555555555555555",
+    "headRefName": "me/fixture-five",
+    "baseRefName": "main",
+    "title": "Fixture PR five (mine, changes requested)",
+    "updatedAt": "2026-09-09T12:10:00Z",
+    "latestReviews": [],
+    "reviews": [],
+    "comments": []
+  }
+]
