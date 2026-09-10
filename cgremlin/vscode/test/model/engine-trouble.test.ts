@@ -1,0 +1,136 @@
+/**
+ * The words the extension says when the engine on the socket is not one it can use.
+ *
+ * They live in a pure module because three surfaces must say the *same* thing — the tree's
+ * explanatory row, the status bar and the notification — and because the real failure this
+ * covers (an old hand-started engine holding the socket) is a string problem before it is
+ * anything else: the user has to be told which socket, and what to do about it.
+ */
+import { describe, expect, it } from 'vitest';
+import {
+  RE_PROBE,
+  SHOW_LOG,
+  SHOW_LOG_ROW,
+  healthOf,
+  refreshBlockedMessage,
+  troubleCommand,
+  troubleMessage,
+  troubleOf,
+  troubleRowLabel,
+  troubleStatusText,
+  type EngineHealth,
+} from '../../src/model/engine-trouble';
+
+const SOCKET = '/home/me/.cgremlin-core/engine.sock';
+
+function health(over: Partial<EngineHealth> = {}): EngineHealth {
+  return { kind: 'running', socketPath: SOCKET, ...over };
+}
+
+describe('the actions', () => {
+  it('names the two buttons every surface offers', () => {
+    expect(RE_PROBE).toBe('Re-probe');
+    expect(SHOW_LOG).toBe('Show log');
+    expect(SHOW_LOG_ROW).toBe('show log');
+  });
+});
+
+describe('turning an engine state into a health report', () => {
+  it('carries the socket path with every kind', () => {
+    expect(healthOf({ kind: 'foreign' }, SOCKET)).toEqual({ kind: 'foreign', socketPath: SOCKET });
+  });
+
+  it('carries a failure reason and a stopping elapsed time', () => {
+    expect(healthOf({ kind: 'failed', reason: 'boom', logTail: [] }, SOCKET)).toEqual({
+      kind: 'failed',
+      socketPath: SOCKET,
+      reason: 'boom',
+    });
+    expect(healthOf({ kind: 'stopping', since: 0, pid: 3, elapsedMs: 1_000 }, SOCKET)).toEqual({
+      kind: 'stopping',
+      socketPath: SOCKET,
+      elapsedMs: 1_000,
+    });
+  });
+});
+
+describe('which states are trouble', () => {
+  it('is exactly foreign and failed', () => {
+    expect(troubleOf(health({ kind: 'foreign' }))).toEqual({ kind: 'foreign', socketPath: SOCKET });
+    expect(troubleOf(health({ kind: 'failed', reason: 'boom' }))).toEqual({
+      kind: 'failed',
+      reason: 'boom',
+    });
+    for (const kind of ['unknown', 'stopped', 'starting', 'running', 'stopping', 'mismatch'] as const) {
+      expect(troubleOf(health({ kind })), kind).toBeNull();
+    }
+  });
+
+  it('reports a failure with no reason at all rather than an empty sentence', () => {
+    expect(troubleOf(health({ kind: 'failed' }))).toEqual({
+      kind: 'failed',
+      reason: 'the engine did not start',
+    });
+  });
+});
+
+describe('the foreign wording', () => {
+  it('interpolates the socket path and names the command that fixes it', () => {
+    const message = troubleMessage({ kind: 'foreign', socketPath: SOCKET });
+    expect(message).toContain(SOCKET);
+    expect(message).toContain('not a cgremlin engine this extension can use');
+    expect(message).toContain('older engine you started by hand');
+    expect(message).toContain('cgremlin: Start the engine');
+  });
+
+  it('says "the cgremlin socket" rather than null when no config has resolved yet', () => {
+    const message = troubleMessage({ kind: 'foreign', socketPath: null });
+    expect(message).not.toContain('null');
+    expect(message).toContain('the cgremlin socket');
+  });
+
+  it('shows the same sentence in the tree row, and re-probes when it is clicked', () => {
+    const trouble = { kind: 'foreign', socketPath: SOCKET } as const;
+    expect(troubleRowLabel(trouble)).toBe(troubleMessage(trouble));
+    expect(troubleCommand(trouble)).toBe('cgremlin.engine.start');
+    expect(troubleStatusText(trouble)).toBe('$(warning) cgremlin: engine not usable');
+  });
+});
+
+describe('the failed wording', () => {
+  const trouble = { kind: 'failed', reason: 'the engine exited with code 1' } as const;
+
+  it('shows the failure verbatim, and adds show log to the row', () => {
+    expect(troubleMessage(trouble)).toContain('the engine exited with code 1');
+    expect(troubleRowLabel(trouble)).toContain('the engine exited with code 1');
+    expect(troubleRowLabel(trouble)).toContain(SHOW_LOG_ROW);
+  });
+
+  it('opens the log when it is clicked', () => {
+    expect(troubleCommand(trouble)).toBe('cgremlin.engine.showLog');
+    expect(troubleStatusText(trouble)).toBe('$(warning) cgremlin: engine failed');
+  });
+});
+
+describe('what Refresh says when the engine is not running', () => {
+  it('says nothing at all when it is', () => {
+    expect(refreshBlockedMessage(health({ kind: 'running' }))).toBeNull();
+  });
+
+  it('reuses the trouble wording verbatim', () => {
+    expect(refreshBlockedMessage(health({ kind: 'foreign' }))).toBe(
+      troubleMessage({ kind: 'foreign', socketPath: SOCKET }),
+    );
+    expect(refreshBlockedMessage(health({ kind: 'failed', reason: 'boom' }))).toBe(
+      troubleMessage({ kind: 'failed', reason: 'boom' }),
+    );
+  });
+
+  it('names the state, and the command, for every other kind', () => {
+    for (const kind of ['unknown', 'stopped', 'starting', 'stopping', 'mismatch'] as const) {
+      const message = refreshBlockedMessage(health({ kind }));
+      expect(message, kind).toContain(kind);
+      expect(message, kind).toContain('cgremlin: Start the engine');
+    }
+  });
+});

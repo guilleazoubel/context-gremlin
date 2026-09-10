@@ -65,6 +65,8 @@ export interface StatusBarItemLike {
   text: string;
   tooltip: string | undefined;
   command: string | undefined;
+  /** The editor's own warning background, on or off — an engine that is not usable is not news. */
+  warning: boolean;
   show(): void;
   hide(): void;
   dispose(): void;

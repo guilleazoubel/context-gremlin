@@ -5,7 +5,8 @@
  * the tests build a fake one and call the same function. That is deliberate: there is no
  * test-only wiring to drift from what ships.
  */
-import { EngineNotRunningError, type CoreClient } from '../core-client';
+import { CoreHttpError, EngineNotRunningError, type CoreClient } from '../core-client';
+import { troubleOf } from '../model/engine-trouble';
 import type { NotificationLevel } from '../model/notify-policy';
 import { CgremlinTreeProvider } from './tree';
 import { NotificationSurface } from './notifications';
@@ -75,12 +76,18 @@ export function createUi(options: UiOptions): Ui {
   const disposables: DisposableLike[] = [
     host.registerTreeDataProvider(VIEW_ID, tree),
     host.onDidCloseTerminal((terminal) => chat.handleClosed(terminal)),
-    ...registerCommands({ host, client, coordinator, opener, chat }),
+    ...registerCommands({ host, client, coordinator, opener, chat, engine: options.engine }),
   ];
   if (options.engine !== undefined) {
     const engine = options.engine;
     disposables.push(...engine.register());
-    const unsubscribe = engine.onState((status) => statusBar.setEngine(status));
+    const unsubscribe = engine.onState((status) => {
+      statusBar.setEngine(status);
+      // An engine that cannot be used replaces the four lists with one row that says so; the
+      // moment a usable one is adopted, the lists come back.
+      tree.setEngineTrouble(troubleOf(status));
+      tree.refresh();
+    });
     disposables.push({ dispose: unsubscribe });
   }
 
@@ -103,6 +110,14 @@ export function createUi(options: UiOptions): Ui {
       } catch (err) {
         if (err instanceof EngineNotRunningError) {
           await offline();
+          return false;
+        }
+        // Something answered, and did not recognise the route. That is an engine this extension
+        // cannot use — the same fact a `foreign` probe reports, and it earns the same
+        // explanation rather than a bare 404 and an empty panel.
+        if (err instanceof CoreHttpError && err.status === 404 && options.engine !== undefined) {
+          host.log(`cgremlin: the engine did not recognise ${err.message}`);
+          options.engine.reportUnusable();
           return false;
         }
         host.log(`cgremlin: could not read the engine's state: ${String(err)}`);

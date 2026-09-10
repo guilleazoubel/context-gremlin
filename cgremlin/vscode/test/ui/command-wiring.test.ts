@@ -57,6 +57,9 @@ async function harness(opts: { handler?: StubHandler; socketPath?: string } = {}
   const host = new FakeHost();
   const level = { value: 'all' as NotificationLevel };
   const engine = new FakeEngineManager();
+  // Every test below drives a UI that is talking to an engine; the ones about an engine that is
+  // *not* usable say so themselves by emitting a state.
+  engine.current = { kind: 'running', version: '0.0.1', pid: 10, adopted: false };
   const surface = new EngineSurface({
     host,
     manager: engine,
@@ -184,6 +187,109 @@ describe('the tree provider', () => {
     h.host.flushTimeouts();
     await h.ui.coordinator.settled();
     expect(h.host.callsOf('treeDataChanged').length - before).toBe(1);
+  });
+});
+
+describe('an engine that is not one this extension can use', () => {
+  const FOREIGN = { kind: 'foreign' } as const;
+
+  function only(ui: Ui): TreeNode {
+    const nodes = roots(ui);
+    expect(nodes).toHaveLength(1);
+    return nodes[0];
+  }
+
+  it('replaces the four empty lists with one row that explains what happened', async () => {
+    const h = await connected();
+    h.engine.emit(FOREIGN);
+    const node = only(h.ui);
+    expect(node.kind).toBe('trouble');
+    const item = h.ui.tree.getTreeItem(node);
+    expect(String(item.label)).toContain('not a cgremlin engine this extension can use');
+    expect(String(item.label)).toContain('cgremlin: Start the engine');
+    expect(item.command?.command).toBe('cgremlin.engine.start');
+    // The row has no children of its own, so the panel cannot be expanded into emptiness.
+    expect(h.ui.tree.getChildren(node)).toEqual([]);
+  });
+
+  it('shows the failure and a way to the log when the engine failed', async () => {
+    const h = await connected();
+    h.engine.emit({ kind: 'failed', reason: 'the engine exited with code 1', logTail: [] });
+    const item = h.ui.tree.getTreeItem(only(h.ui));
+    expect(String(item.label)).toContain('the engine exited with code 1');
+    expect(String(item.label)).toContain('show log');
+    expect(item.command?.command).toBe('cgremlin.engine.showLog');
+  });
+
+  it('warns in the status bar, in the engine warning colour', async () => {
+    const h = await connected();
+    h.engine.emit(FOREIGN);
+    expect(h.host.statusBarItems[0].text).toBe('$(warning) cgremlin: engine not usable');
+    expect(h.host.statusBarItems[0].command).toBe('cgremlin.engine.start');
+    expect(h.host.statusBarItems[0].warning).toBe(true);
+  });
+
+  it('gives the four lists back the moment a usable engine is adopted', async () => {
+    const h = await connected();
+    h.engine.emit(FOREIGN);
+    expect(roots(h.ui)).toHaveLength(1);
+    h.engine.emit({ kind: 'running', version: '0.0.1', pid: 10, adopted: true });
+    expect(roots(h.ui).map((n) => (n.kind === 'root' ? `${n.list}:${n.count}` : n.kind))).toEqual([
+      'parking:1',
+      'reviewing:2',
+      'investigations:1',
+      'devwork:2',
+    ]);
+    expect(h.host.statusBarItems[0].warning).toBe(false);
+  });
+
+  it('treats a 404 from GET /config exactly like a foreign socket', async () => {
+    const h = await harness({
+      handler: (req) => (req.path === '/config' ? { status: 404, body: { error: 'not found' } } : undefined),
+    });
+    expect(await h.ui.connect()).toBe(false);
+    await h.ui.settled();
+
+    expect(only(h.ui).kind).toBe('trouble');
+    expect(h.host.statusBarItems[0].text).toBe('$(warning) cgremlin: engine not usable');
+    const warnings = h.host.callsOf('showWarningMessage');
+    expect(warnings).toHaveLength(1);
+    expect(String(warnings[0].args[0])).toContain('not a cgremlin engine this extension can use');
+    expect(warnings[0].args[2]).toEqual(['Re-probe', 'Show log']);
+  });
+});
+
+describe('Refresh while the engine is not running', () => {
+  it('explains why nothing happened, and re-probes, instead of doing nothing at all', async () => {
+    const h = await connected();
+    h.engine.emit({ kind: 'foreign' });
+    h.engine.calls.length = 0;
+    const mark = h.mark();
+    await h.host.invoke('cgremlin.refreshInventory');
+    await h.ui.settled();
+
+    expect(h.since(mark)).toEqual([]);
+    const said = h.host.callsOf('showInformationMessage');
+    expect(said).toHaveLength(1);
+    expect(String(said[0].args[0])).toContain('not a cgremlin engine this extension can use');
+    expect(h.engine.calls).toEqual(['ensureRunning:user']);
+  });
+
+  it('names the state when the engine is merely stopped', async () => {
+    const h = await connected();
+    h.engine.emit({ kind: 'stopped' });
+    const mark = h.mark();
+    await h.host.invoke('cgremlin.refreshInventory');
+    await h.ui.settled();
+    expect(h.since(mark)).toEqual([]);
+    expect(String(h.host.callsOf('showInformationMessage')[0].args[0])).toContain('stopped');
+  });
+
+  it('scans as it always did when the engine is running', async () => {
+    const h = await connected();
+    const mark = h.mark();
+    await h.host.invoke('cgremlin.refreshInventory');
+    expect(h.since(mark).map((r) => `${r.method} ${r.path}`)).toEqual(['POST /prs/scan']);
   });
 });
 
