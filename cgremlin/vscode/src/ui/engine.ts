@@ -39,6 +39,11 @@ export interface EngineSurfaceDeps {
   /** The Node host and the bundled engine, for `config init` (R5). */
   execPath: string;
   enginePath: string;
+  /**
+   * R20's login-shell `PATH`, the same resolution the engine's own spawn uses. `null` when the
+   * shell did not answer, and then the spawn below simply inherits this process's environment.
+   */
+  resolveLoginPath: () => Promise<string | null>;
   /** Re-attach the event stream and refetch — used when the socket moves (D5). */
   reconnect: () => Promise<void>;
   /** The debounce on a `core.json` save (R6). */
@@ -227,8 +232,15 @@ export class EngineSurface {
 
   private async askWhoTheyAre(): Promise<string | undefined> {
     const { host } = this.deps;
+    // `gh` is very often only on the login shell's PATH — Homebrew's, typically — which the
+    // editor's own environment need not carry. Resolving it the way the engine's spawn does is
+    // the difference between "gh: not found" and knowing who the user is on the first run (R20).
+    const loginPath = await this.deps.resolveLoginPath().catch(() => null);
     const gh = await host
-      .spawnCapture('gh', ['api', 'user', '--jq', '.login'], { timeoutMs: GH_TIMEOUT_MS })
+      .spawnCapture('gh', ['api', 'user', '--jq', '.login'], {
+        timeoutMs: GH_TIMEOUT_MS,
+        env: loginPath === null ? undefined : { PATH: loginPath },
+      })
       .catch(() => ({ code: 1, stdout: '', stderr: '' }));
     const login = gh.code === 0 ? gh.stdout.trim() : '';
     if (login !== '') return login;

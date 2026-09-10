@@ -99,6 +99,17 @@ export const COLLAPSIBLE_NONE = 0;
 export const COLLAPSIBLE_COLLAPSED = 1;
 export const COLLAPSIBLE_EXPANDED = 2;
 
+/**
+ * `env` overrides individual variables of the host's own environment — it does not replace it.
+ * The one caller that sets it supplies R20's login-shell `PATH`, so a command that lives only on
+ * the login `PATH` is found the same way the engine's own host is.
+ */
+export interface SpawnCaptureOptions {
+  cwd?: string;
+  timeoutMs?: number;
+  env?: Record<string, string | undefined>;
+}
+
 export interface Host {
   showInformationMessage(
     message: string,
@@ -156,7 +167,7 @@ export interface Host {
   spawnCapture(
     command: string,
     args: readonly string[],
-    options?: { cwd?: string; timeoutMs?: number },
+    options?: SpawnCaptureOptions,
   ): Promise<{ code: number; stdout: string; stderr: string }>;
 
   /** The output channel, distinct from {@link Host.log} only in that the user is meant to read it. */
