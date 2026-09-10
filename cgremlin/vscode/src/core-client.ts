@@ -1,0 +1,238 @@
+/**
+ * The engine's HTTP API over its Unix socket.
+ *
+ * Pure module — Node stdlib only, no editor API (MG-B1).
+ *
+ * Two response conventions, deliberately:
+ *  - methods that return {@link HttpResult} never throw on an HTTP status, because the UI surfaces
+ *    the engine's own wording for a 4xx verbatim;
+ *  - methods that return a domain value throw {@link CoreHttpError} on a non-2xx, because there is
+ *    no value to hand back.
+ * Both throw {@link EngineNotRunningError} when the socket is not there.
+ */
+import http from 'node:http';
+import type {
+  ArtifactListingResponse,
+  AttentionListing,
+  ConversationView,
+  CoreConfigView,
+  Inventory,
+  InventoryGroups,
+  ItemRef,
+  SessionView,
+} from './model/items';
+
+export class EngineNotRunningError extends Error {
+  constructor(readonly socketPath: string) {
+    super(`cgremlin engine is not running (no engine on ${socketPath})`);
+    this.name = 'EngineNotRunningError';
+  }
+}
+
+/** A non-2xx answer to a request whose caller needs the value, not the status. */
+export class CoreHttpError extends Error {
+  constructor(
+    readonly status: number,
+    readonly body: unknown,
+    method: string,
+    path: string,
+  ) {
+    super(`${method} ${path} failed with ${status}: ${engineErrorText(body)}`);
+    this.name = 'CoreHttpError';
+  }
+}
+
+export interface HttpResult {
+  status: number;
+  body: unknown;
+}
+
+/**
+ * The engine's own wording for a failure. Its 4xx messages are already written for humans
+ * (`README.md:194-212`), so every surface shows this verbatim rather than inventing its own.
+ */
+export function engineErrorText(body: unknown): string {
+  if (body !== null && typeof body === 'object' && 'error' in body) {
+    const value = (body as { error: unknown }).error;
+    if (typeof value === 'string') return value;
+  }
+  return typeof body === 'string' ? body : JSON.stringify(body ?? null);
+}
+
+const OFFLINE_CODES = new Set(['ENOENT', 'ECONNREFUSED']);
+
+/** A path parameter that cannot be spliced into a request path. Never reaches the socket. */
+export class InvalidPathParamError extends Error {
+  constructor(kind: string, value: unknown) {
+    super(`Refusing to address the engine with an unsafe ${kind}: ${JSON.stringify(value)}`);
+    this.name = 'InvalidPathParamError';
+  }
+}
+
+/**
+ * One path segment, verbatim. The engine matches raw path segments, but it re-parses the request
+ * target with `new URL(...)` first — so a `?` or `#` inside an id would silently truncate the path
+ * and address a *different* route. `\w` covers `[A-Za-z0-9_]`; `.`, `:`, `@` and `-` are the only
+ * other characters a core-derived session id can carry (ids are built from a repo slug and a ticket,
+ * and the ticket allow-list is `/^[A-Za-z0-9._-]+$/`), and `:` is explicitly legal in a session id.
+ */
+const SAFE_SEGMENT = /^[\w.:@-]+$/;
+
+export function assertSessionId(id: string): string {
+  if (typeof id !== 'string' || !SAFE_SEGMENT.test(id) || id === '.' || id === '..') {
+    throw new InvalidPathParamError('session id', id);
+  }
+  return id;
+}
+
+const REPO_SLUG = /^[\w.-]+\/[\w.-]+$/;
+
+export function assertRepoSlug(repo: string): string {
+  if (typeof repo !== 'string' || !REPO_SLUG.test(repo) || repo.includes('..')) {
+    throw new InvalidPathParamError('repo slug', repo);
+  }
+  return repo;
+}
+
+export function assertPrNumber(number: number): string {
+  if (!Number.isInteger(number) || number <= 0) {
+    throw new InvalidPathParamError('PR number', number);
+  }
+  return String(number);
+}
+
+export class CoreClient {
+  constructor(private readonly socketPath: string) {}
+
+  // Every id-bearing method is `async` on purpose: its path-parameter check must surface as a
+  // *rejected promise*, not a synchronous throw, so one call site can handle both failure modes.
+
+  request(method: string, path: string, body?: unknown): Promise<HttpResult> {
+    const payload = body === undefined ? undefined : Buffer.from(JSON.stringify(body), 'utf8');
+    return new Promise<HttpResult>((resolve, reject) => {
+      const headers: Record<string, string> = { Accept: 'application/json' };
+      if (payload !== undefined) {
+        headers['Content-Type'] = 'application/json';
+        headers['Content-Length'] = String(payload.byteLength);
+      }
+      const req = http.request({ socketPath: this.socketPath, path, method, headers }, (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => chunks.push(chunk));
+        res.on('error', reject);
+        res.on('end', () => {
+          const text = Buffer.concat(chunks).toString('utf8');
+          resolve({ status: res.statusCode ?? 0, body: parseBody(text) });
+        });
+      });
+      req.on('error', (err: NodeJS.ErrnoException) => {
+        reject(OFFLINE_CODES.has(err.code ?? '') ? new EngineNotRunningError(this.socketPath) : err);
+      });
+      if (payload !== undefined) req.write(payload);
+      req.end();
+    });
+  }
+
+  private async expect<T>(method: string, path: string, body?: unknown): Promise<T> {
+    const result = await this.request(method, path, body);
+    if (result.status < 200 || result.status >= 300) {
+      throw new CoreHttpError(result.status, result.body, method, path);
+    }
+    return result.body as T;
+  }
+
+  async config(): Promise<CoreConfigView> {
+    const body = await this.expect<{ config: CoreConfigView }>('GET', '/config');
+    return body.config;
+  }
+
+  prs(): Promise<{ inventory: Inventory; groups: InventoryGroups }> {
+    return this.expect('GET', '/prs');
+  }
+
+  sessions(): Promise<{ sessions: SessionView[] }> {
+    return this.expect('GET', '/sessions');
+  }
+
+  attention(all?: boolean): Promise<AttentionListing> {
+    return this.expect('GET', all === true ? '/attention?all=1' : '/attention');
+  }
+
+  async artifacts(id: string): Promise<ArtifactListingResponse> {
+    return await this.expect('GET', `/sessions/${assertSessionId(id)}/artifacts`);
+  }
+
+  async conversation(id: string): Promise<ConversationView> {
+    return await this.expect('GET', `/sessions/${assertSessionId(id)}/conversation`);
+  }
+
+  async claim(id: string): Promise<void> {
+    await this.expect('POST', `/sessions/${assertSessionId(id)}/conversation/claim`);
+  }
+
+  async release(id: string): Promise<void> {
+    await this.expect('POST', `/sessions/${assertSessionId(id)}/conversation/release`);
+  }
+
+  async startReview(repo: string, number: number): Promise<HttpResult> {
+    return await this.request('POST', `/prs/${assertRepoSlug(repo)}/${assertPrNumber(number)}/review`);
+  }
+
+  async approvePlan(id: string): Promise<HttpResult> {
+    return await this.request('POST', `/sessions/${assertSessionId(id)}/approve-plan`);
+  }
+
+  async stop(id: string): Promise<HttpResult> {
+    return await this.request('POST', `/sessions/${assertSessionId(id)}/stop`);
+  }
+
+  async retry(id: string): Promise<HttpResult> {
+    return await this.request('POST', `/sessions/${assertSessionId(id)}/retry`);
+  }
+
+  async run(id: string, stage: string): Promise<HttpResult> {
+    return await this.request('POST', `/sessions/${assertSessionId(id)}/run`, { stage });
+  }
+
+  /** The generic, source-agnostic ack path — preferred over the two aliases below. */
+  ack(ref: ItemRef): Promise<HttpResult> {
+    return this.request('POST', '/attention/ack', { ref });
+  }
+
+  async ackSession(id: string): Promise<HttpResult> {
+    return await this.request('POST', `/sessions/${assertSessionId(id)}/ack`);
+  }
+
+  async ackPr(repo: string, number: number): Promise<HttpResult> {
+    return await this.request('POST', `/prs/${assertRepoSlug(repo)}/${assertPrNumber(number)}/ack`);
+  }
+
+  scan(): Promise<HttpResult> {
+    return this.request('POST', '/prs/scan');
+  }
+
+  createInvestigation(input: {
+    repoUrl: string;
+    ticket: string | null;
+    intent: 'investigate_only' | 'development';
+    driveToCompletion: boolean;
+  }): Promise<HttpResult> {
+    return this.request('POST', '/sessions/investigations', input);
+  }
+
+  createDevelopment(input: { repoUrl: string; ticket: string | null }): Promise<HttpResult> {
+    return this.request('POST', '/sessions/developments', input);
+  }
+
+  createReviewFromUrl(prUrl: string): Promise<HttpResult> {
+    return this.request('POST', '/reviews', { prUrl });
+  }
+}
+
+function parseBody(text: string): unknown {
+  if (text === '') return null;
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}

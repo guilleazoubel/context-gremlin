@@ -1,0 +1,244 @@
+{
+  "name": "cgremlin-vscode",
+  "displayName": "cgremlin",
+  "description": "Mission control for the cgremlin engine: attention lists, notifications and chat hand-off.",
+  "version": "0.0.1",
+  "private": true,
+  "publisher": "cgremlin",
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.85.0",
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@10.10.0",
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "cgremlin",
+          "title": "cgremlin",
+          "icon": "$(bug)"
+        }
+      ]
+    },
+    "views": {
+      "cgremlin": [
+        {
+          "id": "cgremlin.items",
+          "name": "Attention",
+          "contextualTitle": "cgremlin"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "cgremlin.openItem",
+        "title": "Open item",
+        "category": "cgremlin"
+      },
+      {
+        "command": "cgremlin.chat",
+        "title": "Chat with the agent",
+        "category": "cgremlin",
+        "icon": "$(comment-discussion)"
+      },
+      {
+        "command": "cgremlin.startReview",
+        "title": "Start review",
+        "category": "cgremlin",
+        "icon": "$(play)"
+      },
+      {
+        "command": "cgremlin.approvePlan",
+        "title": "Approve plan",
+        "category": "cgremlin"
+      },
+      {
+        "command": "cgremlin.stop",
+        "title": "Stop run",
+        "category": "cgremlin",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "cgremlin.retry",
+        "title": "Retry stage",
+        "category": "cgremlin"
+      },
+      {
+        "command": "cgremlin.ack",
+        "title": "Acknowledge",
+        "category": "cgremlin"
+      },
+      {
+        "command": "cgremlin.refreshInventory",
+        "title": "Refresh inventory",
+        "category": "cgremlin",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "cgremlin.newInvestigation",
+        "title": "New investigation...",
+        "category": "cgremlin"
+      },
+      {
+        "command": "cgremlin.newDevelopmentSession",
+        "title": "New development session...",
+        "category": "cgremlin"
+      },
+      {
+        "command": "cgremlin.newReviewFromUrl",
+        "title": "New review from PR URL...",
+        "category": "cgremlin"
+      },
+      {
+        "command": "cgremlin.refreshPreview",
+        "title": "Refresh preview",
+        "category": "cgremlin"
+      },
+      {
+        "command": "cgremlin.startEngine",
+        "title": "Start the engine",
+        "category": "cgremlin"
+      }
+    ],
+    "configuration": {
+      "title": "cgremlin",
+      "properties": {
+        "cgremlin.socketPath": {
+          "type": "string",
+          "default": "~/.cgremlin/engine.sock",
+          "description": "Path to the cgremlin engine's Unix socket."
+        },
+        "cgremlin.configPath": {
+          "type": "string",
+          "default": "~/.cgremlin/core.json",
+          "description": "Path to core.json, used only when starting the engine from the extension."
+        },
+        "cgremlin.notificationLevel": {
+          "type": "string",
+          "enum": [
+            "all",
+            "needs-you-only",
+            "off"
+          ],
+          "default": "all",
+          "description": "Which attention changes raise a popup."
+        }
+      }
+    },
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "cgremlin.openItem",
+          "when": "false"
+        },
+        {
+          "command": "cgremlin.chat",
+          "when": "false"
+        },
+        {
+          "command": "cgremlin.startReview",
+          "when": "false"
+        },
+        {
+          "command": "cgremlin.approvePlan",
+          "when": "false"
+        },
+        {
+          "command": "cgremlin.stop",
+          "when": "false"
+        },
+        {
+          "command": "cgremlin.retry",
+          "when": "false"
+        },
+        {
+          "command": "cgremlin.ack",
+          "when": "false"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "cgremlin.refreshInventory",
+          "when": "view == cgremlin.items",
+          "group": "navigation@1"
+        },
+        {
+          "command": "cgremlin.newInvestigation",
+          "when": "view == cgremlin.items",
+          "group": "1_new@1"
+        },
+        {
+          "command": "cgremlin.newDevelopmentSession",
+          "when": "view == cgremlin.items",
+          "group": "1_new@2"
+        },
+        {
+          "command": "cgremlin.newReviewFromUrl",
+          "when": "view == cgremlin.items",
+          "group": "1_new@3"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "cgremlin.startReview",
+          "when": "viewItem =~ /^(parking|reviewing):/",
+          "group": "inline@1"
+        },
+        {
+          "command": "cgremlin.chat",
+          "when": "viewItem =~ /^(reviewing|investigations|devwork):session:/",
+          "group": "inline@2"
+        },
+        {
+          "command": "cgremlin.openItem",
+          "when": "viewItem =~ /^(parking|reviewing|investigations|devwork):/",
+          "group": "1_open@1"
+        },
+        {
+          "command": "cgremlin.approvePlan",
+          "when": "viewItem =~ /^investigations:session:investigation$/",
+          "group": "2_act@1"
+        },
+        {
+          "command": "cgremlin.stop",
+          "when": "viewItem =~ /^(reviewing|investigations|devwork):session:/",
+          "group": "2_act@2"
+        },
+        {
+          "command": "cgremlin.retry",
+          "when": "viewItem =~ /^(reviewing|investigations|devwork):session:/",
+          "group": "2_act@3"
+        },
+        {
+          "command": "cgremlin.ack",
+          "when": "viewItem =~ /^(parking|reviewing|investigations|devwork):/",
+          "group": "9_ack@1"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.typecheck.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "eslint ."
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.13.0",
+    "@types/node": "^20.19.43",
+    "@types/vscode": "^1.85.0",
+    "eslint": "^9.13.0",
+    "typescript": "^5.6.3",
+    "typescript-eslint": "^8.11.0",
+    "vitest": "^2.1.4"
+  }
+}

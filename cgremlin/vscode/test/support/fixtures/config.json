@@ -1,0 +1,44 @@
+{
+  "config": {
+    "repos": [
+      "acme/web",
+      "acme/api"
+    ],
+    "watchAuthors": [
+      "mona",
+      "octo"
+    ],
+    "me": "guille",
+    "runner": "claude-code",
+    "runnerOptions": {},
+    "pollIntervalMs": 60000,
+    "prListLimit": 50,
+    "stateDir": "/tmp/cgremlin-fixture",
+    "sessionsDir": "/tmp/cgremlin-fixture/sessions",
+    "worktreesDir": "/tmp/cgremlin-fixture/worktrees",
+    "mirrorsDir": "/tmp/cgremlin-fixture/mirrors",
+    "socketPath": "/tmp/cgremlin-fixture/engine.sock",
+    "inventoryPath": "/tmp/cgremlin-fixture/inventory.json",
+    "localAppStatePath": "/tmp/cgremlin-fixture/local-app.json",
+    "reviewSkillCommand": "/APFM:apfm-review",
+    "includeLiveUiCheck": true,
+    "defaultBaseRef": "origin/main",
+    "humanTurnTtlMs": 600000,
+    "attentionAcksPath": "/tmp/cgremlin-fixture/attention-acks.json",
+    "environments": {
+      "acme/web": {
+        "previewStages": [
+          "review",
+          "rereview"
+        ],
+        "vercel": {
+          "scope": "acme",
+          "project": "web",
+          "previewProject": "web-preview",
+          "envFile": ".env.local",
+          "bypassSecret": "[redacted]"
+        }
+      }
+    }
+  }
+}
