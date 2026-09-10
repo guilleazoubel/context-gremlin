@@ -1,5 +1,22 @@
 import { describe, expect, it } from 'vitest';
-import { EngineEvents } from '../../src/engine/events';
+import { ENGINE_EVENT_TYPES, EngineEvents, type EngineEventMap } from '../../src/engine/events';
+
+describe('ENGINE_EVENT_TYPES', () => {
+  it('lists every EngineEventMap key exactly once — what the event ring subscribes to', () => {
+    const expected: Array<keyof EngineEventMap> = [
+      'session.created',
+      'session.transitioned',
+      'run.started',
+      'run.output',
+      'run.finished',
+      'inventory.updated',
+      'attention.changed',
+      'artifact.changed',
+    ];
+    expect([...ENGINE_EVENT_TYPES].sort()).toEqual([...expected].sort());
+    expect(new Set(ENGINE_EVENT_TYPES).size).toBe(ENGINE_EVENT_TYPES.length);
+  });
+});
 
 describe('EngineEvents', () => {
   it('delivers to subscribers of the type only and supports unsubscribe', () => {

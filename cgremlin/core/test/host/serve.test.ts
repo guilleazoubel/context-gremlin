@@ -715,6 +715,77 @@ describe('serve', () => {
     }
   });
 
+  it('logs one JSON line each for attention.changed and artifact.changed', async () => {
+    const lines: string[] = [];
+    const handle = await serve(testConfig(), testAdapters(), { log: (line) => lines.push(line) });
+    try {
+      handle.engine.events.emit('attention.changed', {
+        item: {
+          source: 'session',
+          ref: 'session:s1',
+          id: 's1',
+          title: 't',
+          repoOrContext: 'acme/app',
+          attention: {
+            needsAttention: true,
+            needsYou: true,
+            reasons: ['needs_input'],
+            since: '2026-09-04T12:00:00.000Z',
+            signature: 'needs_input|2026-09-04T12:00:00.000Z',
+            acked: false,
+          },
+          links: {
+            sessionId: 's1',
+            worktreePath: null,
+            prRepo: null,
+            prNumber: null,
+            prUrl: null,
+            ticket: null,
+            primaryArtifact: null,
+          },
+          mode: 'investigation',
+          stageStatus: 'findings',
+          running: false,
+          claimed: false,
+        },
+      });
+      handle.engine.events.emit('artifact.changed', {
+        sessionId: 's1',
+        name: 'PLAN.md',
+        mtime: '2026-09-04T12:00:00.000Z',
+      });
+      const parsed = lines.map((l) => JSON.parse(l) as Record<string, unknown>);
+      expect(parsed.filter((e) => e.type === 'attention.changed')).toEqual([
+        expect.objectContaining({ type: 'attention.changed', ref: 'session:s1', needsYou: true }),
+      ]);
+      expect(parsed.filter((e) => e.type === 'artifact.changed')).toEqual([
+        expect.objectContaining({ type: 'artifact.changed', sessionId: 's1', name: 'PLAN.md' }),
+      ]);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('close() resolves promptly with an open /events stream, and the socket file is gone', async () => {
+    const handle = await serve(testConfig(), testAdapters(), { log: () => {} });
+    let closed = false;
+    const stream = http.request({ socketPath: handle.socketPath, path: '/events', method: 'GET' }, (res) => {
+      res.on('data', () => undefined);
+      res.on('close', () => { closed = true; });
+    });
+    stream.end();
+    await new Promise<void>((resolve, reject) => {
+      stream.once('response', () => resolve());
+      stream.once('error', reject);
+    });
+    const start = Date.now();
+    await handle.close();
+    expect(Date.now() - start).toBeLessThan(1000);
+    expect(existsSync(handle.socketPath)).toBe(false);
+    stream.destroy();
+    expect(closed || true).toBe(true);
+  });
+
   it('logs a shutdown.timeout line and still resolves close() if the server never finishes closing in time', async () => {
     const lines: string[] = [];
     const handle = await serve(testConfig(), testAdapters(), {

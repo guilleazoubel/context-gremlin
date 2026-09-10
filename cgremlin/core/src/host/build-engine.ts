@@ -16,6 +16,9 @@ import { DiscoveryScheduler, type Clock, type Tickable } from '../discovery/sche
 import { InventoryScanner, type ScanReport } from '../inventory/inventory-scanner';
 import { InventoryStore } from '../inventory/inventory-store';
 import { createApiServer } from '../api/server';
+import { EventRing, attachEventRing } from '../api/event-stream';
+import { NodeSessionWatcher } from '../fs/node-session-watcher';
+import type { SessionWatcher } from '../fs/session-watcher';
 import { EnvironmentService } from '../env/environment-service';
 import { AckStore } from '../attention/ack-store';
 import {
@@ -37,6 +40,8 @@ export interface EngineAdapters {
   now?: () => Date;
   /** Where prereq checks read `HOME` and the required env vars from; defaults to the real process environment. */
   env?: NodeJS.ProcessEnv;
+  /** Overrides the real recursive `fs.watch` over the sessions dir — a test seam. */
+  sessionWatcher?: SessionWatcher;
 }
 
 export interface Engine {
@@ -50,6 +55,7 @@ export interface Engine {
   config: CoreConfig;
   environment: EnvironmentService | null;
   attention: AttentionService;
+  eventRing: EventRing;
 }
 
 export interface TickableParts {
@@ -167,6 +173,12 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
   // own (R10), and a service that takes no session lock (MG-A3). It starts
   // nothing — `serve()` owns subscribing it, exactly as it owns every other
   // side effect buildEngine deliberately leaves out.
+  // Every engine event feeds the replay ring exactly once, at build time, so
+  // a client that connects later still replays what it missed.
+  const eventRing = new EventRing();
+  attachEventRing(events, eventRing);
+  const sessionWatcher = adapters.sessionWatcher ?? new NodeSessionWatcher(sessionsDir);
+
   const attention = new AttentionService({
     adapters: [
       new SessionSourceAdapter({
@@ -180,6 +192,7 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     ],
     acks: new AckStore(adapters.fs, attentionAcksPath),
     events,
+    watcher: sessionWatcher,
     now: adapters.now,
   });
 
@@ -197,9 +210,10 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     events,
     inventory: { scanner, scheduler, factory, inventoryStore, config: { me: config.me } },
     attention,
+    eventRing,
     lock,
     ...(environment ? { environment } : {}),
   });
 
-  return { server, scheduler, scanner, pipeline, events, store, lock, config, environment, attention };
+  return { server, scheduler, scanner, pipeline, events, store, lock, config, environment, attention, eventRing };
 }

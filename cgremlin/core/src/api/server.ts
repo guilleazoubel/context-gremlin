@@ -25,6 +25,7 @@ import { groupInventory, type Inventory, type InventoryEntry } from '../inventor
 import type { ReviewSessionFactory, CandidatePR } from '../pipeline/review-session-factory';
 import type { EnvironmentService, LocalAppStatus } from '../env/environment-service';
 import { redactBypassUrls } from '../config/core-config';
+import { handleEventStream, type EventRing } from './event-stream';
 import type { AttentionService } from '../attention/attention-service';
 import { ITEM_SOURCES, parseItemRef, prRef, sessionRef, type ItemRef, type ItemSource } from '../attention/item-ref';
 
@@ -72,6 +73,8 @@ export interface ApiServerDeps {
   environment?: EnvironmentService;
   /** Absent for a wiring with no attention model: every /attention route (and both ack aliases) then 404s. */
   attention?: AttentionService;
+  /** Absent for a wiring with no event ring: GET /events then 404s. */
+  eventRing?: EventRing;
 }
 
 export class OwnPrError extends Error {
@@ -391,6 +394,18 @@ async function handleRequest(
     const url = new URL(req.url ?? '/', 'http://localhost');
     const parts = url.pathname.split('/').filter(Boolean);
     const method = req.method;
+
+    // The server-sent event stream. First branch in the chain, and the only
+    // one that hijacks the response: it writes SSE frames and returns without
+    // ever reaching sendJson or the 404 fall-through.
+    if (method === 'GET' && parts.length === 1 && parts[0] === 'events') {
+      if (!deps.eventRing) {
+        sendJson(res, 404, { error: 'events not configured' });
+        return;
+      }
+      handleEventStream(req, res, { ring: deps.eventRing });
+      return;
+    }
 
     if (method === 'GET' && parts.length === 1 && parts[0] === 'sessions') {
       const sessions = await deps.sessionStore.list();

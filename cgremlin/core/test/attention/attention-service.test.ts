@@ -16,6 +16,7 @@ import type { Inventory, InventoryEntry } from '../../src/inventory/inventory';
 import type { LocalAppStatus } from '../../src/env/environment-service';
 import type { Session } from '../../src/schema/session';
 import { createHarness, SESSIONS_DIR, type PipelineHarness } from '../support/pipeline-harness';
+import { FakeSessionWatcher } from '../support/fake-session-watcher';
 
 const ACKS_PATH = '/state/attention-acks.json';
 const NOW = new Date('2026-09-10T12:00:00.000Z');
@@ -103,6 +104,8 @@ function stoppedStatus(): LocalAppStatus {
 
 interface Fixture {
   h: PipelineHarness;
+  watcher: FakeSessionWatcher;
+  artifacts: Array<{ sessionId: string; name: string; mtime: string }>;
   lock: LoggingLock;
   service: AttentionService;
   acks: AckStore;
@@ -122,6 +125,7 @@ async function makeFixture(extraAdapters: SourceAdapter[] = []): Promise<Fixture
   let running: string[] = [];
   let localStatus: LocalAppStatus = stoppedStatus();
   const acks = new AckStore(h.fs, ACKS_PATH);
+  const watcher = new FakeSessionWatcher();
   const sessionAdapter = new SessionSourceAdapter({
     store: h.store,
     fs: h.fs,
@@ -134,12 +138,17 @@ async function makeFixture(extraAdapters: SourceAdapter[] = []): Promise<Fixture
     adapters: [sessionAdapter, prAdapter, ...extraAdapters],
     acks,
     events: h.events,
+    watcher,
     now: () => NOW,
   });
   const changed: AttentionItem[] = [];
   h.events.on('attention.changed', (e) => changed.push(e.item));
+  const artifacts: Array<{ sessionId: string; name: string; mtime: string }> = [];
+  h.events.on('artifact.changed', (e) => artifacts.push(e));
   return {
     h,
+    watcher,
+    artifacts,
     lock,
     service,
     acks,
@@ -348,6 +357,44 @@ describe('AttentionService.refresh', () => {
       to: 'plan_ready',
     });
     await new Promise((resolve) => setImmediate(resolve));
+    expect(fx.changed).toEqual([]);
+  });
+});
+
+describe('AttentionService + SessionWatcher', () => {
+  it('refreshes attention on an AGENT_STATE write', async () => {
+    fx.service.start();
+    await fx.h.store.save(investigation('a'));
+    await fx.h.fs.writeFile(`${SESSIONS_DIR}/a/AGENT_STATE`, 'needs-input');
+    fx.watcher.emit({ sessionId: 'a', name: 'AGENT_STATE' });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(fx.changed.map((i) => [i.ref, i.attention.reasons])).toEqual([['session:a', ['needs_input']]]);
+    expect(fx.artifacts).toEqual([]);
+  });
+
+  it('emits artifact.changed with an ISO mtime for any other artifact, and no phantom attention delta', async () => {
+    fx.service.start();
+    await fx.h.store.save(investigation('a'));
+    await fx.h.fs.writeFile(`${SESSIONS_DIR}/a/PLAN.md`, '# plan');
+    // A first refresh records the (empty) state, so the artifact write below
+    // can only emit attention.changed if it really changed something.
+    await fx.service.refresh({ kind: 'session', id: 'a' });
+    fx.changed.length = 0;
+    fx.watcher.emit({ sessionId: 'a', name: 'PLAN.md' });
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(fx.artifacts).toEqual([
+      { sessionId: 'a', name: 'PLAN.md', mtime: NOW.toISOString() },
+    ]);
+    expect(new Date(fx.artifacts[0].mtime).toISOString()).toBe(fx.artifacts[0].mtime);
+    expect(fx.changed).toEqual([]);
+  });
+
+  it('stops the watcher when the service stops', () => {
+    fx.service.start();
+    expect(fx.watcher.started).toBe(true);
+    fx.service.stop();
+    expect(fx.watcher.stopped).toBe(true);
+    fx.watcher.emit({ sessionId: 'a', name: 'AGENT_STATE' });
     expect(fx.changed).toEqual([]);
   });
 });

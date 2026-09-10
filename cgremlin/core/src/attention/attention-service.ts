@@ -3,6 +3,7 @@ import type { SessionFileSystem } from '../fs/session-file-system';
 import type { EngineEvents } from '../engine/events';
 import type { Inventory } from '../inventory/inventory';
 import type { LocalAppStatus } from '../env/environment-service';
+import type { SessionWatchEvent, SessionWatcher } from '../fs/session-watcher';
 import type { Session, SessionMode } from '../schema/session';
 import { repoSlugFromUrl } from '../gh/repo-slug';
 import { TERMINAL_PHASES_BY_MODE } from '../workspace/workspace-in-use';
@@ -92,6 +93,12 @@ export interface SourceAdapter {
   collect(): Promise<CollectedItem[]>;
   /** Recompute exactly one item, for a targeted refresh. `null` when it no longer exists. */
   collectOne(ref: ItemRef): Promise<CollectedItem | null>;
+  /**
+   * Optional: the on-disk ISO mtime of one of this source's artifacts, or
+   * null when this source has no such artifact (or cannot tell). Feeds
+   * `artifact.changed`; a source with no artifacts simply omits it.
+   */
+  artifactMtime?(e: SessionWatchEvent): Promise<string | null>;
 }
 
 function emptyLinks(): ItemLinks {
@@ -197,6 +204,11 @@ export class SessionSourceAdapter implements SourceAdapter {
     };
   }
 
+  /** The ISO mtime of one of this session's artifacts, when the port can tell. */
+  async artifactMtime(e: SessionWatchEvent): Promise<string | null> {
+    return this.mtimeOf(`${this.deps.sessionsDir}/${e.sessionId}/${e.name}`);
+  }
+
   /** Trimmed; an unrecognized (or absent) value is no state, never a throw. */
   private async readAgentState(id: string): Promise<AgentState | null> {
     const path = `${this.deps.sessionsDir}/${id}/AGENT_STATE`;
@@ -217,11 +229,15 @@ export class SessionSourceAdapter implements SourceAdapter {
    * what keeps A1 and A2 order-independent.
    */
   private async agentStateMtime(id: string): Promise<string | null> {
+    return this.mtimeOf(`${this.deps.sessionsDir}/${id}/AGENT_STATE`);
+  }
+
+  private async mtimeOf(path: string): Promise<string | null> {
     const fs = this.deps.fs as SessionFileSystem & {
       statMtimeMs?: (path: string) => Promise<number | null>;
     };
     if (typeof fs.statMtimeMs !== 'function') return null;
-    const ms = await fs.statMtimeMs(`${this.deps.sessionsDir}/${id}/AGENT_STATE`);
+    const ms = await fs.statMtimeMs(path);
     return ms === null ? null : new Date(ms).toISOString();
   }
 }
@@ -279,6 +295,12 @@ export interface AttentionServiceDeps {
   adapters: readonly SourceAdapter[];
   acks: AckStore;
   events: EngineEvents;
+  /**
+   * The session-directory watch (R7). The agent writes AGENT_STATE and its
+   * artifacts directly, inside its turn, with no engine involvement — without
+   * this an agent asking a question would be invisible until the turn exits.
+   */
+  watcher?: SessionWatcher;
   now?: () => Date;
 }
 
@@ -372,7 +394,7 @@ export class AttentionService {
     return run;
   }
 
-  /** Subscribes to the engine events that can change an item's attention. */
+  /** Subscribes to the engine events, and to the session watch, that can change an item's attention. */
   start(): void {
     if (this.unsubscribers.length > 0) return;
     const events = this.deps.events;
@@ -389,11 +411,47 @@ export class AttentionService {
         void this.refresh({ kind: 'all' });
       }),
     ];
+    this.deps.watcher?.start((e) => {
+      void this.onWatchEvent(e);
+    });
   }
 
   stop(): void {
     for (const off of this.unsubscribers) off();
     this.unsubscribers = [];
+    this.deps.watcher?.stop();
+  }
+
+  /**
+   * An AGENT_STATE write is an attention change and nothing else; any other
+   * artifact is an `artifact.changed` plus a refresh, since a PLAN.md write
+   * may well change nothing attention-wise and the no-delta check makes that
+   * free.
+   */
+  private async onWatchEvent(e: SessionWatchEvent): Promise<void> {
+    if (e.name === 'AGENT_STATE') {
+      await this.refresh({ kind: 'session', id: e.sessionId });
+      return;
+    }
+    this.deps.events.emit('artifact.changed', {
+      sessionId: e.sessionId,
+      name: e.name,
+      mtime: await this.artifactMtime(e),
+    });
+    await this.refresh({ kind: 'session', id: e.sessionId });
+  }
+
+  /**
+   * The file's own mtime once `statMtimeMs` exists on the port (A2); until
+   * then the observation time, which is the best available answer and keeps
+   * this task independent of that one.
+   */
+  private async artifactMtime(e: SessionWatchEvent): Promise<string> {
+    for (const adapter of this.deps.adapters) {
+      const mtime = await adapter.artifactMtime?.(e);
+      if (mtime !== null && mtime !== undefined) return mtime;
+    }
+    return this.now().toISOString();
   }
 
   private async recompute(scope: RefreshScope): Promise<void> {
