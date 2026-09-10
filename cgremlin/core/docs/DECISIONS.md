@@ -244,3 +244,119 @@ actually runs (see this file's header):
   it compares the reasons/since/claimed/running shape of an item, not its `ItemLinks`, so a
   `primaryArtifact` or `worktreePath` value settling in does not itself count as the delta that
   justifies an event.
+
+## 2026-09-10 — Phase 8 (the extension ships the engine)
+
+Pointer: `cgremlin/core/docs/superpowers/specs/2026-09-10-cgremlin-phase8-bundled-engine-design.md`.
+User decisions: **U1** one setting, and it names the config JSON; **U2** the engine ships with the
+extension and starts itself; **U3** no legacy import — start fresh, which was declined explicitly
+and is not a deferral: nothing reads `~/.cgremlin` except `config import-legacy`, run by hand.
+R1–R19 were confirmed on 2026-09-10; R20–R30 are supervisor rulings from the same pass, several of
+which amend an earlier R.
+
+- **R1 — `GET /version`, not a field on `/config`.** `/config` 404s on a server with no config dep,
+  so its answer cannot distinguish "not our engine" from "our engine, no config"; a probe needs a
+  route that always answers, and a pid does not belong in a config document. *Amended by R21,
+  which adds `activeRuns`.*
+- **R2 — a version mismatch never silently cancels work.** A restart stops every active run, so a
+  mismatch is a modal prompt naming both versions, `Not now` remembered for the window, and the
+  mismatched engine left running and usable. *Amended by R21: the prompt only appears when
+  `activeRuns > 0`.*
+- **R3 — stop is `SIGTERM` only, against a pid proved twice, with no `SIGKILL` ever.** Only
+  `close()` stops agents, clears claims and stops the local app in the right order; a hard kill
+  orphans a dev server that only the next boot could reap. *Amended by R23 (budget and the
+  `stopping` state) and R29 (the proof is re-taken before every signal).*
+- **R4 — `repos` loses `.min(1)` and defaults to `[]`; `me` stays required.** A first-run template
+  must load; an empty `me` would silently defeat the own-PR refusal, so the extension supplies a
+  real login or writes nothing.
+- **R5 — the template is written by the core, not the extension.** `config init` goes through the
+  one config writer (`writeCoreConfig`: tmp → 0600 → rename, derived paths omitted), which is also
+  what gives the CLI the same bootstrap for free.
+- **R6 — the config file is watched, and a save restarts the engine.** *Completed by R27:
+  validate through the bridge first, re-assert 0600, and leave the engine alone on a `ConfigError`
+  with the watcher still armed.*
+- **R7 — the socket path is a provider function, not a value captured at activation**, so a
+  settings change takes effect without a window reload.
+- **R8 — one `.vsix` carrying two esbuild bundles and no dependencies** (`--no-dependencies` keeps
+  pnpm's symlink farm out). *Refined by R28.*
+- **R9 — the bundle's type is declared locally in the extension**, because esbuild emits no
+  declarations and the core's own ones drag `zod` in; the logic still lives in the engine.
+- **R10 — the manager sanitizes the child's environment** (`NODE_OPTIONS`, every `VSCODE_*`) and
+  sets `ELECTRON_RUN_AS_NODE=1`. *Extended by R20 (the login-shell `PATH`) and R24 (the engine
+  scrubs its own env too).*
+- **R11 — the engine logs to `<stateDir>/engine.log`, tailed into the output channel, rotated to
+  `engine.log.1` past 8 MB.**
+- **R12 — four `cgremlin.engine.*` commands replace `cgremlin.startEngine`**, which typed a shell
+  command into a terminal and needed `cgremlin-core` on `PATH`.
+- **R13 — two new derived paths, `enginePidPath` and `engineLogPath`**, registered in both
+  `resolveCoreConfig` and `DERIVED_PATH_SUFFIXES`. *Amended by R22, which makes `engine.json` a
+  lock rather than a report.*
+- **R14 — the test fixtures move to `.cgremlin-core` with the default**, so the quarantine grep
+  over `~/.cgremlin/` stays meaningful.
+- **R15 — first run is `gh api user --jq .login`, then an input box, then nothing** — cancelling
+  writes no file and explains why.
+- **R16 — the engine is a machine-wide daemon**: shared by every window, never stopped on
+  `deactivate()`, and `engine.stop` confirms, naming the shared-daemon fact and the count of
+  running items.
+- **R17 — engine state lives in the status bar**, one text and click target per state.
+- **R18 — start polls at 100 ms for 10 s**, kinder to an editor than the harness's 25 ms.
+- **R19 — `@vscode/vsce` is added as a devDependency and nothing else is**, so packaging is
+  verifiable in this repo rather than on a developer's global install.
+- **R20 — the engine's `PATH` comes from `$SHELL -lic 'echo $PATH'`, capped at 5 s**, because a
+  GUI-launched editor's `PATH` need not contain `claude` or `gh`. A timeout, a non-zero exit or
+  empty output falls back to the host's own `PATH` with exactly one logged line.
+- **R21 — `GET /version`'s `activeRuns` is the single authority on whether a restart is safe.**
+  It is computed per request from **both** the active-run map and the environment preparations
+  still in flight, because cancelling a preparing stage is just as destructive. Zero → restart
+  silently and log one line; more than zero → a modal prompt. `/attention` is not an input.
+- **R22 — `engine.json` is an admission lock, taken before `listenOnSocket`, not a report written
+  after it.** `listenOnSocket`'s liveness test is a connect and it unlinks a socket nobody answers,
+  so it cannot be the mutual-exclusion primitive; one engine per state dir, the loser exits 1.
+  **Spec correction found in implementation:** `open(path, 'wx')` is exclusive but publishes a
+  zero-byte file a loser can read before the winner has written a word — which looks exactly like a
+  dead owner to take over. The lock is therefore written to a temp file and `link()`ed into place,
+  which is atomic and fails `EEXIST`. **Second correction:** taking over a lock whose pid is alive
+  but silent requires a `ps -o command=` check — a pid alone is not ownership, and without the
+  check one recycled pid would make every later `serve` refuse forever.
+- **R23 — the stop budget is 45 s at 500 ms, and a timeout becomes `stopping`, never a harder
+  signal.** R3's 10 s was a guess against a `close()` that awaits a scheduler tick, every active
+  stop, `abortAll()` and the local app. Past the budget the manager keeps probing at 1 s to a
+  5-minute bound; `SIGKILL` is still never sent.
+- **R24 — the engine scrubs `ELECTRON_RUN_AS_NODE`, `NODE_OPTIONS` and every `VSCODE_*` key from
+  its own `process.env` before it starts**, so every `bash -lc` it later spawns for an agent is
+  clean even when the launcher's sanitization was bypassed. `CGREMLIN_ENGINE_PRINT_ENV=1` is the
+  testable seam: it prints what survived and exits 0 without starting an engine.
+- **R25 — one integration case spawns through the real `Code Helper (Plugin)`** and asserts, from
+  the engine log, a non-empty `process.versions.electron` and a `process.version` major ≥ 20 —
+  or skips with the path it looked for. It ran on the development machine: Electron 42.10.0,
+  Node v24.18.1.
+- **R26 — the manager supervises the child it spawned, with a bounded backoff.** An exit while
+  `running` is a failure immediately, not at the next poll. Automatic respawns are gated at 1 s,
+  5 s, 30 s and then never; a user-initiated start is always allowed and resets the gate.
+  **Implementation correction found by the Phase 8 integration suite:** the gate must reset when
+  the engine *answers*, not only when the user asks — counting a successful spawn made R21's
+  silent restart wait out a backoff it never earned, and three of them exhausted it for good.
+- **R27 — the config watcher validates before it restarts, and re-asserts 0600.** A `ConfigError`
+  leaves the engine completely alone, shows the engine's wording verbatim, and keeps the watcher
+  armed. The mode matters late, not now: `loadCoreConfig` only demands 0600 once the config holds
+  a secret.
+- **R28 — packaging specifics.** `.vscodeignore` is exclude-only (the format is a deny list over
+  an otherwise-complete tree; there is no include syntax). Both bundles carry `--sourcemap=inline`,
+  so a crash yields a readable trace and no `.map` exists for a packaging rule to strip. MG-C8 is
+  narrowed accordingly. The manifest gains a truthful `repository` (git origin) and keeps
+  `"license": "UNLICENSED"`; `vsce package` accepted it, warning only that no LICENSE file exists,
+  so none was added and `--allow-missing-repository` was not used.
+- **R29 — the ownership proof is re-taken immediately before every signal**, requiring `pid` *and*
+  `startedAt` to still agree, because reading, probing and then killing is a check/use window a
+  reused pid can walk through. The residual window is microseconds wide and not zero — the same
+  posture `isOurListener` already documents.
+- **R30 — mechanical rules that are cheap to get wrong.** The string `vscode` is banned from every
+  file in `pureSourceFiles()`, prose included, because that assertion is a plain `includes`.
+  `deactivate()` disposes both `fs.watch` handles and still never stops the engine. The spawn-time
+  order is pinned: rotate → spawn → (re)start the tail.
+- **The probe's third answer is `foreign`.** A socket that answers something that is not a
+  `/version` shape is neither "nobody home" (`null`) nor an engine: nothing is spawned against it
+  and nothing is ever signalled.
+- **A start or stop is tagged `'auto'` or `'user'`.** The distinction is not cosmetic: it is what
+  R26's backoff is measured against, and a person is entitled to retry a broken engine as often
+  as they like.

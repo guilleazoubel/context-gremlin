@@ -923,3 +923,47 @@ unwritten decision escalates rather than choosing.
 - Not in scope: importing legacy sessions/worktrees/config (U3), marketplace publishing, bundling the
   extension's own code, bundling `claude`/`codex`/`gh`/`git`, and any change to the pipeline,
   attention model, event stream or human-turn machinery.
+
+---
+
+## Errata (recorded during C1–C3, 2026-09-10)
+
+Things the plan or the spec said that turned out to be wrong or incomplete. Each was fixed in the
+code or the docs rather than worked around.
+
+- **`engine.json` is written with a temp file plus `link()`, not `open(path, 'wx')`** (spec §4.2,
+  R22, Task A2's GREEN note). `wx` is exclusive, but it publishes a *zero-byte* file the instant it
+  succeeds — a loser can read it before the winner has written a word, and a record with no
+  readable pid looks exactly like a dead owner to take over. Write-then-`link` is atomic, fails
+  `EEXIST`, and the file is complete the moment it exists. Documented in `ARCHITECTURE.md` and
+  `DECISIONS.md`.
+- **Taking over a lock needs a command-line check, not just a pid** (R22 said only "provably
+  dead"). `serve()` probes the owner's socket, and for a pid that is alive but silent runs
+  `ps -o command= -p <pid>`: a command naming `cgremlin-core` or `engine.js` refuses the boot,
+  anything else is a reused pid and the lock is taken over, and an unidentifiable pid refuses with
+  an explicit instruction. Without it one recycled pid would make every later `serve` refuse
+  forever.
+- **The probe has three answers, not two**: an engine identity, `null` (nobody home), or
+  `'foreign'` (something answers but is not this engine) — the third is what makes "never start a
+  second engine, never signal a stranger" expressible.
+- **A start or stop carries a `'auto' | 'user'` trigger.** R26 implies it; it is an explicit
+  parameter, and it is what the backoff is measured against.
+- **R26's backoff counted successful spawns.** Found by C2's R21 case against a real engine: after
+  a *successful* start, an automatic start moments later (R21's silent restart, a config save) was
+  refused by a gate only failed spawns are meant to earn — and three of them would have exhausted
+  it permanently. The gate now resets whenever the engine answers. Fixed in
+  `src/engine/manager.ts`, pinned by a unit test that fails when the reset is removed.
+- **`grep -rn "startEngine" cgremlin/vscode` cannot be literally empty** (DoD). Two legitimate
+  hits remain: `test/purity.test.ts`'s MG-C7 guard, whose whole job is to grep for
+  `cgremlin.startEngine`, and the harness entry point the plan itself names,
+  `startEngineViaManager()`. The meaningful grep, `cgremlin.startEngine`, is empty outside that
+  guard.
+- **`vsce package` did not reject the manifest** (C1 was told to record the failure text if it
+  did). Its only complaint was `WARNING  LICENSE, LICENSE.md, or LICENSE.txt not found`, which is
+  a warning and not a refusal, so `"license": "UNLICENSED"` stayed, no `LICENSE` file was added,
+  and `--allow-missing-repository` was not used. `"private": true` did not block packaging.
+- **`engine/**` had to be added to the extension's eslint ignores.** The 1.4 MB generated bundle
+  lands inside the linted tree and produced 134 errors; it is a build artifact, like `out/`.
+- **C1's real-editor acceptance was not run here.** Installing the `.vsix` and opening a window
+  with no `cgremlin.*` settings would create and write `~/.cgremlin-core`, which this worktree's
+  brief forbids touching. It remains outstanding, to be run by hand.

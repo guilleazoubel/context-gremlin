@@ -20,7 +20,12 @@ cd cgremlin/core
 pnpm install
 pnpm build
 
-# One-time: import repos/authors/model from the legacy ~/.cgremlin/config
+# First run: write a loadable core.json (repos: [], to be filled in by hand or by the editor)
+cgremlin-core config init --me <your-github-login>
+
+# Optional, one-time: import repos/authors/model from the legacy ~/.cgremlin/config.
+# That legacy path is the ONLY thing this command reads, and nothing else in the engine
+# ever touches ~/.cgremlin.
 cgremlin-core config import-legacy
 
 # Start the engine (foreground; Ctrl-C / SIGTERM stops it cleanly)
@@ -43,15 +48,15 @@ cgremlin-core release <session-id>         # drop a human-turn claim (see "Human
 `config` is a thin client: it loads `core.json`, makes one request over the Unix socket,
 and prints the result.
 
-## Config file: `~/.cgremlin/core.json`
+## Config file: `~/.cgremlin-core/core.json`
 
-Written by `config import-legacy`, or by hand. Validated with zod
+Written by `config init`, by `config import-legacy`, or by hand. Validated with zod
 (`src/config/core-config.ts`); an invalid file fails `serve`/every CLI command with a
 one-line error. Paths may start with `~`.
 
 | Field | Default | Notes |
 |---|---|---|
-| `repos` | *(required)* | `["owner/name", …]` — repos the inventory scan watches |
+| `repos` | `[]` | `["owner/name", …]` — repos the inventory scan watches. **May be empty**: the scan then has nothing to list, the parking lot is empty, and nothing is discovered — the engine is still fully usable for sessions you create explicitly |
 | `watchAuthors` | `[]` | logins whose reviews/comments count as "team activity" |
 | `me` | *(required)* | your GitHub login; own PRs are never auto-reviewed |
 | `runner` | `'claude-code'` | or `'codex'` |
@@ -60,7 +65,7 @@ one-line error. Paths may start with `~`.
 | `runnerOptions.sandbox` | — | Codex only: `read-only` \| `workspace-write` \| `danger-full-access` |
 | `pollIntervalMs` | `60000` | inventory-scan cadence |
 | `prListLimit` | `50` (max `100`) | `gh pr list --limit` per repo |
-| `stateDir` | `~/.cgremlin` | base dir; every path below derives from it unless overridden |
+| `stateDir` | `~/.cgremlin-core` | base dir; every path below derives from it unless overridden |
 | `sessionsDir` | `<stateDir>/sessions` | |
 | `worktreesDir` | `<stateDir>/worktrees` | |
 | `mirrorsDir` | `<stateDir>/mirrors` | |
@@ -68,6 +73,8 @@ one-line error. Paths may start with `~`.
 | `inventoryPath` | `<stateDir>/inventory.json` | |
 | `localAppStatePath` | `<stateDir>/local-app.json` | |
 | `attentionAcksPath` | `<stateDir>/attention-acks.json` | per-`ItemRef` acknowledgement store |
+| `enginePidPath` | `<stateDir>/engine.json` | the running engine's identity file — and the lock that admits one engine per state dir |
+| `engineLogPath` | `<stateDir>/engine.log` | where a detached engine's output goes (rotated to `engine.log.1` past 8 MB by whoever spawns it) |
 | `reviewSkillCommand` | `'/APFM:apfm-review'` | slash command the review/rereview prompt invokes first |
 | `humanTurnTtlMs` | `600000` (10 min) | how long a human-turn claim (`POST /sessions/:id/conversation/claim`) stays live before it expires and is reaped |
 | `includeLiveUiCheck` | `true` | AND'd with "did the brief actually render a LIVE UI CHECK section" |
@@ -129,7 +136,7 @@ into a local app too, it just isn't on by default.
 - `writeCoreConfig` writes it at file mode **0600**, set on the temp file *before* the
   rename — never a world-readable window.
 - `loadCoreConfig` refuses to load a config that holds a secret if the file is group- or
-  other-readable (`mode & 0o077 !== 0`): `chmod 600 ~/.cgremlin/core.json` and retry.
+  other-readable (`mode & 0o077 !== 0`): `chmod 600 ~/.cgremlin-core/core.json` and retry.
 - The secret is never written into `BRIEF.md`, never logged, and never returned by the
   API. For a stage that needs it, the engine writes the raw value to
   `<sessionDir>/.bypass-secret` (mode 0600) and the brief points the agent at that file;
@@ -151,6 +158,7 @@ Beyond session/workspace/PR-inventory routes, the socket API also answers:
 |---|---|
 | `GET /events` | Server-Sent Events — every engine event, with `Last-Event-ID` replay |
 | `GET /attention`, `POST /attention/ack` (+ `POST /sessions/:id/ack`, `POST /prs/:o/:r/:n/ack`) | which items need attention/you, and acknowledging one |
+| `GET /version` | `{version, pid, startedAt, socketPath, activeRuns}` — dependency-free, so it answers **200 on any engine**, which is what makes it a liveness/identity probe (`GET /config` 404s on an engine built without a config dep). `activeRuns` counts active stage runs **plus** environment preparations still in flight, and is computed per request: it is the only input to "is it safe to restart?" |
 | `GET /config` | the resolved, redacted `CoreConfig` |
 | `GET /sessions/:id/artifacts` | artifact listing with mtimes and the core-chosen `primary` file |
 | `GET /sessions/:id/conversation`, `POST .../conversation/claim`, `POST .../conversation/release` | the human-turn claim/release/resume contract |
@@ -189,12 +197,17 @@ behavior was deliberately retired (see `docs/DECISIONS.md`).
 
 ## Where state lives
 
-Everything is under `stateDir` (default `~/.cgremlin`):
+Everything is under `stateDir` (default `~/.cgremlin-core` — the legacy `~/.cgremlin` is
+never read except by `config import-legacy`, and never written at all):
 
 ```
-~/.cgremlin/
+~/.cgremlin-core/
   core.json                    # config (0600 if it holds a secret)
   engine.sock                  # the API socket serve listens on (mode 0600)
+  engine.json                  # {pid, version, socketPath, startedAt} — written with O_EXCL
+                               # BEFORE the socket is opened, so it is both the ownership proof
+                               # and the lock that admits one engine per state dir; removed on stop
+  engine.log                   # a detached engine's stdout+stderr (engine.log.1 after a rotation)
   inventory.json               # last completed scan
   local-app.json               # the one local dev app's state, if any is running
   attention-acks.json          # per-ItemRef acknowledgement ('session:<id>' / 'pr:<owner>/<repo>#<n>')
@@ -238,7 +251,7 @@ and `.bypass-secret` is explicitly excluded.
   before its health check passed — the first 40 lines of its log, so you can read the
   repo's own refusal message. The engine never edits `/etc/hosts`, configures a
   port-forward, or installs `nvm` versions on your behalf.
-- **Legacy sessions under `~/.cgremlin/sessions`** — a `migrateLegacySession` function
+- **Legacy sessions under `~/.cgremlin/sessions`** (the legacy tool's own state dir, which this engine neither reads nor writes) — a `migrateLegacySession` function
   exists (`src/migrate/legacy-session-migrator.ts`) but nothing in this package calls it
   yet. A directory shaped like a legacy session (no `schemaVersion`) is not picked up by
   `SessionStore.list()` — it fails schema validation and is silently skipped rather than

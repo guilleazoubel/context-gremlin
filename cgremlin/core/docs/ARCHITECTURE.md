@@ -387,6 +387,7 @@ All routes are on the Unix socket at `config.socketPath`, JSON in/out.
 | POST | `/attention/ack` `{ref}` | acknowledge one item by `ItemRef` | 200, 400 unparseable ref, 404 |
 | POST | `/sessions/:id/ack` | alias for `{ref: sessionRef(id)}` | 200, 404 |
 | POST | `/prs/:owner/:repo/:number/ack` | alias for `{ref: prRef(slug, n)}` | 200, 404 |
+| GET | `/version` | `{version, pid, startedAt, socketPath, activeRuns}` — the liveness/identity probe. Built with **no dependencies at all**, so it answers 200 on any engine; `/config` 404s on an engine with no config dep, which is why `/config` cannot be a probe. `activeRuns` is computed **per request** as `pipeline.activeSessionIds().length + environment.inFlightCount()`: the first term misses a stage still *preparing* its environment, and cancelling one of those is just as destructive as cancelling a run, so a restart decision needs both | 200 |
 | GET | `/config` | the resolved, redacted `CoreConfig` | 200 |
 | POST | `/sessions` | save a raw session record | |
 | POST | `/sessions/investigations` | create an investigation session (+ workspace) | 201 |
@@ -430,7 +431,8 @@ codes: `SessionNotFoundError`/`ArtifactNotFoundError`/`NoScanYetError`/`ItemNotF
 | `review <pr-url>` | `POST /prs/:owner/:repo/:number/review` |
 | `sessions [--json]` | `GET /sessions` |
 | `scan [--json]` | `POST /prs/scan` |
-| `config import-legacy [--force]` | read `~/.cgremlin/config`, write `~/.cgremlin/core.json` |
+| `config init [--me <login>] [--force]` | write a first-run `core.json` (`{me, repos: [], runner}`) through `writeCoreConfig` — 0600, no derived paths persisted; exit 2 without `--me`, exit 1 over an existing file without `--force` |
+| `config import-legacy [--force]` | read the legacy `~/.cgremlin/config`, write `~/.cgremlin-core/core.json`. That legacy path is the only `~/.cgremlin` reference left in the engine |
 | `local start <session-id> [--fresh]` / `local stop\|status [session-id]` [--json] | the `/local*` routes |
 | `release <session-id>` | `POST /sessions/:id/conversation/release` — the by-hand human-turn recovery path |
 
@@ -526,7 +528,49 @@ re-entrant, and nesting deadlocks). Map any new error class in `mapErrorToHttp`.
 `src/config/core-config.ts`; if it's a derived path, add it to `DERIVED_PATH_SUFFIXES`
 and `resolveCoreConfig`'s `expandOrDerive` calls so it participates in `stateDir`
 derivation and is omitted from a persisted file when it's just the default. Never make a
-new field required — every existing `core.json` on disk must keep loading.
+new field required — every existing `core.json` on disk must keep loading. The two paths
+Phase 8 added, `enginePidPath` (`<stateDir>/engine.json`) and `engineLogPath`
+(`<stateDir>/engine.log`), are registered in both places; registering only one is the
+documented failure mode (the file loads, and then the value is silently re-persisted).
+`stateDir` itself now defaults to `~/.cgremlin-core`; a `core.json` that names
+`~/.cgremlin` explicitly still resolves every path under it, because the rename is a
+change of *default*, not a hard-coded path.
+
+**The engine's identity file and admission lock (`engine.json`)**: `serve()` creates
+`config.enginePidPath` with `open(path, 'wx')` (O_EXCL, mode 0600) **before** it calls
+`listenOnSocket`, writes `{pid, version, socketPath, startedAt}` into it, and removes it
+in `close()`'s `finally` *and* on a failed listen. It is therefore two things at once:
+
+- **the admission lock.** `listenOnSocket` cannot be the mutual-exclusion primitive: its
+  liveness test is a *connect*, and it unlinks a socket nobody answers, so two engines
+  starting at the same instant can both proceed and the loser can unlink the winner's
+  fresh socket. Exactly one engine therefore wins a state dir; the loser exits 1 with
+  `SocketInUseError`. **The create is a write-then-`link`, not `open(path, 'wx')`** — the
+  design's original wording was wrong: `wx` is exclusive but publishes a *zero-byte* file
+  that the loser can read before the winner has written a word, and a record with no
+  readable pid looks exactly like a dead owner to take over. `link()` from a temp file is
+  atomic, fails `EEXIST`, and the file is complete the instant it exists.
+- **taking over a dead owner needs a command-line check, not just a pid.** On `EEXIST`
+  the recorded owner is probed: if its socket answers, it is the owner and this boot
+  refuses; if its pid is alive but silent, `ps -o command= -p <pid>` decides — a command
+  naming `cgremlin-core` or `engine.js` is an engine still booting (refuse), anything
+  else is a reused pid (take over), and a pid that cannot be identified refuses with an
+  explicit "delete that file if no engine is running". Without that check one recycled
+  pid would make every later `serve` refuse forever. This is the same posture
+  `NodeLocalAppRunner.isOurListener` takes before it trusts a pgid.
+- **the ownership proof, for whoever stops the engine.** A pid file alone never
+  authorizes a signal. `GET /version` on that socket must confirm the same `pid` **and**
+  the same `startedAt` — `startedAt` is what survives pid reuse — and that pair must be
+  re-taken **immediately before** each signal, not once per stop, or the check/use window
+  lets a reused pid take the signal. Any disagreement aborts the stop and signals
+  nothing. The residual window is microseconds wide and not zero: the same posture
+  `isOurListener` already documents, not a stronger claim.
+
+**The 0600 trap, documented because it bites later rather than now**: `loadCoreConfig`
+asserts mode 0600 **only when the config holds a secret** (`hasAnySecret`). An editor or
+tool that rewrites `core.json` and drops the mode therefore breaks nothing today, and
+refuses to load the moment a `bypassSecret` is added — a failure whose cause is weeks in
+the past. Anything that writes `core.json` re-asserts 0600.
 
 **Add an event**: add it to `EngineEventMap` and `ENGINE_EVENT_TYPES` (`src/engine/events.ts`) — the
 `/events` route and its `EventRing` need no change, since `handleEventStream` subscribes to every
@@ -567,3 +611,21 @@ copy of `NEEDS_YOU_REASONS`.
   conversation never expires its claim.
 - **`needsYou` is computed by the core, once.** The extension's notification policy filters on
   `item.attention.needsYou` and the user's `cgremlin.notificationLevel` setting — nothing else.
+- **Since Phase 8 the extension ships and supervises the engine.** It bundles two esbuild
+  artifacts of this package (`engine/engine.js`, spawned; `engine/bridge.js`, required) and starts
+  the engine itself, detached, whenever nothing answers the socket — one engine per state dir,
+  shared by every window, and never stopped when a window closes. It has exactly one setting,
+  `cgremlin.configPath` (default `~/.cgremlin-core/core.json`); **every** other path —
+  `stateDir`, `socketPath`, `sessionsDir`, `worktreesDir`, `enginePidPath`, `engineLogPath` — comes
+  from one call into the bundled bridge, so the extension still derives no state path of its own.
+  It resolves the engine's `PATH` from the user's login shell (`$SHELL -lic 'echo $PATH'`, 5 s cap,
+  one logged fallback line) because a GUI-launched editor's `PATH` need not contain `claude` or
+  `gh`, and it strips `NODE_OPTIONS` and every `VSCODE_*` key from the child's environment (the
+  engine bundle scrubs the same keys from its own `process.env` at startup, so an agent it later
+  spawns cannot inherit them either).
+- **It never unlinks a socket and never signals a process it cannot prove is cgremlin-core.**
+  Stale-socket recovery stays `listenOnSocket`'s job. A stop is one `SIGTERM` against the
+  freshly re-proved pid, then polling — never a second signal, never `SIGKILL`, whatever the wait:
+  only `serve()`'s own `close()` stops agents, clears claims and stops the local app in the right
+  order, and a hard kill would orphan a dev server. A restart is gated on `GET /version`'s
+  `activeRuns`: zero restarts silently, more than zero asks first.
