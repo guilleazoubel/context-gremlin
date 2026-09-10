@@ -37,7 +37,7 @@ export class CoreHttpError extends Error {
     method: string,
     path: string,
   ) {
-    super(`${method} ${path} failed with ${status}: ${errorTextOf(body)}`);
+    super(`${method} ${path} failed with ${status}: ${engineErrorText(body)}`);
     this.name = 'CoreHttpError';
   }
 }
@@ -47,7 +47,11 @@ export interface HttpResult {
   body: unknown;
 }
 
-function errorTextOf(body: unknown): string {
+/**
+ * The engine's own wording for a failure. Its 4xx messages are already written for humans
+ * (`README.md:194-212`), so every surface shows this verbatim rather than inventing its own.
+ */
+export function engineErrorText(body: unknown): string {
   if (body !== null && typeof body === 'object' && 'error' in body) {
     const value = (body as { error: unknown }).error;
     if (typeof value === 'string') return value;

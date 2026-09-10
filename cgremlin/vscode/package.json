@@ -31,75 +31,81 @@
     "views": {
       "cgremlin": [
         {
-          "id": "cgremlin.parking",
-          "name": "Parking lot"
-        },
-        {
-          "id": "cgremlin.reviewing",
-          "name": "PRs we are reviewing"
-        },
-        {
-          "id": "cgremlin.investigations",
-          "name": "Investigations"
-        },
-        {
-          "id": "cgremlin.devwork",
-          "name": "My dev work"
+          "id": "cgremlin.items",
+          "name": "Attention",
+          "contextualTitle": "cgremlin"
         }
       ]
     },
     "commands": [
       {
         "command": "cgremlin.openItem",
-        "title": "cgremlin: Open item"
+        "title": "Open item",
+        "category": "cgremlin"
       },
       {
         "command": "cgremlin.chat",
-        "title": "cgremlin: Chat with the agent"
+        "title": "Chat with the agent",
+        "category": "cgremlin",
+        "icon": "$(comment-discussion)"
       },
       {
         "command": "cgremlin.startReview",
-        "title": "cgremlin: Start review"
+        "title": "Start review",
+        "category": "cgremlin",
+        "icon": "$(play)"
       },
       {
         "command": "cgremlin.approvePlan",
-        "title": "cgremlin: Approve plan"
+        "title": "Approve plan",
+        "category": "cgremlin"
       },
       {
         "command": "cgremlin.stop",
-        "title": "cgremlin: Stop run"
+        "title": "Stop run",
+        "category": "cgremlin",
+        "icon": "$(debug-stop)"
       },
       {
         "command": "cgremlin.retry",
-        "title": "cgremlin: Retry stage"
+        "title": "Retry stage",
+        "category": "cgremlin"
       },
       {
         "command": "cgremlin.ack",
-        "title": "cgremlin: Acknowledge"
+        "title": "Acknowledge",
+        "category": "cgremlin"
       },
       {
         "command": "cgremlin.refreshInventory",
-        "title": "cgremlin: Refresh inventory"
+        "title": "Refresh inventory",
+        "category": "cgremlin",
+        "icon": "$(refresh)"
       },
       {
         "command": "cgremlin.newInvestigation",
-        "title": "cgremlin: New investigation..."
+        "title": "New investigation...",
+        "category": "cgremlin"
       },
       {
         "command": "cgremlin.newDevelopmentSession",
-        "title": "cgremlin: New development session..."
+        "title": "New development session...",
+        "category": "cgremlin"
       },
       {
         "command": "cgremlin.newReviewFromUrl",
-        "title": "cgremlin: New review from PR URL..."
+        "title": "New review from PR URL...",
+        "category": "cgremlin"
       },
       {
         "command": "cgremlin.refreshPreview",
-        "title": "cgremlin: Refresh preview"
+        "title": "Refresh preview",
+        "category": "cgremlin"
       },
       {
         "command": "cgremlin.startEngine",
-        "title": "cgremlin: Start the engine"
+        "title": "Start the engine",
+        "category": "cgremlin"
       }
     ],
     "configuration": {
@@ -126,6 +132,97 @@
           "description": "Which attention changes raise a popup."
         }
       }
+    },
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "cgremlin.openItem",
+          "when": "false"
+        },
+        {
+          "command": "cgremlin.chat",
+          "when": "false"
+        },
+        {
+          "command": "cgremlin.startReview",
+          "when": "false"
+        },
+        {
+          "command": "cgremlin.approvePlan",
+          "when": "false"
+        },
+        {
+          "command": "cgremlin.stop",
+          "when": "false"
+        },
+        {
+          "command": "cgremlin.retry",
+          "when": "false"
+        },
+        {
+          "command": "cgremlin.ack",
+          "when": "false"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "cgremlin.refreshInventory",
+          "when": "view == cgremlin.items",
+          "group": "navigation@1"
+        },
+        {
+          "command": "cgremlin.newInvestigation",
+          "when": "view == cgremlin.items",
+          "group": "1_new@1"
+        },
+        {
+          "command": "cgremlin.newDevelopmentSession",
+          "when": "view == cgremlin.items",
+          "group": "1_new@2"
+        },
+        {
+          "command": "cgremlin.newReviewFromUrl",
+          "when": "view == cgremlin.items",
+          "group": "1_new@3"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "cgremlin.startReview",
+          "when": "viewItem =~ /^(parking|reviewing):/",
+          "group": "inline@1"
+        },
+        {
+          "command": "cgremlin.chat",
+          "when": "viewItem =~ /^(reviewing|investigations|devwork):session:/",
+          "group": "inline@2"
+        },
+        {
+          "command": "cgremlin.openItem",
+          "when": "viewItem =~ /^(parking|reviewing|investigations|devwork):/",
+          "group": "1_open@1"
+        },
+        {
+          "command": "cgremlin.approvePlan",
+          "when": "viewItem =~ /^investigations:session:investigation$/",
+          "group": "2_act@1"
+        },
+        {
+          "command": "cgremlin.stop",
+          "when": "viewItem =~ /^(reviewing|investigations|devwork):session:/",
+          "group": "2_act@2"
+        },
+        {
+          "command": "cgremlin.retry",
+          "when": "viewItem =~ /^(reviewing|investigations|devwork):session:/",
+          "group": "2_act@3"
+        },
+        {
+          "command": "cgremlin.ack",
+          "when": "viewItem =~ /^(parking|reviewing|investigations|devwork):/",
+          "group": "9_ack@1"
+        }
+      ]
     }
   },
   "scripts": {
