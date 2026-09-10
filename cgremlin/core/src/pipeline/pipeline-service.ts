@@ -18,7 +18,7 @@ import type { StageRunner } from './stage-runner';
 import type { SessionFileSystem } from '../fs/session-file-system';
 import type { GitRunner } from '../git/git-runner';
 import type { EngineEvents } from '../engine/events';
-import type { InvestigationSession, Session } from '../schema/session';
+import type { DevelopmentSession, InvestigationSession, Session } from '../schema/session';
 import type { ReviewPhase } from '../schema/pipeline';
 import type { LastRun, StageName } from '../schema/stage';
 import { KeyedLock } from '../api/keyed-lock';
@@ -82,6 +82,12 @@ export interface CreateInvestigationInput {
   ticket: string | null;
   intent: 'investigate_only' | 'development';
   driveToCompletion: boolean;
+  baseRef?: string;
+}
+
+export interface CreateDevelopmentInput {
+  repoUrl: string;
+  ticket: string | null;
   baseRef?: string;
 }
 
@@ -327,6 +333,65 @@ export class PipelineService {
       // ticket doesn't fail with "a branch already exists", and so we don't
       // leave an orphaned worktree/mirror branch behind. Swallow a rollback
       // failure rather than let it mask the original error.
+      await this.deps.workspace.removeWorkspace(input.repoUrl, worktreePath, branch).catch(() => undefined);
+      throw err;
+    }
+    this.deps.events.emit('session.created', { session });
+    return session;
+  }
+
+  /**
+   * R16: a development session with no investigation upstream of it. Mirrors
+   * `createInvestigationSession` — derived id, safety checks, worktree,
+   * save-with-rollback, `session.created` — and, exactly like it, starts
+   * nothing: the caller issues `POST /sessions/:id/run {stage:'develop'}`
+   * when it wants the develop turn (MG-A11). `promote()` is still the path
+   * that auto-starts one.
+   */
+  async createDevelopmentSession(input: CreateDevelopmentInput): Promise<DevelopmentSession> {
+    const slug = repoSlugFromUrl(input.repoUrl);
+    const id = this.newId('dev', slug, input.ticket ?? 'no-ticket');
+    // Same reasoning as createInvestigationSession: the ticket feeds the id
+    // which feeds the worktree path, so validate the derived id BEFORE
+    // touching git or the filesystem, and reject '..' as a substring too.
+    assertSafeSessionId(id);
+    if (id.includes('..')) {
+      throw new InvalidSessionIdError(id);
+    }
+    // Legacy development naming (`bin/cgremlin:14293`), with the id as the
+    // fallback exactly as investigation's `investigate/${ticket ?? id}` does.
+    const branch = `feature/${input.ticket ?? id}`;
+    const worktreePath = `${this.deps.config.worktreesDir}/${id}`;
+
+    await this.deps.workspace.createWorkspace({
+      repoUrl: input.repoUrl,
+      worktreePath,
+      branchName: branch,
+      baseRef: input.baseRef ?? this.deps.config.defaultBaseRef,
+      // Selects the development permission guard: `gh pr review|comment|
+      // merge|close` denied, `git push`/`gh pr create` allowed.
+      mode: 'development',
+    });
+
+    const session: DevelopmentSession = {
+      schemaVersion: 2,
+      id,
+      mode: 'development',
+      createdAt: this.now().toISOString(),
+      workspace: { repoUrl: input.repoUrl, worktreePath, branch },
+      // Self-rooted, unlike promote()'s child session.
+      lineage: { pipelineId: id, parentSessionId: null, ticket: input.ticket },
+      stageStatus: 'active',
+      agent: null,
+      lastRun: null,
+      pr: null,
+    };
+    try {
+      await this.deps.store.save(session);
+    } catch (err) {
+      // Roll the workspace back so a retry with the same ticket doesn't fail
+      // on an existing branch, and swallow a rollback failure rather than let
+      // it mask the original error — verbatim as createInvestigationSession.
       await this.deps.workspace.removeWorkspace(input.repoUrl, worktreePath, branch).catch(() => undefined);
       throw err;
     }

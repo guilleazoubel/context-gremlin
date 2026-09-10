@@ -330,3 +330,76 @@ describe.skipIf(!hasGit())('Phase 3 engine end-to-end: review / re-review / reco
     30_000,
   );
 });
+
+describe.skipIf(!hasGit())('Phase 7 engine end-to-end: a development session created directly', () => {
+  let root: string;
+  let originPath: string;
+  let engine: Engine;
+
+  beforeAll(async () => {
+    root = await mkdtemp(path.join(tmpdir(), 'cgremlin-core-e2e-dev-'));
+    originPath = await createOriginRepo(root);
+    engine = await startEngine(root);
+  }, 20_000);
+
+  afterAll(async () => {
+    await engine.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it(
+    'creates a real worktree on feature/<ticket> with the development permission guard, starts nothing, then runs develop once into the PLAN GATE',
+    async () => {
+      const runStarts: string[] = [];
+      engine.events.on('run.started', (e) => runStarts.push(e.session.id));
+
+      const createRes = await engine.request('POST', '/sessions/developments', {
+        repoUrl: originPath,
+        ticket: 'APP-99',
+      });
+      expect(createRes.status).toBe(201);
+      const dev = (createRes.body as { session: Session }).session;
+      expect(dev.mode).toBe('development');
+      expect(dev.stageStatus).toBe('active');
+      expect(dev.lastRun).toBeNull();
+
+      // A real git worktree, on the legacy feature/<ticket> branch.
+      const worktreePath = path.join(root, 'worktrees', dev.id);
+      expect(gitRun(['rev-parse', '--abbrev-ref', 'HEAD'], worktreePath).trim()).toBe('feature/APP-99');
+
+      // The development permission guard, not the investigation one.
+      const settings = JSON.parse(
+        await readFile(path.join(worktreePath, '.claude', 'settings.local.json'), 'utf8'),
+      ) as { permissions: { deny?: string[] } };
+      expect(settings.permissions.deny).toContain('Bash(gh pr review:*)');
+      expect(settings.permissions.deny).not.toContain('Bash(git push:*)');
+
+      // MG-A11 over the real API: creation started nothing.
+      expect(runStarts).toEqual([]);
+
+      const runRes = await engine.request('POST', `/sessions/${dev.id}/run`, { stage: 'develop' });
+      expect(runRes.status).toBe(202);
+      expect(runStarts).toEqual([dev.id]);
+
+      const sessionDir = path.join(root, 'sessions', dev.id);
+      const brief = await readFile(path.join(sessionDir, 'BRIEF.md'), 'utf8');
+      expect(brief).toContain('**PLAN GATE — pause.**');
+      expect(engine.runner.getContext(engine.runner.lastHandle()).workingDirectory).toBe(worktreePath);
+
+      await finishRun(
+        engine.runner,
+        { 'DEVELOPMENT.md': '# Development plan\nrefined from the ticket\n', AGENT_STATE: 'needs-input' },
+        { code: 0, signal: null },
+      );
+
+      const after = await waitFor(engine, dev.id, (s) => s.lastRun?.outcome === 'succeeded');
+      expect(after.stageStatus).toBe('active'); // develop does not transition on success
+
+      const devArtifact = await engine.request('GET', `/sessions/${dev.id}/artifacts/DEVELOPMENT.md`);
+      expect(devArtifact.status).toBe(200);
+      expect(devArtifact.body as string).toContain('refined from the ticket');
+      expect(await readFile(path.join(sessionDir, 'AGENT_STATE'), 'utf8')).toBe('needs-input');
+    },
+    30_000,
+  );
+});

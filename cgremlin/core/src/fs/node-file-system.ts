@@ -26,6 +26,16 @@ export class NodeFileSystem implements SessionFileSystem {
     }
   }
 
+  async statMtimeMs(path: string): Promise<number | null> {
+    try {
+      const stats = await fs.stat(path);
+      return stats.mtimeMs;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+      throw err;
+    }
+  }
+
   async remove(path: string): Promise<void> {
     await fs.rm(path, { force: true });
   }

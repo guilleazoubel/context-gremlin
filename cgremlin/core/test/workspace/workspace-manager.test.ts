@@ -61,6 +61,7 @@ describe('WorkspaceManager', () => {
         throw new Error('disk full');
       },
       statMode: (p) => fs.statMode(p),
+      statMtimeMs: (p) => fs.statMtimeMs(p),
       remove: (p) => fs.remove(p),
       rename: (a, b) => fs.rename(a, b),
       readdir: (p) => fs.readdir(p),

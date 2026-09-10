@@ -1,6 +1,7 @@
 import type { GhRunner } from '../gh/gh-runner';
 import { PR_VIEW_FIELDS, mapPrView, parsePrView, type ReviewDecision } from '../gh/pr-view';
 import { parsePrUrl } from '../gh/pr-url';
+import { OwnPrError } from '../gh/own-pr-error';
 import { linkPrToSource } from '../discovery/link-pr-to-source';
 import type { SessionStore } from '../engine/session-store';
 import type { WorkspaceManager } from '../workspace/workspace-manager';
@@ -21,6 +22,10 @@ export interface CandidatePR {
   title: string;
 }
 
+export interface CreateFromPrUrlOptions {
+  refuseAuthor?: string;
+}
+
 export interface ReviewSessionFactoryDeps {
   gh: GhRunner;
   store: SessionStore;
@@ -39,20 +44,32 @@ function repoName(slug: string): string {
 export class ReviewSessionFactory {
   constructor(private readonly deps: ReviewSessionFactoryDeps) {}
 
-  async createFromPrUrl(prUrl: string): Promise<ReviewSession> {
+  /** `refuseAuthor`: reject the PR (before any worktree exists) when it is authored by that login, case-insensitively. */
+  async createFromPrUrl(prUrl: string, opts?: CreateFromPrUrlOptions): Promise<ReviewSession> {
     const ref = parsePrUrl(prUrl);
-    return this.create(ref.slug, ref.number);
+    return this.create(ref.slug, ref.number, opts);
   }
 
   async createFromCandidate(candidate: CandidatePR): Promise<ReviewSession> {
     return this.create(candidate.repo, candidate.number);
   }
 
-  private async create(slug: string, number: number): Promise<ReviewSession> {
+  private async create(slug: string, number: number, opts?: CreateFromPrUrlOptions): Promise<ReviewSession> {
     const { gh, store, workspace, events, worktreesDir, now, newId } = this.deps;
 
     const { stdout } = await gh.run(['pr', 'view', String(number), '--repo', slug, '--json', PR_VIEW_FIELDS]);
     const mapped = mapPrView(slug, parsePrView(stdout));
+
+    // Checked from the view we already fetched (no second gh call) and BEFORE
+    // createWorkspace, so a refusal leaves no worktree and no session behind.
+    const refuseAuthor = opts?.refuseAuthor;
+    if (
+      refuseAuthor !== undefined &&
+      mapped.pr.author !== null &&
+      mapped.pr.author.toLowerCase() === refuseAuthor.toLowerCase()
+    ) {
+      throw new OwnPrError(slug, number);
+    }
 
     const nowDate = (now ?? (() => new Date()))();
     const id = (newId ?? ((s, n) => `pr-${repoName(s)}-${n}-${stamp(nowDate)}`))(slug, number);

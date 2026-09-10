@@ -214,6 +214,7 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     attention,
     eventRing,
     lock,
+    config,
     ...(environment ? { environment } : {}),
   });
 

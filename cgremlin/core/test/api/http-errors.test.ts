@@ -14,6 +14,8 @@ import { WorkspaceInUseError } from '../../src/workspace/workspace-in-use';
 import { ArtifactNotFoundError } from '../../src/api/artifacts';
 import { TickInProgressError } from '../../src/discovery/scheduler';
 import { OwnPrError, NoScanYetError } from '../../src/api/server';
+import { OwnPrError as OwnPrErrorFromLeaf } from '../../src/gh/own-pr-error';
+import { InvalidPrUrlError } from '../../src/gh/pr-url';
 import {
   LocalAppPortBusyError,
   LocalAppPrereqError,
@@ -97,6 +99,17 @@ describe('mapErrorToHttp', () => {
 
   it('maps OwnPrError to 409', () => {
     expect(mapErrorToHttp(new OwnPrError('acme/app', 5)).status).toBe(409);
+  });
+
+  it('OwnPrError re-exported from src/api/server is the same class as the leaf module\'s', () => {
+    expect(OwnPrError).toBe(OwnPrErrorFromLeaf);
+    expect(new OwnPrErrorFromLeaf('acme/app', 5)).toBeInstanceOf(OwnPrError);
+  });
+
+  it('maps InvalidPrUrlError to 400', () => {
+    const result = mapErrorToHttp(new InvalidPrUrlError('https://gitlab.com/a/b'));
+    expect(result.status).toBe(400);
+    expect(result.body.error).toContain('gitlab.com');
   });
 
   it('maps NoScanYetError to 404', () => {

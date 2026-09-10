@@ -9,6 +9,7 @@ import { KeyedLock } from './keyed-lock';
 import { mapErrorToHttp } from './http-errors';
 import {
   parseArtifactName,
+  parseCreateDevelopmentRequest,
   parseCreateInvestigationRequest,
   parseCreateWorkspaceRequest,
   parseRemoveWorkspaceRequest,
@@ -16,7 +17,7 @@ import {
   ValidationError,
 } from './validation';
 import { assertWorktreeNotInUse, TERMINAL_PHASES_BY_MODE } from '../workspace/workspace-in-use';
-import { ArtifactNotFoundError } from './artifacts';
+import { ArtifactNotFoundError, pickPrimaryArtifact, type ArtifactListing } from './artifacts';
 import type { DiscoveryScheduler } from '../discovery/scheduler';
 import { awaitRunStart } from '../pipeline/run-start';
 import type { InventoryScanner, ScanReport } from '../inventory/inventory-scanner';
@@ -24,10 +25,12 @@ import type { InventoryStore } from '../inventory/inventory-store';
 import { groupInventory, type Inventory, type InventoryEntry } from '../inventory/inventory';
 import type { ReviewSessionFactory, CandidatePR } from '../pipeline/review-session-factory';
 import type { EnvironmentService, LocalAppStatus } from '../env/environment-service';
-import { redactBypassUrls } from '../config/core-config';
+import { redactBypassUrls, redactCoreConfig, type CoreConfig } from '../config/core-config';
 import { handleEventStream, type EventRing } from './event-stream';
 import type { AttentionService } from '../attention/attention-service';
 import { ITEM_SOURCES, parseItemRef, prRef, sessionRef, type ItemRef, type ItemSource } from '../attention/item-ref';
+import { OwnPrError } from '../gh/own-pr-error';
+import { parsePrUrl } from '../gh/pr-url';
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
@@ -75,14 +78,13 @@ export interface ApiServerDeps {
   attention?: AttentionService;
   /** Absent for a wiring with no event ring: GET /events then 404s. */
   eventRing?: EventRing;
+  /** Absent for a wiring built without one (every test server that doesn't need it): `GET /config` then 404s. */
+  config?: CoreConfig;
 }
 
-export class OwnPrError extends Error {
-  constructor(repo: string, number: number) {
-    super(`PR ${repo}#${number} is authored by the configured user; the engine never reviews its own PRs`);
-    this.name = 'OwnPrError';
-  }
-}
+// Re-exported (not redefined) so every existing importer keeps working while
+// ReviewSessionFactory can throw the same class without importing the server.
+export { OwnPrError } from '../gh/own-pr-error';
 
 export class NoScanYetError extends Error {
   constructor() {
@@ -99,6 +101,42 @@ async function loadCurrentInventory(inv: InventoryDeps): Promise<Inventory | nul
 
 function findEntry(inv: Inventory, repo: string, number: number): InventoryEntry | undefined {
   return inv.entries.find((e) => e.repo === repo && e.number === number);
+}
+
+// Shared by both review-session entry points (POST /reviews and POST
+// /prs/:owner/:repo/:n/review): a session already tracking this PR is
+// restarted when it is not genuinely live — queued, failed, or a
+// 'reviewing' session whose lastRun is not actually in activeSessionIds
+// (the on-disk state left behind by a crashed host) — and left alone (200)
+// only when it truly is live already. Both routes must reach identical
+// conclusions for the same session state.
+async function respondForExistingReviewSession(
+  res: ServerResponse,
+  deps: ApiServerDeps,
+  existing: Session,
+): Promise<void> {
+  const isLive = deps.pipeline.activeSessionIds().includes(existing.id);
+  if (!isLive) {
+    if (existing.stageStatus === 'queued' || existing.stageStatus === 'failed') {
+      await awaitRunStart(deps.events, existing.id, deps.pipeline.runReview(existing.id));
+      const session = await deps.sessionStore.load(existing.id);
+      sendJson(res, 202, { session, created: false, started: true });
+      return;
+    }
+    if (existing.stageStatus === 'reviewing') {
+      // No live run for a session that claims to be 'reviewing' means the
+      // host crashed mid-run — the on-disk phase is stale. Mark it failed
+      // (a legal transition from 'reviewing') before restarting, rather
+      // than leaving it stuck forever or silently resuming as if nothing
+      // happened.
+      await deps.pipeline.transition(existing.id, 'failed');
+      await awaitRunStart(deps.events, existing.id, deps.pipeline.runReview(existing.id));
+      const session = await deps.sessionStore.load(existing.id);
+      sendJson(res, 202, { session, created: false, started: true });
+      return;
+    }
+  }
+  sendJson(res, 200, { session: existing, created: false, started: false });
 }
 
 async function handleReviewStart(
@@ -133,28 +171,7 @@ async function handleReviewStart(
   );
 
   if (existing) {
-    const isLive = deps.pipeline.activeSessionIds().includes(existing.id);
-    if (!isLive) {
-      if (existing.stageStatus === 'queued' || existing.stageStatus === 'failed') {
-        await awaitRunStart(deps.events, existing.id, deps.pipeline.runReview(existing.id));
-        const session = await deps.sessionStore.load(existing.id);
-        sendJson(res, 202, { session, created: false, started: true });
-        return;
-      }
-      if (existing.stageStatus === 'reviewing') {
-        // No live run for a session that claims to be 'reviewing' means the
-        // host crashed mid-run — the on-disk phase is stale. Mark it failed
-        // (a legal transition from 'reviewing') before restarting, rather
-        // than leaving it stuck forever or silently resuming as if nothing
-        // happened.
-        await deps.pipeline.transition(existing.id, 'failed');
-        await awaitRunStart(deps.events, existing.id, deps.pipeline.runReview(existing.id));
-        const session = await deps.sessionStore.load(existing.id);
-        sendJson(res, 202, { session, created: false, started: true });
-        return;
-      }
-    }
-    sendJson(res, 200, { session: existing, created: false, started: false });
+    await respondForExistingReviewSession(res, deps, existing);
     return;
   }
 
@@ -247,6 +264,46 @@ async function handleArtifactRead(
   const content = await deps.fs.readFile(filePath);
   res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
   res.end(content);
+}
+
+/**
+ * The artifact listing. The name filter is `parseArtifactName` itself, called
+ * in a try/catch — there is deliberately no second allow-list, so widening
+ * what is listable stays a one-regex edit in src/api/validation.ts and can
+ * never drift from what the single-artifact read accepts.
+ */
+async function handleArtifactList(res: ServerResponse, deps: ApiServerDeps, id: string): Promise<void> {
+  const session = await deps.sessionStore.load(id); // SessionNotFoundError -> 404
+  const sessionDir = `${deps.sessionsDir}/${id}`;
+  let names: string[];
+  try {
+    names = await deps.fs.readdir(sessionDir);
+  } catch {
+    // A session whose directory was never created (nothing has run yet) has
+    // no artifacts — not an error.
+    names = [];
+  }
+  const artifacts: ArtifactListing[] = [];
+  for (const name of [...names].sort()) {
+    try {
+      parseArtifactName(name);
+    } catch {
+      continue;
+    }
+    const filePath = `${sessionDir}/${name}`;
+    const mtimeMs = await deps.fs.statMtimeMs(filePath);
+    if (mtimeMs === null) continue;
+    let content: string;
+    try {
+      content = await deps.fs.readFile(filePath);
+    } catch {
+      // An allow-listed name that isn't a readable file (a directory, say):
+      // omit it rather than failing the whole listing.
+      continue;
+    }
+    artifacts.push({ name, mtime: new Date(mtimeMs).toISOString(), size: Buffer.byteLength(content, 'utf8') });
+  }
+  sendJson(res, 200, { artifacts, primary: pickPrimaryArtifact(session, artifacts) });
 }
 
 /**
@@ -454,6 +511,12 @@ async function handleRequest(
       return;
     }
 
+    if (method === 'GET' && parts.length === 3 && parts[0] === 'sessions' && parts[2] === 'artifacts') {
+      const id = parts[1];
+      await lock.withLock(id, () => handleArtifactList(res, deps, id));
+      return;
+    }
+
     if (method === 'GET' && parts.length === 4 && parts[0] === 'sessions' && parts[2] === 'artifacts') {
       const id = parts[1];
       await lock.withLock(id, () => handleArtifactRead(res, deps, id, parts[3]));
@@ -500,6 +563,15 @@ async function handleRequest(
       }
     }
 
+    if (method === 'GET' && parts.length === 1 && parts[0] === 'config') {
+      if (!deps.config) {
+        sendJson(res, 404, { error: 'config not available' });
+        return;
+      }
+      sendJson(res, 200, { config: redactCoreConfig(deps.config) });
+      return;
+    }
+
     const localAction = localActionFor(parts);
     if (localAction !== null) {
       if (!deps.environment) {
@@ -523,6 +595,16 @@ async function handleRequest(
       const body = await readJsonBody(req);
       const input = parseCreateInvestigationRequest(body);
       const session = await deps.pipeline.createInvestigationSession(input);
+      sendJson(res, 201, { session });
+      return;
+    }
+
+    if (method === 'POST' && parts.length === 2 && parts[0] === 'sessions' && parts[1] === 'developments') {
+      const body = await readJsonBody(req);
+      const input = parseCreateDevelopmentRequest(body);
+      const session = await deps.pipeline.createDevelopmentSession(input);
+      // 201 and nothing started: the develop turn is a separate, explicit
+      // POST /sessions/:id/run (R16, MG-A11).
       sendJson(res, 201, { session });
       return;
     }
@@ -601,6 +683,49 @@ async function handleRequest(
       assertWorktreeNotInUse(sessions, params.worktreePath);
       await deps.workspaceManager.removeWorkspace(params.repoUrl, params.worktreePath, params.branchName);
       sendJson(res, 204, undefined);
+      return;
+    }
+
+    // R17: the only way to review a PR in a repo the scan does not watch —
+    // there is no InventoryEntry to address, so the PR URL is the input. The
+    // factory and `me` live under `inventory`, hence the same guard /prs uses.
+    if (method === 'POST' && parts.length === 1 && parts[0] === 'reviews') {
+      if (!deps.inventory) {
+        sendJson(res, 404, { error: 'inventory not configured' });
+        return;
+      }
+      const inv = deps.inventory;
+      const body = (await readJsonBody(req)) as { prUrl?: unknown } | undefined;
+      if (typeof body?.prUrl !== 'string') {
+        throw new ValidationError('Invalid review request: prUrl must be a string');
+      }
+      const ref = parsePrUrl(body.prUrl); // InvalidPrUrlError -> 400
+      // The SAME lock key the inventory-originated route uses (below), so the
+      // two entry points cannot create two sessions for one PR concurrently.
+      await lock.withLock(`pr:${ref.slug}#${ref.number}`, async () => {
+        const sessions = await deps.sessionStore.list();
+        const existing = sessions.find(
+          (s) =>
+            s.mode === 'review' &&
+            !TERMINAL_PHASES_BY_MODE.review.has(s.stageStatus) &&
+            s.pr !== null &&
+            s.pr.repo === ref.slug &&
+            s.pr.number === ref.number,
+        );
+        if (existing) {
+          // R23: identical semantics to the inventory-originated route for
+          // the same session state — genuinely live/active already gets 200,
+          // otherwise (queued/failed/orphaned-reviewing) it is restarted and
+          // gets 202. A terminal session is not a match and falls through to
+          // a fresh session below.
+          await respondForExistingReviewSession(res, deps, existing);
+          return;
+        }
+        const created = await inv.factory.createFromPrUrl(ref.url, { refuseAuthor: inv.config.me });
+        await awaitRunStart(deps.events, created.id, deps.pipeline.runReview(created.id));
+        const session = await deps.sessionStore.load(created.id);
+        sendJson(res, 202, { session, created: true, started: true });
+      });
       return;
     }
 

@@ -411,8 +411,11 @@ describe('AttentionService + SessionWatcher', () => {
     fx.changed.length = 0;
     fx.watcher.emit({ sessionId: 'a', name: 'PLAN.md' });
     await new Promise((resolve) => setImmediate(resolve));
+    // Now that `statMtimeMs` exists (A2), the adapter answers with the file's
+    // OWN mtime rather than the service's observation time.
+    const onDisk = await fx.h.fs.statMtimeMs(`${SESSIONS_DIR}/a/PLAN.md`);
     expect(fx.artifacts).toEqual([
-      { sessionId: 'a', name: 'PLAN.md', mtime: NOW.toISOString() },
+      { sessionId: 'a', name: 'PLAN.md', mtime: new Date(onDisk!).toISOString() },
     ]);
     expect(new Date(fx.artifacts[0].mtime).toISOString()).toBe(fx.artifacts[0].mtime);
     expect(fx.changed).toEqual([]);

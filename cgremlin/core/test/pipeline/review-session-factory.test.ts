@@ -9,6 +9,7 @@ import { WorkspaceManager } from '../../src/workspace/workspace-manager';
 import { EngineEvents } from '../../src/engine/events';
 import { PR_VIEW_FIELDS } from '../../src/gh/pr-view';
 import { InvalidPrUrlError } from '../../src/gh/pr-url';
+import { OwnPrError } from '../../src/gh/own-pr-error';
 import { ReviewSessionFactory, type ReviewSessionFactoryDeps } from '../../src/pipeline/review-session-factory';
 import { migrateV1ToV2, type Session } from '../../src/schema/session';
 
@@ -195,5 +196,43 @@ describe('ReviewSessionFactory.createFromCandidate', () => {
       ['pr', 'view', '1614', '--repo', 'aplaceformom/grace-frontend', '--json', PR_VIEW_FIELDS],
     ]);
     expect(session.pr?.number).toBe(1614);
+  });
+});
+
+describe('ReviewSessionFactory.createFromPrUrl — refuseAuthor (R17)', () => {
+  it('throws OwnPrError before any workspace exists when the author matches refuseAuthor, case-insensitively', async () => {
+    const { gh, git, store, workspace, factory } = harness();
+    const raw = JSON.parse(fixture('pr-view-open-approved.json'));
+    raw.author.login = 'Me';
+    gh.queueResponse({ stdout: JSON.stringify(raw) });
+    const createCalls: unknown[] = [];
+    workspace.createWorkspace = async (params) => {
+      createCalls.push(params);
+      return '/mirrors/never';
+    };
+
+    await expect(factory.createFromPrUrl(PR_URL, { refuseAuthor: 'me' })).rejects.toBeInstanceOf(OwnPrError);
+
+    expect(createCalls).toEqual([]);
+    expect(git.calls).toEqual([]);
+    expect(await store.list()).toEqual([]);
+  });
+
+  it('creates the session exactly as usual when the author differs from refuseAuthor', async () => {
+    const { gh, store, factory } = harness();
+    gh.queueResponse({ stdout: fixture('pr-view-open-approved.json') });
+    const session = await factory.createFromPrUrl(PR_URL, { refuseAuthor: 'someone-else' });
+    expect(session.pr?.author).toBe('pureawesome');
+    expect(await store.list()).toEqual([session]);
+  });
+
+  it('with no options at all it behaves exactly as before: an own-looking author is still created', async () => {
+    const { gh, store, factory } = harness();
+    const raw = JSON.parse(fixture('pr-view-open-approved.json'));
+    raw.author.login = 'me';
+    gh.queueResponse({ stdout: JSON.stringify(raw) });
+    const session = await factory.createFromPrUrl(PR_URL);
+    expect(session.pr?.author).toBe('me');
+    expect((await store.list()).length).toBe(1);
   });
 });

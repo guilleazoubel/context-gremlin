@@ -3,6 +3,8 @@ export interface SessionFileSystem {
   writeFile(path: string, content: string, options?: { mode?: number }): Promise<void>;
   /** Permission bits only (`mode & 0o777`); `null` when the path does not exist. */
   statMode(path: string): Promise<number | null>;
+  /** Last-modification time in epoch milliseconds; `null` when the path does not exist. */
+  statMtimeMs(path: string): Promise<number | null>;
   /** Deletes a file; a no-op when the path does not exist. */
   remove(path: string): Promise<void>;
   rename(from: string, to: string): Promise<void>;

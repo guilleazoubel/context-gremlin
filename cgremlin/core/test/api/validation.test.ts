@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   parseArtifactName,
+  parseCreateDevelopmentRequest,
   parseCreateInvestigationRequest,
   parseCreateWorkspaceRequest,
   parseRunStageRequest,
@@ -131,5 +132,32 @@ describe('parseArtifactName', () => {
 
   it('MG-2: parseArtifactName rejects .bypass-secret', () => {
     expect(() => parseArtifactName('.bypass-secret')).toThrow(ValidationError);
+  });
+});
+
+describe('parseCreateDevelopmentRequest', () => {
+  it('returns the parsed input for a valid request', () => {
+    const body = { repoUrl: 'git@github.com:acme/app.git', ticket: 'APP-1' };
+    expect(parseCreateDevelopmentRequest(body)).toEqual(body);
+  });
+
+  it('accepts a null ticket and an optional baseRef', () => {
+    const body = { repoUrl: 'git@github.com:acme/app.git', ticket: null, baseRef: 'origin/release' };
+    expect(parseCreateDevelopmentRequest(body)).toEqual(body);
+  });
+
+  it('enforces the same ticket rule as the investigation request', () => {
+    for (const ticket of ['../../x', 'a/b', 'a b', '']) {
+      expect(() => parseCreateDevelopmentRequest({ repoUrl: 'git@github.com:acme/app.git', ticket })).toThrow(
+        ValidationError,
+      );
+    }
+    expect(parseCreateDevelopmentRequest({ repoUrl: 'git@github.com:acme/app.git', ticket: 'a.b_c-1' }).ticket).toBe(
+      'a.b_c-1',
+    );
+  });
+
+  it('throws ValidationError for a missing repoUrl', () => {
+    expect(() => parseCreateDevelopmentRequest({ ticket: 'APP-1' })).toThrow(ValidationError);
   });
 });
