@@ -6,6 +6,7 @@ import {
   MAX_PENDING_FRAMES,
   handleEventStream,
   serializeFrame,
+  type RingEntry,
 } from '../../src/api/event-stream';
 
 interface StubRes {
@@ -353,6 +354,84 @@ describe('handleEventStream', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  /**
+   * The `entry.id <= lastSent` gate. With today's EventRing the gate is not
+   * reachable: `push` only ever hands out increasing ids, and the handover
+   * subscribes strictly after the replay snapshot, so no already-sent id can
+   * come back. It is the one thing standing between a future ring change (a
+   * re-delivering subscriber, a since() that overlaps what was replayed) and
+   * a duplicated frame, so it is pinned here against a ring that does exactly
+   * that rather than left to the honour system.
+   */
+  describe('R21: an already-sent id is never written twice', () => {
+    class ReDeliveringRing extends EventRing {
+      subscriber: ((entry: RingEntry) => void) | null = null;
+      /** Entries the Nth `since` call returns instead of the real answer. */
+      overlapOnCall: { call: number; entries: RingEntry[] } | null = null;
+      private sinceCalls = 0;
+
+      subscribe(cb: (entry: RingEntry) => void): () => void {
+        this.subscriber = cb;
+        return super.subscribe(cb);
+      }
+
+      since(lastEventId: number): { entries: RingEntry[]; complete: boolean } {
+        this.sinceCalls += 1;
+        if (this.overlapOnCall !== null && this.overlapOnCall.call === this.sinceCalls) {
+          return { entries: this.overlapOnCall.entries, complete: true };
+        }
+        return super.since(lastEventId);
+      }
+    }
+
+    function idsOf(res: StubRes): number[] {
+      return framesOf(res)
+        .map((f) => /^id: (\d+)/.exec(f)?.[1])
+        .filter((id): id is string => id !== undefined)
+        .map(Number);
+    }
+
+    it('drops a live notification for an id the replay already wrote', () => {
+      const ring = new ReDeliveringRing();
+      for (let i = 1; i <= 5; i += 1) ring.push('session.created', { i });
+      const res = stubRes();
+      handleEventStream(stubReq('/events', { 'last-event-id': '0' }).as(), res.as(), { ring });
+      expect(idsOf(res)).toEqual([1, 2, 3, 4, 5]);
+
+      // The ring re-delivers what the replay already sent.
+      ring.subscriber?.({ id: 3, type: 'session.created', data: { i: 3 } });
+      ring.subscriber?.({ id: 5, type: 'session.created', data: { i: 5 } });
+      expect(idsOf(res)).toEqual([1, 2, 3, 4, 5]);
+
+      // And the connection is still live for the next real event.
+      ring.push('session.created', { i: 6 });
+      const ids = idsOf(res);
+      expect(ids).toEqual([1, 2, 3, 4, 5, 6]);
+      expect(ids).toEqual([...new Set(ids)]);
+      expect(ids).toEqual([...ids].sort((a, b) => a - b));
+    });
+
+    it('drops a catch-up pass that overlaps what the replay already wrote', () => {
+      const ring = new ReDeliveringRing();
+      for (let i = 1; i <= 5; i += 1) ring.push('session.created', { i });
+      // Call 1 is the replay snapshot; call 2 is the post-subscribe catch-up,
+      // which here hands back an id already written alongside a new one.
+      ring.overlapOnCall = {
+        call: 2,
+        entries: [
+          { id: 2, type: 'session.created', data: { i: 2 } },
+          { id: 6, type: 'session.created', data: { i: 6 } },
+        ],
+      };
+      const res = stubRes();
+      handleEventStream(stubReq('/events', { 'last-event-id': '0' }).as(), res.as(), { ring });
+      const ids = idsOf(res);
+      expect(ids).toEqual([1, 2, 3, 4, 5, 6]);
+      expect(ids).toEqual([...new Set(ids)]);
+      expect(ids).toEqual([...ids].sort((a, b) => a - b));
+    });
   });
 
   it('never writes to a destroyed response', () => {
