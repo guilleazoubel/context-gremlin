@@ -122,6 +122,15 @@ export async function serve(config: CoreConfig, adapters: EngineAdapters, opts: 
     logLine(opts.log, 'local.reap_failed', { error: err instanceof Error ? err.message : String(err) });
   }
 
+  // R20: no extension can hold a human-turn claim across an engine restart it
+  // did not survive, so every claim is cleared BEFORE anything can reach us —
+  // otherwise an orphaned claim would refuse every stage on that session with
+  // nothing left alive to release it.
+  const clearedClaims = await pipeline.clearAllHumanTurns();
+  if (clearedClaims.count > 0) {
+    logLine(opts.log, 'conversation.claims_cleared', clearedClaims);
+  }
+
   await listenOnSocket(server, socketPath);
   scheduler.start();
 

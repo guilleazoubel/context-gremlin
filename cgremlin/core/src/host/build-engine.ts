@@ -123,6 +123,8 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
       defaultBaseRef: config.defaultBaseRef,
       reviewSkillCommand: config.reviewSkillCommand,
       includeLiveUiCheck: config.includeLiveUiCheck,
+      runnerKind: adapters.runnerKind,
+      humanTurnTtlMs: config.humanTurnTtlMs,
     },
     now: adapters.now,
     lock,
@@ -139,7 +141,7 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
   });
 
   const inventoryStore = new InventoryStore(adapters.fs, inventoryPath);
-  const tick = new ReconciliationTick({ gh: adapters.gh, store, pipeline, events, lock });
+  const tick = new ReconciliationTick({ gh: adapters.gh, store, pipeline, events, lock, now: adapters.now });
   const scanner = new InventoryScanner({
     gh: adapters.gh,
     store,

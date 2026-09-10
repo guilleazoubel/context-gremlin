@@ -44,6 +44,10 @@ export function flush(): Promise<void> {
 export interface HarnessOptions {
   /** Swap in an instrumented lock (e.g. one that records enter/exit) — still the ONE lock every component shares. */
   lock?: KeyedLock;
+  /** Overrides FIXED_NOW for both StageRunner and PipelineService — a movable clock for TTL tests. */
+  now?: () => Date;
+  /** What a claim on a never-run session records as its runner (PipelineConfig.runnerKind). */
+  runnerKind?: 'claude-code' | 'codex';
   /**
    * Built after the harness's fs/git/lock exist, so an EnvironmentService can
    * share them; omitted for every wiring that has no environment at all.
@@ -59,6 +63,8 @@ export function createHarness(options: HarnessOptions = {}): PipelineHarness {
   const runner = new FakeAgentRunner();
   const events = new EngineEvents();
   const lock = options.lock ?? new KeyedLock();
+  const now = options.now ?? FIXED_NOW;
+  const runnerKind = options.runnerKind ?? 'claude-code';
   const environment = options.environment?.({ fs, git, lock });
   const stageRunner = new StageRunner({
     runner,
@@ -66,14 +72,16 @@ export function createHarness(options: HarnessOptions = {}): PipelineHarness {
     fs,
     events,
     sessionsDir: SESSIONS_DIR,
-    runnerKind: 'claude-code',
-    now: FIXED_NOW,
+    runnerKind,
+    now,
     lock,
   });
   const config: PipelineConfig = {
     sessionsDir: SESSIONS_DIR,
     worktreesDir: WORKTREES_DIR,
     defaultBaseRef: 'origin/main',
+    runnerKind,
+    humanTurnTtlMs: 600_000,
   };
   const service = new PipelineService({
     store,
@@ -83,7 +91,7 @@ export function createHarness(options: HarnessOptions = {}): PipelineHarness {
     git,
     events,
     config,
-    now: FIXED_NOW,
+    now,
     lock,
     environment,
   });

@@ -7,6 +7,7 @@ import type { ReviewSession, Session } from '../schema/session';
 import { canTransition, type DevelopmentPhase, type ReviewPhase } from '../schema/pipeline';
 import { TERMINAL_PHASES_BY_MODE } from '../workspace/workspace-in-use';
 import { awaitRunStart } from '../pipeline/run-start';
+import { isClaimed } from '../pipeline/pipeline-service';
 import type { KeyedLock } from '../api/keyed-lock';
 
 export type ReconcileAction =
@@ -23,6 +24,11 @@ export interface PlanReconciliationInput {
   review: ReviewSession;
   view: ReturnType<typeof mapPrView>;
   source: Session | null;
+  /**
+   * A clock ARGUMENT, not a clock — the function stays pure. Needed only to
+   * decide whether the review's human-turn claim is still live (R20).
+   */
+  now: Date;
 }
 
 export interface PlanReconciliationResult {
@@ -60,7 +66,7 @@ function proposeTransition(
 }
 
 export function planReconciliation(input: PlanReconciliationInput): PlanReconciliationResult {
-  const { review, view, source } = input;
+  const { review, view, source, now } = input;
   const actions: ReconcileAction[] = [];
   const skipped: SkippedTransition[] = [];
 
@@ -98,7 +104,17 @@ export function planReconciliation(input: PlanReconciliationInput): PlanReconcil
     view.pr.headSha !== review.pr?.reviewedSha &&
     REREVIEW_ELIGIBLE_REVIEW_PHASES.includes(review.stageStatus)
   ) {
-    actions.push({ type: 'rereview', sessionId: review.id, reason: 'rereview started — outcome reported on the session' });
+    // R20: a human holding the conversation SKIPS the re-review — it never
+    // errors. Returning the action anyway would make PipelineService refuse
+    // it (HumanTurnInProgressError), and the apply loop's catch would file a
+    // report.errors entry every pollIntervalMs for as long as the human keeps
+    // the conversation open. Merge/close transitions above are deliberately
+    // NOT guarded: a claim delays a re-review, never the truth about the PR.
+    if (isClaimed(review, now)) {
+      skipped.push({ sessionId: review.id, to: 'reviewing', why: 'conversation claimed by a human turn' });
+    } else {
+      actions.push({ type: 'rereview', sessionId: review.id, reason: 'rereview started — outcome reported on the session' });
+    }
   }
 
   return { actions, skipped };
@@ -110,6 +126,8 @@ export interface ReconciliationTickDeps {
   pipeline: PipelineService;
   events: EngineEvents;
   lock: KeyedLock;
+  /** Injected for the human-turn claim's TTL comparison (R20); defaults to the real clock. */
+  now?: () => Date;
 }
 
 export interface TickReport {
@@ -129,7 +147,11 @@ function errorMessage(err: unknown): string {
 // no code path here creates a session or starts a review for a PR the
 // engine doesn't already have a session for.
 export class ReconciliationTick {
-  constructor(private readonly deps: ReconciliationTickDeps) {}
+  private readonly now: () => Date;
+
+  constructor(private readonly deps: ReconciliationTickDeps) {
+    this.now = deps.now ?? (() => new Date());
+  }
 
   async run(): Promise<TickReport> {
     const report: TickReport = {
@@ -174,7 +196,7 @@ export class ReconciliationTick {
           ]);
           const view = mapPrView(pr.repo, parsePrView(stdout));
           const source = sessions.find((s) => s.id === fresh.lineage.parentSessionId) ?? null;
-          const { actions, skipped } = planReconciliation({ review: fresh, view, source });
+          const { actions, skipped } = planReconciliation({ review: fresh, view, source, now: this.now() });
           return { fresh, source, actions, skipped };
         });
         if (planned === null) continue;

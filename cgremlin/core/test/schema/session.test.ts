@@ -127,3 +127,47 @@ describe('schema v2', () => {
     ).toThrow();
   });
 });
+
+const v2WithoutHumanTurn = {
+  schemaVersion: 2 as const,
+  id: 'dev-1',
+  mode: 'development' as const,
+  createdAt: '2026-09-04T10:00:00.000Z',
+  workspace: { repoUrl: 'git@github.com:acme/app.git', worktreePath: '/w/dev-1', branch: 'feature/x' },
+  lineage: { pipelineId: 'p1', parentSessionId: null, ticket: 'APP-1' },
+  stageStatus: 'active' as const,
+  agent: { runner: 'claude-code' as const, resumeId: 'resume-1' },
+  lastRun: null,
+  pr: null,
+};
+
+const CLAIM = { claimedAt: '2026-09-10T09:00:00.000Z', expiresAt: '2026-09-10T09:10:00.000Z' };
+
+describe('agent.humanTurn (R20)', () => {
+  it('an agent record already on disk with no humanTurn loads with humanTurn === null', () => {
+    const s = parseSession(v2WithoutHumanTurn);
+    expect(s.agent).toEqual({ runner: 'claude-code', resumeId: 'resume-1', humanTurn: null });
+  });
+
+  it('a v1 document still migrates with agent === null', () => {
+    expect(migrateV1ToV2(v1Investigation).agent).toBeNull();
+  });
+
+  it('agent: null stays null', () => {
+    expect(parseSession({ ...v2WithoutHumanTurn, agent: null }).agent).toBeNull();
+  });
+
+  it('a { claimedAt, expiresAt } claim round-trips', () => {
+    const s = parseSession({ ...v2WithoutHumanTurn, agent: { ...v2WithoutHumanTurn.agent, humanTurn: CLAIM } });
+    expect(s.agent?.humanTurn).toEqual(CLAIM);
+  });
+
+  it('a malformed claim (no expiresAt) is rejected rather than silently dropped', () => {
+    expect(() =>
+      parseSession({
+        ...v2WithoutHumanTurn,
+        agent: { ...v2WithoutHumanTurn.agent, humanTurn: { claimedAt: CLAIM.claimedAt } },
+      }),
+    ).toThrow();
+  });
+});

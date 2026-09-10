@@ -20,6 +20,7 @@ export function mapErrorToHttp(err: unknown): HttpError {
     case 'PlanGateError':
     case 'RunInProgressError':
     case 'WorkspaceInUseError':
+    case 'HumanTurnInProgressError':
     case 'UnsupportedStageError':
     case 'WorkspaceMissingError':
     case 'TickInProgressError':

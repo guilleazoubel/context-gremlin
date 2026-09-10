@@ -179,7 +179,7 @@ export async function startEngine(root: string, fakes: EngineFakes = {}): Promis
     fs,
     git,
     events,
-    config: { sessionsDir, worktreesDir, defaultBaseRef: 'origin/main' },
+    config: { sessionsDir, worktreesDir, defaultBaseRef: 'origin/main' , runnerKind: 'claude-code', humanTurnTtlMs: 600_000 },
     lock,
   });
   const server = createApiServer({
