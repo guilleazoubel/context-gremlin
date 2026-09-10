@@ -4,13 +4,18 @@
  * narrow {@link Host} member it backs, or one line of wiring; all behaviour lives in `ui/*`,
  * which is why this file has no unit test of its own and `ui/wiring.ts` has one.
  */
+import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import * as vscode from 'vscode';
 import { CoreClient } from './core-client';
-import { loadBridge } from './engine/bridge';
+import { engineBundlePath, loadBridge, type EngineBridge } from './engine/bridge';
+import { watchFileByRename } from './engine/file-watch';
+import { EngineManager } from './engine/manager';
+import { NodeEngineProcess } from './engine/node-engine-process';
 import { SseClient } from './sse';
 import { readSettings } from './settings';
+import { EngineSurface } from './ui/engine';
 import { createUi, type Ui } from './ui/wiring';
 import type {
   DisposableLike,
@@ -28,56 +33,104 @@ import type {
 
 let ui: Ui | null = null;
 let stream: SseClient | null = null;
+let engineSurface: EngineSurface | null = null;
 
 export function activate(context: vscode.ExtensionContext): void {
   const output = vscode.window.createOutputChannel('cgremlin');
   context.subscriptions.push(output);
-  const settings = readSettings();
-  const host = buildHost((line) => output.appendLine(line));
+  const host = buildHost(output);
   // The socket path is not a setting: it is derived from `core.json` by the engine's own loader
-  // (MG-C6), and it is handed to the client layer as a provider so a settings change can re-point
-  // it without rebuilding the UI and releasing every chat claim (R7).
-  const paths = { socketPath: '' };
-  const client = new CoreClient(() => paths.socketPath);
+  // (MG-C6), and it reaches the client layer as a provider so a settings change can re-point it
+  // without rebuilding the UI and releasing every chat claim (R7).
+  const socketPath = (): string => engineSurface?.paths()?.socketPath ?? '';
+  const client = new CoreClient(socketPath);
+  const sse = new SseClient({ socketPath });
+  stream = sse;
 
-  const created = createUi({
+  let created: Ui | null = null;
+  let bridge: EngineBridge;
+  try {
+    bridge = loadBridge(context.extensionPath);
+  } catch (err) {
+    // The build produces the engine bundle; only a half-built checkout gets here, and R9's message
+    // says which command was missed. Failing loudly here beats registering commands that cannot
+    // work, but it must not be a stack trace in the developer console.
+    const message = err instanceof Error ? err.message : String(err);
+    output.appendLine(`cgremlin: ${message}`);
+    void vscode.window.showWarningMessage(message);
+    return;
+  }
+  const manager = new EngineManager({
+    process: new NodeEngineProcess(),
+    bundledVersion: bridge.ENGINE_VERSION,
+    paths: () => {
+      const resolved = engineSurface?.paths();
+      return {
+        configPath: resolved?.configPath ?? readSettings().configPath,
+        socketPath: resolved?.socketPath ?? '',
+        enginePidPath: resolved?.enginePidPath ?? '',
+        engineLogPath: resolved?.engineLogPath ?? '',
+      };
+    },
+    launch: () => ({
+      // `process.execPath` is the editor's own Node host; `ELECTRON_RUN_AS_NODE` (set by the
+      // adapter) is what makes it behave as Node.
+      execPath: process.execPath,
+      enginePath: engineBundlePath(context.extensionPath),
+      cwd: os.homedir(),
+    }),
+    log: (line) => output.appendLine(line),
+  });
+
+  const surface = new EngineSurface({
+    host,
+    manager,
+    bridge,
+    configPath: () => readSettings().configPath,
+    home: os.homedir(),
+    execPath: process.execPath,
+    enginePath: engineBundlePath(context.extensionPath),
+    reconnect: async () => {
+      sse.stop();
+      sse.start();
+      await created?.connect();
+    },
+  });
+  engineSurface = surface;
+
+  created = createUi({
     host,
     client,
     // Read live, so changing the level takes effect without a reload.
     notificationLevel: () => readSettings().notificationLevel,
-    configPath: () => readSettings().configPath,
+    engine: surface,
   });
   ui = created;
 
-  const sse = new SseClient({ socketPath: () => paths.socketPath });
-  stream = sse;
+  const ready = created;
   // Every frame is a hint that something changed; the coordinator coalesces a burst into one
   // refetch, so the extension never trusts a frame's payload to be the whole truth.
-  sse.on('frame', () => created.coordinator.schedule());
-  sse.on('resync', () => created.coordinator.schedule());
-  sse.on('open', () => created.coordinator.schedule());
-  sse.on('offline', () => void created.offline());
+  sse.on('frame', () => ready.coordinator.schedule());
+  sse.on('resync', () => ready.coordinator.schedule());
+  sse.on('open', () => ready.coordinator.schedule());
+  sse.on('offline', () => void ready.offline());
 
-  // B3 owns the engine's lifecycle, the first-run flow and the `ConfigError` surface; until then
-  // resolving the config is all that stands between activation and a socket to talk to.
-  void (async () => {
-    try {
-      const bridge = loadBridge(context.extensionPath);
-      const resolved = await bridge.loadResolvedConfig(settings.configPath, os.homedir());
-      paths.socketPath = resolved.socketPath;
-    } catch (err) {
-      output.appendLine(`cgremlin: could not resolve ${settings.configPath}: ${String(err)}`);
-      return;
-    }
-    void created.connect();
-    // The stream retries with backoff regardless of whether the first connect succeeded.
-    sse.start();
-  })();
+  // R15: opening a window starts the engine. Everything that can go wrong on the way — a missing
+  // `core.json`, a `ConfigError`, an engine that will not come up — is surfaced by the surface.
+  void surface.bootstrap();
 
+  context.subscriptions.push(
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration('cgremlin')) void surface.settingsChanged();
+    }),
+  );
   context.subscriptions.push({ dispose: () => sse.stop() });
+  // R30: the log tail and the config watcher are both `fs.watch` handles, and an undisposed watch
+  // survives a window reload and tails into a dead channel.
+  context.subscriptions.push({ dispose: () => surface.dispose() });
   context.subscriptions.push({
     dispose: () => {
-      void created.dispose();
+      void ready.dispose();
     },
   });
 }
@@ -85,13 +138,18 @@ export function activate(context: vscode.ExtensionContext): void {
 export async function deactivate(): Promise<void> {
   stream?.stop();
   stream = null;
+  // R16: no window owns the engine. Deactivation releases this window's claims and lets go of its
+  // watches; it never stops a daemon every other window is also using.
+  engineSurface?.dispose();
+  engineSurface = null;
   const current = ui;
   ui = null;
   // Releases every conversation claim this window holds, and clears every heartbeat (R20).
   await current?.dispose();
 }
 
-function buildHost(log: (line: string) => void): Host {
+function buildHost(output: vscode.OutputChannel): Host {
+  const log = (line: string): void => output.appendLine(line);
   return {
     async showInformationMessage(message, options, ...items) {
       return await vscode.window.showInformationMessage(message, options ?? {}, ...items);
@@ -191,6 +249,54 @@ function buildHost(log: (line: string) => void): Host {
     },
     writeFile(path: string, content: string) {
       fs.writeFileSync(path, content, 'utf8');
+    },
+    fileSize(path: string) {
+      try {
+        return fs.statSync(path).size;
+      } catch {
+        return 0;
+      }
+    },
+    readFileSlice(path: string, from: number) {
+      try {
+        const buffer = fs.readFileSync(path);
+        const slice = buffer.subarray(Math.min(from, buffer.byteLength));
+        return { text: slice.toString('utf8'), end: buffer.byteLength };
+      } catch {
+        return { text: '', end: from };
+      }
+    },
+    watchFile(path: string, callback: () => void) {
+      return watchFileByRename(path, callback);
+    },
+    async chmod(path: string, mode: number) {
+      await fs.promises.chmod(path, mode);
+    },
+
+    async openTextDocument(path: string) {
+      const document = await vscode.workspace.openTextDocument(vscode.Uri.file(path));
+      await vscode.window.showTextDocument(document);
+    },
+    spawnCapture(command, args, options) {
+      return new Promise((resolve) => {
+        execFile(
+          command,
+          [...args],
+          { cwd: options?.cwd, timeout: options?.timeoutMs, encoding: 'utf8' },
+          (err, stdout, stderr) => {
+            const code =
+              err === null ? 0 : typeof err.code === 'number' ? err.code : 1;
+            resolve({ code, stdout, stderr });
+          },
+        );
+      });
+    },
+
+    appendOutput(line: string) {
+      output.appendLine(line);
+    },
+    showOutput() {
+      output.show(true);
     },
 
     setInterval(callback, ms) {

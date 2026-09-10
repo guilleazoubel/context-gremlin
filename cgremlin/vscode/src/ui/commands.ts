@@ -54,8 +54,6 @@ export interface CommandDeps {
   coordinator: RefreshCoordinator;
   opener: ItemOpener;
   chat: ChatSessions;
-  /** `cgremlin.configPath`, used only by the `Start it` terminal command. */
-  configPath: () => string;
 }
 
 export function registerCommands(deps: CommandDeps): DisposableLike[] {
@@ -149,12 +147,6 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
 
     host.registerCommand('cgremlin.refreshPreview', async () => {
       await host.executeCommand('markdown.preview.refresh');
-    }),
-
-    host.registerCommand('cgremlin.startEngine', () => {
-      const terminal = host.createTerminal({ name: 'cgremlin-core' });
-      terminal.show();
-      terminal.sendText(`cgremlin-core serve --config ${deps.configPath()}`);
     }),
 
     host.registerCommand('cgremlin.newInvestigation', async () => {

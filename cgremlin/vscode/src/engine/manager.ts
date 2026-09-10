@@ -150,6 +150,16 @@ export class EngineManager {
     return this.current;
   }
 
+  /**
+   * R21: how much work a restart would cancel, straight from `GET /version`. `null` means nothing
+   * answered. This is the *only* input to a restart decision: the PR-level listing the panel shows
+   * describes pull requests, not the engine's own in-flight work, and cannot see a preparing stage.
+   */
+  async activeRuns(): Promise<number | null> {
+    const probe = await this.opts.process.probe(this.opts.paths().socketPath);
+    return probe === null || probe === 'foreign' ? null : probe.activeRuns;
+  }
+
   onStateChange(cb: (state: EngineState) => void): () => void {
     this.listeners.add(cb);
     return () => this.listeners.delete(cb);

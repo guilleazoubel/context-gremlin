@@ -94,6 +94,7 @@ describe('MG-B1 the editor API has exactly two entry points', () => {
     const ui = allSourceFiles(path.join(root, 'src/ui')).map((f) => path.basename(f)).sort();
     expect(ui).toEqual([
       'commands.ts',
+      'engine.ts',
       'host.ts',
       'notifications.ts',
       'preview.ts',
@@ -158,6 +159,45 @@ describe('MG-C3 socket-setting-is-gone', () => {
       'cgremlin.notificationLevel',
     ]);
     expect(properties['cgremlin.configPath'].default).toBe('~/.cgremlin-core/core.json');
+  });
+});
+
+/**
+ * MG-C7: the engine is started by the manager, not by typing a shell command into a terminal that
+ * needs `cgremlin-core` on `PATH`. The old start-engine command id is replaced rather than
+ * aliased (R12), so its name must be gone from the whole package. (The integration harness has an
+ * unrelated helper of a similar name, which is why this pins the command id and not the word.)
+ */
+describe('MG-C7 no-engine-start-via-terminal', () => {
+  it('has no start-engine command id left anywhere', () => {
+    expect(hits(packageSources(), /cgremlin\.startEngine/)).toEqual([]);
+  });
+
+  it('sends no serve command to a terminal', () => {
+    const files = everyFileUnder(path.join(root, 'src'), (n) => n.endsWith('.ts'));
+    const offenders = files.filter((file) =>
+      fs
+        .readFileSync(file, 'utf8')
+        .split('\n')
+        .some((line) => line.includes('sendText') && line.includes('serve')),
+    );
+    expect(offenders).toEqual([]);
+  });
+
+  it('contributes the four engine commands', () => {
+    const manifest = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8')) as {
+      contributes: { commands: { command: string }[] };
+    };
+    const engine = manifest.contributes.commands
+      .map((c) => c.command)
+      .filter((c) => c.startsWith('cgremlin.engine.'))
+      .sort();
+    expect(engine).toEqual([
+      'cgremlin.engine.restart',
+      'cgremlin.engine.showLog',
+      'cgremlin.engine.start',
+      'cgremlin.engine.stop',
+    ]);
   });
 });
 

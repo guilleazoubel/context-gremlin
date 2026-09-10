@@ -53,7 +53,7 @@ export class NotificationSurface {
       START_IT,
       SETTINGS,
     );
-    if (answer === START_IT) await this.host.executeCommand('cgremlin.startEngine');
+    if (answer === START_IT) await this.host.executeCommand('cgremlin.engine.start');
     else if (answer === SETTINGS) {
       await this.host.executeCommand('workbench.action.openSettings', 'cgremlin');
     }

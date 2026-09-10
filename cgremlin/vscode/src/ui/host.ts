@@ -137,6 +137,31 @@ export interface Host {
 
   fileExists(path: string): boolean;
   writeFile(path: string, content: string): void;
+  /** Byte length, or 0 when the file is not there — the log tail's starting offset (R11). */
+  fileSize(path: string): number;
+  /** Reads from a byte offset and reports where it stopped, so the tail never re-reads. */
+  readFileSlice(path: string, from: number): { text: string; end: number };
+  /**
+   * Watches one file *through a rename*: the engine replaces `core.json` by renaming a temp file
+   * over it, so a watch on the inode would be orphaned by the first save (spec 4.5). The adapter
+   * watches the directory and filters by basename.
+   */
+  watchFile(path: string, callback: () => void): DisposableLike;
+  /** Best-effort `chmod`; a failure is one logged line and never blocks a restart (R27). */
+  chmod(path: string, mode: number): Promise<void>;
+
+  /** Opens the file in an editor tab. */
+  openTextDocument(path: string): Promise<void>;
+  /** Runs a command to completion and captures its output — `gh api user`, `config init` (R5). */
+  spawnCapture(
+    command: string,
+    args: readonly string[],
+    options?: { cwd?: string; timeoutMs?: number },
+  ): Promise<{ code: number; stdout: string; stderr: string }>;
+
+  /** The output channel, distinct from {@link Host.log} only in that the user is meant to read it. */
+  appendOutput(line: string): void;
+  showOutput(): void;
 
   /** Returns the canceller, not a handle. */
   setInterval(callback: () => void, ms: number): () => void;

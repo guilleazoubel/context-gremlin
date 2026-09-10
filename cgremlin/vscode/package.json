@@ -103,8 +103,23 @@
         "category": "cgremlin"
       },
       {
-        "command": "cgremlin.startEngine",
+        "command": "cgremlin.engine.start",
         "title": "Start the engine",
+        "category": "cgremlin"
+      },
+      {
+        "command": "cgremlin.engine.stop",
+        "title": "Stop the engine",
+        "category": "cgremlin"
+      },
+      {
+        "command": "cgremlin.engine.restart",
+        "title": "Restart the engine",
+        "category": "cgremlin"
+      },
+      {
+        "command": "cgremlin.engine.showLog",
+        "title": "Show the engine log",
         "category": "cgremlin"
       }
     ],
