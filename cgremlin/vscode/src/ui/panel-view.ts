@@ -198,6 +198,8 @@ export class PanelView implements WebviewViewProviderLike {
       description: row.description,
       badges: row.badges,
       chips: row.chips,
+      age: row.age,
+      size: row.size,
       ci: row.ci,
       needsYou: row.needsYou,
       hasChildren: row.hasChildren,

@@ -3,8 +3,8 @@
  * panel" (R54).
  *
  * Every colour is a `var(--vscode-*)` token — no palette of our own, so light, dark and
- * high-contrast all work. No icon font is loaded: `font-src 'none'` (R38) would drop a codicon
- * font silently, so every glyph is unicode.
+ * high-contrast all work. No icon font is loaded at all: `font-src 'none'` (R38) would drop one
+ * silently, so every glyph is unicode (R54).
  */
 
 body {

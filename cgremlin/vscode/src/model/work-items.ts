@@ -383,14 +383,16 @@ export function toRow(item: WorkItem, list: WorkListKind, now: number): WorkRow 
   const activity = activityOf(primary);
   const badges = item.agents.map(badgeOf);
   const chips = item.prs.map((pr) => `${pr.repo}#${pr.number}`);
+  // The `—` placeholders stay in the line: a row whose age and size took their R45 defaults
+  // must say it has none, never imply a zero (MG-12).
   const description = [
     primary?.author === null || primary?.author === undefined ? '' : `@${primary.author}`,
-    age,
-    size,
+    primary === undefined ? '' : age,
+    primary === undefined ? '' : size,
     activity,
     item.attention.reasons.join(', '),
   ]
-    .filter((part) => part !== '' && part !== '—')
+    .filter((part) => part !== '')
     .join(' · ');
   return {
     id: item.id,

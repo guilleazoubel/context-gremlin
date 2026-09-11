@@ -22,6 +22,9 @@ export interface PanelRowView {
   description: string;
   badges: string[];
   chips: string[];
+  /** Rendered cells, already `—` where the field took its R45 default (MG-12). */
+  age: string;
+  size: string;
   ci: string;
   needsYou: boolean;
   hasChildren: boolean;

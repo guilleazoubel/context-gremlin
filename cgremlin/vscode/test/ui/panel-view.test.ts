@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { PANEL_VIEW_ID, PanelView } from '../../src/ui/panel-view';
+import { handleKey, panelTreeNodes } from '../../src/model/panel-tree';
 import { cspFor } from '../../src/ui/item-tab';
 import { FakeHost, FakeWebviewView } from '../support/fake-host';
 import itemsFixture from '../support/fixtures/items.json';
@@ -377,5 +378,213 @@ describe('R35/Phase 8 the banners', () => {
     expect(h.state().lists).toEqual([]);
     h.panel.setTrouble(null);
     expect(h.state().lists).toHaveLength(4);
+  });
+});
+
+
+/**
+ * B5 — R66's tree roles and R54's keyboard model, asserted **together**: they come from one pure
+ * module, so roles-without-keys and keys-without-roles both fail here.
+ */
+describe('R66/R54 the panel is an accessible tree, and the keys are the tree model', () => {
+  function nodes(h: Built) {
+    return panelTreeNodes(h.state());
+  }
+
+  it('gives every node a level: 1 for a group header or a row, 2 for a child', () => {
+    const h = build();
+    h.ready();
+    h.view.webview.emit({ type: 'toggleRow', id: 'ticket:HB-627', expanded: true });
+    const seen = nodes(h);
+    expect(seen.filter((n) => n.kind === 'group').map((n) => n.level)).toEqual([1]);
+    expect(seen.filter((n) => n.kind === 'row').every((n) => n.level === 1)).toBe(true);
+    // HB-627 is legitimately in two lists (`myWork` and `waitingForReview`), so its five
+    // children are rendered under each of them.
+    const children = seen.filter((n) => n.kind === 'child');
+    expect(children.length).toBe(10);
+    expect(children.every((n) => n.level === 2)).toBe(true);
+  });
+
+  it('marks exactly the expandable nodes, and reports their state', () => {
+    const h = build();
+    h.ready();
+    const seen = nodes(h);
+    const group = seen.find((n) => n.kind === 'group');
+    expect(group).toMatchObject({ expandable: true, expanded: false });
+    expect(seen.find((n) => n.id === 'ticket:HB-627')).toMatchObject({
+      expandable: true,
+      expanded: false,
+    });
+    expect(seen.find((n) => n.id === 'pr:acme/web#101')?.expandable).toBe(false);
+  });
+
+  it('hides a collapsed group’s rows from the sequence but keeps its header focusable', () => {
+    const h = build();
+    h.ready();
+    const seen = nodes(h);
+    expect(seen.some((n) => n.id === 'pr:acme/api#55')).toBe(false);
+    h.view.webview.emit({
+      type: 'toggleGroup',
+      list: 'parkingLot',
+      group: 'someoneOnIt',
+      collapsed: false,
+    });
+    expect(nodes(h).some((n) => n.id === 'pr:acme/api#55')).toBe(true);
+  });
+
+  it('walks the sequence with up and down, and clamps at both ends', () => {
+    const h = build();
+    h.ready();
+    const seen = nodes(h);
+    expect(handleKey('ArrowDown', seen, null)).toEqual({ kind: 'focus', key: seen[0].key });
+    expect(handleKey('ArrowDown', seen, seen[0].key)).toEqual({ kind: 'focus', key: seen[1].key });
+    expect(handleKey('ArrowUp', seen, seen[0].key)).toEqual({ kind: 'focus', key: seen[0].key });
+    expect(handleKey('End', seen, seen[0].key)).toEqual({
+      kind: 'focus',
+      key: seen[seen.length - 1].key,
+    });
+    expect(handleKey('Home', seen, seen[seen.length - 1].key)).toEqual({
+      kind: 'focus',
+      key: seen[0].key,
+    });
+  });
+
+  it('expands with right, collapses with left, and steps out of a child to its row', () => {
+    const h = build();
+    h.ready();
+    const seen = nodes(h);
+    const row = seen.find((n) => n.id === 'ticket:HB-627');
+    if (row === undefined) throw new Error('no row');
+    expect(handleKey('ArrowRight', seen, row.key)).toEqual({
+      kind: 'toggleRow',
+      id: 'ticket:HB-627',
+      expanded: true,
+    });
+
+    h.view.webview.emit({ type: 'toggleRow', id: 'ticket:HB-627', expanded: true });
+    const opened = nodes(h);
+    const openedRow = opened.find((n) => n.id === 'ticket:HB-627');
+    if (openedRow === undefined) throw new Error('no row');
+    expect(handleKey('ArrowLeft', opened, openedRow.key)).toEqual({
+      kind: 'toggleRow',
+      id: 'ticket:HB-627',
+      expanded: false,
+    });
+    const child = opened.find((n) => n.kind === 'child');
+    if (child === undefined) throw new Error('no child');
+    expect(handleKey('ArrowLeft', opened, child.key)).toEqual({
+      kind: 'focus',
+      key: openedRow.key,
+    });
+  });
+
+  it('toggles a collapsible group with right and left', () => {
+    const h = build();
+    h.ready();
+    const seen = nodes(h);
+    const group = seen.find((n) => n.kind === 'group');
+    if (group === undefined) throw new Error('no group');
+    expect(handleKey('ArrowRight', seen, group.key)).toEqual({
+      kind: 'toggleGroup',
+      list: 'parkingLot',
+      group: 'someoneOnIt',
+      collapsed: false,
+    });
+  });
+
+  it('activates the focused node with Enter and with Space', () => {
+    const h = build();
+    h.ready();
+    const seen = nodes(h);
+    const row = seen.find((n) => n.id === 'pr:acme/web#101');
+    if (row === undefined) throw new Error('no row');
+    for (const key of ['Enter', ' ']) {
+      expect(handleKey(key, seen, row.key)).toEqual({ kind: 'activate', node: row });
+    }
+    expect(handleKey('x', seen, row.key)).toBeNull();
+  });
+
+  it('walks a whole simulated sequence without ever leaving the tree', () => {
+    const h = build();
+    h.ready();
+    let seen = panelTreeNodes(h.state());
+    let focus: string | null = null;
+    for (const key of ['ArrowDown', 'ArrowDown', 'ArrowDown', 'ArrowUp', 'End', 'Home']) {
+      const intent = handleKey(key, seen, focus);
+      expect(intent?.kind).toBe('focus');
+      focus = (intent as { key: string }).key;
+      expect(seen.some((node) => node.key === focus)).toBe(true);
+      seen = panelTreeNodes(h.state());
+    }
+  });
+
+  it('declares the roles in the rendered script, not only in the model', () => {
+    const source = fs.readFileSync(path.join(root, 'src/webview/panel.ts'), 'utf8');
+    for (const attribute of ['role', 'tree', 'treeitem', 'aria-level', 'aria-expanded', 'aria-selected']) {
+      expect(source).toContain(attribute);
+    }
+    // And the keys come from the same module the roles do (R66).
+    expect(source).toContain("from '../model/panel-tree'");
+    expect(source).toContain('handleKey');
+  });
+});
+
+describe('R54 the look', () => {
+  const css = fs.readFileSync(path.join(root, 'media/panel.css'), 'utf8');
+
+  it('takes every colour from a --vscode-* token', () => {
+    expect(css).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
+    expect(css).not.toMatch(/rgba?\(/);
+    expect(css).toContain('var(--vscode-');
+  });
+
+  it('loads no icon font, because font-src none would drop it silently', () => {
+    expect(css).not.toContain('codicon');
+    expect(css).not.toContain('@font-face');
+    const script = fs.readFileSync(path.join(root, 'src/webview/panel.ts'), 'utf8');
+    expect(script).not.toContain('codicon');
+  });
+
+  it('separates card rows with the panel border and dims the second line', () => {
+    expect(css).toMatch(/\.row\s*\{[^}]*border-bottom:\s*1px solid var\(--vscode-panel-border\)/);
+    expect(css).toMatch(/\.row-line2\s*\{[^}]*var\(--vscode-descriptionForeground\)/);
+    expect(css).toMatch(/:focus-visible[^}]*outline/);
+  });
+});
+
+describe('MG-12 the panel half — defaults render as unknown', () => {
+  it('renders — for a row whose age and size took their R45 defaults', () => {
+    const h = build();
+    h.ready();
+    const row = h
+      .state()
+      .lists.flatMap((l) => l.sections.flatMap((s) => s.rows))
+      .find((r) => r.id === 'pr:acme/legacy#9');
+    expect(row?.age).toBe('—');
+    expect(row?.size).toBe('—');
+    expect(row?.ci).toBe('');
+    expect(row?.description).not.toContain('0 files');
+    expect(row?.description).toContain('—');
+  });
+});
+
+describe('R48 the children are clickable, with two actions', () => {
+  it('gives each child its Info click and its Go-to label', () => {
+    const h = build();
+    h.ready();
+    h.view.webview.emit({ type: 'toggleRow', id: 'ticket:HB-627', expanded: true });
+    const row = h
+      .state()
+      .lists.flatMap((l) => l.sections.flatMap((s) => s.rows))
+      .find((r) => r.id === 'ticket:HB-627');
+    expect(row?.children.map((c) => c.goToLabel)).toEqual([
+      'Resume',
+      'Resume',
+      'Open in Jira',
+      'Open on GitHub',
+      'Open on GitHub',
+    ]);
+    h.view.webview.emit({ type: 'openChild', id: 'ticket:HB-627', childId: 'pr:acme/web#310' });
+    expect(h.children).toEqual([['ticket:HB-627', 'pr:acme/web#310']]);
   });
 });

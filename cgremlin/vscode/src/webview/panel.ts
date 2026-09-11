@@ -8,6 +8,7 @@
  * esbuild bundles this into `media/panel.js`; the host inlines that text under R38's CSP. It runs
  * in a browser context, so it never imports the editor module.
  */
+import { handleKey, panelTreeNodes, type PanelTreeNode } from '../model/panel-tree';
 import type {
   HostToPanel,
   PanelListView,
@@ -25,6 +26,9 @@ export function post(message: unknown): void {
 }
 
 let state: PanelState | null = null;
+/** Which `role="treeitem"` has focus. The tree is one tab stop; the keys move within it (R66). */
+let focusedKey: string | null = null;
+let nodes: PanelTreeNode[] = [];
 
 export function current(): PanelState | null {
   return state;
@@ -47,12 +51,14 @@ function root(): HTMLElement {
   return node;
 }
 
-function rowNode(row: PanelRowView, level: number): HTMLElement {
+function rowNode(row: PanelRowView, list: PanelListView): HTMLElement {
+  const key = `row:${list.kind}:${row.id}`;
   const node = el('div', row.needsYou ? 'row needs-you' : 'row');
-  node.dataset.id = row.id;
-  node.tabIndex = -1;
+  node.dataset.key = key;
+  node.tabIndex = focusedKey === key ? 0 : -1;
   node.setAttribute('role', 'treeitem');
-  node.setAttribute('aria-level', String(level));
+  node.setAttribute('aria-level', '1');
+  node.setAttribute('aria-selected', String(focusedKey === key));
   if (row.hasChildren) node.setAttribute('aria-expanded', String(row.expanded));
 
   const line1 = el('div', 'row-line1');
@@ -93,16 +99,21 @@ function rowNode(row: PanelRowView, level: number): HTMLElement {
     node.appendChild(actions);
   }
 
-  node.addEventListener('click', () => post({ type: 'openItem', id: row.id }));
+  node.addEventListener('click', () => {
+    focusedKey = key;
+    post({ type: 'openItem', id: row.id });
+  });
   return node;
 }
 
 function childNode(row: PanelRowView, child: PanelRowView['children'][number]): HTMLElement {
+  const key = `child:${row.id}:${child.id}`;
   const node = el('div', 'child');
-  node.dataset.id = child.id;
-  node.tabIndex = -1;
+  node.dataset.key = key;
+  node.tabIndex = focusedKey === key ? 0 : -1;
   node.setAttribute('role', 'treeitem');
   node.setAttribute('aria-level', '2');
+  node.setAttribute('aria-selected', String(focusedKey === key));
   node.appendChild(el('span', 'child-label', child.label));
   const goTo = document.createElement('button');
   goTo.className = 'child-goto';
@@ -130,8 +141,11 @@ function sectionNode(list: PanelListView, section: PanelSectionView): HTMLElemen
     header.setAttribute('role', 'treeitem');
     header.setAttribute('aria-level', '1');
     if (section.collapsible) {
+      const key = `group:${list.kind}:${section.group}`;
+      header.dataset.key = key;
       header.setAttribute('aria-expanded', String(!section.collapsed));
-      header.tabIndex = -1;
+      header.setAttribute('aria-selected', String(focusedKey === key));
+      header.tabIndex = focusedKey === key ? 0 : -1;
       header.addEventListener('click', () =>
         post({
           type: 'toggleGroup',
@@ -145,7 +159,7 @@ function sectionNode(list: PanelListView, section: PanelSectionView): HTMLElemen
   }
   if (section.collapsed) return node;
   for (const row of section.rows) {
-    node.appendChild(rowNode(row, 1));
+    node.appendChild(rowNode(row, list));
     if (!row.expanded) continue;
     for (const child of row.children) node.appendChild(childNode(row, child));
   }
@@ -189,6 +203,12 @@ const SORT_LABELS: Record<string, string> = {
 
 export function render(next: PanelState): void {
   state = next;
+  nodes = panelTreeNodes(next);
+  if (focusedKey !== null && !nodes.some((node) => node.key === focusedKey)) {
+    // The node the user was on is gone (a group closed, a row left the list): fall back to the
+    // first one rather than losing the tab stop entirely.
+    focusedKey = nodes[0]?.key ?? null;
+  }
   const container = root();
   container.textContent = '';
 
@@ -211,7 +231,63 @@ export function render(next: PanelState): void {
     container.appendChild(el('div', 'banner stale', 'The cgremlin engine is not reachable.'));
   }
   for (const list of next.lists) container.appendChild(listNode(list));
+  restoreFocus();
 }
+
+function restoreFocus(): void {
+  if (focusedKey === null) return;
+  const node = document.querySelector(`[data-key="${cssEscape(focusedKey)}"]`);
+  if (node instanceof HTMLElement) node.focus({ preventScroll: false });
+}
+
+/** The keys are `list:id` strings we built ourselves, so only the quoting has to be handled. */
+function cssEscape(value: string): string {
+  return value.replace(/["\\]/g, '\\$&');
+}
+
+/**
+ * R66: the keyboard model the ARIA roles promise, taken from the same pure module the roles come
+ * from — so roles without keys, or keys without roles, is not a state this file can be in.
+ */
+function onKeyDown(event: KeyboardEvent): void {
+  if (state === null) return;
+  const intent = handleKey(event.key, nodes, focusedKey);
+  if (intent === null) return;
+  event.preventDefault();
+  if (intent.kind === 'focus') {
+    focusedKey = intent.key;
+    document.querySelectorAll('[data-key]').forEach((node) => {
+      if (!(node instanceof HTMLElement)) return;
+      const selected = node.dataset.key === focusedKey;
+      node.tabIndex = selected ? 0 : -1;
+      node.setAttribute('aria-selected', String(selected));
+    });
+    restoreFocus();
+    return;
+  }
+  if (intent.kind === 'toggleRow') {
+    post({ type: 'toggleRow', id: intent.id, expanded: intent.expanded });
+    return;
+  }
+  if (intent.kind === 'toggleGroup') {
+    post({
+      type: 'toggleGroup',
+      list: intent.list,
+      group: intent.group,
+      collapsed: intent.collapsed,
+    });
+    return;
+  }
+  const node = intent.node;
+  if (node.kind === 'row' && node.id !== null) post({ type: 'openItem', id: node.id });
+  else if (node.kind === 'child' && node.id !== null && node.rowId !== null) {
+    post({ type: 'openChild', id: node.rowId, childId: node.id });
+  } else if (node.kind === 'group' && node.group !== null) {
+    post({ type: 'toggleGroup', list: node.list, group: node.group, collapsed: node.expanded });
+  }
+}
+
+document.addEventListener('keydown', onKeyDown);
 
 window.addEventListener('message', (event: MessageEvent) => {
   const message = event.data as HostToPanel;
