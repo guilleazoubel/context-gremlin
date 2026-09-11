@@ -94,6 +94,13 @@ export interface InventoryConfig {
   botLogins?: readonly string[];
   /** R46 — empty (or absent) disables ticket linking entirely. */
   projectKeys?: readonly string[];
+  /**
+   * R52 — review-thread replies, keyed `"<repo>#<n>"`, from the PREVIOUS
+   * tick's cache. They count towards `humanActivity` alongside reviews and
+   * conversation comments; the leg that refreshes them runs AFTER this scan
+   * publishes (R34), so this is deliberately one tick behind.
+   */
+  threadComments?: ReadonlyMap<string, ReadonlyArray<{ login: string; at: string }>>;
 }
 
 function buildTeamActivity(
@@ -148,6 +155,7 @@ function buildHumanActivity(
   item: PrInventoryItem,
   authorLower: string,
   botLogins: readonly string[],
+  threadComments: ReadonlyArray<{ login: string; at: string }>,
 ): HumanActivity {
   const reviewedBy: string[] = [];
   const commentedBy: string[] = [];
@@ -160,6 +168,10 @@ function buildHumanActivity(
   };
   for (const r of item.reviews) note(r.author.login, r.author.is_bot, r.submittedAt, reviewedBy);
   for (const c of item.comments) note(c.author.login, c.author.is_bot, c.createdAt, commentedBy);
+  // R52: a review-thread reply is a human on the PR exactly like a
+  // conversation comment, and it is the only signal the two `gh pr list`
+  // arrays cannot see.
+  for (const t of threadComments) note(t.login, undefined, t.at, commentedBy);
   return { reviewedBy, commentedBy, lastAt };
 }
 
@@ -217,7 +229,12 @@ export function buildEntries(
     branch: item.headRefName,
     ticketKeys: ticketKeysOf(item, cfg.projectKeys ?? []),
     reviewRequests: flattenReviewRequests(item.reviewRequests),
-    humanActivity: buildHumanActivity(item, item.author.login.toLowerCase(), cfg.botLogins ?? []),
+    humanActivity: buildHumanActivity(
+      item,
+      item.author.login.toLowerCase(),
+      cfg.botLogins ?? [],
+      cfg.threadComments?.get(`${repo}#${item.number}`) ?? [],
+    ),
     createdAt: item.createdAt ?? null,
     changedFiles: item.changedFiles ?? null,
     additions: item.additions ?? null,

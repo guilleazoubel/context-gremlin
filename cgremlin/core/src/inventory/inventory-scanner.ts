@@ -15,6 +15,7 @@ import type { Tickable } from '../discovery/scheduler';
 import { buildEntries, groupInventory, type Inventory, type InventoryEntry, type InventoryGroups } from './inventory';
 import type { Session } from '../schema/session';
 import type { JiraScanReport } from '../jira/jira-store';
+import type { ReviewThreadCache, ThreadScanCandidate, ThreadScanReport } from '../gh/review-threads';
 
 export interface InventoryScannerDeps {
   gh: GhRunner;
@@ -42,6 +43,18 @@ export interface InventoryScannerDeps {
     inFlight(): Promise<void> | null;
     lastReport(): Promise<JiraScanReport>;
   };
+  /**
+   * R52 — the review-thread leg, on R34's discipline exactly like the Jira
+   * one: after `inventory.updated`, not awaited, single-flight, budgeted,
+   * drained by `stop()`. Its CACHE is read before `buildEntries`, so the
+   * thread half of `humanActivity` is one tick behind by construction.
+   */
+  threads?: {
+    run(candidates: readonly ThreadScanCandidate[]): Promise<void>;
+    inFlight(): Promise<void> | null;
+    lastReport(): ThreadScanReport;
+    cached(): Promise<ReviewThreadCache>;
+  };
 }
 
 export interface ScanReport {
@@ -49,6 +62,7 @@ export interface ScanReport {
   groups: InventoryGroups;
   reconciliation: TickReport;
   jira: JiraScanReport;
+  threads: ThreadScanReport;
 }
 
 function errorMessage(err: unknown): string {
@@ -103,6 +117,17 @@ export class InventoryScanner implements Tickable<ScanReport> {
       '--json', fields,
     ];
 
+    // R52: last tick's threads, folded into this tick's `humanActivity`.
+    const threadCache = (await this.deps.threads?.cached().catch(() => ({}))) ?? {};
+    const threadComments = new Map<string, Array<{ login: string; at: string }>>();
+    for (const [key, entry] of Object.entries(threadCache) as Array<[string, ReviewThreadCache[string]]>) {
+      threadComments.set(
+        key,
+        entry.threads.flatMap((t) => t.comments.map((c) => ({ login: c.author, at: c.createdAt }))),
+      );
+    }
+    const scanConfig = { ...this.deps.config, threadComments };
+
     const entries: InventoryEntry[] = [];
     for (const repo of this.deps.config.repos) {
       try {
@@ -132,7 +157,7 @@ export class InventoryScanner implements Tickable<ScanReport> {
           ).map((raw) => ({ ...raw, ...(byNumber.get(raw.number as number) ?? {}) }));
           items = parsePrInventoryList(JSON.stringify(merged));
         }
-        entries.push(...buildEntries(repo, items, sessions, this.deps.config, nowIso));
+        entries.push(...buildEntries(repo, items, sessions, scanConfig, nowIso));
       } catch (err) {
         errors.push({ repo, error: errorMessage(err) });
         if (fallbackInventory === null) {
@@ -164,7 +189,13 @@ export class InventoryScanner implements Tickable<ScanReport> {
       kind: 'notConfigured',
     };
 
-    const report: ScanReport = { inventory, groups, reconciliation, jira };
+    const report: ScanReport = {
+      inventory,
+      groups,
+      reconciliation,
+      jira,
+      threads: this.deps.threads?.lastReport() ?? { scannedAt: null, error: null, fetched: 0 },
+    };
     this._lastReport = report;
     this.deps.events.emit('inventory.updated', { inventory });
 
@@ -176,11 +207,25 @@ export class InventoryScanner implements Tickable<ScanReport> {
     if (this.deps.jira !== undefined && this.deps.jira.inFlight() === null) {
       void this.deps.jira.run().catch(() => undefined);
     }
+    if (this.deps.threads !== undefined && this.deps.threads.inFlight() === null) {
+      const candidates: ThreadScanCandidate[] = entries.map((e) => ({
+        repo: e.repo,
+        number: e.number,
+        updatedAt: e.updatedAt,
+        isMine: e.isMine,
+        isDraft: e.isDraft,
+        // R52's policy input: a PR that already has human activity from
+        // reviews and comments alone needs no thread call to stay demoted.
+        hasHumanActivity: e.humanActivity.lastAt !== null,
+      }));
+      void this.deps.threads.run(candidates).catch(() => undefined);
+    }
     return report;
   }
 
-  /** Drains the in-flight Jira leg, so a shutdown never leaves a half-written cache. */
+  /** Drains the in-flight background legs, so a shutdown never leaves a half-written cache. */
   async stop(): Promise<void> {
     await this.deps.jira?.inFlight()?.catch(() => undefined);
+    await this.deps.threads?.inFlight()?.catch(() => undefined);
   }
 }

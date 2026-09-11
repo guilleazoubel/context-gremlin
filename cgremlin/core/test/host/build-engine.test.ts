@@ -144,6 +144,7 @@ describe('buildEngine', () => {
       groups: { unreviewed: [], teamOnIt: [], ours: [], mine: [] },
       reconciliation: { reconciled: 0, actions: [], skipped: [], errors: [] },
       jira: { scannedAt: '2026-09-04T12:00:00.000Z', me: null, issues: [], error: null, kind: 'notConfigured' },
+      threads: { scannedAt: null, error: null, fetched: 0 },
     };
     const fakeTickable: Tickable<ScanReport> = { run: async () => fakeReport };
     const engine = buildEngine(testConfig(), testAdapters(), { makeTickable: () => fakeTickable });

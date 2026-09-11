@@ -24,6 +24,7 @@ let agentStarts: number;
 let jira: JiraScanReport;
 let ticketDetailCalls: string[];
 let ticketDetailAnswer: { ticket: JiraIssueDetail | null; ticketError: string | null };
+let threadReport: { scannedAt: string | null; error: string | null; fetched: number };
 
 function prFixture(number: number, author: string, overrides: Record<string, unknown> = {}) {
   return {
@@ -101,6 +102,7 @@ async function start(opts: { withWorkItems?: boolean } = {}): Promise<void> {
     attention,
     inventory: ih.inventoryStore,
     jira: { lastReport: async () => jira },
+    threads: { lastReport: () => threadReport },
     events: ih.h.events,
     config: { me: 'me-user', watchAuthors: ['bob'], showAllRepoPrs: false, projectKeys: ['HB'] },
   });
@@ -142,6 +144,7 @@ beforeEach(async () => {
   jira = { scannedAt: '2026-09-10T00:00:00.000Z', me: '712020:me', issues: [], error: null, kind: 'ok' };
   ticketDetailCalls = [];
   ticketDetailAnswer = { ticket: null, ticketError: null };
+  threadReport = { scannedAt: null, error: null, fetched: 0 };
 });
 
 afterEach(async () => {
@@ -468,5 +471,20 @@ describe('MG-9: no raw id ever reaches a request path', () => {
   it('a source grep over src/api/server.ts finds no /items/${ interpolation', () => {
     const source = readFileSync(path.join(__dirname, '../../src/api/server.ts'), 'utf8');
     expect(source).not.toContain('/items/${');
+  });
+});
+
+describe('threadSource on GET /items (R52, MG-6 shape)', () => {
+  it('carries the leg report, and a non-null error never empties a list', async () => {
+    await start();
+    await scan([prFixture(10, 'bob')]);
+    const before = await request('GET', '/items');
+    expect(before.body.threadSource).toEqual({ error: null, scannedAt: null });
+    expect(before.body.lists.parkingLot.untouched.length).toBe(1);
+
+    threadReport = { scannedAt: '2026-09-10T00:00:00.000Z', error: 'gh exploded', fetched: 0 };
+    const after = await request('GET', '/items');
+    expect(after.body.threadSource).toEqual({ error: 'gh exploded', scannedAt: '2026-09-10T00:00:00.000Z' });
+    expect(after.body.lists.parkingLot.untouched.length).toBe(1);
   });
 });

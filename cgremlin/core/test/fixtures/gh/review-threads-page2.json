@@ -1,0 +1,46 @@
+{
+  "data": {
+    "repository": {
+      "pullRequest": {
+        "reviewThreads": {
+          "pageInfo": {
+            "hasNextPage": false,
+            "endCursor": null
+          },
+          "nodes": [
+            {
+              "id": "PRRT_kwDOPYIaBc6gyue0",
+              "isResolved": true,
+              "isOutdated": true,
+              "path": "apps/consumer/src/features/consumer/care-guide/publication-adapter/format-publication.ts",
+              "line": null,
+              "comments": {
+                "pageInfo": {
+                  "hasNextPage": false
+                },
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "gitstream-cm"
+                    },
+                    "body": "\ud83d\udc1e Bug - **Suffix-anchor collision**: Replace the single-attempt resolution with a loop that keeps incrementing a counter until the candidate is not in `usedAnch",
+                    "createdAt": "2026-09-09T18:55:35Z",
+                    "url": "https://github.com/aplaceformom/grace-frontend/pull/2037#discussion_r3971963154"
+                  },
+                  {
+                    "author": {
+                      "login": "guilleazoubel"
+                    },
+                    "body": "Good catch, this was a real gap \u2014 my previous fix (tracking the emitted `id`) still let an explicit `htmlId` collide with an auto-suffixed id that happened to m",
+                    "createdAt": "2026-09-09T19:00:29Z",
+                    "url": "https://github.com/aplaceformom/grace-frontend/pull/2037#discussion_r3972002168"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

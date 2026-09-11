@@ -15,6 +15,7 @@ import { SessionStore } from '../../src/engine/session-store';
 import { migrateV1ToV2, type ReviewSession, type Session } from '../../src/schema/session';
 import type { Inventory } from '../../src/inventory/inventory';
 import type { JiraScanReport } from '../../src/jira/jira-store';
+import type { ReviewThreadCache, ThreadScanCandidate } from '../../src/gh/review-threads';
 
 const fixturesDir = path.join(__dirname, '../fixtures/gh');
 const fullListJson = readFileSync(path.join(fixturesDir, 'pr-list-full.json'), 'utf8');
@@ -651,5 +652,143 @@ describe('InventoryScanner: the Jira leg (R34, R12)', () => {
     const report = await scanner.run();
     expect(report.jira).toEqual({ scannedAt: expect.any(String), me: null, issues: [], error: null, kind: 'notConfigured' });
     await scanner.stop();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 9 / Task A8 — the review-thread leg, on R34's discipline.
+// ---------------------------------------------------------------------------
+
+describe('InventoryScanner: the review-thread leg (R52, R34 applied)', () => {
+  function fakeThreadLeg(behaviour: { hang?: boolean; cache?: ReviewThreadCache } = {}) {
+    let flight: Promise<void> | null = null;
+    let release: (() => void) | null = null;
+    const runs: ThreadScanCandidate[][] = [];
+    return {
+      runs,
+      releaseLeg: () => release?.(),
+      leg: {
+        run: async (candidates: readonly ThreadScanCandidate[]): Promise<void> => {
+          runs.push([...candidates]);
+          if (behaviour.hang === true) {
+            flight ??= new Promise<void>((resolve) => {
+              release = resolve;
+            });
+            await flight;
+          }
+        },
+        inFlight: () => flight,
+        lastReport: () => ({ scannedAt: '2026-09-10T00:00:00.000Z', error: null, fetched: 0 }),
+        cached: async () => behaviour.cache ?? {},
+      },
+    };
+  }
+
+  function buildWithThreads(leg: ReturnType<typeof fakeThreadLeg>['leg'], order: string[]) {
+    const h = createHarness();
+    const gh = new FakeGhRunner();
+    const lock = new KeyedLock();
+    const reconciliationTick = new ReconciliationTick({ gh, store: h.store, pipeline: h.service, events: h.events, lock });
+    const inventoryStore = new InventoryStore(h.fs, '/state/inventory.json');
+    h.events.on('inventory.updated', () => order.push('inventory.updated'));
+    const scanner = new InventoryScanner({
+      gh,
+      store: h.store,
+      inventoryStore,
+      reconciler: { reconcile: () => reconciliationTick.run() },
+      events: h.events,
+      config: scannerConfig(),
+      now: FIXED_NOW,
+      threads: leg,
+    });
+    return { h, gh, scanner };
+  }
+
+  it('the leg runs AFTER inventory.updated and is not awaited by run()', async () => {
+    const order: string[] = [];
+    const fake = fakeThreadLeg({ hang: true });
+    const wrapped = {
+      ...fake.leg,
+      run: async (c: readonly ThreadScanCandidate[]) => {
+        order.push('threads.leg');
+        return fake.leg.run(c);
+      },
+    };
+    const { gh, scanner } = buildWithThreads(wrapped, order);
+    gh.queueResponse({ stdout: fullListJson });
+    await scanner.run();
+    expect(order).toEqual(['inventory.updated', 'threads.leg']);
+    expect(fake.leg.inFlight()).not.toBeNull();
+    fake.releaseLeg();
+    await scanner.stop();
+  });
+
+  it('stop() drains the in-flight thread leg', async () => {
+    const fake = fakeThreadLeg({ hang: true });
+    const { gh, scanner } = buildWithThreads(fake.leg, []);
+    gh.queueResponse({ stdout: fullListJson });
+    await scanner.run();
+    let drained = false;
+    const stopping = scanner.stop().then(() => {
+      drained = true;
+    });
+    expect(drained).toBe(false);
+    fake.releaseLeg();
+    await stopping;
+    expect(drained).toBe(true);
+  });
+
+  it('a tick during an in-flight leg starts no second one', async () => {
+    const fake = fakeThreadLeg({ hang: true });
+    const { gh, scanner } = buildWithThreads(fake.leg, []);
+    gh.queueResponse({ stdout: fullListJson });
+    gh.queueResponse({ stdout: fullListJson });
+    await scanner.run();
+    await scanner.run();
+    expect(fake.runs.length).toBe(1);
+    fake.releaseLeg();
+    await scanner.stop();
+  });
+
+  it("the leg's candidates carry the R52 policy inputs", async () => {
+    const fake = fakeThreadLeg();
+    const { gh, scanner } = buildWithThreads(fake.leg, []);
+    gh.queueResponse({ stdout: fullListJson });
+    await scanner.run();
+    await scanner.stop();
+    const [candidates] = fake.runs;
+    expect(candidates.length).toBeGreaterThan(0);
+    for (const c of candidates) {
+      expect(Object.keys(c).sort()).toEqual(['hasHumanActivity', 'isDraft', 'isMine', 'number', 'repo', 'updatedAt']);
+    }
+  });
+
+  it('the cached threads reach humanActivity on the NEXT scan, and ScanReport carries threads', async () => {
+    const cache: ReviewThreadCache = {
+      [`${REPO}#2010`]: {
+        updatedAt: 'x',
+        threads: [
+          {
+            id: 't1',
+            isResolved: false,
+            isOutdated: false,
+            path: 'a.ts',
+            line: 1,
+            truncated: false,
+            comments: [
+              { author: 'a-real-human', body: 'b', createdAt: '2026-09-09T00:00:00Z', url: 'u' },
+            ],
+          },
+        ],
+      },
+    };
+    const fake = fakeThreadLeg({ cache });
+    const { gh, scanner } = buildWithThreads(fake.leg, []);
+    gh.queueResponse({ stdout: fullListJson });
+    const report = await scanner.run();
+    await scanner.stop();
+    const entry = report.inventory.entries.find((e) => e.number === 2010)!;
+    expect(entry.humanActivity.commentedBy).toContain('a-real-human');
+    expect(report.threads).toEqual({ scannedAt: '2026-09-10T00:00:00.000Z', error: null, fetched: 0 });
   });
 });

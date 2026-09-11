@@ -17,6 +17,7 @@ import { InventoryScanner, type ScanReport } from '../inventory/inventory-scanne
 import { JiraRestSource } from '../jira/jira-rest-source';
 import { JiraScanner } from '../jira/jira-scanner';
 import { JiraStore, TicketDetailCache } from '../jira/jira-store';
+import { ReviewThreadScanner, ReviewThreadStore } from '../gh/review-threads';
 import type { JiraSource } from '../jira/jira-source';
 import { InventoryStore } from '../inventory/inventory-store';
 import { createApiServer, type EngineInfo } from '../api/server';
@@ -217,6 +218,14 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     now: adapters.now,
   });
   const tick = new ReconciliationTick({ gh: adapters.gh, store, pipeline, events, lock, now: adapters.now });
+  // R52 — the review-thread leg: the engine's first GraphQL call, cached on
+  // the PR's `updatedAt` so a steady-state tick makes ZERO of them.
+  const threadScanner = new ReviewThreadScanner({
+    gh: adapters.gh,
+    store: new ReviewThreadStore(adapters.fs, config.reviewThreadsCachePath!),
+    scanBudgetMs: config.reviewThreads.scanBudgetMs,
+    now: adapters.now,
+  });
   const scanner = new InventoryScanner({
     gh: adapters.gh,
     store,
@@ -233,6 +242,7 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     },
     now: adapters.now,
     jira: jiraScanner,
+    threads: threadScanner,
   });
 
   // The attention model: one adapter per source (R18), an ack store of its
@@ -269,6 +279,7 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     attention,
     inventory: inventoryStore,
     jira: jiraScanner,
+    threads: threadScanner,
     events,
     config: {
       me: config.me,

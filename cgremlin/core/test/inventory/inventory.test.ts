@@ -551,3 +551,45 @@ describe('buildEntries: reviewDecisionAt (R58)', () => {
     expect(b.reviewDecisionAt).toBe(a.reviewDecisionAt);
   });
 });
+
+describe('buildEntries: the THREAD half of humanActivity (MG-3, R52)', () => {
+  const threads = (comments: Array<{ login: string; at: string }>) =>
+    new Map([[`acme/app#70`, comments]]);
+
+  it('a non-bot, non-author thread reply sets lastAt and lists that login', () => {
+    const item = prItem({ number: 70 });
+    const [entry] = buildEntries(
+      'acme/app',
+      [item],
+      [],
+      { ...PHASE9_CFG, threadComments: threads([{ login: 'jane', at: '2026-09-06T00:00:00Z' }]) },
+      NOW,
+    );
+    expect(entry.humanActivity.commentedBy).toEqual(['jane']);
+    expect(entry.humanActivity.lastAt).toBe('2026-09-06T00:00:00Z');
+  });
+
+  it('a BOT thread reply does not', () => {
+    const item = prItem({ number: 70 });
+    const [entry] = buildEntries(
+      'acme/app',
+      [item],
+      [],
+      { ...PHASE9_CFG, threadComments: threads([{ login: 'github-actions', at: '2026-09-06T00:00:00Z' }]) },
+      NOW,
+    );
+    expect(entry.humanActivity.lastAt).toBeNull();
+  });
+
+  it("the PR author's own thread reply does not", () => {
+    const item = prItem({ number: 70, author: { login: 'author-x' } });
+    const [entry] = buildEntries(
+      'acme/app',
+      [item],
+      [],
+      { ...PHASE9_CFG, threadComments: threads([{ login: 'author-x', at: '2026-09-06T00:00:00Z' }]) },
+      NOW,
+    );
+    expect(entry.humanActivity.lastAt).toBeNull();
+  });
+});
