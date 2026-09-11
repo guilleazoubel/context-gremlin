@@ -24,6 +24,8 @@ import type { InventoryScanner, ScanReport } from '../inventory/inventory-scanne
 import type { InventoryStore } from '../inventory/inventory-store';
 import { groupInventory, type Inventory, type InventoryEntry } from '../inventory/inventory';
 import type { ReviewSessionFactory, CandidatePR } from '../pipeline/review-session-factory';
+import type { RespondSessionFactory } from '../pipeline/respond-session-factory';
+import { isClaimed } from '../pipeline/pipeline-service';
 import type { EnvironmentService, LocalAppStatus } from '../env/environment-service';
 import { redactBypassUrls, redactCoreConfig, type CoreConfig } from '../config/core-config';
 import { handleEventStream, type EventRing } from './event-stream';
@@ -84,6 +86,14 @@ export interface ApiServerDeps {
   workItems?: WorkItemService;
   /** R36 — the 60 s / `updated`-keyed ticket detail cache. Absent means `ticket: null`, never a 5xx. */
   ticketDetail?: { detail(key: string): Promise<{ ticket: unknown; ticketError: string | null }> };
+  /** R51 — the respond-mode factory. Absent makes `{ mode: 'respond' }` a clean 404. */
+  respondFactory?: RespondSessionFactory;
+  /**
+   * The clock the claim check reads. It MUST be the same one PipelineService
+   * uses, or the route and the run disagree about whether a claim is live —
+   * the route would try to restart and the run would answer 409.
+   */
+  now?: () => Date;
   /** Absent for a wiring with no event ring: GET /events then 404s. */
   eventRing?: EventRing;
   /** Absent for a wiring built without one (every test server that doesn't need it): `GET /config` then 404s. */
@@ -246,8 +256,69 @@ async function handleItemAgents(
   }
 
   if (request.mode === 'respond') {
-    // R51: respond lands in Task A9, with its own factory, stage and run.
-    throw new ValidationError('Invalid agent request: mode respond is not available yet');
+    // R51: only on a `pr/…` path, and only when the PR is mine. A 400 on an
+    // item with no PR; a 409 (NotMyPrError) on somebody else's.
+    if (pr === undefined) {
+      throw new ValidationError('Invalid agent request: mode respond requires an item with a pull request');
+    }
+    if (!deps.respondFactory) {
+      sendJson(res, 404, { error: 'respond mode not configured' });
+      return;
+    }
+    const factory = deps.respondFactory;
+    // The SAME lock key the review path takes (`server.ts`'s
+    // `pr:<slug>#<n>`), so a respond start cannot race a review start on the
+    // same PR and two concurrent posts yield one session.
+    await lock.withLock(`pr:${pr.repo}#${pr.number}`, async () => {
+      const existing = await factory.existingFor(pr.repo, pr.number);
+      if (existing !== null) {
+        // R51's parity rule, the same one POST /reviews has: never a second
+        // session, and a RESTART on a recomposed brief — unless a run is
+        // already in flight or the session is claimed, which is what stops
+        // two agents writing one COMMENTS.md.
+        if (deps.pipeline.activeSessionIds().includes(existing.id)) {
+          sendJson(res, 200, {
+            session: existing,
+            created: false,
+            started: false,
+            reason: 'a respond run is already in flight for this session',
+            item,
+          });
+          return;
+        }
+        if (isClaimed(existing, deps.now ? deps.now() : new Date())) {
+          sendJson(res, 200, {
+            session: existing,
+            created: false,
+            started: false,
+            reason: 'a human holds the conversation claim on this session',
+            item,
+          });
+          return;
+        }
+        await awaitRunStart(deps.events, existing.id, deps.pipeline.runRespond(existing.id));
+        sendJson(res, 202, {
+          session: await deps.sessionStore.load(existing.id),
+          created: false,
+          started: true,
+          item,
+        });
+        return;
+      }
+      const created = await factory.createFromPr(pr.repo, pr.number);
+      // R56: the click that creates the session STARTS the run. The user's
+      // click on a lit waitingForReview row IS the explicit ask (Phase 7 R5),
+      // and anything else hands them a session with an empty BRIEF.md and a
+      // second button to press.
+      await awaitRunStart(deps.events, created.id, deps.pipeline.runRespond(created.id));
+      sendJson(res, 202, {
+        session: await deps.sessionStore.load(created.id),
+        created: true,
+        started: true,
+        item,
+      });
+    });
+    return;
   }
 
   // investigation | development: a Jira ticket does not know which repo it

@@ -9,7 +9,8 @@ import { AckStore } from '../../src/attention/ack-store';
 import { AttentionService, PrSourceAdapter, SessionSourceAdapter } from '../../src/attention/attention-service';
 import { WorkItemService } from '../../src/work/work-item-service';
 import { createInventoryHarness, type InventoryHarness } from '../support/inventory-harness';
-import { SESSIONS_DIR } from '../support/pipeline-harness';
+import { RespondSessionFactory } from '../../src/pipeline/respond-session-factory';
+import { FIXED_NOW, SESSIONS_DIR, WORKTREES_DIR } from '../support/pipeline-harness';
 import type { JiraScanReport } from '../../src/jira/jira-store';
 import type { JiraIssueDetail } from '../../src/jira/jira-source';
 
@@ -114,6 +115,7 @@ async function start(opts: { withWorkItems?: boolean } = {}): Promise<void> {
     sessionsDir: SESSIONS_DIR,
     events: ih.h.events,
     lock: ih.h.lock,
+    now: FIXED_NOW,
     attention,
     inventory: {
       scanner: ih.scanner,
@@ -128,6 +130,14 @@ async function start(opts: { withWorkItems?: boolean } = {}): Promise<void> {
         return ticketDetailAnswer;
       },
     },
+    respondFactory: new RespondSessionFactory({
+      gh: ih.gh,
+      store: ih.h.store,
+      workspace: ih.h.workspace,
+      events: ih.h.events,
+      worktreesDir: WORKTREES_DIR,
+      me: 'me-user',
+    }),
     ...(opts.withWorkItems === false ? {} : { workItems }),
   });
   socketPath = path.join(dir, `items-${Math.random().toString(36).slice(2)}.sock`);
@@ -486,5 +496,143 @@ describe('threadSource on GET /items (R52, MG-6 shape)', () => {
     const after = await request('GET', '/items');
     expect(after.body.threadSource).toEqual({ error: 'gh exploded', scannedAt: '2026-09-10T00:00:00.000Z' });
     expect(after.body.lists.parkingLot.untouched.length).toBe(1);
+  });
+});
+
+describe('POST /items/pr/:o/:r/:n/agents { mode: respond } (R51, R56, MG-8 amended)', () => {
+  function prViewJson(author: string) {
+    return JSON.stringify({
+      number: 11,
+      title: 'PR #11',
+      author: { login: author },
+      headRefName: 'feature/HB-6211-x',
+      headRefOid: 'a'.repeat(40),
+      baseRefName: 'main',
+      url: 'https://github.com/acme/app/pull/11',
+      state: 'OPEN',
+      isDraft: false,
+      reviewDecision: 'CHANGES_REQUESTED',
+      mergedAt: null,
+      closedAt: null,
+      latestReviews: [],
+      statusCheckRollup: [],
+    });
+  }
+
+  it('R56: the click CREATES the session and STARTS the respond run in the same request, answering 202', async () => {
+    await start();
+    await scan([prFixture(11, 'me-user')]);
+    ih.gh.queueResponse({ stdout: prViewJson('me-user') });
+    const res = await request('POST', '/items/pr/acme/app/11/agents', { mode: 'respond' });
+    expect(res.status).toBe(202);
+    expect(res.body.created).toBe(true);
+    expect(res.body.started).toBe(true);
+    expect(res.body.session.mode).toBe('respond');
+    expect(res.body.session.stageStatus).toBe('addressing');
+    // R61: the PR is mine and its branch names HB-6211, so the item has
+    // already merged into its ticket — the route resolved the pr/ path to
+    // the CONTAINING item (R65), which is the whole point.
+    expect(res.body.item.id).toBe('ticket:HB-6211');
+    expect(agentStarts).toBe(1);
+    expect(runStarts).toEqual(['respond']);
+    // the brief is NOT empty — the whole point of creating and starting together
+    const brief = await ih.h.fs.readFile(`${SESSIONS_DIR}/${res.body.session.id}/BRIEF.md`);
+    expect(brief).toContain('# RESPOND — acme/app#11');
+  });
+
+  it('named: "the respond click records one run start and zero claim attempts"', async () => {
+    await start();
+    await scan([prFixture(11, 'me-user')]);
+    ih.gh.queueResponse({ stdout: prViewJson('me-user') });
+    const claims: string[] = [];
+    const realClaim = ih.h.service.claimConversation.bind(ih.h.service);
+    ih.h.service.claimConversation = async (id: string) => {
+      claims.push(id);
+      return realClaim(id);
+    };
+    await request('POST', '/items/pr/acme/app/11/agents', { mode: 'respond' });
+    expect(runStarts).toEqual(['respond']);
+    expect(claims).toEqual([]);
+  });
+
+  it("R51: a second POST never creates a second session and RESTARTS the run", async () => {
+    await start();
+    await scan([prFixture(11, 'me-user')]);
+    ih.gh.queueResponse({ stdout: prViewJson('me-user') });
+    const first = await request('POST', '/items/pr/acme/app/11/agents', { mode: 'respond' });
+    await ih.h.finishRun({}, { code: 0, signal: null });
+    ih.gh.queueResponse({ stdout: prViewJson('me-user') });
+    const second = await request('POST', '/items/pr/acme/app/11/agents', { mode: 'respond' });
+    expect(second.status).toBe(202);
+    expect(second.body.created).toBe(false);
+    expect(second.body.started).toBe(true);
+    expect(second.body.session.id).toBe(first.body.session.id);
+    expect((await ih.h.store.list()).filter((s) => s.mode === 'respond').length).toBe(1);
+  });
+
+  it('R51: with the session CLAIMED it is { created: false, started: false } with a reason', async () => {
+    await start();
+    await scan([prFixture(11, 'me-user')]);
+    ih.gh.queueResponse({ stdout: prViewJson('me-user') });
+    const first = await request('POST', '/items/pr/acme/app/11/agents', { mode: 'respond' });
+    await ih.h.finishRun({}, { code: 0, signal: null });
+    await ih.h.service.claimConversation(first.body.session.id);
+    const second = await request('POST', '/items/pr/acme/app/11/agents', { mode: 'respond' });
+    expect(second.status).toBe(200);
+    expect(second.body).toMatchObject({ created: false, started: false });
+    expect(second.body.reason).toContain('claim');
+  });
+
+  it('R51: a second POST while the run is IN FLIGHT refuses to restart — two agents must never write one COMMENTS.md', async () => {
+    await start();
+    await scan([prFixture(11, 'me-user')]);
+    ih.gh.queueResponse({ stdout: prViewJson('me-user') });
+    await request('POST', '/items/pr/acme/app/11/agents', { mode: 'respond' });
+    const second = await request('POST', '/items/pr/acme/app/11/agents', { mode: 'respond' });
+    expect(second.status).toBe(200);
+    expect(second.body).toMatchObject({ created: false, started: false });
+    expect(second.body.reason).toContain('in flight');
+    expect(runStarts).toEqual(['respond']);
+  });
+
+  it("mode respond on somebody else's PR is a 409 naming NotMyPrError's wording", async () => {
+    await start();
+    await scan([prFixture(10, 'bob')]);
+    ih.gh.queueResponse({ stdout: prViewJson('bob') });
+    const res = await request('POST', '/items/pr/acme/app/10/agents', { mode: 'respond' });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toContain('not yours');
+    expect(agentStarts).toBe(0);
+  });
+
+  it('mode respond on a ticket-only item is a 400', async () => {
+    jira = {
+      ...jira,
+      issues: [
+        {
+          key: 'HB-900',
+          summary: 'ticket only',
+          status: 'To Do',
+          statusCategory: 'new',
+          assignee: '712020:me',
+          updated: '2026-09-09T00:00:00.000Z',
+          url: 'https://example.atlassian.net/browse/HB-900',
+        },
+      ],
+    };
+    await start();
+    await scan([]);
+    const res = await request('POST', '/items/ticket/HB-900/agents', { mode: 'respond' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('pull request');
+  });
+
+  it('R56: POST /sessions/:id/run { stage: respond } validates', async () => {
+    await start();
+    await scan([prFixture(11, 'me-user')]);
+    ih.gh.queueResponse({ stdout: prViewJson('me-user') });
+    const created = await request('POST', '/items/pr/acme/app/11/agents', { mode: 'respond' });
+    const res = await request('POST', `/sessions/${created.body.session.id}/run`, { stage: 'respond' });
+    expect(res.status).not.toBe(400);
   });
 });

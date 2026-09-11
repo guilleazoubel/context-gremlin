@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "id": "pr-app-12-2026-08-03-cccc",
+  "mode": "review",
+  "createdAt": "2026-08-03T10:00:00.000Z",
+  "workspace": { "repoUrl": "https://github.com/acme/app.git", "worktreePath": "/worktrees/pr-app-12", "branch": "pr-12" },
+  "lineage": { "pipelineId": "pr-app-12-2026-08-03-cccc", "parentSessionId": null, "ticket": null },
+  "stageStatus": "ready"
+}

@@ -5,7 +5,12 @@ import { SessionStore } from '../../src/engine/session-store';
 import { WorkspaceManager } from '../../src/workspace/workspace-manager';
 import { EngineEvents } from '../../src/engine/events';
 import { StageRunner } from '../../src/pipeline/stage-runner';
-import { PipelineService, type CreateInvestigationInput, type PipelineConfig } from '../../src/pipeline/pipeline-service';
+import {
+  PipelineService,
+  type CreateInvestigationInput,
+  type PipelineConfig,
+  type PipelineServiceDeps,
+} from '../../src/pipeline/pipeline-service';
 import { KeyedLock } from '../../src/api/keyed-lock';
 import type { AgentExitResult } from '../../src/agent/agent-runner';
 import type { InvestigationSession } from '../../src/schema/session';
@@ -53,6 +58,8 @@ export interface HarnessOptions {
    * share them; omitted for every wiring that has no environment at all.
    */
   environment?: (parts: { fs: InMemoryFileSystem; git: FakeGitRunner; lock: KeyedLock }) => EnvironmentService;
+  /** R50 — what the respond brief carries beyond the ticket; omitted means an empty body. */
+  respondContext?: PipelineServiceDeps['respondContext'];
 }
 
 export function createHarness(options: HarnessOptions = {}): PipelineHarness {
@@ -94,6 +101,7 @@ export function createHarness(options: HarnessOptions = {}): PipelineHarness {
     now,
     lock,
     environment,
+    ...(options.respondContext !== undefined ? { respondContext: options.respondContext } : {}),
   });
 
   async function finishRun(files: Record<string, string>, exit: AgentExitResult): Promise<void> {

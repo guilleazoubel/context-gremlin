@@ -157,6 +157,12 @@ export function deriveSessionReasons(ev: SessionEvidence): DerivedReason[] {
       derived.push({ reason: 'rereview_ready', at: lastRun?.finishedAt ?? null });
     }
   }
+  // R51: the mirror of the review/ready -> review_ready clause above. A
+  // respond session at `ready` has every thread classified and the local
+  // fixes committed; the human is what it is waiting on.
+  if (s.mode === 'respond' && s.stageStatus === 'ready') {
+    derived.push({ reason: 'comments_ready', at: lastRun?.finishedAt ?? null });
+  }
   if (ev.localApp?.state === 'unavailable') {
     derived.push({ reason: 'local_prereq_failed', at: null });
   }

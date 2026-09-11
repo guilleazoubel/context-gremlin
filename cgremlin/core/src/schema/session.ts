@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { SessionModeSchema, type SessionMode } from './session-mode';
-import { INVESTIGATION_PHASES, DEVELOPMENT_PHASES, REVIEW_PHASES } from './pipeline';
+import { INVESTIGATION_PHASES, DEVELOPMENT_PHASES, REVIEW_PHASES, RESPOND_PHASES } from './pipeline';
 import { AgentSchema, LastRunSchema, PrSchema } from './stage';
 
 export { SessionModeSchema };
@@ -71,11 +71,19 @@ export const SessionSchema = z.discriminatedUnion('mode', [
     reviewVersion: z.number().int().nonnegative(),
     lastRereviewSummary: RereviewSummarySchema.nullable().default(null),
   }),
+  // R51 — the fourth variant. Additive: the union is discriminated on
+  // `mode`, so every document already on disk keeps matching its own branch
+  // (MG-13). The v1 union above is deliberately NOT extended.
+  V2Base.extend({
+    mode: z.literal('respond'),
+    stageStatus: z.enum(RESPOND_PHASES),
+  }),
 ]);
 export type Session = z.infer<typeof SessionSchema>;
 export type InvestigationSession = Extract<Session, { mode: 'investigation' }>;
 export type DevelopmentSession = Extract<Session, { mode: 'development' }>;
 export type ReviewSession = Extract<Session, { mode: 'review' }>;
+export type RespondSession = Extract<Session, { mode: 'respond' }>;
 
 export function migrateV1ToV2(v1: SessionV1): Session {
   const base = {

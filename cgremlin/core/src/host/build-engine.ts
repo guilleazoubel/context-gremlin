@@ -17,7 +17,9 @@ import { InventoryScanner, type ScanReport } from '../inventory/inventory-scanne
 import { JiraRestSource } from '../jira/jira-rest-source';
 import { JiraScanner } from '../jira/jira-scanner';
 import { JiraStore, TicketDetailCache } from '../jira/jira-store';
-import { ReviewThreadScanner, ReviewThreadStore } from '../gh/review-threads';
+import { ReviewThreadScanner, ReviewThreadStore, threadCacheKey, type ReviewThreadCache } from '../gh/review-threads';
+import { RespondSessionFactory } from '../pipeline/respond-session-factory';
+import { PR_VIEW_FIELDS, failingChecks, parsePrView } from '../gh/pr-view';
 import type { JiraSource } from '../jira/jira-source';
 import { InventoryStore } from '../inventory/inventory-store';
 import { createApiServer, type EngineInfo } from '../api/server';
@@ -161,6 +163,53 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     environment: environment ?? undefined,
     // R18: the engine fetches the ticket text; the agent never sees a
     // credential, and the `## Ticket` block is composed in exactly one place.
+    /**
+     * R50/R52 — everything the respond brief carries beyond the ticket: the
+     * cached review threads, the per-reviewer states, the failing checks and
+     * the diff summary. One read-only `gh pr view` per respond run, the same
+     * call `RespondSessionFactory` already makes.
+     */
+    respondContext: async (session) => {
+      const empty = {
+        threads: [],
+        reviews: [],
+        reviewDecision: null,
+        failingChecks: [],
+        changedFiles: null,
+        additions: null,
+        deletions: null,
+      };
+      const pr = session.pr;
+      if (pr === null) return empty;
+      const cache: ReviewThreadCache = await threadScanner.cached().catch(() => ({}));
+      const threads = cache[threadCacheKey(pr.repo, pr.number)]?.threads ?? [];
+      const inventoryEntry = (await inventoryStore.load().catch(() => null))?.entries.find(
+        (e) => e.repo === pr.repo && e.number === pr.number,
+      );
+      try {
+        const { stdout } = await adapters.gh.run([
+          'pr', 'view', String(pr.number), '--repo', pr.repo, '--json', PR_VIEW_FIELDS,
+        ]);
+        const view = parsePrView(stdout);
+        return {
+          threads,
+          reviews: view.latestReviews.map((r) => ({
+            author: r.author.login,
+            state: r.state,
+            body: typeof r.body === 'string' ? r.body : null,
+            submittedAt: r.submittedAt,
+          })),
+          reviewDecision: view.reviewDecision,
+          failingChecks: failingChecks(view.statusCheckRollup ?? []),
+          changedFiles: inventoryEntry?.changedFiles ?? null,
+          additions: inventoryEntry?.additions ?? null,
+          deletions: inventoryEntry?.deletions ?? null,
+        };
+      } catch {
+        // A brief with the threads but no review summary still beats no run.
+        return { ...empty, threads };
+      }
+    },
     tickets: {
       forBrief: async (key) => {
         const { ticket } = await ticketDetail.detail(key);
@@ -175,6 +224,15 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
         };
       },
     },
+  });
+  const respondFactory = new RespondSessionFactory({
+    gh: adapters.gh,
+    store,
+    workspace,
+    events,
+    worktreesDir,
+    me: config.me,
+    now: adapters.now,
   });
   const factory = new ReviewSessionFactory({
     gh: adapters.gh,
@@ -315,6 +373,8 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     attention,
     workItems,
     ticketDetail,
+    respondFactory,
+    now: adapters.now,
     eventRing,
     lock,
     config,

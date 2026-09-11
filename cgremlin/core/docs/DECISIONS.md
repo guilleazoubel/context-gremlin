@@ -390,3 +390,26 @@ Rulings live in `docs/superpowers/specs/2026-09-10-cgremlin-phase9-work-items-de
   `z.array(z.object({ login: z.string() }))` the ruling forbids would have thrown on the first
   row. The 32-PR repo did not trip GitHub's node limit even at `--limit 100`, so R67's two-call
   fallback remains covered by fixtures and by smoke step 1 only. *A2, R59, R60, R67.*
+- **R56's create-and-start click, recorded explicitly against Phase 7 R5 / MG-8.** "Nothing starts an
+  agent that was not explicitly asked for" still holds: the user's click on a lit `waitingForReview`
+  row **is** the explicit ask, and it is a `POST`, not a read. So
+  `POST /items/pr/:o/:r/:n/agents { mode: 'respond' }` creates the session AND starts the respond run
+  in the same request, answering `202` with `started: true`. MG-8 is amended to match — it still
+  asserts **zero** starts from every `GET`, and now asserts exactly one from that `POST`. The
+  alternative hands the user a session with an empty `BRIEF.md` and a second button to press.
+  *A9, R56.*
+- **`'respond'` is a `STAGE_NAME`, appended.** `STAGE_NAMES` is three contracts in one array — the
+  `POST /sessions/:id/run` validator, the persisted `lastRun.stage` type, and the
+  `run.started`/`run.finished` payload type — so a respond session running a stage named anything
+  else could not be started, recorded or reported. Appending keeps every persisted `lastRun.stage`
+  meaning what it did. *A9, R56.*
+- **The v1 session union is deliberately not extended.** There were no respond sessions before
+  Phase 9, so a v1 respond document cannot exist and `migrateV1ToV2` needs no case for it. Both
+  unions are discriminated on `mode`, so the fourth variant is additive and every document already
+  on disk keeps matching its own branch — MG-13 pins that against six committed pre-Phase-9
+  fixtures. *A9, R51.*
+- **Nothing in v1 posts to GitHub.** The respond agent's permission set denies every mutating
+  `gh pr` verb and `gh api --method`; `renderRespondBrief` carries the out-of-scope line in the
+  brief itself; and the respond-flow tests run against a `GhRunner` fake that throws on any
+  mutation. The legacy `--reply-comment` / `--resolve-comment` / `--push-fix` verbs are not ported.
+  v1 ends at "the fix is committed locally"; the drafted replies live in `COMMENTS.md`. *A9, R55.*

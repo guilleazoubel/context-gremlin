@@ -194,6 +194,25 @@ export function ciStatus(checks: readonly StatusCheck[]): CiStatus {
   return pending ? 'pending' : 'success';
 }
 
+/**
+ * R50 — the failing checks by NAME, with their detailsUrl, for the respond
+ * brief. Shares `ciStatus`'s failure sets rather than inventing a second
+ * notion of "failed".
+ */
+export function failingChecks(checks: readonly StatusCheck[]): Array<{ name: string; detailsUrl: string | null }> {
+  const failing: Array<{ name: string; detailsUrl: string | null }> = [];
+  for (const check of checks) {
+    if (check.__typename === 'CheckRun') {
+      if (check.conclusion !== null && FAILURE_CONCLUSIONS.has(check.conclusion)) {
+        failing.push({ name: check.name, detailsUrl: check.detailsUrl ?? null });
+      }
+    } else if (FAILURE_STATES.has(check.state)) {
+      failing.push({ name: check.context, detailsUrl: check.targetUrl ?? null });
+    }
+  }
+  return failing;
+}
+
 export function mapPrView(
   slug: string,
   view: PrView,

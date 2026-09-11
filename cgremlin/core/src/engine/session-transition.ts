@@ -3,6 +3,7 @@ import {
   transitionPhase,
   type DevelopmentPhase,
   type InvestigationPhase,
+  type RespondPhase,
   type ReviewPhase,
 } from '../schema/pipeline';
 
@@ -22,6 +23,11 @@ export function applyTransition(session: Session, to: string): Session {
       return {
         ...session,
         stageStatus: transitionPhase('review', session.stageStatus, to as ReviewPhase),
+      };
+    case 'respond':
+      return {
+        ...session,
+        stageStatus: transitionPhase('respond', session.stageStatus, to as RespondPhase),
       };
   }
 }

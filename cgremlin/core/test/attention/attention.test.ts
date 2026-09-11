@@ -481,3 +481,51 @@ describe('derivePrReasons: the three my-own-PR reasons (R50, R58)', () => {
     expect(second.needsAttention).toBe(false);
   });
 });
+
+describe('deriveSessionReasons: comments_ready (R51)', () => {
+  function respond(stageStatus: string): SessionEvidence {
+    return {
+      session: {
+        schemaVersion: 2,
+        id: 'respond-1',
+        mode: 'respond',
+        createdAt: CREATED,
+        workspace: { repoUrl: 'https://github.com/acme/app.git', worktreePath: '/wt/respond-1' },
+        lineage: { pipelineId: 'respond-1', parentSessionId: null, ticket: null },
+        agent: null,
+        lastRun: {
+          stage: 'respond',
+          startedAt: '2026-09-03T00:00:00.000Z',
+          finishedAt: '2026-09-03T00:10:00.000Z',
+          exitCode: 0,
+          signal: null,
+          outcome: 'succeeded',
+          error: null,
+        },
+        pr: null,
+        stageStatus,
+      } as unknown as SessionEvidence['session'],
+      agentState: null,
+      agentStateMtime: null,
+      running: false,
+      localApp: null,
+    };
+  }
+
+  it('fires comments_ready at `ready`, stamped from the run finish', () => {
+    expect(deriveSessionReasons(respond('ready'))).toContainEqual({
+      reason: 'comments_ready',
+      at: '2026-09-03T00:10:00.000Z',
+    });
+  });
+
+  it('fires NOTHING at triaging or addressing', () => {
+    for (const phase of ['triaging', 'addressing']) {
+      expect(deriveSessionReasons(respond(phase)).map((d) => d.reason)).not.toContain('comments_ready');
+    }
+  });
+
+  it('comments_ready is in NEEDS_YOU_REASONS', () => {
+    expect(NEEDS_YOU_REASONS).toContain('comments_ready');
+  });
+});

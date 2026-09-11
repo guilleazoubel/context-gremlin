@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "id": "inv-2026-08-01-aaaa",
+  "mode": "investigation",
+  "createdAt": "2026-08-01T10:00:00.000Z",
+  "workspace": { "repoUrl": "git@github.com:acme/app.git", "worktreePath": "/worktrees/inv-2026-08-01-aaaa" },
+  "lineage": { "pipelineId": "inv-2026-08-01-aaaa", "parentSessionId": null, "ticket": "HB-1" },
+  "stageStatus": "findings"
+}

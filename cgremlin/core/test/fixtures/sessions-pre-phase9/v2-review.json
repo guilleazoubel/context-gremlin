@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 2,
+  "id": "pr-app-12-2026-08-06-ffff",
+  "mode": "review",
+  "createdAt": "2026-08-06T10:00:00.000Z",
+  "workspace": { "repoUrl": "https://github.com/acme/app.git", "worktreePath": "/worktrees/pr-app-12-b", "branch": "pr-12" },
+  "lineage": { "pipelineId": "pr-app-12-2026-08-06-ffff", "parentSessionId": null, "ticket": "HB-3" },
+  "agent": { "runner": "claude-code", "resumeId": null, "humanTurn": null },
+  "lastRun": {
+    "stage": "review",
+    "startedAt": "2026-08-06T10:01:00.000Z",
+    "finishedAt": "2026-08-06T10:20:00.000Z",
+    "exitCode": 0,
+    "signal": null,
+    "outcome": "succeeded",
+    "error": null
+  },
+  "pr": {
+    "repo": "acme/app",
+    "number": 12,
+    "url": "https://github.com/acme/app/pull/12",
+    "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "reviewedSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "title": "PR twelve",
+    "author": "bob"
+  },
+  "stageStatus": "ready",
+  "reviewVersion": 1,
+  "lastRereviewSummary": null
+}

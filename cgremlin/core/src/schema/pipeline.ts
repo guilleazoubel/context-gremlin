@@ -30,11 +30,22 @@ export const REVIEW_PHASES = [
 ] as const;
 export type ReviewPhase = (typeof REVIEW_PHASES)[number];
 
+/**
+ * R51 — `triaging`: the agent is classifying the live threads into
+ * COMMENTS.md. `addressing`: working the entries (fixes, reply drafts).
+ * `ready`: every entry has a verdict and the local fixes are committed — the
+ * HUMAN is what it is waiting on. `closed`/`abandoned`: done.
+ */
+export const RESPOND_PHASES = ['triaging', 'addressing', 'ready', 'closed', 'abandoned'] as const;
+export type RespondPhase = (typeof RESPOND_PHASES)[number];
+
 export type PhaseFor<M extends SessionMode> = M extends 'investigation'
   ? InvestigationPhase
   : M extends 'development'
     ? DevelopmentPhase
-    : ReviewPhase;
+    : M extends 'respond'
+      ? RespondPhase
+      : ReviewPhase;
 
 const INVESTIGATION_TRANSITIONS: Record<InvestigationPhase, readonly InvestigationPhase[]> = {
   findings: ['planning', 'abandoned'],
@@ -67,10 +78,21 @@ const REVIEW_TRANSITIONS: Record<ReviewPhase, readonly ReviewPhase[]> = {
   dismissed: [],
 };
 
+// R51: a new review arriving sends a `ready` respond session back to
+// `addressing`, which is why `ready` is not terminal.
+const RESPOND_TRANSITIONS: Record<RespondPhase, readonly RespondPhase[]> = {
+  triaging: ['addressing', 'abandoned'],
+  addressing: ['ready', 'abandoned'],
+  ready: ['addressing', 'closed', 'abandoned'],
+  closed: [],
+  abandoned: [],
+};
+
 const TRANSITIONS = {
   investigation: INVESTIGATION_TRANSITIONS,
   development: DEVELOPMENT_TRANSITIONS,
   review: REVIEW_TRANSITIONS,
+  respond: RESPOND_TRANSITIONS,
 } as const;
 
 export class IllegalTransitionError extends Error {

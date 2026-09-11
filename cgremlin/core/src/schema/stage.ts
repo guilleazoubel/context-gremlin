@@ -1,6 +1,14 @@
 import { z } from 'zod';
 
-export const STAGE_NAMES = ['findings', 'plan', 'develop', 'review', 'rereview'] as const;
+/**
+ * R56 — THREE contracts in one array: `StageNameSchema` validates
+ * `POST /sessions/:id/run`, it is the persisted `LastRunSchema.stage` type,
+ * and it is the payload type of `run.started`/`run.finished`. A session
+ * whose stage is not named here cannot be started, cannot record its run and
+ * cannot emit an event. The fourth mode's stage is APPENDED, so no existing
+ * persisted `lastRun.stage` value shifts meaning.
+ */
+export const STAGE_NAMES = ['findings', 'plan', 'develop', 'review', 'rereview', 'respond'] as const;
 export const StageNameSchema = z.enum(STAGE_NAMES);
 export type StageName = z.infer<typeof StageNameSchema>;
 
