@@ -591,6 +591,41 @@ function changedFilesOf(item: WorkItem): number | null {
   return item.prs[0]?.changedFiles ?? null;
 }
 
+/**
+ * Which agent a Chat click opens, or `null` when the row has none to open (R50).
+ *
+ * A respond agent is chat-eligible only from `addressing` onwards — chatting into a session
+ * whose `BRIEF.md` is still being written is the failure R50's ordering prevents — so an item
+ * whose only agent is a triaging respond agent offers no Chat at all. Among several eligible
+ * agents the most recently active one wins: a running agent, then a claimed one, then the
+ * first in the core's order (which is already review → respond → investigation → development,
+ * then by phase age). Every caller uses THIS, so the button and the click can never disagree.
+ */
+export function chatTargetOf(item: WorkItem): string | null {
+  const eligible = item.agents.filter(
+    (agent) =>
+      agent.mode !== 'respond' || agent.phase === 'addressing' || agent.phase === 'ready',
+  );
+  if (eligible.length === 0) return null;
+  const best =
+    eligible.find((agent) => agent.running) ??
+    eligible.find((agent) => agent.claimed) ??
+    eligible[0];
+  return best.sessionId;
+}
+
+/** The `childId` an agent-targeting row action carries, so the click needs no second rule. */
+export function agentChildId(sessionId: string): string {
+  return `agent:${sessionId}`;
+}
+
+/** The session an `agent:` child id names, or `null` when it names something else. */
+export function agentOfChildId(childId: string | null | undefined): string | null {
+  if (typeof childId !== 'string' || !childId.startsWith('agent:')) return null;
+  const sessionId = childId.slice('agent:'.length);
+  return sessionId === '' ? null : sessionId;
+}
+
 // ---------------------------------------------------------------------------
 // Children (R48, MG-15)
 // ---------------------------------------------------------------------------

@@ -343,6 +343,29 @@ describe('R42/R51 the row actions', () => {
     expect((row?.actions ?? []).map((a) => a.command)).toContain('cgremlin.openTicket');
   });
 
+  it('finding 1 — the Chat action names the agent it would open', () => {
+    const h = build();
+    h.ready();
+    const row = h
+      .state()
+      .lists.flatMap((l) => l.sections.flatMap((s) => s.rows))
+      .find((r) => r.id === 'pr:acme/api#77');
+    const chat = (row?.actions ?? []).find((a) => a.command === 'cgremlin.chat');
+    // The row carries a triaging respond agent AND a chat-eligible dev agent: the action must
+    // name the dev agent, not "whatever the item's first agent happens to be".
+    expect(chat?.childId).toBe('agent:dev-acme-api-77');
+  });
+
+  it('finding 1 — a row whose only agent is triaging offers no Chat at all', () => {
+    const h = build();
+    h.ready();
+    const row = h
+      .state()
+      .lists.flatMap((l) => l.sections.flatMap((s) => s.rows))
+      .find((r) => r.id === 'pr:acme/web#200');
+    expect((row?.actions ?? []).map((a) => a.command)).not.toContain('cgremlin.chat');
+  });
+
   it('always offers Ack', () => {
     const h = build();
     h.ready();

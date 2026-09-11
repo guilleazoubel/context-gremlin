@@ -15,8 +15,10 @@
  */
 import crypto from 'node:crypto';
 import {
+  agentChildId,
   buildItemChildren,
   buildWorkLists,
+  chatTargetOf,
   readSort,
   readSorts,
   ticketBanner,
@@ -309,17 +311,23 @@ function childView(child: WorkChild): PanelChildView {
  *    panel untrustworthy;
  *  - **Address review comments** exactly on my own non-draft PR (R51), which is the click that
  *    creates AND starts the respond run (R56);
- *  - **Chat** only where there is an agent to chat to, and on a respond agent only once its run
- *    has finished — `addressing` or `ready` (R50);
+ *  - **Chat** only where `chatTargetOf` finds an agent to chat to — a respond agent counts only
+ *    once its run has finished, `addressing` or `ready` (R50) — and the action carries that
+ *    agent's id;
  *  - **Open PR** once per entry in `prs` (R26).
  */
 export function actionsFor(item: WorkItem): PanelActionView[] {
   const actions: PanelActionView[] = [];
   const primary = item.prs[0];
-  const chatable = item.agents.find(
-    (agent) => agent.mode !== 'respond' || agent.phase === 'addressing' || agent.phase === 'ready',
-  );
-  if (chatable !== undefined) actions.push({ command: 'cgremlin.chat', label: 'Chat' });
+  // The action names the agent it would open, so the click has no second rule to get wrong.
+  const chatTarget = chatTargetOf(item);
+  if (chatTarget !== null) {
+    actions.push({
+      command: 'cgremlin.chat',
+      label: 'Chat',
+      childId: agentChildId(chatTarget),
+    });
+  }
   if (primary !== undefined && primary.isMine !== true) {
     if (!item.agents.some((agent) => agent.mode === 'review')) {
       actions.push({ command: 'cgremlin.startReview', label: 'Start review' });

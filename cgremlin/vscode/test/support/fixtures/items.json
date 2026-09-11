@@ -2,24 +2,51 @@
   "evaluatedAt": "2026-09-10T12:00:00.000Z",
   "lists": {
     "parkingLot": {
-      "reviewing": ["pr:acme/web#102"],
-      "untouched": ["pr:acme/web#101", "pr:acme/legacy#9"],
-      "someoneOnIt": ["pr:acme/api#55", "pr:acme/api#56"]
+      "reviewing": [
+        "pr:acme/web#102"
+      ],
+      "untouched": [
+        "pr:acme/web#101",
+        "pr:acme/legacy#9"
+      ],
+      "someoneOnIt": [
+        "pr:acme/api#55",
+        "pr:acme/api#56"
+      ]
     },
-    "myWork": ["ticket:HB-627", "pr:acme/web#200"],
-    "investigations": ["session:inv-stacktrace-1"],
-    "waitingForReview": ["pr:acme/web#200", "ticket:HB-627"]
+    "myWork": [
+      "ticket:HB-627",
+      "pr:acme/web#200",
+      "pr:acme/api#77"
+    ],
+    "investigations": [
+      "session:inv-stacktrace-1"
+    ],
+    "waitingForReview": [
+      "pr:acme/web#200",
+      "ticket:HB-627",
+      "pr:acme/api#77"
+    ]
   },
-  "ticketSource": { "kind": "ok", "error": null, "scannedAt": "2026-09-10T11:59:00.000Z" },
-  "threadSource": { "error": null, "scannedAt": "2026-09-10T11:59:00.000Z" },
+  "ticketSource": {
+    "kind": "ok",
+    "error": null,
+    "scannedAt": "2026-09-10T11:59:00.000Z"
+  },
+  "threadSource": {
+    "error": null,
+    "scannedAt": "2026-09-10T11:59:00.000Z"
+  },
   "items": [
     {
       "id": "pr:acme/web#101",
       "kind": "pr",
-      "lists": ["parkingLot"],
+      "lists": [
+        "parkingLot"
+      ],
       "demoted": false,
       "parkingLotGroup": "untouched",
-      "title": "acme/web#101 — Add the retry budget",
+      "title": "acme/web#101 \u2014 Add the retry budget",
       "prs": [
         {
           "repo": "acme/web",
@@ -31,7 +58,11 @@
           "isDraft": false,
           "isMine": false,
           "reviewDecision": "REVIEW_REQUIRED",
-          "humanActivity": { "reviewedBy": [], "commentedBy": [], "lastAt": null },
+          "humanActivity": {
+            "reviewedBy": [],
+            "commentedBy": [],
+            "lastAt": null
+          },
           "reviewRequests": [],
           "teamActivity": [],
           "updatedAt": "2026-09-09T09:00:00.000Z",
@@ -40,21 +71,32 @@
           "additions": 120,
           "deletions": 30,
           "ci": "success",
-          "labels": ["backend"]
+          "labels": [
+            "backend"
+          ]
         }
       ],
       "ticket": null,
       "agents": [],
       "needsYou": false,
-      "attention": { "reasons": [], "since": "2026-09-09T09:00:00.000Z", "acked": true, "refs": ["pr:acme/web#101"] }
+      "attention": {
+        "reasons": [],
+        "since": "2026-09-09T09:00:00.000Z",
+        "acked": true,
+        "refs": [
+          "pr:acme/web#101"
+        ]
+      }
     },
     {
       "id": "pr:acme/legacy#9",
       "kind": "pr",
-      "lists": ["parkingLot"],
+      "lists": [
+        "parkingLot"
+      ],
       "demoted": false,
       "parkingLotGroup": "untouched",
-      "title": "acme/legacy#9 — Bump the toolchain",
+      "title": "acme/legacy#9 \u2014 Bump the toolchain",
       "prs": [
         {
           "repo": "acme/legacy",
@@ -81,15 +123,24 @@
       "ticket": null,
       "agents": [],
       "needsYou": false,
-      "attention": { "reasons": [], "since": "2026-09-01T00:00:00.000Z", "acked": true, "refs": ["pr:acme/legacy#9"] }
+      "attention": {
+        "reasons": [],
+        "since": "2026-09-01T00:00:00.000Z",
+        "acked": true,
+        "refs": [
+          "pr:acme/legacy#9"
+        ]
+      }
     },
     {
       "id": "pr:acme/web#102",
       "kind": "pr",
-      "lists": ["parkingLot"],
+      "lists": [
+        "parkingLot"
+      ],
       "demoted": false,
       "parkingLotGroup": "reviewing",
-      "title": "acme/web#102 — Drop the legacy shim",
+      "title": "acme/web#102 \u2014 Drop the legacy shim",
       "prs": [
         {
           "repo": "acme/web",
@@ -101,7 +152,11 @@
           "isDraft": false,
           "isMine": false,
           "reviewDecision": "REVIEW_REQUIRED",
-          "humanActivity": { "reviewedBy": [], "commentedBy": [], "lastAt": null },
+          "humanActivity": {
+            "reviewedBy": [],
+            "commentedBy": [],
+            "lastAt": null
+          },
           "reviewRequests": [],
           "teamActivity": [],
           "updatedAt": "2026-09-10T08:20:00.000Z",
@@ -129,19 +184,26 @@
       ],
       "needsYou": true,
       "attention": {
-        "reasons": ["review_ready"],
+        "reasons": [
+          "review_ready"
+        ],
         "since": "2026-09-10T08:20:00.000Z",
         "acked": false,
-        "refs": ["session:pr-acme-web-102", "pr:acme/web#102"]
+        "refs": [
+          "session:pr-acme-web-102",
+          "pr:acme/web#102"
+        ]
       }
     },
     {
       "id": "pr:acme/api#55",
       "kind": "pr",
-      "lists": ["parkingLot"],
+      "lists": [
+        "parkingLot"
+      ],
       "demoted": true,
       "parkingLotGroup": "someoneOnIt",
-      "title": "acme/api#55 — Split the scheduler",
+      "title": "acme/api#55 \u2014 Split the scheduler",
       "prs": [
         {
           "repo": "acme/api",
@@ -154,8 +216,12 @@
           "isMine": false,
           "reviewDecision": "CHANGES_REQUESTED",
           "humanActivity": {
-            "reviewedBy": ["dana"],
-            "commentedBy": ["kim"],
+            "reviewedBy": [
+              "dana"
+            ],
+            "commentedBy": [
+              "kim"
+            ],
             "lastAt": "2026-09-08T17:00:00.000Z"
           },
           "reviewRequests": [],
@@ -166,21 +232,32 @@
           "additions": 900,
           "deletions": 120,
           "ci": "pending",
-          "labels": ["infra"]
+          "labels": [
+            "infra"
+          ]
         }
       ],
       "ticket": null,
       "agents": [],
       "needsYou": false,
-      "attention": { "reasons": [], "since": "2026-09-08T17:00:00.000Z", "acked": true, "refs": ["pr:acme/api#55"] }
+      "attention": {
+        "reasons": [],
+        "since": "2026-09-08T17:00:00.000Z",
+        "acked": true,
+        "refs": [
+          "pr:acme/api#55"
+        ]
+      }
     },
     {
       "id": "pr:acme/api#56",
       "kind": "pr",
-      "lists": ["parkingLot"],
+      "lists": [
+        "parkingLot"
+      ],
       "demoted": true,
       "parkingLotGroup": "someoneOnIt",
-      "title": "acme/api#56 — Retire the v1 endpoint",
+      "title": "acme/api#56 \u2014 Retire the v1 endpoint",
       "prs": [
         {
           "repo": "acme/api",
@@ -192,8 +269,14 @@
           "isDraft": false,
           "isMine": false,
           "reviewDecision": "REVIEW_REQUIRED",
-          "humanActivity": { "reviewedBy": [], "commentedBy": [], "lastAt": null },
-          "reviewRequests": ["dana"],
+          "humanActivity": {
+            "reviewedBy": [],
+            "commentedBy": [],
+            "lastAt": null
+          },
+          "reviewRequests": [
+            "dana"
+          ],
           "teamActivity": [],
           "updatedAt": "2026-09-07T10:00:00.000Z",
           "createdAt": "2026-09-02T12:00:00.000Z",
@@ -207,15 +290,25 @@
       "ticket": null,
       "agents": [],
       "needsYou": false,
-      "attention": { "reasons": [], "since": "2026-09-07T10:00:00.000Z", "acked": true, "refs": ["pr:acme/api#56"] }
+      "attention": {
+        "reasons": [],
+        "since": "2026-09-07T10:00:00.000Z",
+        "acked": true,
+        "refs": [
+          "pr:acme/api#56"
+        ]
+      }
     },
     {
       "id": "ticket:HB-627",
       "kind": "pr+ticket",
-      "lists": ["myWork", "waitingForReview"],
+      "lists": [
+        "myWork",
+        "waitingForReview"
+      ],
       "demoted": false,
       "parkingLotGroup": null,
-      "title": "HB-627 — Caregiver inbox reshuffle",
+      "title": "HB-627 \u2014 Caregiver inbox reshuffle",
       "prs": [
         {
           "repo": "acme/web",
@@ -228,7 +321,9 @@
           "isMine": true,
           "reviewDecision": "APPROVED",
           "humanActivity": {
-            "reviewedBy": ["dana"],
+            "reviewedBy": [
+              "dana"
+            ],
             "commentedBy": [],
             "lastAt": "2026-09-10T07:00:00.000Z"
           },
@@ -252,7 +347,11 @@
           "isDraft": false,
           "isMine": true,
           "reviewDecision": "REVIEW_REQUIRED",
-          "humanActivity": { "reviewedBy": [], "commentedBy": [], "lastAt": null },
+          "humanActivity": {
+            "reviewedBy": [],
+            "commentedBy": [],
+            "lastAt": null
+          },
           "reviewRequests": [],
           "teamActivity": [],
           "updatedAt": "2026-09-09T18:00:00.000Z",
@@ -299,19 +398,30 @@
       ],
       "needsYou": true,
       "attention": {
-        "reasons": ["plan_ready", "approved"],
+        "reasons": [
+          "plan_ready",
+          "approved"
+        ],
         "since": "2026-09-10T07:00:00.000Z",
         "acked": false,
-        "refs": ["session:inv-hb-627", "session:dev-hb-627", "pr:acme/web#310", "pr:acme/api#88"]
+        "refs": [
+          "session:inv-hb-627",
+          "session:dev-hb-627",
+          "pr:acme/web#310",
+          "pr:acme/api#88"
+        ]
       }
     },
     {
       "id": "pr:acme/web#200",
       "kind": "pr",
-      "lists": ["myWork", "waitingForReview"],
+      "lists": [
+        "myWork",
+        "waitingForReview"
+      ],
       "demoted": false,
       "parkingLotGroup": null,
-      "title": "acme/web#200 — Tighten the socket timeout",
+      "title": "acme/web#200 \u2014 Tighten the socket timeout",
       "prs": [
         {
           "repo": "acme/web",
@@ -324,7 +434,9 @@
           "isMine": true,
           "reviewDecision": "CHANGES_REQUESTED",
           "humanActivity": {
-            "reviewedBy": ["jane"],
+            "reviewedBy": [
+              "jane"
+            ],
             "commentedBy": [],
             "lastAt": "2026-09-10T09:30:00.000Z"
           },
@@ -355,16 +467,24 @@
       ],
       "needsYou": true,
       "attention": {
-        "reasons": ["changes_requested", "review_arrived"],
+        "reasons": [
+          "changes_requested",
+          "review_arrived"
+        ],
         "since": "2026-09-10T09:30:00.000Z",
         "acked": false,
-        "refs": ["session:respond-acme-web-200", "pr:acme/web#200"]
+        "refs": [
+          "session:respond-acme-web-200",
+          "pr:acme/web#200"
+        ]
       }
     },
     {
       "id": "session:inv-stacktrace-1",
       "kind": "session",
-      "lists": ["investigations"],
+      "lists": [
+        "investigations"
+      ],
       "demoted": false,
       "parkingLotGroup": null,
       "title": "Investigate the nightly crash",
@@ -388,7 +508,83 @@
         "reasons": [],
         "since": "2026-09-10T05:00:00.000Z",
         "acked": true,
-        "refs": ["session:inv-stacktrace-1"]
+        "refs": [
+          "session:inv-stacktrace-1"
+        ]
+      }
+    },
+    {
+      "id": "pr:acme/api#77",
+      "kind": "pr",
+      "lists": [
+        "myWork",
+        "waitingForReview"
+      ],
+      "demoted": false,
+      "parkingLotGroup": null,
+      "title": "acme/api#77 \u2014 Split the ingest worker",
+      "prs": [
+        {
+          "repo": "acme/api",
+          "number": 77,
+          "url": "https://github.com/acme/api/pull/77",
+          "title": "Split the ingest worker",
+          "author": "me",
+          "branch": "me/ingest-worker",
+          "isDraft": false,
+          "isMine": true,
+          "reviewDecision": "REVIEW_REQUIRED",
+          "humanActivity": {
+            "reviewedBy": [],
+            "commentedBy": [],
+            "lastAt": null
+          },
+          "reviewRequests": [],
+          "teamActivity": [],
+          "updatedAt": "2026-09-08T09:00:00.000Z",
+          "createdAt": "2026-09-07T12:00:00.000Z",
+          "changedFiles": 5,
+          "additions": 70,
+          "deletions": 20,
+          "ci": "success",
+          "labels": []
+        }
+      ],
+      "ticket": null,
+      "agents": [
+        {
+          "sessionId": "respond-acme-api-77",
+          "mode": "respond",
+          "phase": "triaging",
+          "running": true,
+          "needsYou": false,
+          "claimed": false,
+          "primaryArtifact": null,
+          "worktreePath": "/tmp/cgremlin-fixture/worktrees/respond-acme-api-77",
+          "ref": "session:respond-acme-api-77"
+        },
+        {
+          "sessionId": "dev-acme-api-77",
+          "mode": "development",
+          "phase": "developing",
+          "running": false,
+          "needsYou": false,
+          "claimed": false,
+          "primaryArtifact": "NOTES.md",
+          "worktreePath": "/tmp/cgremlin-fixture/worktrees/dev-acme-api-77",
+          "ref": "session:dev-acme-api-77"
+        }
+      ],
+      "needsYou": false,
+      "attention": {
+        "reasons": [],
+        "since": "2026-09-08T09:00:00.000Z",
+        "acked": true,
+        "refs": [
+          "session:respond-acme-api-77",
+          "session:dev-acme-api-77",
+          "pr:acme/api#77"
+        ]
       }
     }
   ]

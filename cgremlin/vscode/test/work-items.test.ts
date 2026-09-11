@@ -13,8 +13,11 @@ import {
   SORT_OPTIONS,
   WORK_LIST_KINDS,
   WORK_SORT_KINDS,
+  agentChildId,
+  agentOfChildId,
   buildItemChildren,
   buildWorkLists,
+  chatTargetOf,
   itemPathOf,
   readSort,
   readSorts,
@@ -78,9 +81,17 @@ describe('MG-B8 buildWorkLists returns exactly the four lists', () => {
 
   it('takes the membership from the wire and never re-derives it', () => {
     const built = lists();
-    expect(rowIds(built.myWork).sort()).toEqual(['pr:acme/web#200', 'ticket:HB-627']);
+    expect(rowIds(built.myWork).sort()).toEqual([
+      'pr:acme/api#77',
+      'pr:acme/web#200',
+      'ticket:HB-627',
+    ]);
     expect(rowIds(built.investigations)).toEqual(['session:inv-stacktrace-1']);
-    expect(rowIds(built.waitingForReview).sort()).toEqual(['pr:acme/web#200', 'ticket:HB-627']);
+    expect(rowIds(built.waitingForReview).sort()).toEqual([
+      'pr:acme/api#77',
+      'pr:acme/web#200',
+      'ticket:HB-627',
+    ]);
   });
 
   it('has no membership rule of its own in the source (D2)', () => {
@@ -245,9 +256,17 @@ describe('R47 the sorts', () => {
       'pr:acme/api#56',
     ]);
     // waitingForReview: createdAt ascending.
-    expect(rowIds(built.waitingForReview)).toEqual(['ticket:HB-627', 'pr:acme/web#200']);
-    // myWork: needsYou first, then most recently updated.
-    expect(rowIds(built.myWork)).toEqual(['pr:acme/web#200', 'ticket:HB-627']);
+    expect(rowIds(built.waitingForReview)).toEqual([
+      'ticket:HB-627',
+      'pr:acme/web#200',
+      'pr:acme/api#77',
+    ]);
+    // myWork: needsYou first, then most recently updated — #77 needs nobody, so it is last.
+    expect(rowIds(built.myWork)).toEqual([
+      'pr:acme/web#200',
+      'ticket:HB-627',
+      'pr:acme/api#77',
+    ]);
   });
 
   it('sorts within each parking-lot group and never across them', () => {
@@ -268,9 +287,9 @@ describe('R47 the sorts', () => {
 
   it('sorts oldest and newest on the row date, nulls last', () => {
     const oldest = rowIds(lists({ sorts: { waitingForReview: 'oldest' } }).waitingForReview);
-    expect(oldest).toEqual(['ticket:HB-627', 'pr:acme/web#200']);
+    expect(oldest).toEqual(['ticket:HB-627', 'pr:acme/web#200', 'pr:acme/api#77']);
     const newest = rowIds(lists({ sorts: { waitingForReview: 'newest' } }).waitingForReview);
-    expect(newest).toEqual(['pr:acme/web#200', 'ticket:HB-627']);
+    expect(newest).toEqual(['pr:acme/web#200', 'ticket:HB-627', 'pr:acme/api#77']);
   });
 
   it('breaks ties on id, so the order is total and stable', () => {
@@ -389,6 +408,43 @@ describe('R25/R65 item paths', () => {
   it('opens a session item at its own session path', () => {
     const built = lists();
     expect(built.investigations.sections[0].rows[0].path).toBe('session/inv-stacktrace-1');
+  });
+});
+
+describe('finding 1 — chatTargetOf', () => {
+  const res = response();
+
+  it('skips a respond agent still triaging and takes the eligible one', () => {
+    expect(chatTargetOf(itemOf(res, 'pr:acme/api#77'))).toBe('dev-acme-api-77');
+  });
+
+  it('is null when the only agent is triaging, and null with no agent at all', () => {
+    expect(chatTargetOf(itemOf(res, 'pr:acme/web#200'))).toBeNull();
+    expect(chatTargetOf(itemOf(res, 'pr:acme/web#101'))).toBeNull();
+  });
+
+  it('takes a respond agent once it is addressing or ready', () => {
+    for (const phase of ['addressing', 'ready']) {
+      const item = JSON.parse(JSON.stringify(itemOf(res, 'pr:acme/web#200'))) as WorkItem;
+      item.agents[0].phase = phase;
+      expect(chatTargetOf(item)).toBe('respond-acme-web-200');
+    }
+  });
+
+  it('prefers a running agent, then a claimed one, then the core’s order', () => {
+    const item = JSON.parse(JSON.stringify(itemOf(res, 'ticket:HB-627'))) as WorkItem;
+    expect(chatTargetOf(item)).toBe('dev-hb-627'); // the running one
+    item.agents[1].running = false;
+    item.agents[1].claimed = true;
+    expect(chatTargetOf(item)).toBe('dev-hb-627'); // the claimed one
+    item.agents[1].claimed = false;
+    expect(chatTargetOf(item)).toBe('inv-hb-627'); // first in the core's order
+  });
+
+  it('round-trips the child id the row action carries', () => {
+    expect(agentOfChildId(agentChildId('dev-hb-627'))).toBe('dev-hb-627');
+    expect(agentOfChildId('pr:acme/web#310')).toBeNull();
+    expect(agentOfChildId(undefined)).toBeNull();
   });
 });
 

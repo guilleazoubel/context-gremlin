@@ -193,9 +193,9 @@ describe('R24 one refresh, one request', () => {
     const h = await connected();
     expect(h.state().lists.map((l) => `${l.kind}:${l.count}`)).toEqual([
       'parkingLot:5',
-      'myWork:2',
+      'myWork:3',
       'investigations:1',
-      'waitingForReview:2',
+      'waitingForReview:3',
     ]);
   });
 });
@@ -460,6 +460,32 @@ describe('MG-B4 chat-always-runs-in-the-worktree', () => {
       'GET /sessions/dev-hb-627/conversation',
       'POST /sessions/dev-hb-627/conversation/claim',
     ]);
+  });
+
+  it('finding 1 — the row Chat opens the eligible agent, never a triaging respond one', async () => {
+    const h = await connected();
+    // The window is "on" the triaging respond agent, which is exactly the state in which
+    // falling back to the current session would open a session the Item tab itself gates off.
+    h.ui.coordinator.setCurrentSession('respond-acme-api-77', null);
+    const row = h.rowOf('pr:acme/api#77');
+    const chat = row.actions.find((a) => a.command === 'cgremlin.chat');
+    expect(chat).toBeDefined();
+    const mark = h.mark();
+    await h.host.invoke('cgremlin.chat', 'pr:acme/api#77', chat?.childId);
+    expect(paths(h, mark)).toEqual([
+      'GET /sessions/dev-acme-api-77/conversation',
+      'POST /sessions/dev-acme-api-77/conversation/claim',
+    ]);
+  });
+
+  it('finding 1 — chatting to a row whose only agent is triaging opens nothing', async () => {
+    const h = await connected();
+    h.ui.coordinator.setCurrentSession('respond-acme-web-200', null);
+    const mark = h.mark();
+    await h.host.invoke('cgremlin.chat', MY_PR_ITEM);
+    expect(h.since(mark)).toEqual([]);
+    expect(h.host.callsOf('createTerminal')).toEqual([]);
+    expect(h.host.callsOf('showWarningMessage')).toHaveLength(1);
   });
 
   it('shows a refused claim verbatim and creates no terminal', async () => {

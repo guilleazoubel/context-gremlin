@@ -12,7 +12,13 @@
  */
 import { engineErrorText, type CoreClient, type HttpResult } from '../core-client';
 import { refreshBlockedMessage } from '../model/engine-trouble';
-import { itemPathOf, type ItemFocus, type WorkItem } from '../model/work-items';
+import {
+  agentOfChildId,
+  chatTargetOf,
+  itemPathOf,
+  type ItemFocus,
+  type WorkItem,
+} from '../model/work-items';
 import type { EngineHealthSource } from './engine';
 import type { DisposableLike, Host } from './host';
 import type { ItemTab } from './item-tab';
@@ -134,15 +140,18 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
     }),
 
     host.registerCommand('cgremlin.chat', async (arg, childArg) => {
-      // Three callers: a popup and a row hand over an item id, the Item tab hands over a session
-      // id directly, and an agent child's "Resume" names that agent (R48).
+      // Three callers: a row action and an agent child's "Resume" NAME the agent (R48), and the
+      // Item tab hands over its selected session id directly. What is deliberately not used
+      // here is `sessionOf`: the item's first agent, or the one the window happens to be on,
+      // may be a respond agent still at `triaging`, which is exactly what R50 gates off.
       const item = itemOf(arg);
-      const child = idOf(childArg);
-      const named =
-        child !== null && child.startsWith('agent:') ? child.slice('agent:'.length) : null;
-      const id = named ?? (item === null ? idOf(arg) : sessionOf(item));
+      const named = agentOfChildId(idOf(childArg));
+      const id = named ?? (item === null ? idOf(arg) : chatTargetOf(item));
       if (id === null) {
-        void host.showWarningMessage('That item has no conversation to join.', undefined);
+        void host.showWarningMessage(
+          'That item has no conversation to join yet — an agent that is still triaging has nothing to talk about.',
+          undefined,
+        );
         return;
       }
       await chat.open(id);
