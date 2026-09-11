@@ -370,6 +370,7 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     fs: adapters.fs,
     sessionsDir,
     events,
+    git: adapters.git,
     inventory: { scanner, scheduler, factory, inventoryStore, config: { me: config.me } },
     attention,
     workItems,

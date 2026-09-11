@@ -1,5 +1,6 @@
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import type { SessionStore } from '../engine/session-store';
+import type { GitRunner } from '../git/git-runner';
 import type { WorkspaceManager } from '../workspace/workspace-manager';
 import type { PipelineService } from '../pipeline/pipeline-service';
 import type { SessionFileSystem } from '../fs/session-file-system';
@@ -37,6 +38,7 @@ import type { AttentionService } from '../attention/attention-service';
 import { ITEM_SOURCES, parseItemRef, prRef, sessionRef, type ItemRef, type ItemSource } from '../attention/item-ref';
 import { OwnPrError } from '../gh/own-pr-error';
 import { parsePrUrl } from '../gh/pr-url';
+import { computeSessionChanges } from './session-changes';
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
@@ -104,6 +106,8 @@ export interface ApiServerDeps {
    * Absent for a wiring built without one: `GET /version` then 404s.
    */
   engineInfo?: EngineInfo;
+  /** R-changes (Phase 10) — `GET /sessions/:id/changes`. Absent leaves that route a clean 404. */
+  git?: GitRunner;
 }
 
 /** The identity a running engine reports on `GET /version` and records in its `engine.json` lock. */
@@ -682,6 +686,46 @@ function conversationActionFor(
   return null;
 }
 
+/** `GET /sessions/:id/changes` (Phase 10). Matches the `conversation` route's shape. */
+function isSessionChangesRoute(parts: readonly string[], method: string | undefined): string | null {
+  if (method !== 'GET' || parts.length !== 3 || parts[0] !== 'sessions' || parts[2] !== 'changes') return null;
+  return parts[1];
+}
+
+/**
+ * The PR's own base ref (as scanned into the current inventory) when the
+ * session carries a PR, else `config.defaultBaseRef` — never a persisted
+ * field on the session itself (there isn't one).
+ */
+async function resolveChangesBaseRef(deps: ApiServerDeps, session: Session): Promise<string> {
+  const fallback = deps.config?.defaultBaseRef ?? 'origin/main';
+  if (session.pr === null || deps.inventory === undefined) return fallback;
+  const inventory = await loadCurrentInventory(deps.inventory);
+  if (inventory === null) return fallback;
+  const entry = findEntry(inventory, session.pr.repo, session.pr.number);
+  return entry?.baseRef ?? fallback;
+}
+
+/**
+ * `GET /sessions/:id/changes` (Phase 10) — deliberately NOT wrapped in
+ * `lock.withLock`, the same reasoning as `conversation`'s `get` action: this
+ * is a pure read of the worktree and never contends with a run.
+ */
+async function handleSessionChanges(res: ServerResponse, deps: ApiServerDeps, id: string): Promise<void> {
+  const session = await deps.sessionStore.load(id);
+  if (deps.git === undefined) {
+    sendJson(res, 404, { error: 'git not configured' });
+    return;
+  }
+  const worktreePath = session.workspace.worktreePath;
+  if (worktreePath === undefined) {
+    sendJson(res, 200, { base: null, baseResolved: null, head: null, committed: null, workingTree: null });
+    return;
+  }
+  const base = await resolveChangesBaseRef(deps, session);
+  const result = await computeSessionChanges(deps.git, worktreePath, base);
+  sendJson(res, 200, result);
+}
 
 // ---------------------------------------------------------------------------
 // The /items surface (R14, R15, R25, R31, R35, R47, R65).
@@ -1048,6 +1092,12 @@ async function handleRequest(
     const conversationAction = conversationActionFor(parts, method);
     if (conversationAction !== null) {
       await handleConversationRoute(res, deps, conversationAction.id, conversationAction.action);
+      return;
+    }
+
+    const changesSessionId = isSessionChangesRoute(parts, method);
+    if (changesSessionId !== null) {
+      await handleSessionChanges(res, deps, changesSessionId);
       return;
     }
 
