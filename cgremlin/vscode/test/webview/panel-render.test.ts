@@ -49,6 +49,9 @@ describe('P0-4 keyed reconciliation', () => {
     dom.document.clearLog();
     panel.render(stateOf());
     expect(dom.document.log).toEqual([]);
+    // `log` alone is not enough: the browser does not deduplicate, so a reconciler that assigns
+    // every leaf its current value still rebuilds every text node. `writes` counts assignments.
+    expect(dom.document.writes).toEqual([]);
     // …and the very same nodes are still there, so `:hover` and focus were never interrupted.
     expect(rowNodes().map((node, at) => node === before[at]).every(Boolean)).toBe(true);
   });

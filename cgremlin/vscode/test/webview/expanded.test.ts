@@ -83,6 +83,13 @@ const slots = (node: FakeElement): FakeElement[] => node.byClass('slot');
 const textOf = (node: FakeElement, cls: string): string => node.byClass(cls)[0]?.textContent ?? '';
 
 describe('the lifecycle slots', () => {
+  it('assign nothing at all on a patch over identical data', () => {
+    const node = build();
+    patchExpanded(node as unknown as HTMLElement, rowView(), null);
+    expect(doc.log).toEqual([]);
+    expect(doc.writes).toEqual([]);
+  });
+
   it('are the three stages with their states, in order', () => {
     const node = build();
     expect(slots(node).map((s) => textOf(s, 'slot-title'))).toEqual([

@@ -34,10 +34,21 @@ export class FakeElement {
     this.doc.log.push({ kind, tag: this.tagName, key: this.dataset.key ?? this.cls, detail });
   }
 
+  /**
+   * Every ASSIGNMENT, whether or not it changed anything. This is the ledger the "identical data
+   * mutates nothing" tests read: the browser does not deduplicate, so re-assigning the same
+   * string to `textContent` still rebuilds the text node — collapsing a selection and cancelling
+   * an IME composition — and a guard that stopped guarding would be invisible in `log` alone.
+   */
+  private wrote(kind: DomMutation['kind'], detail?: string): void {
+    this.doc.writes.push({ kind, tag: this.tagName, key: this.dataset.key ?? this.cls, detail });
+  }
+
   get className(): string {
     return this.cls;
   }
   set className(value: string) {
+    this.wrote('class', value);
     if (this.cls === value) return;
     this.log('class', value);
     this.cls = value;
@@ -47,6 +58,7 @@ export class FakeElement {
     return this.children.length > 0 ? this.children.map((c) => c.textContent).join('') : this.ownText;
   }
   set textContent(value: string) {
+    this.wrote('text', value);
     if (this.children.length === 0 && this.ownText === value) return;
     this.log('text', value);
     for (const child of this.children.splice(0)) child.parentNode = null;
@@ -57,6 +69,7 @@ export class FakeElement {
     return (this.props.get('tabIndex') as number | undefined) ?? -1;
   }
   set tabIndex(value: number) {
+    this.wrote('prop', `tabIndex=${value}`);
     if (this.tabIndex === value) return;
     this.log('prop', `tabIndex=${value}`);
     this.props.set('tabIndex', value);
@@ -66,6 +79,7 @@ export class FakeElement {
     return (this.props.get('title') as string | undefined) ?? '';
   }
   set title(value: string) {
+    this.wrote('prop', `title=${value}`);
     if (this.title === value) return;
     this.log('prop', `title=${value}`);
     this.props.set('title', value);
@@ -75,12 +89,14 @@ export class FakeElement {
     return this.props.get('hidden') === true;
   }
   set hidden(value: boolean) {
+    this.wrote('prop', `hidden=${value}`);
     if (this.hidden === value) return;
     this.log('prop', `hidden=${value}`);
     this.props.set('hidden', value);
   }
 
   setAttribute(name: string, value: string): void {
+    this.wrote('attr', `${name}=${value}`);
     if (this.attrs.get(name) === value) return;
     this.log('attr', `${name}=${value}`);
     this.attrs.set(name, value);
@@ -89,6 +105,7 @@ export class FakeElement {
     return this.attrs.get(name) ?? null;
   }
   removeAttribute(name: string): void {
+    this.wrote('attr', `-${name}`);
     if (!this.attrs.has(name)) return;
     this.log('attr', `-${name}`);
     this.attrs.delete(name);
@@ -173,7 +190,10 @@ export class FakeElement {
 }
 
 export class FakeDocument {
+  /** What actually changed. */
   readonly log: DomMutation[] = [];
+  /** What was assigned, changed or not — see `FakeElement.wrote`. */
+  readonly writes: DomMutation[] = [];
   activeElement: FakeElement | null = null;
   readonly body: FakeElement;
   readonly listeners = new Map<string, ((event: unknown) => void)[]>();
@@ -206,6 +226,7 @@ export class FakeDocument {
 
   clearLog(): void {
     this.log.length = 0;
+    this.writes.length = 0;
   }
 }
 

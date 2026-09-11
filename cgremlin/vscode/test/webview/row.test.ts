@@ -110,6 +110,7 @@ describe('what a patch does to a row that is already on screen', () => {
     const node = build();
     patchRow(node as unknown as HTMLElement, rowView(), { focusedKey: null });
     expect(doc.log).toEqual([]);
+    expect(doc.writes).toEqual([]);
   });
 
   it('writes only the cell that changed', () => {

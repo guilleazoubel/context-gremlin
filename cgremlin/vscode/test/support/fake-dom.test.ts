@@ -30,6 +30,49 @@ describe('the fake DOM records only real changes', () => {
     expect(doc.log).toEqual([]);
   });
 
+  /**
+   * The other half, and the one that makes the guards observable: `log` says what CHANGED, and
+   * `writes` says what was ASSIGNED. A reconciler that assigns the same string to `textContent`
+   * on every render changes nothing and still tears down the text node — so a zero-mutation test
+   * that only reads `log` passes on code that rewrites every leaf.
+   */
+  it('records an assignment that changes nothing as a write, not as a change', () => {
+    const doc = new FakeDocument();
+    const node = doc.createElement('div');
+    node.className = 'row';
+    node.textContent = 'hello';
+    node.setAttribute('role', 'treeitem');
+    node.title = 'now';
+    node.tabIndex = 0;
+    node.hidden = true;
+    doc.clearLog();
+
+    node.className = 'row';
+    node.textContent = 'hello';
+    node.setAttribute('role', 'treeitem');
+    node.removeAttribute('missing');
+    node.title = 'now';
+    node.tabIndex = 0;
+    node.hidden = true;
+    expect(doc.log).toEqual([]);
+    expect(doc.writes.map((w) => w.kind)).toEqual([
+      'class',
+      'text',
+      'attr',
+      'attr',
+      'prop',
+      'prop',
+      'prop',
+    ]);
+  });
+
+  it('clears both ledgers together', () => {
+    const doc = new FakeDocument();
+    doc.createElement('div').textContent = 'x';
+    doc.clearLog();
+    expect(doc.writes).toEqual([]);
+  });
+
   it('logs one text write when the text actually changes', () => {
     const doc = new FakeDocument();
     const node = doc.createElement('span');

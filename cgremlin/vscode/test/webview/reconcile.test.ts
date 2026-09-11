@@ -53,6 +53,8 @@ describe('the setters refuse a write that changes nothing', () => {
       setHidden(parent as unknown as HTMLElement, true);
     }
     expect(doc.log.map((m) => m.kind)).toEqual(['text', 'class', 'attr', 'prop', 'prop', 'prop']);
+    // Six writes, not twelve: the second pass through the loop assigned nothing at all.
+    expect(doc.writes).toHaveLength(6);
   });
 
   it('removes an attribute only when it is there', () => {
@@ -75,6 +77,9 @@ describe('reconcile keeps nodes alive across renders', () => {
 
     apply(doc, parent, ['a', 'b', 'c']);
     expect(doc.log).toEqual([]);
+    // The setters are the only thing standing between this and a full rebuild, so the ASSIGNMENT
+    // ledger is asserted too — `log` alone would pass on `node.textContent = text` unguarded.
+    expect(doc.writes).toEqual([]);
     expect(parent.children).toEqual(before);
   });
 
