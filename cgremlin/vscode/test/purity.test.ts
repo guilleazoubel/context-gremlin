@@ -84,12 +84,21 @@ describe('MG-B1 (widened) the webview bundles import no editor module', () => {
     expect(names).toContain('panel.ts');
   });
 
-  it('imports the editor module nowhere under src/webview', () => {
-    const offenders = fs
-      .readdirSync(dir)
-      .filter((name) => name.endsWith('.ts'))
-      .filter((name) => IMPORTS_VSCODE.test(fs.readFileSync(path.join(dir, name), 'utf8')));
+  // Recursive on purpose: the panel is a directory of small modules (`src/webview/panel/*`), and
+  // a guard that read only the top level would stop covering the code it is about the moment the
+  // first one was extracted.
+  const sources = (): string[] => everyFileUnder(dir, (name) => name.endsWith('.ts'));
+
+  it('imports the editor module nowhere under src/webview, at any depth', () => {
+    const offenders = sources()
+      .filter((file) => IMPORTS_VSCODE.test(fs.readFileSync(file, 'utf8')))
+      .map((file) => path.relative(root, file));
     expect(offenders).toEqual([]);
+  });
+
+  it('reaches the panel modules the entry point bundles', () => {
+    const names = sources().map((file) => path.relative(dir, file));
+    expect(names).toContain(path.join('panel', 'reconcile.ts'));
   });
 
   it('is not on the pure list, and the pure list is unchanged by its existence', () => {
