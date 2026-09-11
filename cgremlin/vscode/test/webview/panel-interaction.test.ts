@@ -108,6 +108,25 @@ describe('§4 — one click is one message', () => {
     ]);
   });
 
+  it('wires the popover dismissals into the panel itself, not only into the module', () => {
+    panel.render(stateOf());
+    const row = rowOf('row:parkingLot:pr:acme/web#101');
+    const menu = row.byClass('row-overflow')[0];
+    row.byClass('row-more')[0].emit('click');
+    expect(menu.hidden).toBe(false);
+
+    dom.document.emit('keydown', { key: 'Escape' });
+    expect(menu.hidden).toBe(true);
+
+    row.byClass('row-more')[0].emit('click');
+    dom.document.emit('pointerdown', { target: rowOf('row:parkingLot:pr:acme/legacy#9') });
+    expect(menu.hidden).toBe(true);
+
+    row.byClass('row-more')[0].emit('click');
+    dom.root.byClass('tree')[0].emit('scroll');
+    expect(menu.hidden).toBe(true);
+  });
+
   it('changes a sort from its button', () => {
     panel.render(stateOf());
     dom.posted.length = 0;

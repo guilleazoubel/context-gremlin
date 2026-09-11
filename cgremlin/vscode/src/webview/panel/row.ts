@@ -15,6 +15,7 @@
 import { post } from './channel';
 import { patchCells } from './cells';
 import { button, el } from './dom';
+import { closeOverflow, forgetOverflow, toggleOverflow } from './overflow';
 import { reconcile, setAttr, setClass, setHidden, setTabStop, setText } from './reconcile';
 import type { PanelActionView, PanelRowView } from '../../model/panel-protocol';
 
@@ -58,7 +59,7 @@ export function createRow(row: PanelRowView): HTMLElement {
   more.setAttribute('aria-label', 'More actions');
   more.addEventListener('click', (event: Event) => {
     event.stopPropagation();
-    toggleOverflow(node);
+    toggleOverflow(child(node, '.row-overflow'), more);
   });
   gutter.appendChild(more);
   const menu = el('div', 'row-overflow');
@@ -115,7 +116,10 @@ function patchActions(node: HTMLElement, row: PanelRowView): void {
 
   const menu = child(node, '.row-overflow');
   setHidden(child(node, '.row-more'), rest.length === 0);
-  if (rest.length === 0) setHidden(menu, true);
+  // A row that lost its overflow must not stay "the open one". A row that still has one keeps it
+  // open across a refresh on purpose: a menu that closed under the pointer would be the very
+  // defect P0-4 is about.
+  if (rest.length === 0) forgetOverflow(menu);
   reconcile(
     menu,
     rest.map((action) => ({ key: `${action.command}:${action.childId ?? ''}`, data: action })),
@@ -131,7 +135,7 @@ function menuItem(row: HTMLElement, action: PanelActionView): HTMLElement {
     message: () => commandOf(row, action.command, action.childId),
   });
   item.setAttribute('role', 'menuitem');
-  item.addEventListener('click', () => setHidden(child(row, '.row-overflow'), true));
+  item.addEventListener('click', () => closeOverflow(false));
   return item;
 }
 
@@ -142,9 +146,4 @@ export function commandOf(row: HTMLElement, command: string, childId?: string): 
     id: row.dataset.id ?? '',
     ...(childId === undefined || childId === '' ? {} : { childId }),
   };
-}
-
-function toggleOverflow(row: HTMLElement): void {
-  const menu = child(row, '.row-overflow');
-  setHidden(menu, !menu.hidden);
 }
