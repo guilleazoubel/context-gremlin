@@ -190,6 +190,8 @@ export async function startEngine(root: string, fakes: EngineFakes = {}): Promis
     sessionsDir,
     events,
     lock,
+    // Real NodeGitRunner — GET /sessions/:id/changes shells out for real here.
+    git,
   });
   const socketPath = path.join(tmpdir(), `cg-e2e-${randomBytes(4).toString('hex')}.sock`);
   await listenOnSocket(server, socketPath);
