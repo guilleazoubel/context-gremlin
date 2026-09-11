@@ -129,6 +129,11 @@ export interface StartEngineOptions {
    * and what MG-6's third case asserts with a block that carries no `apiToken`.
    */
   jira?: SeededJira;
+  /**
+   * MG-7/R45: a pre-Phase-9 `inventory.json` written before the engine boots, so the upgrade
+   * path (`InventoryStore.load` re-parses and `GET /prs` has no catch) is exercised for real.
+   */
+  inventory?: unknown;
 }
 
 export async function seedStateDir(opts: StartEngineOptions = {}): Promise<SeededStateDir> {
@@ -226,6 +231,14 @@ export async function seedStateDir(opts: StartEngineOptions = {}): Promise<Seede
     ),
     { encoding: 'utf8', mode: 0o600 },
   );
+
+  if (opts.inventory !== undefined) {
+    await writeFile(
+      path.join(stateDir, 'inventory.json'),
+      `${JSON.stringify(opts.inventory, null, 2)}\n`,
+      'utf8',
+    );
+  }
 
   const seeded = await seedSessions(sessionsDir, worktreesDir);
 

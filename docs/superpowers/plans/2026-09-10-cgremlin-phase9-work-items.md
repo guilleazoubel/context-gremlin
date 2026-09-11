@@ -1337,6 +1337,71 @@ this is the presentation the user actually asked for, and mixing them makes both
 
 ---
 
+## Errata (recorded during execution)
+
+Things this plan got wrong, found while executing it. Each is a defect in the PLAN, corrected
+here rather than worked around in the code.
+
+### Wrong DoD greps
+
+1. **MG-14, `grep -rn "mutation" cgremlin/core/src` → empty.** It is not empty and must not be:
+   `pipeline-service.ts:222` says *"does whatever pre-run mutation the caller used to do
+   unlocked"* about session state. The claim R55 actually makes is about the GraphQL **operation
+   kind**. The guard implemented in C2 is `\bmutation\s*[({A-Z]` over `core/src` (empty), plus
+   "no file that mentions `graphql` at all contains the word `mutation` in any form", which pins
+   `src/gh/review-threads.ts` specifically.
+
+2. **MG-14, the mutating-`gh` grep.** It legitimately hits
+   `cgremlin/core/src/workspace/permission-guard.ts`, whose entire job is to **deny** `gh pr
+   review|comment|merge|close|edit` to the agent, and one comment in `pipeline-service.ts` that
+   points at it. C2 excludes the guard file and comment-only lines, and adds the positive
+   assertion that the guard really denies each verb (a grep that only says "absent" would pass
+   just as well if the deny list were deleted).
+
+3. **MG-10, `grep -rnE "[A-Za-z]Html\b"` over both `src` trees.** Read as "hits nothing" this is
+   wrong: `vscode/src/model/escape-html.ts` and `src/webview/*` must carry `escapeHtml`, which is
+   how MG-B7 holds. The plan's own wording already scopes it ("nothing in `src/jira`, `src/work`,
+   `src/api` or any `postMessage` payload type"); C2 implements the scoped form and separately
+   asserts the only owners anywhere are the escaper and its two webview callers.
+
+4. **MG-1's `'reviewing'` grep over `src/work`.** Inverted. R47 **requires** that literal: it is
+   the name of the parking lot's first group, which is what replaced the fourth list. C2 asserts
+   it is **present**, and that it is typed as a `ParkingLotGroup` and never as a `WorkListKind`.
+
+5. **R41, "`item.changed` appears once in `serve.ts`".** It appears **twice**, like every other
+   event — the `events.on('item.changed', …)` subscription and the `logLine` inside it. C2 pins
+   the count at two.
+
+### Task A2 recorded no RED
+
+A2 ("the `gh` fixture that closes U1") is a recording task with no behaviour of its own, so it
+has no RED step; U1 and U6 are closed by the fixture's *content* being asserted downstream (A1's
+parsing tests, and C1's end-to-end `humanActivity` assertions over a bot review carrying
+`is_bot`, a bot comment carrying no flag, and a heterogeneous user/team `reviewRequests`).
+
+### Task A0's inputs were supplied by the supervisor
+
+A0 is a gate on user input. The Jira site, email and account id were supplied by the supervisor
+from the user's existing `~/.cgremlin-core-smoke/core.json`; `projectKeys` is `[HB, WEB]` and
+`botLogins` is `[apfm-sonar, gitstream-cm]`. The **API token was never read by any agent** and is
+not in any fixture: every test uses a throwaway token against a local stub, and the real token
+stays in the user's own config for the manual smoke pass (SMOKE.md step 9).
+
+### Two defects C1 found in the merged streams
+
+1. **`RespondSessionFactory` could never create a worktree.** It branched with `-b <headRefName>`,
+   and the bare mirror already carries `refs/heads/<that branch>` from `clone --bare`, so every
+   respond session failed with *"a branch named X already exists"*. Fixed in the core:
+   `createWorktree` gained an opt-in `resetBranch` (`-B`), which is also the only way the worktree
+   gets the **fetched** head rather than the clone-time snapshot.
+
+2. **`ticketTrouble` was dead code.** R35 asks for a row **and** a status-bar state on
+   `ticketSource.kind === 'auth'`; the helper existed and was unit-tested but nothing called it.
+   Fixed in the extension, deliberately kept apart from the `/items` trouble: a rejected Jira
+   token leaves every PR row where it is and only colours the bar.
+
+---
+
 ## Risks
 
 | # | Risk | Mitigation | Owner |
