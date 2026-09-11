@@ -31,7 +31,7 @@ function devSession(id: string, humanTurn: typeof LIVE | null): Session {
   return {
     schemaVersion: 2, id, mode: 'development', createdAt: '2026-09-04T10:00:00.000Z',
     workspace: { repoUrl: 'git@github.com:acme/app.git', worktreePath: `${WORKTREES_DIR}/${id}`, branch: 'feature/x' },
-    lineage: { pipelineId: id, parentSessionId: null, ticket: 'APP-1' },
+    lineage: { pipelineId: id, parentSessionId: null, ticket: 'APP-1', selfReview: false },
     stageStatus: 'active',
     agent: { runner: 'claude-code', resumeId: 'resume-1', humanTurn },
     lastRun: null, pr: null,

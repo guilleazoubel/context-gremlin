@@ -104,7 +104,7 @@ describe('ReviewSessionFactory.createFromPrUrl', () => {
     expect(session.lastRun).toBeNull();
     expect(session.createdAt).toBe(FIXED_NOW.toISOString());
     expect(session.id).toMatch(/^pr-grace-frontend-1614-\d{8}-\d{6}$/);
-    expect(session.lineage).toEqual({ pipelineId: session.id, parentSessionId: null, ticket: null });
+    expect(session.lineage).toEqual({ pipelineId: session.id, parentSessionId: null, ticket: null, selfReview: false });
     expect(session.pr).toEqual({
       repo: 'aplaceformom/grace-frontend',
       number: 1614,
@@ -127,7 +127,7 @@ describe('ReviewSessionFactory.createFromPrUrl', () => {
 
     const session = await factory.createFromPrUrl(PR_URL);
 
-    expect(session.lineage).toEqual({ pipelineId: 'dev-1', parentSessionId: 'dev-1', ticket: 'APP-1' });
+    expect(session.lineage).toEqual({ pipelineId: 'dev-1', parentSessionId: 'dev-1', ticket: 'APP-1', selfReview: false });
     const reloadedSource = await store.load('dev-1');
     expect(reloadedSource.mode).toBe('development');
     expect(reloadedSource.stageStatus).toBe('superseded');
@@ -138,7 +138,7 @@ describe('ReviewSessionFactory.createFromPrUrl', () => {
     const { gh, store, factory } = harness();
     gh.queueResponse({ stdout: fixture('pr-view-open-approved.json') });
     const session = await factory.createFromPrUrl(PR_URL);
-    expect(session.lineage).toEqual({ pipelineId: session.id, parentSessionId: null, ticket: null });
+    expect(session.lineage).toEqual({ pipelineId: session.id, parentSessionId: null, ticket: null, selfReview: false });
     expect(await store.list()).toEqual([session]);
   });
 
@@ -196,6 +196,31 @@ describe('ReviewSessionFactory.createFromCandidate', () => {
       ['pr', 'view', '1614', '--repo', 'aplaceformom/grace-frontend', '--json', PR_VIEW_FIELDS],
     ]);
     expect(session.pr?.number).toBe(1614);
+  });
+
+  it('Phase 10 self-review: kind "own" is created without throwing OwnPrError and marks lineage.selfReview', async () => {
+    const { gh, factory } = harness();
+    const raw = JSON.parse(fixture('pr-view-open-approved.json'));
+    raw.author.login = 'me';
+    gh.queueResponse({ stdout: JSON.stringify(raw) });
+    const session = await factory.createFromCandidate({
+      kind: 'own', repo: 'aplaceformom/grace-frontend', number: 1614,
+      url: PR_URL, author: 'me', isDraft: false, reviewDecision: 'APPROVED',
+      headSha: 'bec43cdfd87c5daf537e3564907966ef97a25dd1', title: 'x',
+    });
+    expect(session.pr?.author).toBe('me');
+    expect(session.lineage.selfReview).toBe(true);
+  });
+
+  it('kind "review" (the ordinary path) marks lineage.selfReview false', async () => {
+    const { gh, factory } = harness();
+    gh.queueResponse({ stdout: fixture('pr-view-open-approved.json') });
+    const session = await factory.createFromCandidate({
+      kind: 'review', repo: 'aplaceformom/grace-frontend', number: 1614,
+      url: PR_URL, author: 'pureawesome', isDraft: false, reviewDecision: 'APPROVED',
+      headSha: 'bec43cdfd87c5daf537e3564907966ef97a25dd1', title: 'x',
+    });
+    expect(session.lineage.selfReview).toBe(false);
   });
 });
 

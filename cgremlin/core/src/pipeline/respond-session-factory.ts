@@ -100,7 +100,7 @@ export class RespondSessionFactory {
       mode: 'respond',
       createdAt: nowDate.toISOString(),
       workspace: { repoUrl, worktreePath, branch: branchName },
-      lineage: { pipelineId: id, parentSessionId: null, ticket: extractTicketKey(mapped.headRefName) },
+      lineage: { pipelineId: id, parentSessionId: null, ticket: extractTicketKey(mapped.headRefName), selfReview: false },
       agent: null,
       lastRun: null,
       pr: mapped.pr,

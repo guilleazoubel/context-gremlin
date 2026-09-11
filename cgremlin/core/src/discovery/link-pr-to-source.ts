@@ -47,6 +47,9 @@ export function linkPrToSource(review: ReviewSession, sessions: readonly Session
       pipelineId: source.lineage.pipelineId,
       parentSessionId: source.id,
       ticket: source.lineage.ticket ?? review.lineage.ticket,
+      // Phase 10: the review's OWN selfReview flag, never the source's — a
+      // self-review is a fact about this review session, not the ticket.
+      selfReview: review.lineage.selfReview,
     },
   };
   const supersede = source.mode === 'development' && source.stageStatus === 'pr_opened';

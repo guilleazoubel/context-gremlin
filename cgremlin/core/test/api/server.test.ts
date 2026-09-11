@@ -1310,7 +1310,7 @@ function devSessionForConversation(id: string, humanTurn: typeof CLAIM_LIVE | nu
   return {
     schemaVersion: 2, id, mode: 'development', createdAt: '2026-09-04T10:00:00.000Z',
     workspace: { repoUrl: 'git@github.com:acme/app.git', worktreePath: `${WORKTREES_DIR}/${id}`, branch: 'feature/x' },
-    lineage: { pipelineId: id, parentSessionId: null, ticket: 'APP-1' },
+    lineage: { pipelineId: id, parentSessionId: null, ticket: 'APP-1', selfReview: false },
     stageStatus: 'active',
     agent: { runner: 'claude-code', resumeId: 'resume-1', humanTurn },
     lastRun: null, pr: null,
@@ -1534,7 +1534,7 @@ describe('POST /sessions/developments (R16)', () => {
     expect(session.stageStatus).toBe('active');
     expect(session.lastRun).toBeNull();
     expect(session.workspace.branch).toBe('feature/APP-9');
-    expect(session.lineage).toEqual({ pipelineId: session.id, parentSessionId: null, ticket: 'APP-9' });
+    expect(session.lineage).toEqual({ pipelineId: session.id, parentSessionId: null, ticket: 'APP-9', selfReview: false });
     expect((await h.store.load(session.id)).id).toBe(session.id);
 
     // MG-A11 at the HTTP layer: the route starts nothing.

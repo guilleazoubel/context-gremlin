@@ -40,7 +40,13 @@ export interface BriefCommon { sessionDir: string; ticket: string | null; ticket
 export interface FindingsBriefParams extends BriefCommon { intent: 'investigate_only' | 'development'; env?: EnvironmentBriefContext }
 export interface PlanBriefParams extends BriefCommon { driveToCompletion: boolean }
 export interface DevelopBriefParams extends BriefCommon { hasPlan: boolean; env?: EnvironmentBriefContext }
-export interface ReviewBriefParams { sessionDir: string; prNumber: number; env?: EnvironmentBriefContext }
+export interface ReviewBriefParams {
+  sessionDir: string;
+  prNumber: number;
+  env?: EnvironmentBriefContext;
+  /** Phase 10: this review session was deliberately created on the author's own PR (selfReview:true bypassed OwnPrError). */
+  selfReview?: boolean;
+}
 export interface RereviewBriefParams { sessionDir: string; prNumber: number; commitCount: number; env?: EnvironmentBriefContext }
 export interface ReviewPromptParams { sessionDir: string; reviewSkillCommand?: string; includeLiveUiCheck?: boolean; uiCheckRendered?: boolean }
 export interface RereviewPromptParams { sessionDir: string; commitCount: number; reviewSkillCommand?: string }
@@ -430,8 +436,11 @@ export function renderReviewBrief(p: ReviewBriefParams): string {
   const env = p.env ?? EMPTY_ENVIRONMENT;
   const envSection = renderEnvironmentSection(env);
   const uiCheck = renderUiCheckProtocol('observe', "the PR's Vercel preview URL shown in the ## Environment section above", env);
+  const selfReviewNote =
+    p.selfReview === true ? '**Note:** this is a self-review — the PR under review is your own PR.' : '';
   const parts = [
     `# REVIEW — PR #${p.prNumber}`,
+    selfReviewNote,
     TIER0_INTENT_GATE,
     EVIDENCE_BAR,
     SEVERITY_LIST,
