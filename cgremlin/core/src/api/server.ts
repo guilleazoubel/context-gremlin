@@ -693,9 +693,27 @@ function isSessionChangesRoute(parts: readonly string[], method: string | undefi
 }
 
 /**
+ * A ref-safe enough `baseRef` to hand to `git`: not empty, not padded with whitespace, and free
+ * of the bytes `git check-ref-format` rejects in a ref component (whitespace inside it, the
+ * special characters below, and a `..` anywhere). Deliberately conservative — this only ever
+ * widens to the fallback, never narrows what a legitimate ref looks like.
+ */
+const UNSAFE_BASE_REF_CHARS = /[\s~^:?*[\\]/;
+
+function isSafeBaseRef(value: string): boolean {
+  if (value === '' || value.trim() !== value) return false;
+  if (UNSAFE_BASE_REF_CHARS.test(value)) return false;
+  if (value.includes('..')) return false;
+  return true;
+}
+
+/**
  * The PR's own base ref (as scanned into the current inventory) when the
  * session carries a PR, else `config.defaultBaseRef` — never a persisted
- * field on the session itself (there isn't one).
+ * field on the session itself (there isn't one). An inventory entry whose
+ * `baseRef` is empty, whitespace, or not ref-safe (a scan that raced a
+ * rename, or otherwise landed a corrupt value) is treated the same as no
+ * entry at all, rather than being handed to `git` as-is.
  */
 async function resolveChangesBaseRef(deps: ApiServerDeps, session: Session): Promise<string> {
   const fallback = deps.config?.defaultBaseRef ?? 'origin/main';
@@ -703,7 +721,8 @@ async function resolveChangesBaseRef(deps: ApiServerDeps, session: Session): Pro
   const inventory = await loadCurrentInventory(deps.inventory);
   if (inventory === null) return fallback;
   const entry = findEntry(inventory, session.pr.repo, session.pr.number);
-  return entry?.baseRef ?? fallback;
+  if (entry === undefined || !isSafeBaseRef(entry.baseRef)) return fallback;
+  return entry.baseRef;
 }
 
 /**
