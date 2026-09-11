@@ -11,6 +11,7 @@ import {
   troubleStatusText,
   troubleMessage,
   type EngineHealth,
+  type SourceTrouble,
 } from '../model/engine-trouble';
 import type { Host, StatusBarItemLike } from './host';
 
@@ -22,6 +23,8 @@ export type EngineStatus = EngineHealth;
 
 export interface StatusBarState {
   connected: boolean;
+  /** The engine answered but could not list the work — shown when the engine itself is fine. */
+  sourceTrouble: SourceTrouble | null;
   needYou: number;
   currentSessionId: string | null;
   currentPhase: string | null;
@@ -57,12 +60,14 @@ export function engineText(engine: EngineStatus): string | null {
 
 /** R17: the two states that are not simply news are painted in the editor's warning colour. */
 export function statusBarWarning(state: StatusBarState): boolean {
-  return troubleOf(state.engine) !== null;
+  return troubleOf(state.engine) !== null || state.sourceTrouble !== null;
 }
 
 export function statusBarText(state: StatusBarState): string {
   const engine = engineText(state.engine);
   if (engine !== null) return engine;
+  // One explanation at a time, and the engine's own is the more fundamental of the two.
+  if (state.sourceTrouble !== null) return state.sourceTrouble.statusText;
   if (!state.connected) return '$(circle-slash) cgremlin: offline';
   if (state.currentSessionId === null) {
     return `$(folder) cgremlin: no repo open — ${state.needYou} need you`;
@@ -75,6 +80,7 @@ export function statusBarTooltip(state: StatusBarState): string {
   const trouble = troubleOf(state.engine);
   if (trouble !== null) return troubleMessage(trouble);
   if (engineText(state.engine) !== null) return 'The cgremlin engine — click to see the log.';
+  if (state.sourceTrouble !== null) return state.sourceTrouble.message;
   if (!state.connected) return 'The cgremlin engine is not reachable on its socket.';
   return [
     state.currentWorktreePath === null
@@ -93,6 +99,7 @@ export function statusBarCommand(state: StatusBarState): string {
   // A stranger on the socket is one click from a re-probe (the user has just stopped the old
   // engine); a failure is one click from the log that says why.
   if (trouble !== null) return troubleCommand(trouble);
+  if (state.sourceTrouble !== null) return state.sourceTrouble.command;
   switch (state.engine.kind) {
     case 'stopped':
       return 'cgremlin.engine.start';
@@ -113,6 +120,7 @@ export class StatusBar {
     currentSessionId: null,
     currentPhase: null,
     currentWorktreePath: null,
+    sourceTrouble: null,
   };
   private engine: EngineStatus = { kind: 'unknown' };
 

@@ -267,3 +267,40 @@ describe('path parameters can never truncate the request path', () => {
     expect(server.requests.map((r) => r.path)).toEqual(['/prs/acme/web/102/review']);
   });
 });
+
+describe('finding 3 — artifactText returns the bytes, not a parsed body', () => {
+  it('round-trips a JSON-shaped artifact byte-identically', async () => {
+    const raw = '{\n  "b": 1,\n  "a": [2, 3]\n}\n';
+    const server = await startStubServer({
+      handler: (req) =>
+        req.path === '/sessions/s1/artifacts/NOTES.md' ? { status: 200, text: raw } : undefined,
+    });
+    servers.push(server);
+    const client = new CoreClient(server.socketPath);
+    // A body that happens to parse as JSON must not come back re-serialised: an artifact is a
+    // document the tab renders, and key order, indentation and the trailing newline are part
+    // of it.
+    expect(await client.artifactText('s1', 'NOTES.md')).toBe(raw);
+  });
+
+  it('returns markdown untouched, including trailing whitespace', async () => {
+    const raw = '# REVIEW\n\n| a | b |\n|---|---|\n\n  \n';
+    const server = await startStubServer({
+      handler: (req) =>
+        req.path === '/sessions/s1/artifacts/REVIEW.md' ? { status: 200, text: raw } : undefined,
+    });
+    servers.push(server);
+    const client = new CoreClient(server.socketPath);
+    expect(await client.artifactText('s1', 'REVIEW.md')).toBe(raw);
+  });
+
+  it('still throws CoreHttpError on a non-2xx, and refuses an unsafe name', async () => {
+    const server = await startStubServer({
+      handler: () => ({ status: 404, body: { error: 'no such artifact' } }),
+    });
+    servers.push(server);
+    const client = new CoreClient(server.socketPath);
+    await expect(client.artifactText('s1', 'NOPE.md')).rejects.toThrow(CoreHttpError);
+    await expect(client.artifactText('s1', '../escape')).rejects.toThrow(/unsafe artifact name/);
+  });
+});

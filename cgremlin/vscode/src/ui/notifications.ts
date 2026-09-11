@@ -5,7 +5,7 @@
  * `attention.needsYou` (R22); this file only shows what it returns and dispatches the two actions.
  */
 import { decideNotifications, type NotificationLevel, type Popup } from '../model/notify-policy';
-import type { AttentionItem } from '../model/items';
+import type { WorkItem } from '../model/work-items';
 import { PendingWork, type Host } from './host';
 
 const OPEN = 'Open';
@@ -24,7 +24,7 @@ export class NotificationSurface {
    * Dispatches one popup per item that entered needs-you. Deliberately does not await them: a
    * popup's promise settles when the user dismisses it, which may be never.
    */
-  apply(prev: AttentionItem[], next: AttentionItem[], level: NotificationLevel): void {
+  apply(prev: WorkItem[], next: WorkItem[], level: NotificationLevel): void {
     for (const popup of decideNotifications(prev, next, level)) {
       this.pending.track(this.show(popup));
     }
@@ -32,8 +32,10 @@ export class NotificationSurface {
 
   private async show(popup: Popup): Promise<void> {
     const answer = await this.host.showInformationMessage(popup.message, undefined, OPEN, ACK);
-    if (answer === OPEN) await this.host.executeCommand('cgremlin.openItem', popup.ref);
-    else if (answer === ACK) await this.host.executeCommand('cgremlin.ack', popup.ref);
+    // R31: `Ack` is ONE request — `POST /items/<path>/ack` — and the core fans out over every
+    // ref the item contributes. The extension never loops over refs itself.
+    if (answer === OPEN) await this.host.executeCommand('cgremlin.openItem', popup.id);
+    else if (answer === ACK) await this.host.executeCommand('cgremlin.ack', popup.id);
   }
 
   /**

@@ -37,6 +37,11 @@ describe('MG-B1 pure-modules-are-vscode-free', () => {
     expect(pureSourceFiles().length).toBeGreaterThanOrEqual(3);
   });
 
+  it('covers the work-item view model (B1)', () => {
+    const names = pureSourceFiles().map((file) => path.basename(file));
+    expect(names).toContain('work-items.ts');
+  });
+
   it('covers the engine modules', () => {
     const engine = pureSourceFiles()
       .filter((file) => path.dirname(file).endsWith(path.join('src', 'engine')))
@@ -57,6 +62,39 @@ describe('MG-B1 pure-modules-are-vscode-free', () => {
   it('flags a pure module that merely mentions the editor API in a comment', () => {
     expect(mentionsEditorApi('// adapts one vscode.window call\nexport const a = 1;\n')).toBe(true);
     expect(mentionsEditorApi('// adapts one editor call\nexport const a = 1;\n')).toBe(false);
+  });
+});
+
+/**
+ * MG-B1, deliberately widened for `src/webview/**` (R40, spec §5).
+ *
+ * A webview module calls `acquireVsCodeApi()` and styles with `var(--vscode-*)`, so the plain
+ * `includes('vscode')` rule above is unsatisfiable there and it does NOT join `pureSourceFiles()`.
+ * It gets the narrower rule instead — it may never *import* the editor module, because it runs in
+ * a browser context where that module does not exist — and the two-file import count below is
+ * what stops the widening from becoming a hole.
+ */
+describe('MG-B1 (widened) the webview bundles import no editor module', () => {
+  const dir = path.join(root, 'src/webview');
+  const IMPORTS_VSCODE = /(?:from\s+'vscode'|require\('vscode'\)|import\('vscode'\))/;
+
+  it('has webview entry points to check', () => {
+    const names = fs.readdirSync(dir).filter((name) => name.endsWith('.ts')).sort();
+    expect(names).toContain('item-tab.ts');
+    expect(names).toContain('panel.ts');
+  });
+
+  it('imports the editor module nowhere under src/webview', () => {
+    const offenders = fs
+      .readdirSync(dir)
+      .filter((name) => name.endsWith('.ts'))
+      .filter((name) => IMPORTS_VSCODE.test(fs.readFileSync(path.join(dir, name), 'utf8')));
+    expect(offenders).toEqual([]);
+  });
+
+  it('is not on the pure list, and the pure list is unchanged by its existence', () => {
+    const pure = pureSourceFiles().map((file) => path.relative(root, file));
+    expect(pure.filter((file) => file.startsWith('src/webview'))).toEqual([]);
   });
 });
 
@@ -96,12 +134,13 @@ describe('MG-B1 the editor API has exactly two entry points', () => {
       'commands.ts',
       'engine.ts',
       'host.ts',
+      'item-tab.ts',
       'notifications.ts',
+      'panel-view.ts',
       'preview.ts',
       'refresh.ts',
       'status-bar.ts',
       'terminal.ts',
-      'tree.ts',
       'wiring.ts',
     ]);
   });

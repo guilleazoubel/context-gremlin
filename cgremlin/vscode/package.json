@@ -36,8 +36,9 @@
       "cgremlin": [
         {
           "id": "cgremlin.items",
-          "name": "Attention",
-          "contextualTitle": "cgremlin"
+          "name": "Work",
+          "contextualTitle": "cgremlin",
+          "type": "webview"
         }
       ]
     },
@@ -45,6 +46,11 @@
       {
         "command": "cgremlin.openItem",
         "title": "Open item",
+        "category": "cgremlin"
+      },
+      {
+        "command": "cgremlin.openChild",
+        "title": "Open part of an item",
         "category": "cgremlin"
       },
       {
@@ -58,6 +64,32 @@
         "title": "Start review",
         "category": "cgremlin",
         "icon": "$(play)"
+      },
+      {
+        "command": "cgremlin.addressReview",
+        "title": "Address review comments",
+        "category": "cgremlin",
+        "icon": "$(reply)"
+      },
+      {
+        "command": "cgremlin.startInvestigation",
+        "title": "Start investigation here",
+        "category": "cgremlin"
+      },
+      {
+        "command": "cgremlin.startDevelopment",
+        "title": "Start development here",
+        "category": "cgremlin"
+      },
+      {
+        "command": "cgremlin.openPr",
+        "title": "Open pull request",
+        "category": "cgremlin"
+      },
+      {
+        "command": "cgremlin.openTicket",
+        "title": "Open ticket",
+        "category": "cgremlin"
       },
       {
         "command": "cgremlin.approvePlan",
@@ -102,11 +134,6 @@
         "category": "cgremlin"
       },
       {
-        "command": "cgremlin.refreshPreview",
-        "title": "Refresh preview",
-        "category": "cgremlin"
-      },
-      {
         "command": "cgremlin.engine.start",
         "title": "Start the engine",
         "category": "cgremlin"
@@ -133,7 +160,7 @@
         "cgremlin.configPath": {
           "type": "string",
           "default": "~/.cgremlin-core/core.json",
-          "description": "Path to the engine's core.json. Every other path — the socket, the log, the sessions and worktrees directories — is derived from it by the engine itself."
+          "description": "Path to the engine's core.json. Every other path \u2014 the socket, the log, the sessions and worktrees directories \u2014 is derived from it by the engine itself."
         },
         "cgremlin.notificationLevel": {
           "type": "string",
@@ -154,11 +181,35 @@
           "when": "false"
         },
         {
+          "command": "cgremlin.openChild",
+          "when": "false"
+        },
+        {
           "command": "cgremlin.chat",
           "when": "false"
         },
         {
           "command": "cgremlin.startReview",
+          "when": "false"
+        },
+        {
+          "command": "cgremlin.addressReview",
+          "when": "false"
+        },
+        {
+          "command": "cgremlin.startInvestigation",
+          "when": "false"
+        },
+        {
+          "command": "cgremlin.startDevelopment",
+          "when": "false"
+        },
+        {
+          "command": "cgremlin.openPr",
+          "when": "false"
+        },
+        {
+          "command": "cgremlin.openTicket",
           "when": "false"
         },
         {
@@ -199,51 +250,15 @@
           "when": "view == cgremlin.items",
           "group": "1_new@3"
         }
-      ],
-      "view/item/context": [
-        {
-          "command": "cgremlin.startReview",
-          "when": "viewItem =~ /^(parking|reviewing):/",
-          "group": "inline@1"
-        },
-        {
-          "command": "cgremlin.chat",
-          "when": "viewItem =~ /^(reviewing|investigations|devwork):session:/",
-          "group": "inline@2"
-        },
-        {
-          "command": "cgremlin.openItem",
-          "when": "viewItem =~ /^(parking|reviewing|investigations|devwork):/",
-          "group": "1_open@1"
-        },
-        {
-          "command": "cgremlin.approvePlan",
-          "when": "viewItem =~ /^investigations:session:investigation$/",
-          "group": "2_act@1"
-        },
-        {
-          "command": "cgremlin.stop",
-          "when": "viewItem =~ /^(reviewing|investigations|devwork):session:/",
-          "group": "2_act@2"
-        },
-        {
-          "command": "cgremlin.retry",
-          "when": "viewItem =~ /^(reviewing|investigations|devwork):session:/",
-          "group": "2_act@3"
-        },
-        {
-          "command": "cgremlin.ack",
-          "when": "viewItem =~ /^(parking|reviewing|investigations|devwork):/",
-          "group": "9_ack@1"
-        }
       ]
     }
   },
   "scripts": {
-    "build": "pnpm --dir ../core build:engine && tsc -p tsconfig.json",
-    "vscode:prepublish": "pnpm build",
+    "build": "pnpm --dir ../core build:engine && pnpm build:webview && tsc -p tsconfig.json",
+    "build:webview": "esbuild src/webview/item-tab.ts --outfile=media/item-tab.js --bundle --format=iife --platform=browser --target=es2020 --minify && esbuild src/webview/panel.ts --outfile=media/panel.js --bundle --format=iife --platform=browser --target=es2020 --minify",
+    "vscode:prepublish": "pnpm build:webview && pnpm build",
     "package": "vsce package --no-dependencies",
-    "typecheck": "tsc -p tsconfig.typecheck.json --noEmit",
+    "typecheck": "tsc -p tsconfig.typecheck.json --noEmit && tsc -p tsconfig.webview.json --noEmit",
     "test": "vitest run",
     "test:integration": "pnpm --dir ../core build && pnpm --dir ../core build:engine && vitest run test/integration",
     "test:watch": "vitest",
@@ -251,10 +266,13 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.13.0",
+    "@types/markdown-it": "14.2.0",
     "@types/node": "^20.19.43",
     "@types/vscode": "1.85.0",
     "@vscode/vsce": "3.9.2",
+    "esbuild": "0.28.2",
     "eslint": "^9.13.0",
+    "markdown-it": "14.3.1",
     "typescript": "^5.6.3",
     "typescript-eslint": "^8.11.0",
     "vitest": "^2.1.4"

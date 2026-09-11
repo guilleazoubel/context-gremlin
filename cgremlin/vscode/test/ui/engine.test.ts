@@ -534,6 +534,7 @@ describe('the status bar (R17, R23)', () => {
     currentSessionId: null,
     currentPhase: null,
     currentWorktreePath: null,
+    sourceTrouble: null,
   };
 
   function withEngine(engine: EngineStatus) {

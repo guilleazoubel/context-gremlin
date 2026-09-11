@@ -94,6 +94,44 @@ export function troubleStatusText(trouble: EngineTrouble): string {
 }
 
 /**
+ * The engine answered, but not with work items.
+ *
+ * Two causes, and they need different words: an engine older than this extension has no
+ * `/items` route at all — the fix is to restart it so the manager adopts the bundled version —
+ * while anything else is a failure worth showing verbatim, with the log one click away. Either
+ * way the panel says so: four empty lists that silently mean "the engine cannot answer" is the
+ * failure Phase 8's engine-trouble row exists to end.
+ */
+export interface SourceTrouble {
+  message: string;
+  command: string;
+  actionLabel: string;
+  /** The status bar's short form. The bar has no room for the sentence. */
+  statusText: string;
+}
+
+export const OUTDATED_ENGINE_MESSAGE =
+  'The engine is older than this extension (no /items). Restart the engine to load the ' +
+  'bundled version.';
+
+export function itemsTroubleOf(status: number, message: string): SourceTrouble {
+  if (status === 404) {
+    return {
+      message: OUTDATED_ENGINE_MESSAGE,
+      command: 'cgremlin.engine.restart',
+      actionLabel: 'Restart the engine',
+      statusText: '$(warning) cgremlin: engine is out of date',
+    };
+  }
+  return {
+    message: `The engine could not list your work (HTTP ${status}): ${message}`,
+    command: SHOW_LOG_ID,
+    actionLabel: SHOW_LOG,
+    statusText: '$(warning) cgremlin: work items unavailable',
+  };
+}
+
+/**
  * What the Refresh command says when there is nothing to refresh, or `null` when the engine is
  * running and the refresh should just happen. Trouble reuses the same wording the row shows;
  * every other not-running kind names the state, because "starting…" and "stopped" call for

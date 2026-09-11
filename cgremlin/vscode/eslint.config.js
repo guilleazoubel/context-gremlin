@@ -5,7 +5,9 @@ module.exports = tseslint.config(
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
-    ignores: ['out/**', 'engine/**', 'node_modules/**', 'eslint.config.js'],
+    // `media/*.js` is esbuild's output, like `engine/*` and `out/*`: generated, minified and
+    // never a source file (R40, R54).
+    ignores: ['out/**', 'engine/**', 'media/**', 'node_modules/**', 'eslint.config.js'],
   },
   {
     // The stand-in for the engine bundle is, like the real one, a CommonJS artifact rather than a

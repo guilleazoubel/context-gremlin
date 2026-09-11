@@ -5,12 +5,14 @@ import { randomUUID } from 'node:crypto';
 import prsFixture from './fixtures/prs.json';
 import sessionsFixture from './fixtures/sessions.json';
 import attentionFixture from './fixtures/attention.json';
+import itemsFixture from './fixtures/items.json';
 import configFixture from './fixtures/config.json';
 
 export const fixtures = {
   prs: prsFixture as unknown,
   sessions: sessionsFixture as unknown,
   attention: attentionFixture as unknown,
+  items: itemsFixture as unknown,
   config: configFixture as unknown,
 };
 
@@ -26,6 +28,12 @@ export interface StubRequest {
 export interface StubResponse {
   status: number;
   body?: unknown;
+  /**
+   * A `text/plain` body, sent **verbatim**. `GET /sessions/:id/artifacts/:name` answers this way
+   * (`server.ts:280`), and an artifact that happens to look like JSON must reach the client as
+   * the bytes it is.
+   */
+  text?: string;
 }
 
 export type StubHandler = (req: StubRequest) => StubResponse | undefined;
@@ -63,6 +71,15 @@ function defaultHandler(req: StubRequest): StubResponse | undefined {
   if (req.method === 'GET' && req.path === '/prs') return { status: 200, body: fixtures.prs };
   if (req.method === 'GET' && req.path === '/sessions') return { status: 200, body: fixtures.sessions };
   if (req.method === 'GET' && req.path === '/attention') return { status: 200, body: fixtures.attention };
+  // R24: the one read the panel makes, plus the per-item detail the Item tab opens.
+  if (req.method === 'GET' && req.path === '/items') return { status: 200, body: fixtures.items };
+  if (req.method === 'GET' && req.path.startsWith('/items/')) {
+    const detail = itemDetailFor(req.path.slice('/items/'.length));
+    return detail === null ? { status: 404, body: { error: 'no such item' } } : { status: 200, body: detail };
+  }
+  if (req.method === 'GET' && /^\/sessions\/[^/]+\/artifacts\/[^/]+$/.test(req.path)) {
+    return { status: 200, text: `# ${req.path.split('/').pop()}\n\nbody text` };
+  }
   if (req.method === 'GET' && /^\/sessions\/[^/]+\/artifacts$/.test(req.path)) {
     return {
       status: 200,
@@ -93,6 +110,40 @@ function defaultHandler(req: StubRequest): StubResponse | undefined {
     return { status: 200, body: { ok: true } };
   }
   return undefined;
+}
+
+interface FixtureItem {
+  id: string;
+  prs: { repo: string; number: number }[];
+  agents: { sessionId: string }[];
+  ticket: { key: string } | null;
+}
+
+/**
+ * R65: a `pr/…` or `session/…` path resolves to the item that *contains* it, which may answer
+ * with a `ticket:` id — the stub mirrors the engine's rule so the extension's tests exercise it.
+ */
+function itemDetailFor(path: string): unknown {
+  const items = (fixtures.items as { items: FixtureItem[] }).items;
+  const parts = path.split('/');
+  const match = items.find((item) => {
+    if (parts[0] === 'ticket') return item.ticket?.key === parts[1];
+    if (parts[0] === 'session') return item.agents.some((a) => a.sessionId === parts[1]);
+    if (parts[0] === 'pr') {
+      return item.prs.some(
+        (pr) => pr.repo === `${parts[1]}/${parts[2]}` && String(pr.number) === parts[3],
+      );
+    }
+    return false;
+  });
+  if (match === undefined) return null;
+  const artifacts: Record<string, unknown[]> = {};
+  for (const agent of match.agents) {
+    artifacts[agent.sessionId] = [
+      { name: 'BRIEF.md', mtime: '2026-09-10T08:00:00.000Z', size: 10 },
+    ];
+  }
+  return { item: match, ticket: null, ticketError: null, artifacts };
 }
 
 export async function startStubServer(opts: StartOptions = {}): Promise<StubServerHandle> {
@@ -161,9 +212,14 @@ export async function startStubServer(opts: StartOptions = {}): Promise<StubServ
           status: 404,
           body: { error: 'not found' },
         };
-        const payload = answer.body === undefined ? '' : JSON.stringify(answer.body);
+        const raw = answer.text !== undefined;
+        const payload = raw
+          ? (answer.text as string)
+          : answer.body === undefined
+            ? ''
+            : JSON.stringify(answer.body);
         res.writeHead(answer.status, {
-          'Content-Type': 'application/json',
+          'Content-Type': raw ? 'text/plain; charset=utf-8' : 'application/json',
           'Content-Length': Buffer.byteLength(payload),
         });
         res.end(payload);

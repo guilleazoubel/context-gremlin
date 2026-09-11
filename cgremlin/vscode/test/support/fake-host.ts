@@ -8,6 +8,12 @@
  */
 import type {
   DisposableLike,
+  WebviewLike,
+  WebviewOptionsLike,
+  WebviewPanelLike,
+  WebviewPanelOptionsLike,
+  WebviewViewLike,
+  WebviewViewProviderLike,
   EventEmitterLike,
   Host,
   InputBoxOptionsLike,
@@ -17,8 +23,6 @@ import type {
   StatusBarItemLike,
   TerminalLike,
   TerminalOptionsLike,
-  TreeDataProviderLike,
-  TreeItemLike,
   UriLike,
 } from '../../src/ui/host';
 
@@ -54,12 +58,92 @@ export class FakeTerminal implements TerminalLike {
   }
 }
 
+/**
+ * A recording webview. The tests drive it from the webview's side — `emit` is the script posting
+ * a message — and read `posted` and `html` from the host's side.
+ */
+export class FakeWebview implements WebviewLike {
+  html = '';
+  options: WebviewOptionsLike | undefined;
+  readonly posted: unknown[] = [];
+  private readonly listeners: ((message: unknown) => void)[] = [];
+
+  async postMessage(message: unknown): Promise<boolean> {
+    this.posted.push(message);
+    return true;
+  }
+
+  onDidReceiveMessage(listener: (message: unknown) => void): DisposableLike {
+    this.listeners.push(listener);
+    return {
+      dispose: () => {
+        const at = this.listeners.indexOf(listener);
+        if (at >= 0) this.listeners.splice(at, 1);
+      },
+    };
+  }
+
+  /** The script posting to the host. */
+  emit(message: unknown): void {
+    for (const listener of [...this.listeners]) listener(message);
+  }
+
+  /** Every `render` the host has posted, in order. */
+  renders(): unknown[] {
+    return this.posted.filter((m) => (m as { type?: string }).type === 'render');
+  }
+}
+
+export class FakeWebviewPanel implements WebviewPanelLike {
+  readonly webview = new FakeWebview();
+  title: string;
+  revealed = 0;
+  disposed = 0;
+  private readonly disposeListeners: (() => void)[] = [];
+
+  constructor(readonly options: WebviewPanelOptionsLike) {
+    this.title = options.title;
+  }
+
+  reveal(): void {
+    this.revealed += 1;
+  }
+
+  onDidDispose(listener: () => void): DisposableLike {
+    this.disposeListeners.push(listener);
+    return { dispose: () => undefined };
+  }
+
+  dispose(): void {
+    this.disposed += 1;
+    for (const listener of [...this.disposeListeners]) listener();
+  }
+}
+
+/** The side panel's view, as the editor would hand it to a provider (R54). */
+export class FakeWebviewView implements WebviewViewLike {
+  readonly webview = new FakeWebview();
+  title: string | undefined;
+  private readonly disposeListeners: (() => void)[] = [];
+
+  onDidDispose(listener: () => void): DisposableLike {
+    this.disposeListeners.push(listener);
+    return { dispose: () => undefined };
+  }
+
+  dispose(): void {
+    for (const listener of [...this.disposeListeners]) listener();
+  }
+}
+
 export class FakeHost implements Host {
   readonly calls: RecordedCall[] = [];
   readonly commands = new Map<string, (...args: unknown[]) => unknown>();
-  readonly providers = new Map<string, TreeDataProviderLike<unknown>>();
+  readonly providers = new Map<string, WebviewViewProviderLike>();
+  readonly views: FakeWebviewView[] = [];
   readonly terminals: FakeTerminal[] = [];
   readonly statusBarItems: FakeStatusBarItem[] = [];
+  readonly panels: FakeWebviewPanel[] = [];
   readonly files = new Map<string, string>();
   readonly logs: string[] = [];
   /** The output channel's lines, kept apart from `logs` so a test can tell them apart. */
@@ -152,10 +236,24 @@ export class FakeHost implements Host {
     return await callback(...args);
   }
 
-  registerTreeDataProvider<T>(viewId: string, provider: TreeDataProviderLike<T>): DisposableLike {
-    this.record('registerTreeDataProvider', viewId);
-    this.providers.set(viewId, provider as TreeDataProviderLike<unknown>);
+  registerWebviewViewProvider(
+    viewId: string,
+    provider: WebviewViewProviderLike,
+    options?: { webviewOptions?: { retainContextWhenHidden?: boolean } },
+  ): DisposableLike {
+    this.record('registerWebviewViewProvider', viewId, options);
+    this.providers.set(viewId, provider);
     return { dispose: () => this.providers.delete(viewId) };
+  }
+
+  /** Simulates the editor creating the view for a registered provider. */
+  resolveView(viewId: string): FakeWebviewView {
+    const provider = this.providers.get(viewId);
+    if (provider === undefined) throw new Error(`no provider registered for '${viewId}'`);
+    const view = new FakeWebviewView();
+    provider.resolveWebviewView(view);
+    this.views.push(view);
+    return view;
   }
 
   createEventEmitter<T>(): EventEmitterLike<T> {
@@ -168,7 +266,7 @@ export class FakeHost implements Host {
       },
       fire: (data: T) => {
         emitter.fired += 1;
-        this.record('treeDataChanged', data);
+        this.record('eventFired', data);
         for (const listener of listeners) listener(data);
       },
       dispose: () => listeners.clear(),
@@ -176,8 +274,11 @@ export class FakeHost implements Host {
     return emitter;
   }
 
-  createTreeItem(label: string, collapsibleState: number): TreeItemLike {
-    return { label, collapsibleState };
+  createWebviewPanel(options: WebviewPanelOptionsLike): WebviewPanelLike {
+    this.record('createWebviewPanel', options);
+    const panel = new FakeWebviewPanel(options);
+    this.panels.push(panel);
+    return panel;
   }
 
   createStatusBarItem(): StatusBarItemLike {
@@ -312,6 +413,18 @@ export class FakeHost implements Host {
   ): Promise<{ code: number; stdout: string; stderr: string }> {
     this.record('spawnCapture', command, [...args], options);
     return this.spawnResults.get(command) ?? { code: 0, stdout: '', stderr: '' };
+  }
+
+  /** The in-memory stand-in for `globalState` (R64). */
+  readonly state = new Map<string, unknown>();
+
+  getState<T>(key: string): T | undefined {
+    return this.state.get(key) as T | undefined;
+  }
+
+  async setState(key: string, value: unknown): Promise<void> {
+    this.record('setState', key, value);
+    this.state.set(key, value);
   }
 
   appendOutput(line: string): void {

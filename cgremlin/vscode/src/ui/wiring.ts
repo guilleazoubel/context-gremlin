@@ -8,18 +8,19 @@
 import { CoreHttpError, EngineNotRunningError, type CoreClient } from '../core-client';
 import { troubleOf } from '../model/engine-trouble';
 import type { NotificationLevel } from '../model/notify-policy';
-import { CgremlinTreeProvider } from './tree';
+import { PanelView, PANEL_VIEW_ID } from './panel-view';
 import { NotificationSurface } from './notifications';
 import { StatusBar } from './status-bar';
 import { RefreshCoordinator } from './refresh';
-import { ItemOpener } from './preview';
+import { WorktreeSwapper } from './preview';
+import { ItemTab, type ItemTabAssets } from './item-tab';
 import { ChatSessions } from './terminal';
 import { registerCommands } from './commands';
 import type { EngineSurface } from './engine';
 import type { DisposableLike, Host } from './host';
 
-/** The single tree view the four lists are roots of. Must match `contributes.views`. */
-export const VIEW_ID = 'cgremlin.items';
+/** The single view the four lists live in — a webview since R54. Matches `contributes.views`. */
+export const VIEW_ID = PANEL_VIEW_ID;
 
 export interface UiOptions {
   host: Host;
@@ -31,16 +32,28 @@ export interface UiOptions {
    */
   engine?: EngineSurface;
   coalesceMs?: number;
+  /**
+   * R62: the webview bundle and stylesheet as TEXT, read by `extension.ts` at activation. A test
+   * passes literals, so no unit test depends on `build:webview` having run.
+   */
+  assets?: { itemTab: ItemTabAssets; panel: ItemTabAssets; mediaPath: string };
 }
 
 export interface Ui {
-  readonly tree: CgremlinTreeProvider;
+  readonly panel: PanelView;
+  readonly itemTab: ItemTab;
   readonly statusBar: StatusBar;
   readonly notifications: NotificationSurface;
   readonly coordinator: RefreshCoordinator;
   readonly chat: ChatSessions;
   /** `GET /config` then the first snapshot. `false` means the engine is not running. */
   connect(): Promise<boolean>;
+  /**
+   * One `/events` frame. R41: its payload is read as an **address** and never as content — the
+   * open Item tab refetches only when the id is its own, and everything else coalesces into one
+   * `/items` refresh.
+   */
+  handleFrame(frame: unknown): void;
   /** The SSE consumer lost its connection (or never had one). */
   offline(): Promise<void>;
   settled(): Promise<void>;
@@ -49,13 +62,26 @@ export interface Ui {
 
 export function createUi(options: UiOptions): Ui {
   const { host, client } = options;
-  const tree = new CgremlinTreeProvider(host);
   const statusBar = new StatusBar(host);
   const notifications = new NotificationSurface(host);
+  const panel: PanelView = new PanelView({
+    host,
+    assets: options.assets?.panel ?? { scriptText: '', styleText: '' },
+    mediaPath: options.assets?.mediaPath ?? '',
+    onOpenItem: async (id) => {
+      await host.executeCommand('cgremlin.openItem', id);
+    },
+    onOpenChild: async (id, childId) => {
+      await host.executeCommand('cgremlin.openChild', id, childId);
+    },
+    onCommand: async (command, id, childId) => {
+      await host.executeCommand(command, id, childId);
+    },
+  });
   const coordinator = new RefreshCoordinator({
     host,
     client,
-    tree,
+    panel,
     statusBar,
     notifications,
     notificationLevel: options.notificationLevel,
@@ -66,17 +92,30 @@ export function createUi(options: UiOptions): Ui {
     client,
     ttlMs: () => coordinator.config()?.humanTurnTtlMs,
   });
-  const opener = new ItemOpener({
+  const swapper = new WorktreeSwapper({ host, config: () => coordinator.config() });
+  const itemTab = new ItemTab({
     host,
     client,
     config: () => coordinator.config(),
+    assets: options.assets?.itemTab ?? { scriptText: '', styleText: '' },
+    mediaPath: options.assets?.mediaPath ?? '',
+    swapper,
     onOpened: (sessionId, worktreePath) => coordinator.setCurrentSession(sessionId, worktreePath),
   });
-
   const disposables: DisposableLike[] = [
-    host.registerTreeDataProvider(VIEW_ID, tree),
+    host.registerWebviewViewProvider(VIEW_ID, panel, {
+      webviewOptions: { retainContextWhenHidden: true },
+    }),
     host.onDidCloseTerminal((terminal) => chat.handleClosed(terminal)),
-    ...registerCommands({ host, client, coordinator, opener, chat, engine: options.engine }),
+    ...registerCommands({
+      host,
+      client,
+      coordinator,
+      panel,
+      itemTab,
+      chat,
+      engine: options.engine,
+    }),
   ];
   if (options.engine !== undefined) {
     const engine = options.engine;
@@ -85,8 +124,7 @@ export function createUi(options: UiOptions): Ui {
       statusBar.setEngine(status);
       // An engine that cannot be used replaces the four lists with one row that says so; the
       // moment a usable one is adopted, the lists come back.
-      tree.setEngineTrouble(troubleOf(status));
-      tree.refresh();
+      panel.setTrouble(troubleOf(status));
     });
     disposables.push({ dispose: unsubscribe });
   }
@@ -98,7 +136,8 @@ export function createUi(options: UiOptions): Ui {
   };
 
   return {
-    tree,
+    panel,
+    itemTab,
     statusBar,
     notifications,
     coordinator,
@@ -126,6 +165,17 @@ export function createUi(options: UiOptions): Ui {
       }
     },
     offline,
+    handleFrame(frame: unknown) {
+      const { event, id } = addressOf(frame);
+      if (event === 'item.changed' && id !== null && id === itemTab.itemId()) {
+        void itemTab.itemChanged(id);
+      }
+      if (event === 'artifact.changed') {
+        const { sessionId, name } = artifactAddressOf(frame);
+        if (sessionId !== null && name !== null) void itemTab.artifactChanged(sessionId, name);
+      }
+      coordinator.schedule();
+    },
     async settled() {
       await options.engine?.settled();
       await coordinator.settled();
@@ -135,8 +185,35 @@ export function createUi(options: UiOptions): Ui {
     async dispose() {
       await chat.releaseAll();
       for (const disposable of disposables.splice(0)) disposable.dispose();
+      itemTab.dispose();
       statusBar.dispose();
-      tree.dispose();
+      panel.dispose();
     },
+  };
+}
+
+/**
+ * A frame's payload, read as an address and nothing else (R41): the `event` name and the `id`
+ * the change is about. Nothing branches on the absence of `changedFields`.
+ */
+function addressOf(frame: unknown): { event: string | null; id: string | null } {
+  if (typeof frame !== 'object' || frame === null) return { event: null, id: null };
+  const event = (frame as { event?: unknown }).event;
+  const data = (frame as { data?: unknown }).data;
+  const id = typeof data === 'object' && data !== null ? (data as { id?: unknown }).id : undefined;
+  return {
+    event: typeof event === 'string' ? event : null,
+    id: typeof id === 'string' ? id : null,
+  };
+}
+
+function artifactAddressOf(frame: unknown): { sessionId: string | null; name: string | null } {
+  const data = (frame as { data?: unknown } | null)?.data;
+  if (typeof data !== 'object' || data === null) return { sessionId: null, name: null };
+  const sessionId = (data as { sessionId?: unknown }).sessionId;
+  const name = (data as { name?: unknown }).name;
+  return {
+    sessionId: typeof sessionId === 'string' ? sessionId : null,
+    name: typeof name === 'string' ? name : null,
   };
 }
