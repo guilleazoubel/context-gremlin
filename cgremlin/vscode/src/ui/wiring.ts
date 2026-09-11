@@ -12,7 +12,8 @@ import { CgremlinTreeProvider } from './tree';
 import { NotificationSurface } from './notifications';
 import { StatusBar } from './status-bar';
 import { RefreshCoordinator } from './refresh';
-import { ItemOpener } from './preview';
+import { ItemOpener, WorktreeSwapper } from './preview';
+import { ItemTab, type ItemTabAssets } from './item-tab';
 import { ChatSessions } from './terminal';
 import { registerCommands } from './commands';
 import type { EngineSurface } from './engine';
@@ -31,10 +32,16 @@ export interface UiOptions {
    */
   engine?: EngineSurface;
   coalesceMs?: number;
+  /**
+   * R62: the webview bundle and stylesheet as TEXT, read by `extension.ts` at activation. A test
+   * passes literals, so no unit test depends on `build:webview` having run.
+   */
+  assets?: { itemTab: ItemTabAssets; mediaPath: string };
 }
 
 export interface Ui {
   readonly tree: CgremlinTreeProvider;
+  readonly itemTab: ItemTab;
   readonly statusBar: StatusBar;
   readonly notifications: NotificationSurface;
   readonly coordinator: RefreshCoordinator;
@@ -65,6 +72,16 @@ export function createUi(options: UiOptions): Ui {
     host,
     client,
     ttlMs: () => coordinator.config()?.humanTurnTtlMs,
+  });
+  const swapper = new WorktreeSwapper({ host, config: () => coordinator.config() });
+  const itemTab = new ItemTab({
+    host,
+    client,
+    config: () => coordinator.config(),
+    assets: options.assets?.itemTab ?? { scriptText: '', styleText: '' },
+    mediaPath: options.assets?.mediaPath ?? '',
+    swapper,
+    onOpened: (sessionId, worktreePath) => coordinator.setCurrentSession(sessionId, worktreePath),
   });
   const opener = new ItemOpener({
     host,
@@ -99,6 +116,7 @@ export function createUi(options: UiOptions): Ui {
 
   return {
     tree,
+    itemTab,
     statusBar,
     notifications,
     coordinator,
@@ -135,6 +153,7 @@ export function createUi(options: UiOptions): Ui {
     async dispose() {
       await chat.releaseAll();
       for (const disposable of disposables.splice(0)) disposable.dispose();
+      itemTab.dispose();
       statusBar.dispose();
       tree.dispose();
     },

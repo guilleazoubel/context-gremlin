@@ -96,6 +96,40 @@ export interface TreeDataProviderLike<T> {
   getChildren(element?: T): T[];
 }
 
+/**
+ * The webview surface, narrowed to what the Item tab and the side panel actually use (R19, R54).
+ *
+ * `html` is a plain string and the script and the style are *injected text* (R62), so neither
+ * `ui/item-tab.ts` nor `ui/panel-view.ts` ever reads `media/` off disk and neither of their tests
+ * needs `build:webview` to have run. `localResourceRoots` is still set, to the extension's own
+ * `media` directory alone, even though nothing is loaded by URI.
+ */
+export interface WebviewLike {
+  html: string;
+  postMessage(message: unknown): Promise<boolean>;
+  onDidReceiveMessage(listener: (message: unknown) => void): DisposableLike;
+}
+
+export interface WebviewPanelLike {
+  readonly webview: WebviewLike;
+  title: string;
+  reveal(preserveFocus?: boolean): void;
+  onDidDispose(listener: () => void): DisposableLike;
+  dispose(): void;
+}
+
+export interface WebviewOptionsLike {
+  enableScripts: boolean;
+  /** R39: the tab keeps its artifacts, its selected agent and its scroll position. */
+  retainContextWhenHidden: boolean;
+  localResourceRoots: string[];
+}
+
+export interface WebviewPanelOptionsLike extends WebviewOptionsLike {
+  viewType: string;
+  title: string;
+}
+
 /** `vscode.TreeItemCollapsibleState`, mirrored (None/Collapsed/Expanded). */
 export const COLLAPSIBLE_NONE = 0;
 export const COLLAPSIBLE_COLLAPSED = 1;
@@ -132,6 +166,7 @@ export interface Host {
   createEventEmitter<T>(): EventEmitterLike<T>;
   createTreeItem(label: string, collapsibleState: number): TreeItemLike;
   createStatusBarItem(): StatusBarItemLike;
+  createWebviewPanel(options: WebviewPanelOptionsLike): WebviewPanelLike;
 
   createTerminal(options: TerminalOptionsLike): TerminalLike;
   onDidCloseTerminal(listener: (terminal: TerminalLike) => void): DisposableLike;

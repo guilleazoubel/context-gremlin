@@ -6,6 +6,7 @@
  */
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
+import nodePath from 'node:path';
 import os from 'node:os';
 import * as vscode from 'vscode';
 import { CoreClient } from './core-client';
@@ -29,6 +30,8 @@ import type {
   TreeDataProviderLike,
   TreeItemLike,
   UriLike,
+  WebviewPanelLike,
+  WebviewPanelOptionsLike,
 } from './ui/host';
 
 let ui: Ui | null = null;
@@ -102,6 +105,12 @@ export function activate(context: vscode.ExtensionContext): void {
   created = createUi({
     host,
     client,
+    // R62: this is the ONLY module that touches the media directory. The tab and the panel take
+    // the bytes as text, so their tests never depend on the bundler having run.
+    assets: {
+      itemTab: readAssets(context.extensionPath, 'item-tab', output),
+      mediaPath: nodePath.join(context.extensionPath, 'media'),
+    },
     // Read live, so changing the level takes effect without a reload.
     notificationLevel: () => readSettings().notificationLevel,
     engine: surface,
@@ -147,6 +156,27 @@ export async function deactivate(): Promise<void> {
   ui = null;
   // Releases every conversation claim this window holds, and clears every heartbeat (R20).
   await current?.dispose();
+}
+
+/**
+ * `media/<name>.js` is a build output (R40): a checkout that has not run `build:webview` has no
+ * script, and a webview with no script renders blank rather than throwing. So a missing bundle is
+ * one logged line naming the command, not a silent empty panel.
+ */
+function readAssets(
+  extensionPath: string,
+  name: string,
+  output: vscode.OutputChannel,
+): { scriptText: string; styleText: string } {
+  const read = (file: string): string => {
+    try {
+      return fs.readFileSync(nodePath.join(extensionPath, 'media', file), 'utf8');
+    } catch {
+      output.appendLine(`cgremlin: media/${file} is missing — run \`pnpm build:webview\``);
+      return '';
+    }
+  };
+  return { scriptText: read(`${name}.js`), styleText: read(`${name}.css`) };
 }
 
 function buildHost(output: vscode.OutputChannel, state: vscode.Memento): Host {
@@ -218,6 +248,41 @@ function buildHost(output: vscode.OutputChannel, state: vscode.Memento): Host {
         show: () => item.show(),
         hide: () => item.hide(),
         dispose: () => item.dispose(),
+      };
+    },
+
+    createWebviewPanel(options: WebviewPanelOptionsLike): WebviewPanelLike {
+      const panel = vscode.window.createWebviewPanel(
+        options.viewType,
+        options.title,
+        vscode.ViewColumn.Active,
+        {
+          enableScripts: options.enableScripts,
+          retainContextWhenHidden: options.retainContextWhenHidden,
+          localResourceRoots: options.localResourceRoots.map((root) => vscode.Uri.file(root)),
+        },
+      );
+      return {
+        webview: {
+          get html() {
+            return panel.webview.html;
+          },
+          set html(value: string) {
+            panel.webview.html = value;
+          },
+          postMessage: (message: unknown) => Promise.resolve(panel.webview.postMessage(message)),
+          onDidReceiveMessage: (listener: (message: unknown) => void) =>
+            panel.webview.onDidReceiveMessage((message: unknown) => listener(message)),
+        },
+        get title() {
+          return panel.title;
+        },
+        set title(value: string) {
+          panel.title = value;
+        },
+        reveal: (preserveFocus?: boolean) => panel.reveal(undefined, preserveFocus),
+        onDidDispose: (listener: () => void) => panel.onDidDispose(listener),
+        dispose: () => panel.dispose(),
       };
     },
 

@@ -11,6 +11,7 @@
  * Both throw {@link EngineNotRunningError} when the socket is not there.
  */
 import http from 'node:http';
+import type { ItemDetailResponse, ItemsResponse } from './model/work-items';
 import type {
   ArtifactListingResponse,
   AttentionListing,
@@ -102,6 +103,31 @@ export function assertPrNumber(number: number): string {
 }
 
 /**
+ * One `/items` route path, already segmented (R14): `ticket/<KEY>`, `pr/<owner>/<repo>/<n>` or
+ * `session/<id>`. The extension builds these with `itemPathOf`, never by interpolating a raw id
+ * — an id carries `/` and `#`, which a path cannot (MG-9).
+ */
+const ITEM_PATH =
+  /^(?:ticket\/[A-Za-z0-9._-]+|pr\/[\w.-]+\/[\w.-]+\/\d+|session\/[\w.:@-]+)$/;
+
+export function assertItemPath(path: string): string {
+  if (typeof path !== 'string' || !ITEM_PATH.test(path) || path.includes('..')) {
+    throw new InvalidPathParamError('item path', path);
+  }
+  return path;
+}
+
+/** `parseArtifactName` (`src/api/validation.ts:101-102`), mirrored. */
+const ARTIFACT_NAME = /^[A-Za-z0-9._-]+$/;
+
+export function assertArtifactName(name: string): string {
+  if (typeof name !== 'string' || !ARTIFACT_NAME.test(name) || name === '.' || name === '..') {
+    throw new InvalidPathParamError('artifact name', name);
+  }
+  return name;
+}
+
+/**
  * Where the engine's socket is. A function is resolved on **every** request, which is what lets a
  * settings change take effect without rebuilding the client layer — and therefore without tearing
  * down the tree, the status bar and every outstanding chat claim (R7).
@@ -156,6 +182,38 @@ export class CoreClient {
   async config(): Promise<CoreConfigView> {
     const body = await this.expect<{ config: CoreConfigView }>('GET', '/config');
     return body.config;
+  }
+
+  /** R24: the one read a refresh makes. Four lists, one round trip. */
+  items(): Promise<ItemsResponse> {
+    return this.expect('GET', '/items');
+  }
+
+  /** R65: the path addresses the item that *contains* it, which may answer with a ticket id. */
+  async item(path: string): Promise<ItemDetailResponse> {
+    return await this.expect('GET', `/items/${assertItemPath(path)}`);
+  }
+
+  /** R15/R56. `{ mode: 'respond' }` creates AND starts, in this one request. */
+  async startAgent(
+    path: string,
+    body: { mode: string; repoUrl?: string; intent?: string; driveToCompletion?: boolean },
+  ): Promise<HttpResult> {
+    return await this.request('POST', `/items/${assertItemPath(path)}/agents`, body);
+  }
+
+  /** R31: one request; the core fans out over every ref the item contributes. */
+  async ackItem(path: string): Promise<HttpResult> {
+    return await this.request('POST', `/items/${assertItemPath(path)}/ack`);
+  }
+
+  /** The artifact body, which the host relays over `postMessage` — never a file URI (R19). */
+  async artifactText(id: string, name: string): Promise<string> {
+    const body = await this.expect<unknown>(
+      'GET',
+      `/sessions/${assertSessionId(id)}/artifacts/${assertArtifactName(name)}`,
+    );
+    return typeof body === 'string' ? body : JSON.stringify(body);
   }
 
   prs(): Promise<{ inventory: Inventory; groups: InventoryGroups }> {

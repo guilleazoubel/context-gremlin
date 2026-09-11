@@ -74,7 +74,7 @@ function header(current: ItemTabState): HTMLElement {
 
 function buttons(current: ItemTabState): HTMLElement {
   const row = el('div', 'buttons');
-  for (const button of buttonsFor(current)) {
+  for (const button of current.buttons) {
     const node = document.createElement('button');
     node.textContent = button.label;
     node.disabled = !button.enabled;
@@ -85,43 +85,6 @@ function buttons(current: ItemTabState): HTMLElement {
     row.appendChild(node);
   }
   return row;
-}
-
-/**
- * Which buttons apply is a rule, not a style: "Start review" is hidden on my own PR (R42) and
- * "Address review comments" takes its place when the PR is mine and not a draft (R51). Chat is
- * offered on a respond agent only once its run has finished (R50).
- */
-export function buttonsFor(current: ItemTabState): {
-  id: string;
-  label: string;
-  enabled: boolean;
-  reason?: string;
-}[] {
-  const out: { id: string; label: string; enabled: boolean; reason?: string }[] = [];
-  const selected = current.agents.find((a) => a.sessionId === current.selectedSessionId);
-  const chatBlocked =
-    selected !== undefined && selected.mode === 'respond' && selected.phase === 'triaging';
-  out.push({
-    id: 'cgremlin.chat',
-    label: 'Chat',
-    enabled: selected !== undefined && !chatBlocked,
-    reason: chatBlocked
-      ? 'The respond agent is still triaging the review threads; chat opens once it has written them up.'
-      : undefined,
-  });
-  const primary = current.prs[0];
-  if (primary !== undefined && primary.isMine !== true) {
-    const reviewing = current.agents.some((a) => a.mode === 'review');
-    if (!reviewing) out.push({ id: 'cgremlin.startReview', label: 'Start review', enabled: true });
-  }
-  if (primary !== undefined && primary.isMine === true && primary.isDraft === false) {
-    out.push({ id: 'cgremlin.addressReview', label: 'Address review comments', enabled: true });
-  }
-  out.push({ id: 'cgremlin.newInvestigationHere', label: 'Start investigation', enabled: true });
-  out.push({ id: 'cgremlin.newDevelopmentHere', label: 'Start development', enabled: true });
-  out.push({ id: 'cgremlin.ack', label: 'Ack', enabled: true });
-  return out;
 }
 
 function agentTabs(current: ItemTabState): HTMLElement {

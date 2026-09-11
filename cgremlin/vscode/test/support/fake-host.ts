@@ -8,6 +8,9 @@
  */
 import type {
   DisposableLike,
+  WebviewLike,
+  WebviewPanelLike,
+  WebviewPanelOptionsLike,
   EventEmitterLike,
   Host,
   InputBoxOptionsLike,
@@ -54,12 +57,74 @@ export class FakeTerminal implements TerminalLike {
   }
 }
 
+/**
+ * A recording webview. The tests drive it from the webview's side — `emit` is the script posting
+ * a message — and read `posted` and `html` from the host's side.
+ */
+export class FakeWebview implements WebviewLike {
+  html = '';
+  readonly posted: unknown[] = [];
+  private readonly listeners: ((message: unknown) => void)[] = [];
+
+  async postMessage(message: unknown): Promise<boolean> {
+    this.posted.push(message);
+    return true;
+  }
+
+  onDidReceiveMessage(listener: (message: unknown) => void): DisposableLike {
+    this.listeners.push(listener);
+    return {
+      dispose: () => {
+        const at = this.listeners.indexOf(listener);
+        if (at >= 0) this.listeners.splice(at, 1);
+      },
+    };
+  }
+
+  /** The script posting to the host. */
+  emit(message: unknown): void {
+    for (const listener of [...this.listeners]) listener(message);
+  }
+
+  /** Every `render` the host has posted, in order. */
+  renders(): unknown[] {
+    return this.posted.filter((m) => (m as { type?: string }).type === 'render');
+  }
+}
+
+export class FakeWebviewPanel implements WebviewPanelLike {
+  readonly webview = new FakeWebview();
+  title: string;
+  revealed = 0;
+  disposed = 0;
+  private readonly disposeListeners: (() => void)[] = [];
+
+  constructor(readonly options: WebviewPanelOptionsLike) {
+    this.title = options.title;
+  }
+
+  reveal(): void {
+    this.revealed += 1;
+  }
+
+  onDidDispose(listener: () => void): DisposableLike {
+    this.disposeListeners.push(listener);
+    return { dispose: () => undefined };
+  }
+
+  dispose(): void {
+    this.disposed += 1;
+    for (const listener of [...this.disposeListeners]) listener();
+  }
+}
+
 export class FakeHost implements Host {
   readonly calls: RecordedCall[] = [];
   readonly commands = new Map<string, (...args: unknown[]) => unknown>();
   readonly providers = new Map<string, TreeDataProviderLike<unknown>>();
   readonly terminals: FakeTerminal[] = [];
   readonly statusBarItems: FakeStatusBarItem[] = [];
+  readonly panels: FakeWebviewPanel[] = [];
   readonly files = new Map<string, string>();
   readonly logs: string[] = [];
   /** The output channel's lines, kept apart from `logs` so a test can tell them apart. */
@@ -178,6 +243,13 @@ export class FakeHost implements Host {
 
   createTreeItem(label: string, collapsibleState: number): TreeItemLike {
     return { label, collapsibleState };
+  }
+
+  createWebviewPanel(options: WebviewPanelOptionsLike): WebviewPanelLike {
+    this.record('createWebviewPanel', options);
+    const panel = new FakeWebviewPanel(options);
+    this.panels.push(panel);
+    return panel;
   }
 
   createStatusBarItem(): StatusBarItemLike {

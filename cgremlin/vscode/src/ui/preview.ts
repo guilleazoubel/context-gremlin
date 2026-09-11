@@ -24,6 +24,29 @@ export interface OpenTarget {
   prUrl: string | null;
 }
 
+/**
+ * The worktree-swap half of "open item", on its own (R23).
+ *
+ * Phase 9 opens an Item tab rather than a markdown preview, but the swap — one managed folder, a
+ * modal before unsaved work is closed — is unchanged and must stay in exactly one place, so the
+ * tab and the older opener share this.
+ */
+export interface WorktreeSwapperDeps {
+  host: Host;
+  config: () => CoreConfigView | null;
+}
+
+export class WorktreeSwapper {
+  constructor(private readonly deps: WorktreeSwapperDeps) {}
+
+  /** No-ops when there is no config yet, or when the worktree is already the only folder. */
+  async swapTo(id: string, worktreePath: string): Promise<void> {
+    const config = this.deps.config();
+    if (config === null) return;
+    await applyWorkspace(this.deps.host, id, worktreePath, config);
+  }
+}
+
 export interface ItemOpenerDeps {
   host: Host;
   client: CoreClient;
@@ -56,7 +79,7 @@ export class ItemOpener {
     await this.preview(id, config);
     this.deps.onOpened(id, target.worktreePath);
     if (target.worktreePath !== null) {
-      await this.applyWorkspace(id, target.worktreePath, config);
+      await applyWorkspace(this.deps.host, id, target.worktreePath, config);
     }
   }
 
@@ -79,58 +102,59 @@ export class ItemOpener {
     );
   }
 
-  private async applyWorkspace(
-    id: string,
-    worktreePath: string,
-    config: CoreConfigView,
-  ): Promise<void> {
-    const { host } = this.deps;
-    const plan = planWorkspaceAction({
-      workspaceFile: host.workspaceFile(),
-      folders: host.workspaceFolders(),
-      worktreePath,
-      managedPath: managedWorkspacePath(config.stateDir),
-      dirtyPaths: host.dirtyPaths(),
+}
+
+async function applyWorkspace(
+  host: Host,
+  id: string,
+  worktreePath: string,
+  config: CoreConfigView,
+): Promise<void> {
+  const plan = planWorkspaceAction({
+    workspaceFile: host.workspaceFile(),
+    folders: host.workspaceFolders(),
+    worktreePath,
+    managedPath: managedWorkspacePath(config.stateDir),
+    dirtyPaths: host.dirtyPaths(),
+  });
+  if (plan.kind === 'noop') return;
+
+  if (plan.kind === 'swap') {
+    if (plan.requiresConfirm) {
+      // Unsaved work is never closed by a click on a tree row (R-10a). Awaited, and awaited
+      // *before* the swap: this is the one blocking dialog in the extension.
+      const answer = await host.showWarningMessage(
+        `Switching to '${id}' closes the editors of the current worktree, and you have unsaved changes there.`,
+        { modal: true },
+        SWITCH_ANYWAY,
+      );
+      if (answer !== SWITCH_ANYWAY) return;
+    }
+    host.updateWorkspaceFolders(0, plan.removeCount, {
+      uri: host.fileUri(plan.uri),
+      name: path.basename(plan.uri),
     });
-    if (plan.kind === 'noop') return;
+    if (plan.removeCount > 0) {
+      void host.showInformationMessage(
+        `Opened '${id}'. VS Code closed the editors of the worktree it replaced.`,
+        undefined,
+      );
+    }
+    return;
+  }
 
-    if (plan.kind === 'swap') {
-      if (plan.requiresConfirm) {
-        // Unsaved work is never closed by a click on a tree row (R-10a). Awaited, and awaited
-        // *before* the swap: this is the one blocking dialog in the extension.
-        const answer = await host.showWarningMessage(
-          `Switching to '${id}' closes the editors of the current worktree, and you have unsaved changes there.`,
-          { modal: true },
-          SWITCH_ANYWAY,
-        );
-        if (answer !== SWITCH_ANYWAY) return;
-      }
-      host.updateWorkspaceFolders(0, plan.removeCount, {
-        uri: host.fileUri(plan.uri),
-        name: path.basename(plan.uri),
-      });
-      if (plan.removeCount > 0) {
-        void host.showInformationMessage(
-          `Opened '${id}'. VS Code closed the editors of the worktree it replaced.`,
-          undefined,
-        );
-      }
-      return;
-    }
-
-    // offer-open-managed: opening a workspace file reloads the window, the one unavoidable
-    // restart, so it is offered and never forced.
-    if (!host.fileExists(plan.managedPath)) {
-      host.writeFile(plan.managedPath, plan.bootstrap);
-    }
-    const answer = await host.showInformationMessage(
-      `cgremlin keeps one worktree open in ${MANAGED_WORKSPACE_NAME}. Open it? (This reloads the window.)`,
-      undefined,
-      OPEN_MANAGED,
-    );
-    if (answer === OPEN_MANAGED) {
-      await host.executeCommand('vscode.openFolder', host.fileUri(plan.managedPath));
-    }
+  // offer-open-managed: opening a workspace file reloads the window, the one unavoidable
+  // restart, so it is offered and never forced.
+  if (!host.fileExists(plan.managedPath)) {
+    host.writeFile(plan.managedPath, plan.bootstrap);
+  }
+  const answer = await host.showInformationMessage(
+    `cgremlin keeps one worktree open in ${MANAGED_WORKSPACE_NAME}. Open it? (This reloads the window.)`,
+    undefined,
+    OPEN_MANAGED,
+  );
+  if (answer === OPEN_MANAGED) {
+    await host.executeCommand('vscode.openFolder', host.fileUri(plan.managedPath));
   }
 }
 

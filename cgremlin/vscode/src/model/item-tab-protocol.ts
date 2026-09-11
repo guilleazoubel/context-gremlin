@@ -82,6 +82,8 @@ export interface ItemTabState {
   prs: TabPr[];
   ticket: TabTicket | null;
   ticketError: string | null;
+  /** Decided by the host (R42/R51), rendered by the webview — the rule is not a style. */
+  buttons: TabButton[];
 }
 
 export type HostToWebview =

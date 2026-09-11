@@ -51,6 +51,14 @@ export interface WorkItemPr {
   deletions: number | null;
   ci: CiStatus | null;
   labels: string[] | null;
+  /**
+   * R48's PR focus wants per-reviewer summaries, the open-thread count and the CI checks by
+   * name. They are **optional** on the wire: the list response has no use for them, and the tab
+   * renders what it is given rather than insisting the detail route carries them.
+   */
+  reviews?: { login: string; state: string; body: string | null }[] | null;
+  checks?: { name: string; state: string; detailsUrl: string | null }[] | null;
+  openThreads?: number | null;
 }
 
 export interface WorkItemTicket {
