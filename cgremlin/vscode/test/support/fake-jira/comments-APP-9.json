@@ -1,0 +1,17 @@
+{
+  "startAt": 0,
+  "maxResults": 5,
+  "total": 2,
+  "comments": [
+    {
+      "author": { "displayName": "Dana Reviewer" },
+      "created": "2026-09-09T09:30:00.000+0000",
+      "renderedBody": "<p>TICKET-COMMENT-NEWEST: agreed, ship behind the flag.</p>"
+    },
+    {
+      "author": { "displayName": "Integration User" },
+      "created": "2026-09-08T09:30:00.000+0000",
+      "renderedBody": "<p>TICKET-COMMENT-OLDEST: starting on this today.</p>"
+    }
+  ]
+}

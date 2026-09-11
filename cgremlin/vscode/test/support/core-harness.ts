@@ -8,17 +8,22 @@
  * through the very same `CoreClient` / `SseClient` / `RefreshCoordinator` that ship.
  *
  * What IS faked, and only outside the engine:
- *  - `gh`, by a committed script on PATH that answers `pr list`/`pr view` from fixtures and exits 1
- *    for every write (test/support/fake-gh/gh);
- *  - `claude`, by a no-op script on PATH, purely as a backstop — no test here starts a stage, and
- *    the assertions say so;
+ *  - `gh`, by a committed script on PATH that answers `pr list`/`pr view`/`api graphql` from
+ *    fixtures and exits 1 for every write and for any GraphQL `mutation` (test/support/fake-gh/gh);
+ *  - `claude`, by a no-op script on PATH: the ONLY stage any test here starts is the one respond
+ *    run C1 asserts, and MG-8's accounting over `run.started` is what keeps that true;
+ *  - Jira, by a stub HTTP server the caller starts and points `jira.baseUrl` at (D7/R10) — the
+ *    real `JiraRestSource` inside the real engine talks to it over real HTTP;
+ *  - `https://github.com/...`, by a `url.<local>.insteadOf` in the throwaway HOME's `.gitconfig`,
+ *    so `RespondSessionFactory`'s mirror-and-worktree really runs against a local origin;
  *  - the login shell R20 asks for `PATH`, by a script that echoes the throwaway bin dir first, so
  *    the fake `gh` is what the engine finds.
  *
  * The legacy `~/.cgremlin` state dir is never touched: HOME itself is redirected into the temp dir.
  */
+import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { chmod, mkdir, mkdtemp, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readdir, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { CoreClient } from '../../src/core-client';
@@ -57,9 +62,23 @@ export function loadEngineBridge(): EngineBridge {
 export const PR3_SHA = '3333333333333333333333333333333333333333';
 
 export interface SeededSessions {
+  /** Carries `lineage.ticket: 'APP-1'`, so under `projectKeys: ['APP']` it merges into a ticket. */
   investigation: string;
+  /** No ticket, no PR — R49's "the sessions I only have an investigation for". */
+  looseInvestigation: string;
   development: string;
   review: string;
+}
+
+/** The Jira block C1 seeds into `core.json`, pointing the real adapter at the stub (D7/R10). */
+export interface SeededJira {
+  baseUrl: string;
+  apiToken: string;
+  email?: string;
+  siteUrl?: string;
+  projectKeys?: string[];
+  scanBudgetMs?: number;
+  timeoutMs?: number;
 }
 
 /** A throwaway state dir with a loadable `core.json` and three seeded sessions in it. */
@@ -79,6 +98,8 @@ export interface SeededStateDir {
   env: NodeJS.ProcessEnv;
   repoSlug: string;
   bypassSecret: string;
+  /** The throwaway Jira token, or null when the seed carries no `jira` block. */
+  jiraToken: string | null;
   humanTurnTtlMs: number;
   seeded: SeededSessions;
 }
@@ -102,6 +123,12 @@ export interface CoreHarness extends SeededStateDir {
 export interface StartEngineOptions {
   /** R20's claim TTL. Deliberately short in tests that assert a claim expires. */
   humanTurnTtlMs?: number;
+  /**
+   * D7/R10: a `jira` block pointing at a stub. Omitted, the engine has no Jira source at all and
+   * `ticketSource.kind` is `notConfigured` — which is exactly what the engine-manager suite wants,
+   * and what MG-6's third case asserts with a block that carries no `apiToken`.
+   */
+  jira?: SeededJira;
 }
 
 export async function seedStateDir(opts: StartEngineOptions = {}): Promise<SeededStateDir> {
@@ -117,8 +144,9 @@ export async function seedStateDir(opts: StartEngineOptions = {}): Promise<Seede
   await mkdir(worktreesDir, { recursive: true });
   await mkdir(binDir, { recursive: true });
   await symlink(path.join(FAKE_GH_DIR, 'gh'), path.join(binDir, 'gh'));
-  // A backstop only: no test in this suite starts a stage, so this must never be invoked. It
-  // exists so that a future assertion which does start one cannot reach the real agent CLI.
+  // The agent runner, as a no-op that exits 0. Exactly ONE stage is started anywhere in this
+  // suite — C1's respond run — and MG-8's accounting over `run.started` proves it; this script
+  // is what guarantees that even that one can never reach the real agent CLI.
   await writeFile(path.join(binDir, 'claude'), '#!/bin/bash\nexit 0\n', 'utf8');
   await chmod(path.join(binDir, 'claude'), 0o755);
 
@@ -132,6 +160,26 @@ export async function seedStateDir(opts: StartEngineOptions = {}): Promise<Seede
   );
   await chmod(loginShell, 0o755);
 
+  // R51's respond flow mirrors and worktrees `https://github.com/fake/repo.git` for real, so the
+  // throwaway HOME rewrites that prefix onto a local origin. Everything else about git is left
+  // alone: the clone, the fetch, the `worktree add -b <head branch> origin/<head branch>` all run.
+  const originsDir = path.join(stateDir, 'origins');
+  await createOrigin(path.join(originsDir, `${REPO_SLUG}.git`));
+  await writeFile(
+    path.join(stateDir, '.gitconfig'),
+    [
+      '[user]',
+      '\tname = integration',
+      '\temail = integration@example.com',
+      '[safe]',
+      '\tdirectory = *',
+      `[url "${originsDir}/"]`,
+      '\tinsteadOf = https://github.com/',
+      '',
+    ].join('\n'),
+    'utf8',
+  );
+
   const configPath = path.join(stateDir, 'core.json');
   await writeFile(
     configPath,
@@ -140,6 +188,25 @@ export async function seedStateDir(opts: StartEngineOptions = {}): Promise<Seede
         repos: [REPO_SLUG],
         watchAuthors: ['mate'],
         me: 'me',
+        // R5, the user's own two: `apfm-sonar` also carries gh's `is_bot`, `gitstream-cm` does
+        // not — so PR #7 proves both halves of the ONE bot predicate keep a row untouched.
+        botLogins: ['apfm-sonar', 'gitstream-cm'],
+        // R46: without `projectKeys` no PR and no session links to a ticket at all, so the
+        // pr↔ticket merge this phase exists to create would never fire.
+        ...(opts.jira !== undefined
+          ? {
+              jira: {
+                siteUrl: opts.jira.siteUrl ?? 'https://fake.atlassian.net',
+                email: opts.jira.email ?? 'integration@example.com',
+                ...(opts.jira.apiToken === '' ? {} : { apiToken: opts.jira.apiToken }),
+                baseUrl: opts.jira.baseUrl,
+                projectKeys: opts.jira.projectKeys ?? ['APP'],
+                scanBudgetMs: opts.jira.scanBudgetMs ?? 5_000,
+                timeoutMs: opts.jira.timeoutMs ?? 4_000,
+              },
+            }
+          : {}),
+        reviewThreads: { scanBudgetMs: 5_000 },
         // One hour, so no discovery tick ever fires on its own: every scan in these tests is an
         // explicit POST /prs/scan, which keeps the assertions deterministic.
         pollIntervalMs: 3_600_000,
@@ -180,9 +247,51 @@ export async function seedStateDir(opts: StartEngineOptions = {}): Promise<Seede
     },
     repoSlug: REPO_SLUG,
     bypassSecret,
+    jiraToken: opts.jira?.apiToken !== undefined && opts.jira.apiToken !== '' ? opts.jira.apiToken : null,
     humanTurnTtlMs,
     seeded,
   };
+}
+
+/** A one-commit local origin carrying `main` and PR #5's head branch, for the respond worktree. */
+async function createOrigin(originPath: string): Promise<void> {
+  await mkdir(path.dirname(originPath), { recursive: true });
+  const git = (args: string[], cwd = originPath): void => {
+    execFileSync('git', ['-c', 'user.email=integration@example.com', '-c', 'user.name=integration', ...args], {
+      cwd,
+      encoding: 'utf8',
+    });
+  };
+  execFileSync('git', ['init', '-q', '-b', 'main', originPath]);
+  await writeFile(path.join(originPath, 'README.md'), '# fixture origin\n', 'utf8');
+  git(['add', 'README.md']);
+  git(['commit', '-q', '-m', 'init']);
+  // The branch PR #5 is open on — `RespondSessionFactory` branches from `origin/<headRefName>`.
+  git(['branch', 'me/fixture-five']);
+}
+
+/**
+ * Every file under the state dir except `core.json` itself, which is the one place the token is
+ * allowed to be — MG-5 is "the secret never LEAVES core.json", not "there is no secret".
+ */
+export async function stateDirFiles(stateDir: string): Promise<string[]> {
+  const found: string[] = [];
+  const walk = async (dir: string): Promise<void> => {
+    for (const entry of await readdir(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        // The mirrors and worktrees are git's own object store; nothing the engine writes.
+        if (entry.name === '.git' || entry.name === 'mirrors' || entry.name === 'origins') continue;
+        await walk(full);
+        continue;
+      }
+      if (full === path.join(stateDir, 'core.json')) continue;
+      if (full === path.join(stateDir, '.gitconfig')) continue;
+      found.push(full);
+    }
+  };
+  await walk(stateDir);
+  return found;
 }
 
 export interface ManagerOptions {
@@ -297,6 +406,7 @@ export async function waitForGone(target: string, what: string, timeoutMs = 5_00
 
 async function seedSessions(sessionsDir: string, worktreesDir: string): Promise<SeededSessions> {
   const investigation = 'inv-fake-repo-APP-1';
+  const looseInvestigation = 'inv-fake-repo-loose';
   const development = 'dev-fake-repo-APP-2';
   const review = 'rev-fake-repo-3';
 
@@ -329,6 +439,27 @@ async function seedSessions(sessionsDir: string, worktreesDir: string): Promise<
   await writeArtifacts(sessionsDir, investigation, {
     'BRIEF.md': '# brief\n',
     'PLAN.md': '# the plan\n\nstep one\n',
+  });
+
+  // R49: no PR, no ticket, an investigation agent and nothing else — the one item that belongs
+  // in `investigations` and must NOT also be in `myWork`.
+  await writeSession(sessionsDir, worktreesDir, {
+    schemaVersion: 2,
+    id: looseInvestigation,
+    createdAt: '2026-09-09T10:30:00.000Z',
+    mode: 'investigation',
+    stageStatus: 'findings',
+    workspace: {
+      repoUrl: `https://github.com/${REPO_SLUG}.git`,
+      worktreePath: path.join(worktreesDir, looseInvestigation),
+      branch: 'investigate/loose',
+    },
+    lineage: { pipelineId: looseInvestigation, parentSessionId: null, ticket: null },
+    agent: { runner: 'claude-code', resumeId: 'resume-inv-loose', humanTurn: null },
+    lastRun: null,
+    pr: null,
+    intent: 'investigate_only',
+    driveToCompletion: false,
   });
 
   await writeSession(sessionsDir, worktreesDir, {
@@ -391,7 +522,7 @@ async function seedSessions(sessionsDir: string, worktreesDir: string): Promise<
     'REVIEW.md': '# review\n\nlooks fine\n',
   });
 
-  return { investigation, development, review };
+  return { investigation, looseInvestigation, development, review };
 }
 
 async function writeSession(
@@ -408,13 +539,24 @@ async function writeSession(
   );
 }
 
+/**
+ * Artifacts with EXPLICIT, distinct mtimes, oldest first in declaration order. The Item tab sorts
+ * a session's artifacts newest-first (R48), and two files written in the same millisecond make
+ * that assertion a coin toss rather than a test.
+ */
 async function writeArtifacts(
   sessionsDir: string,
   id: string,
   files: Record<string, string>,
 ): Promise<void> {
+  const base = Date.parse('2026-09-09T10:00:00.000Z');
+  let index = 0;
   for (const [name, content] of Object.entries(files)) {
-    await writeFile(path.join(sessionsDir, id, name), content, 'utf8');
+    const target = path.join(sessionsDir, id, name);
+    await writeFile(target, content, 'utf8');
+    const at = new Date(base + index * 60_000);
+    await utimes(target, at, at);
+    index += 1;
   }
 }
 

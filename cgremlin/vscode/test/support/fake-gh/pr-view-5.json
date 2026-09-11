@@ -1,0 +1,32 @@
+{
+  "number": 5,
+  "title": "Fixture PR five (mine, changes requested)",
+  "author": { "login": "me" },
+  "headRefName": "me/fixture-five",
+  "headRefOid": "5555555555555555555555555555555555555555",
+  "baseRefName": "main",
+  "url": "https://github.com/fake/repo/pull/5",
+  "state": "OPEN",
+  "isDraft": false,
+  "reviewDecision": "CHANGES_REQUESTED",
+  "mergedAt": null,
+  "closedAt": null,
+  "latestReviews": [
+    {
+      "author": { "login": "jane" },
+      "state": "CHANGES_REQUESTED",
+      "submittedAt": "2026-09-09T11:00:00Z",
+      "body": "Two things before this goes in."
+    }
+  ],
+  "statusCheckRollup": [
+    {
+      "__typename": "CheckRun",
+      "name": "unit",
+      "status": "COMPLETED",
+      "conclusion": "FAILURE",
+      "completedAt": "2026-09-09T12:09:00Z",
+      "detailsUrl": "https://ci.example/unit/5"
+    }
+  ]
+}

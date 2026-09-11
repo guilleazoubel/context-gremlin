@@ -1,0 +1,49 @@
+{
+  "data": {
+    "repository": {
+      "pullRequest": {
+        "reviewThreads": {
+          "pageInfo": { "hasNextPage": false, "endCursor": null },
+          "nodes": [
+            {
+              "id": "PRRT_thread_one",
+              "isResolved": false,
+              "isOutdated": false,
+              "path": "src/retry.ts",
+              "line": 42,
+              "comments": {
+                "pageInfo": { "hasNextPage": true },
+                "nodes": [
+                  {
+                    "author": { "login": "jane" },
+                    "body": "THREAD-ONE-FIRST: this retry budget can go negative.",
+                    "createdAt": "2026-09-09T11:00:00Z",
+                    "url": "https://github.com/fake/repo/pull/5#discussion_r1"
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_thread_two",
+              "isResolved": false,
+              "isOutdated": false,
+              "path": "src/socket.ts",
+              "line": 7,
+              "comments": {
+                "pageInfo": { "hasNextPage": false },
+                "nodes": [
+                  {
+                    "author": { "login": "dana" },
+                    "body": "THREAD-TWO-ONLY: please add a test for the timeout path.",
+                    "createdAt": "2026-09-09T11:30:00Z",
+                    "url": "https://github.com/fake/repo/pull/5#discussion_r3"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

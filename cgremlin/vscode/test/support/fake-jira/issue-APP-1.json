@@ -1,0 +1,10 @@
+{
+  "key": "APP-1",
+  "fields": {
+    "summary": "The investigation's ticket",
+    "updated": "2026-09-09T08:00:00.000+0000",
+    "status": { "name": "In Progress", "statusCategory": { "key": "indeterminate" } },
+    "assignee": { "accountId": "712020:integration-account" }
+  },
+  "renderedFields": { "description": "<p>TICKET-BODY-APP-1: find out why the nightly job stalls.</p>" }
+}

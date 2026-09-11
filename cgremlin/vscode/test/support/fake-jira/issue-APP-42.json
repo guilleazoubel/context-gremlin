@@ -1,0 +1,10 @@
+{
+  "key": "APP-42",
+  "fields": {
+    "summary": "A ticket with no pull request and no agent",
+    "updated": "2026-09-09T10:00:00.000+0000",
+    "status": { "name": "To Do", "statusCategory": { "key": "new" } },
+    "assignee": { "accountId": "712020:integration-account" }
+  },
+  "renderedFields": { "description": "<p>TICKET-BODY-APP-42: nothing has started yet.</p>" }
+}

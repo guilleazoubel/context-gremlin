@@ -39,6 +39,228 @@
   },
   "items": [
     {
+      "id": "pr:acme/api#55",
+      "kind": "pr",
+      "lists": [
+        "parkingLot"
+      ],
+      "demoted": true,
+      "parkingLotGroup": "someoneOnIt",
+      "title": "acme/api#55 — Split the scheduler",
+      "prs": [
+        {
+          "repo": "acme/api",
+          "number": 55,
+          "url": "https://github.com/acme/api/pull/55",
+          "title": "Split the scheduler",
+          "author": "jane",
+          "branch": "jane/split-scheduler",
+          "isDraft": false,
+          "isMine": false,
+          "reviewDecision": "CHANGES_REQUESTED",
+          "humanActivity": {
+            "reviewedBy": [
+              "dana"
+            ],
+            "commentedBy": [
+              "kim"
+            ],
+            "lastAt": "2026-09-08T17:00:00.000Z"
+          },
+          "reviewRequests": [],
+          "teamActivity": [],
+          "updatedAt": "2026-09-08T17:00:00.000Z",
+          "createdAt": "2026-09-01T12:00:00.000Z",
+          "changedFiles": 42,
+          "additions": 900,
+          "deletions": 120,
+          "ci": "pending",
+          "labels": [
+            "infra"
+          ]
+        }
+      ],
+      "ticket": null,
+      "agents": [],
+      "needsYou": false,
+      "attention": {
+        "reasons": [],
+        "since": "2026-09-08T17:00:00.000Z",
+        "acked": true,
+        "refs": [
+          "pr:acme/api#55"
+        ]
+      }
+    },
+    {
+      "id": "pr:acme/api#56",
+      "kind": "pr",
+      "lists": [
+        "parkingLot"
+      ],
+      "demoted": true,
+      "parkingLotGroup": "someoneOnIt",
+      "title": "acme/api#56 — Retire the v1 endpoint",
+      "prs": [
+        {
+          "repo": "acme/api",
+          "number": 56,
+          "url": "https://github.com/acme/api/pull/56",
+          "title": "Retire the v1 endpoint",
+          "author": "sam",
+          "branch": "sam/retire-v1",
+          "isDraft": false,
+          "isMine": false,
+          "reviewDecision": "REVIEW_REQUIRED",
+          "humanActivity": {
+            "reviewedBy": [],
+            "commentedBy": [],
+            "lastAt": null
+          },
+          "reviewRequests": [
+            "dana"
+          ],
+          "teamActivity": [],
+          "updatedAt": "2026-09-07T10:00:00.000Z",
+          "createdAt": "2026-09-02T12:00:00.000Z",
+          "changedFiles": 1,
+          "additions": 4,
+          "deletions": 900,
+          "ci": "none",
+          "labels": []
+        }
+      ],
+      "ticket": null,
+      "agents": [],
+      "needsYou": false,
+      "attention": {
+        "reasons": [],
+        "since": "2026-09-07T10:00:00.000Z",
+        "acked": true,
+        "refs": [
+          "pr:acme/api#56"
+        ]
+      }
+    },
+    {
+      "id": "pr:acme/api#77",
+      "kind": "pr",
+      "lists": [
+        "myWork",
+        "waitingForReview"
+      ],
+      "demoted": false,
+      "parkingLotGroup": null,
+      "title": "acme/api#77 — Split the ingest worker",
+      "prs": [
+        {
+          "repo": "acme/api",
+          "number": 77,
+          "url": "https://github.com/acme/api/pull/77",
+          "title": "Split the ingest worker",
+          "author": "me",
+          "branch": "me/ingest-worker",
+          "isDraft": false,
+          "isMine": true,
+          "reviewDecision": "REVIEW_REQUIRED",
+          "humanActivity": {
+            "reviewedBy": [],
+            "commentedBy": [],
+            "lastAt": null
+          },
+          "reviewRequests": [],
+          "teamActivity": [],
+          "updatedAt": "2026-09-08T09:00:00.000Z",
+          "createdAt": "2026-09-07T12:00:00.000Z",
+          "changedFiles": 5,
+          "additions": 70,
+          "deletions": 20,
+          "ci": "success",
+          "labels": []
+        }
+      ],
+      "ticket": null,
+      "agents": [
+        {
+          "sessionId": "respond-acme-api-77",
+          "mode": "respond",
+          "phase": "triaging",
+          "running": true,
+          "needsYou": false,
+          "claimed": false,
+          "primaryArtifact": null,
+          "worktreePath": "/tmp/cgremlin-fixture/worktrees/respond-acme-api-77",
+          "ref": "session:respond-acme-api-77"
+        },
+        {
+          "sessionId": "dev-acme-api-77",
+          "mode": "development",
+          "phase": "developing",
+          "running": false,
+          "needsYou": false,
+          "claimed": false,
+          "primaryArtifact": "NOTES.md",
+          "worktreePath": "/tmp/cgremlin-fixture/worktrees/dev-acme-api-77",
+          "ref": "session:dev-acme-api-77"
+        }
+      ],
+      "needsYou": false,
+      "attention": {
+        "reasons": [],
+        "since": "2026-09-08T09:00:00.000Z",
+        "acked": true,
+        "refs": [
+          "session:respond-acme-api-77",
+          "session:dev-acme-api-77",
+          "pr:acme/api#77"
+        ]
+      }
+    },
+    {
+      "id": "pr:acme/legacy#9",
+      "kind": "pr",
+      "lists": [
+        "parkingLot"
+      ],
+      "demoted": false,
+      "parkingLotGroup": "untouched",
+      "title": "acme/legacy#9 — Bump the toolchain",
+      "prs": [
+        {
+          "repo": "acme/legacy",
+          "number": 9,
+          "url": "https://github.com/acme/legacy/pull/9",
+          "title": "Bump the toolchain",
+          "author": "pat",
+          "branch": null,
+          "isDraft": null,
+          "isMine": false,
+          "reviewDecision": null,
+          "humanActivity": null,
+          "reviewRequests": null,
+          "teamActivity": null,
+          "updatedAt": null,
+          "createdAt": null,
+          "changedFiles": null,
+          "additions": null,
+          "deletions": null,
+          "ci": null,
+          "labels": null
+        }
+      ],
+      "ticket": null,
+      "agents": [],
+      "needsYou": false,
+      "attention": {
+        "reasons": [],
+        "since": "2026-09-01T00:00:00.000Z",
+        "acked": true,
+        "refs": [
+          "pr:acme/legacy#9"
+        ]
+      }
+    },
+    {
       "id": "pr:acme/web#101",
       "kind": "pr",
       "lists": [
@@ -46,7 +268,7 @@
       ],
       "demoted": false,
       "parkingLotGroup": "untouched",
-      "title": "acme/web#101 \u2014 Add the retry budget",
+      "title": "acme/web#101 — Add the retry budget",
       "prs": [
         {
           "repo": "acme/web",
@@ -89,50 +311,6 @@
       }
     },
     {
-      "id": "pr:acme/legacy#9",
-      "kind": "pr",
-      "lists": [
-        "parkingLot"
-      ],
-      "demoted": false,
-      "parkingLotGroup": "untouched",
-      "title": "acme/legacy#9 \u2014 Bump the toolchain",
-      "prs": [
-        {
-          "repo": "acme/legacy",
-          "number": 9,
-          "url": "https://github.com/acme/legacy/pull/9",
-          "title": "Bump the toolchain",
-          "author": "pat",
-          "branch": null,
-          "isDraft": null,
-          "isMine": false,
-          "reviewDecision": null,
-          "humanActivity": null,
-          "reviewRequests": null,
-          "teamActivity": null,
-          "updatedAt": null,
-          "createdAt": null,
-          "changedFiles": null,
-          "additions": null,
-          "deletions": null,
-          "ci": null,
-          "labels": null
-        }
-      ],
-      "ticket": null,
-      "agents": [],
-      "needsYou": false,
-      "attention": {
-        "reasons": [],
-        "since": "2026-09-01T00:00:00.000Z",
-        "acked": true,
-        "refs": [
-          "pr:acme/legacy#9"
-        ]
-      }
-    },
-    {
       "id": "pr:acme/web#102",
       "kind": "pr",
       "lists": [
@@ -140,7 +318,7 @@
       ],
       "demoted": false,
       "parkingLotGroup": "reviewing",
-      "title": "acme/web#102 \u2014 Drop the legacy shim",
+      "title": "acme/web#102 — Drop the legacy shim",
       "prs": [
         {
           "repo": "acme/web",
@@ -196,106 +374,103 @@
       }
     },
     {
-      "id": "pr:acme/api#55",
+      "id": "pr:acme/web#200",
       "kind": "pr",
       "lists": [
-        "parkingLot"
+        "myWork",
+        "waitingForReview"
       ],
-      "demoted": true,
-      "parkingLotGroup": "someoneOnIt",
-      "title": "acme/api#55 \u2014 Split the scheduler",
+      "demoted": false,
+      "parkingLotGroup": null,
+      "title": "acme/web#200 — Tighten the socket timeout",
       "prs": [
         {
-          "repo": "acme/api",
-          "number": 55,
-          "url": "https://github.com/acme/api/pull/55",
-          "title": "Split the scheduler",
-          "author": "jane",
-          "branch": "jane/split-scheduler",
+          "repo": "acme/web",
+          "number": 200,
+          "url": "https://github.com/acme/web/pull/200",
+          "title": "Tighten the socket timeout",
+          "author": "me",
+          "branch": "me/socket-timeout",
           "isDraft": false,
-          "isMine": false,
+          "isMine": true,
           "reviewDecision": "CHANGES_REQUESTED",
           "humanActivity": {
             "reviewedBy": [
-              "dana"
+              "jane"
             ],
-            "commentedBy": [
-              "kim"
-            ],
-            "lastAt": "2026-09-08T17:00:00.000Z"
+            "commentedBy": [],
+            "lastAt": "2026-09-10T09:30:00.000Z"
           },
           "reviewRequests": [],
           "teamActivity": [],
-          "updatedAt": "2026-09-08T17:00:00.000Z",
-          "createdAt": "2026-09-01T12:00:00.000Z",
-          "changedFiles": 42,
-          "additions": 900,
-          "deletions": 120,
-          "ci": "pending",
-          "labels": [
-            "infra"
-          ]
-        }
-      ],
-      "ticket": null,
-      "agents": [],
-      "needsYou": false,
-      "attention": {
-        "reasons": [],
-        "since": "2026-09-08T17:00:00.000Z",
-        "acked": true,
-        "refs": [
-          "pr:acme/api#55"
-        ]
-      }
-    },
-    {
-      "id": "pr:acme/api#56",
-      "kind": "pr",
-      "lists": [
-        "parkingLot"
-      ],
-      "demoted": true,
-      "parkingLotGroup": "someoneOnIt",
-      "title": "acme/api#56 \u2014 Retire the v1 endpoint",
-      "prs": [
-        {
-          "repo": "acme/api",
-          "number": 56,
-          "url": "https://github.com/acme/api/pull/56",
-          "title": "Retire the v1 endpoint",
-          "author": "sam",
-          "branch": "sam/retire-v1",
-          "isDraft": false,
-          "isMine": false,
-          "reviewDecision": "REVIEW_REQUIRED",
-          "humanActivity": {
-            "reviewedBy": [],
-            "commentedBy": [],
-            "lastAt": null
-          },
-          "reviewRequests": [
-            "dana"
-          ],
-          "teamActivity": [],
-          "updatedAt": "2026-09-07T10:00:00.000Z",
-          "createdAt": "2026-09-02T12:00:00.000Z",
-          "changedFiles": 1,
-          "additions": 4,
-          "deletions": 900,
-          "ci": "none",
+          "updatedAt": "2026-09-10T09:30:00.000Z",
+          "createdAt": "2026-09-06T12:00:00.000Z",
+          "changedFiles": 4,
+          "additions": 60,
+          "deletions": 12,
+          "ci": "success",
           "labels": []
         }
       ],
       "ticket": null,
-      "agents": [],
+      "agents": [
+        {
+          "sessionId": "respond-acme-web-200",
+          "mode": "respond",
+          "phase": "triaging",
+          "running": true,
+          "needsYou": false,
+          "claimed": false,
+          "primaryArtifact": null,
+          "worktreePath": "/tmp/cgremlin-fixture/worktrees/respond-acme-web-200",
+          "ref": "session:respond-acme-web-200"
+        }
+      ],
+      "needsYou": true,
+      "attention": {
+        "reasons": [
+          "changes_requested",
+          "review_arrived"
+        ],
+        "since": "2026-09-10T09:30:00.000Z",
+        "acked": false,
+        "refs": [
+          "session:respond-acme-web-200",
+          "pr:acme/web#200"
+        ]
+      }
+    },
+    {
+      "id": "session:inv-stacktrace-1",
+      "kind": "session",
+      "lists": [
+        "investigations"
+      ],
+      "demoted": false,
+      "parkingLotGroup": null,
+      "title": "Investigate the nightly crash",
+      "prs": [],
+      "ticket": null,
+      "agents": [
+        {
+          "sessionId": "inv-stacktrace-1",
+          "mode": "investigation",
+          "phase": "investigating",
+          "running": false,
+          "needsYou": false,
+          "claimed": true,
+          "primaryArtifact": "FINDINGS.md",
+          "worktreePath": "/tmp/cgremlin-fixture/worktrees/inv-stacktrace-1",
+          "ref": "session:inv-stacktrace-1"
+        }
+      ],
       "needsYou": false,
       "attention": {
         "reasons": [],
-        "since": "2026-09-07T10:00:00.000Z",
+        "since": "2026-09-10T05:00:00.000Z",
         "acked": true,
         "refs": [
-          "pr:acme/api#56"
+          "session:inv-stacktrace-1"
         ]
       }
     },
@@ -308,7 +483,7 @@
       ],
       "demoted": false,
       "parkingLotGroup": null,
-      "title": "HB-627 \u2014 Caregiver inbox reshuffle",
+      "title": "HB-627 — Caregiver inbox reshuffle",
       "prs": [
         {
           "repo": "acme/web",
@@ -409,181 +584,6 @@
           "session:dev-hb-627",
           "pr:acme/web#310",
           "pr:acme/api#88"
-        ]
-      }
-    },
-    {
-      "id": "pr:acme/web#200",
-      "kind": "pr",
-      "lists": [
-        "myWork",
-        "waitingForReview"
-      ],
-      "demoted": false,
-      "parkingLotGroup": null,
-      "title": "acme/web#200 \u2014 Tighten the socket timeout",
-      "prs": [
-        {
-          "repo": "acme/web",
-          "number": 200,
-          "url": "https://github.com/acme/web/pull/200",
-          "title": "Tighten the socket timeout",
-          "author": "me",
-          "branch": "me/socket-timeout",
-          "isDraft": false,
-          "isMine": true,
-          "reviewDecision": "CHANGES_REQUESTED",
-          "humanActivity": {
-            "reviewedBy": [
-              "jane"
-            ],
-            "commentedBy": [],
-            "lastAt": "2026-09-10T09:30:00.000Z"
-          },
-          "reviewRequests": [],
-          "teamActivity": [],
-          "updatedAt": "2026-09-10T09:30:00.000Z",
-          "createdAt": "2026-09-06T12:00:00.000Z",
-          "changedFiles": 4,
-          "additions": 60,
-          "deletions": 12,
-          "ci": "success",
-          "labels": []
-        }
-      ],
-      "ticket": null,
-      "agents": [
-        {
-          "sessionId": "respond-acme-web-200",
-          "mode": "respond",
-          "phase": "triaging",
-          "running": true,
-          "needsYou": false,
-          "claimed": false,
-          "primaryArtifact": null,
-          "worktreePath": "/tmp/cgremlin-fixture/worktrees/respond-acme-web-200",
-          "ref": "session:respond-acme-web-200"
-        }
-      ],
-      "needsYou": true,
-      "attention": {
-        "reasons": [
-          "changes_requested",
-          "review_arrived"
-        ],
-        "since": "2026-09-10T09:30:00.000Z",
-        "acked": false,
-        "refs": [
-          "session:respond-acme-web-200",
-          "pr:acme/web#200"
-        ]
-      }
-    },
-    {
-      "id": "session:inv-stacktrace-1",
-      "kind": "session",
-      "lists": [
-        "investigations"
-      ],
-      "demoted": false,
-      "parkingLotGroup": null,
-      "title": "Investigate the nightly crash",
-      "prs": [],
-      "ticket": null,
-      "agents": [
-        {
-          "sessionId": "inv-stacktrace-1",
-          "mode": "investigation",
-          "phase": "investigating",
-          "running": false,
-          "needsYou": false,
-          "claimed": true,
-          "primaryArtifact": "FINDINGS.md",
-          "worktreePath": "/tmp/cgremlin-fixture/worktrees/inv-stacktrace-1",
-          "ref": "session:inv-stacktrace-1"
-        }
-      ],
-      "needsYou": false,
-      "attention": {
-        "reasons": [],
-        "since": "2026-09-10T05:00:00.000Z",
-        "acked": true,
-        "refs": [
-          "session:inv-stacktrace-1"
-        ]
-      }
-    },
-    {
-      "id": "pr:acme/api#77",
-      "kind": "pr",
-      "lists": [
-        "myWork",
-        "waitingForReview"
-      ],
-      "demoted": false,
-      "parkingLotGroup": null,
-      "title": "acme/api#77 \u2014 Split the ingest worker",
-      "prs": [
-        {
-          "repo": "acme/api",
-          "number": 77,
-          "url": "https://github.com/acme/api/pull/77",
-          "title": "Split the ingest worker",
-          "author": "me",
-          "branch": "me/ingest-worker",
-          "isDraft": false,
-          "isMine": true,
-          "reviewDecision": "REVIEW_REQUIRED",
-          "humanActivity": {
-            "reviewedBy": [],
-            "commentedBy": [],
-            "lastAt": null
-          },
-          "reviewRequests": [],
-          "teamActivity": [],
-          "updatedAt": "2026-09-08T09:00:00.000Z",
-          "createdAt": "2026-09-07T12:00:00.000Z",
-          "changedFiles": 5,
-          "additions": 70,
-          "deletions": 20,
-          "ci": "success",
-          "labels": []
-        }
-      ],
-      "ticket": null,
-      "agents": [
-        {
-          "sessionId": "respond-acme-api-77",
-          "mode": "respond",
-          "phase": "triaging",
-          "running": true,
-          "needsYou": false,
-          "claimed": false,
-          "primaryArtifact": null,
-          "worktreePath": "/tmp/cgremlin-fixture/worktrees/respond-acme-api-77",
-          "ref": "session:respond-acme-api-77"
-        },
-        {
-          "sessionId": "dev-acme-api-77",
-          "mode": "development",
-          "phase": "developing",
-          "running": false,
-          "needsYou": false,
-          "claimed": false,
-          "primaryArtifact": "NOTES.md",
-          "worktreePath": "/tmp/cgremlin-fixture/worktrees/dev-acme-api-77",
-          "ref": "session:dev-acme-api-77"
-        }
-      ],
-      "needsYou": false,
-      "attention": {
-        "reasons": [],
-        "since": "2026-09-08T09:00:00.000Z",
-        "acked": true,
-        "refs": [
-          "session:respond-acme-api-77",
-          "session:dev-acme-api-77",
-          "pr:acme/api#77"
         ]
       }
     }

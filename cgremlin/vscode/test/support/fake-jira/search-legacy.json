@@ -1,0 +1,34 @@
+{
+  "startAt": 0,
+  "maxResults": 50,
+  "total": 3,
+  "issues": [
+    {
+      "key": "APP-1",
+      "fields": {
+        "summary": "The investigation's ticket",
+        "updated": "2026-09-09T08:00:00.000+0000",
+        "status": { "name": "In Progress", "statusCategory": { "key": "indeterminate" } },
+        "assignee": { "accountId": "712020:integration-account" }
+      }
+    },
+    {
+      "key": "APP-9",
+      "fields": {
+        "summary": "Ticket linked to my pull request",
+        "updated": "2026-09-09T09:00:00.000+0000",
+        "status": { "name": "In Review", "statusCategory": { "key": "indeterminate" } },
+        "assignee": { "accountId": "712020:integration-account" }
+      }
+    },
+    {
+      "key": "APP-42",
+      "fields": {
+        "summary": "A ticket with no pull request and no agent",
+        "updated": "2026-09-09T10:00:00.000+0000",
+        "status": { "name": "To Do", "statusCategory": { "key": "new" } },
+        "assignee": { "accountId": "712020:integration-account" }
+      }
+    }
+  ]
+}

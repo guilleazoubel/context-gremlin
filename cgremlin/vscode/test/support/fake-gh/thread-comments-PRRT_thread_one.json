@@ -1,0 +1,17 @@
+{
+  "data": {
+    "node": {
+      "comments": {
+        "pageInfo": { "hasNextPage": false, "endCursor": null },
+        "nodes": [
+          {
+            "author": { "login": "me" },
+            "body": "THREAD-ONE-SECOND: good catch, clamping it at zero.",
+            "createdAt": "2026-09-09T11:15:00Z",
+            "url": "https://github.com/fake/repo/pull/5#discussion_r2"
+          }
+        ]
+      }
+    }
+  }
+}
