@@ -1,0 +1,116 @@
+/**
+ * The expanded row's three slots — always three, and never one that offers a Start the row's own
+ * button would refuse.
+ */
+import { describe, expect, it } from 'vitest';
+import { lifecycleSlots, type LifecycleAgent } from '../../src/model/lifecycle';
+import type { ActionFacts, ActionPr } from '../../src/model/row-actions';
+
+const NOW = Date.parse('2026-09-11T12:00:00.000Z');
+
+function agent(over: Partial<LifecycleAgent> & { mode: string }): LifecycleAgent {
+  return {
+    sessionId: `s-${over.mode}`,
+    phase: 'working',
+    running: false,
+    needsYou: false,
+    primaryArtifact: null,
+    ...over,
+  };
+}
+
+function pr(over: Partial<ActionPr> = {}): ActionPr {
+  return { repo: 'acme/web', number: 1, isMine: true, isDraft: false, ...over };
+}
+
+function facts(over: Partial<ActionFacts> = {}): ActionFacts {
+  return { agents: [], prs: [], ticketKey: null, needsYou: false, ...over };
+}
+
+const slots = (input: Parameters<typeof lifecycleSlots>[0]) =>
+  lifecycleSlots({ now: NOW, ...input });
+
+describe('the lifecycle slots', () => {
+  it('are always the three stages, in order, even on a row where nothing ran', () => {
+    const built = slots({ agents: [], facts: facts() });
+    expect(built.map((slot) => slot.stage)).toEqual(['investigation', 'development', 'review']);
+    expect(built.map((slot) => slot.stateText)).toEqual([
+      'not started',
+      'not started',
+      'not started',
+    ]);
+    expect(built.map((slot) => slot.sessionId)).toEqual([null, null, null]);
+  });
+
+  it('reads a running agent as running, and names the phase', () => {
+    const agents = [agent({ mode: 'development', phase: 'coding', running: true })];
+    const built = slots({ agents, facts: facts({ agents: asActionAgents(agents) }) });
+    expect(built[1].state).toBe('running');
+    expect(built[1].stateText).toBe('running · coding');
+    expect(built[1].sessionId).toBe('s-development');
+  });
+
+  it('reads the gate as "needs you" rather than as done', () => {
+    const agents = [agent({ mode: 'investigation', phase: 'plan_ready', needsYou: true })];
+    const built = slots({ agents, facts: facts({ agents: asActionAgents(agents) }) });
+    expect(built[0].state).toBe('needsYou');
+    expect(built[0].stateText).toBe('needs you · plan_ready');
+  });
+
+  it('dates a finished slot by the artifact, and says plain "done" when it has no date', () => {
+    const agents = [agent({ mode: 'investigation', phase: 'ready' })];
+    const withDate = slots({
+      agents,
+      facts: facts({ agents: asActionAgents(agents) }),
+      artifactAt: { 's-investigation': '2026-09-11T10:00:00.000Z' },
+    });
+    expect(withDate[0].stateText).toBe('done · 2h');
+
+    const without = slots({ agents, facts: facts({ agents: asActionAgents(agents) }) });
+    expect(without[0].stateText).toBe('done');
+  });
+
+  it('takes the latest agent of a stage that ran twice', () => {
+    const agents = [
+      agent({ mode: 'review', sessionId: 'old', phase: 'ready' }),
+      agent({ mode: 'review', sessionId: 'new', phase: 'reviewing', running: true }),
+    ];
+    const built = slots({ agents, facts: facts({ agents: asActionAgents(agents) }) });
+    expect(built[2].sessionId).toBe('new');
+    expect(built[2].state).toBe('running');
+  });
+});
+
+describe('the slot that may be started is the one the forward-only rule names (§4)', () => {
+  it('offers both entry points when nothing has happened, and never review', () => {
+    const built = slots({ agents: [], facts: facts() });
+    expect(built.filter((slot) => slot.next).map((slot) => slot.stage)).toEqual([
+      'investigation',
+      'development',
+    ]);
+  });
+
+  it('offers development once an investigation exists, and never investigation again', () => {
+    const agents = [agent({ mode: 'investigation', phase: 'ready' })];
+    const built = slots({ agents, facts: facts({ agents: asActionAgents(agents) }) });
+    expect(built.filter((slot) => slot.next).map((slot) => slot.stage)).toEqual(['development']);
+  });
+
+  it('offers review once a PR exists, whether or not a development agent was ever seen', () => {
+    const built = slots({ agents: [], facts: facts({ prs: [pr()] }) });
+    expect(built.filter((slot) => slot.next).map((slot) => slot.stage)).toEqual(['review']);
+  });
+
+  it('offers nothing at all once a review has run — the ladder has no rung after it', () => {
+    const agents = [agent({ mode: 'review', phase: 'ready' })];
+    const built = slots({
+      agents,
+      facts: facts({ agents: asActionAgents(agents), prs: [pr()] }),
+    });
+    expect(built.filter((slot) => slot.next)).toEqual([]);
+  });
+});
+
+function asActionAgents(agents: LifecycleAgent[]): ActionFacts['agents'] {
+  return agents.map((a) => ({ ...a, claimed: false }));
+}
