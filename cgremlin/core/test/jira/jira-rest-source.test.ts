@@ -4,6 +4,9 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { JiraRestSource } from '../../src/jira/jira-rest-source';
 import { JiraAuthError, JiraUnavailableError } from '../../src/jira/jira-source';
+import { JiraScanner } from '../../src/jira/jira-scanner';
+import { JiraStore } from '../../src/jira/jira-store';
+import { InMemoryFileSystem } from '../support/in-memory-file-system';
 
 const fixturesDir = path.join(__dirname, '../fixtures/jira');
 const fixture = (name: string): string => readFileSync(path.join(fixturesDir, `${name}.json`), 'utf8');
@@ -320,5 +323,49 @@ describe('JiraRestSource: the summary mapping', () => {
       url: `${SITE_URL}/browse/HB-627`,
     });
     expect(second.assignee).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// R34 — ONE budget for the WHOLE Jira leg. A `Retry-After` backoff is wall
+// time like any other, so the 429 sleep must lose the race against the
+// caller's signal instead of outliving the budget that was meant to bound it.
+// ---------------------------------------------------------------------------
+
+describe('R34: the scan budget bounds wall time, the 429 backoff included', () => {
+  it('a caller signal that aborts DURING the 429 backoff gives up at once, with no second request', async () => {
+    let hits = 0;
+    stub.responder = (_req, res) => {
+      hits += 1;
+      res.writeHead(429, { 'retry-after': '60', 'content-type': 'application/json' }).end('{}');
+    };
+    // A REAL sleep (no `sleep` stub) — a stubbed sleep resolves instantly and
+    // never exercises the race this test exists for.
+    const started = Date.now();
+    const err = await source({ sleep: undefined, timeoutMs: 5_000 })
+      .search('x', { signal: AbortSignal.timeout(150) })
+      .catch((e: unknown) => e);
+    const elapsed = Date.now() - started;
+    expect(err).toBeInstanceOf(JiraUnavailableError);
+    expect(hits).toBe(1);
+    expect(elapsed).toBeLessThan(1_500);
+  });
+
+  it("a 429 with Retry-After: 60 under a ~200ms scan budget returns 'unavailable' inside the budget", async () => {
+    stub.responder = (_req, res) => {
+      res.writeHead(429, { 'retry-after': '60', 'content-type': 'application/json' }).end('{}');
+    };
+    const store = new JiraStore(new InMemoryFileSystem(), '/state/jira.json');
+    const scanner = new JiraScanner({
+      source: source({ sleep: undefined, timeoutMs: 5_000 }),
+      store,
+      jql: 'assignee = currentUser()',
+      scanBudgetMs: 200,
+    });
+    const started = Date.now();
+    const report = await scanner.run();
+    const elapsed = Date.now() - started;
+    expect(report.kind).toBe('unavailable');
+    expect(elapsed).toBeLessThan(1_500);
   });
 });

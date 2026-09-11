@@ -364,7 +364,7 @@ describe('groupWorkItems: the pr<->ticket merge (R4, R26, R46, R61)', () => {
     expect(prItems.every((i) => i.lists.includes('parkingLot'))).toBe(true);
   });
 
-  it('R61: the same pair with one of them MINE produces the R26 two-PR row', () => {
+  it('R61: the same pair with one of them MINE produces the R26 two-PR row, and it is NOT a parking-lot row', () => {
     const mine = entry({ number: 30, isMine: true, author: ME, ticketKeys: ['HB-627'] });
     const theirs = entry({ number: 31, ticketKeys: ['HB-627'] });
     const items = group({
@@ -374,6 +374,29 @@ describe('groupWorkItems: the pr<->ticket merge (R4, R26, R46, R61)', () => {
     });
     const merged = items.find((i) => i.id === 'ticket:HB-627')!;
     expect(merged.prs.map((p) => p.number).sort()).toEqual([30, 31]);
+    // R47/MG-17: the isMine exclusion is a property of the ITEM, not of one
+    // `prs[]` entry. The teammate's PR rode into MY row, and a row of mine is
+    // never a parking-lot candidate — otherwise `parkingLot` and
+    // `waitingForReview`, which MG-17 requires to be disjoint, both hold it,
+    // and `labelOf` relabels my ticket row after the teammate's PR.
+    expect(merged.lists.sort()).toEqual(['myWork', 'waitingForReview']);
+    expect(merged.parkingLotGroup).toBeNull();
+    const lists = workListsOf(items);
+    expect(parkingLotOrder(lists)).not.toContain('ticket:HB-627');
+    expect(lists.waitingForReview).toContain('ticket:HB-627');
+    expect(lists.myWork).toContain('ticket:HB-627');
+  });
+
+  it("R47/R61: a teammate's PR absorbed by MY ticket is in myWork, never in the parking lot", () => {
+    const theirs = entry({ number: 31, ticketKeys: ['HB-627'] });
+    const items = group({
+      inventory: inv([theirs]),
+      items: [prAttention(theirs)],
+      jira: jiraReport([{ key: 'HB-627', assignee: '712020:me' }]),
+    });
+    const merged = items.find((i) => i.id === 'ticket:HB-627')!;
+    expect(merged.lists).toEqual(['myWork']);
+    expect(merged.parkingLotGroup).toBeNull();
   });
 
   it("R61: a ticket assigned to me absorbs a teammate's PR that names it", () => {
@@ -668,13 +691,22 @@ describe('groupWorkItems: the row label (R13, R47)', () => {
   });
 
   it("R47: a parkingLot row is always <repo>#<n> — title even when it carries a ticket key", () => {
+    // R61 merges the teammate's PR into the ticket because a session of OURS
+    // references it — the one route that still leaves a TICKET-bearing row in
+    // the parking lot, now that a row whose ticket is assigned to me, or that
+    // holds a PR of mine, is excluded from the list outright (R47).
     const e = entry({ number: 1, ticketKeys: ['HB-627'], title: 'Add thing' });
     const items = group({
       inventory: inv([e]),
-      items: [prAttention(e)],
-      jira: jiraReport([{ key: 'HB-627', summary: 'Do the thing', assignee: '712020:me' }]),
+      items: [
+        prAttention(e),
+        agentAttention({ id: 'i1', mode: 'investigation', ticket: 'HB-627' }),
+      ],
+      jira: jiraReport([{ key: 'HB-627', summary: 'Do the thing', assignee: null }]),
     });
     const row = items.find((i) => i.lists.includes('parkingLot'))!;
+    expect(row.id).toBe('ticket:HB-627');
+    expect(row.ticket?.key).toBe('HB-627');
     expect(row.title).toBe('acme/app#1 — Add thing');
   });
 });
@@ -776,5 +808,151 @@ describe('groupWorkItems: MG-17 totality and disjointness', () => {
       if (item.id === 'pr:acme/app#4' || item.id === 'pr:acme/app#5') continue;
       expect(item.lists.length).toBeGreaterThan(0);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// MG-17 — `four-lists-are-total-and-disjoint-where-they-must-be`, as a matrix
+// rather than a hand-picked handful of rows: owner x PR draftness x agent x
+// ticket linkage, 24 items, every one of them checked against the SAME
+// invariants.
+// ---------------------------------------------------------------------------
+
+describe('MG-17: the four lists are total and disjoint where they must be', () => {
+  const OWNERS = ['mine', 'teammate'] as const;
+  const DRAFTS = ['open', 'draft'] as const;
+  const AGENTS = ['none', 'review', 'dev'] as const;
+  const TICKETS = ['myTicket', 'unlinked'] as const;
+
+  interface Combo {
+    owner: (typeof OWNERS)[number];
+    draft: (typeof DRAFTS)[number];
+    agent: (typeof AGENTS)[number];
+    ticket: (typeof TICKETS)[number];
+    id: string;
+    key: string;
+    number: number;
+    name: string;
+  }
+
+  const combos: Combo[] = [];
+  for (const owner of OWNERS) {
+    for (const draft of DRAFTS) {
+      for (const agent of AGENTS) {
+        for (const ticket of TICKETS) {
+          const n = 100 + combos.length;
+          const key = `HB-${n}`;
+          combos.push({
+            owner,
+            draft,
+            agent,
+            ticket,
+            number: n,
+            key,
+            // A linked PR is merged into its ticket (R61 lets it, the ticket
+            // is mine), so the resulting item's id follows the link.
+            id: ticket === 'myTicket' ? `ticket:${key}` : `pr:${REPO}#${n}`,
+            name: `${owner}/${draft}/${agent}/${ticket}`,
+          });
+        }
+      }
+    }
+  }
+
+  const entries = combos.map((c) =>
+    entry({
+      number: c.number,
+      isDraft: c.draft === 'draft',
+      ...(c.owner === 'mine' ? { isMine: true, author: ME } : { isMine: false, author: 'bob' }),
+      ticketKeys: c.ticket === 'myTicket' ? [c.key] : [],
+    }),
+  );
+  const agentItems = combos
+    .filter((c) => c.agent !== 'none')
+    .map((c) =>
+      agentAttention({
+        id: `a${c.number}`,
+        mode: c.agent === 'review' ? 'review' : 'development',
+        prRepo: REPO,
+        prNumber: c.number,
+      }),
+    );
+  const items = group({
+    inventory: inv(entries),
+    items: [...entries.map(prAttention), ...agentItems],
+    jira: jiraReport(
+      combos.filter((c) => c.ticket === 'myTicket').map((c) => ({ key: c.key, assignee: '712020:me' })),
+    ),
+  });
+
+  const of = (c: Combo): WorkItem => {
+    const found = items.find((i) => i.id === c.id);
+    if (found === undefined) throw new Error(`no item for ${c.name} (${c.id})`);
+    return found;
+  };
+
+  it('the matrix produces exactly one item per combination', () => {
+    expect(items.length).toBe(combos.length);
+    for (const c of combos) expect(of(c).prs.map((p) => p.number)).toEqual([c.number]);
+  });
+
+  it('every item that anything makes listable is in at least one list (R57)', () => {
+    for (const c of combos) {
+      const item = of(c);
+      // The two deliberate non-members of every list: a DRAFT is in no list
+      // (R47), and R57's totality disjunct keeps the draft test — so a
+      // teammate's draft, even with a review agent, stays unlisted unless
+      // something else lists it.
+      const listable =
+        c.agent === 'dev' ||
+        c.ticket === 'myTicket' ||
+        c.draft === 'open';
+      if (listable) expect(item.lists.length, `${c.name} must be listed`).toBeGreaterThan(0);
+      else expect(item.lists, `${c.name} is deliberately unlisted`).toEqual([]);
+    }
+  });
+
+  it('parkingLot is disjoint from waitingForReview and from investigations', () => {
+    for (const c of combos) {
+      const l = of(c).lists;
+      expect(l.includes('parkingLot') && l.includes('waitingForReview'), `${c.name}`).toBe(false);
+      expect(l.includes('parkingLot') && l.includes('investigations'), `${c.name}`).toBe(false);
+      expect(l.includes('investigations') && l.includes('myWork'), `${c.name}`).toBe(false);
+    }
+  });
+
+  it('the ONLY parkingLot ∩ myWork overlap is a teammate PR carrying a non-review session (MG-17)', () => {
+    for (const c of combos) {
+      const item = of(c);
+      if (!item.lists.includes('parkingLot') || !item.lists.includes('myWork')) continue;
+      expect(c.owner, `${c.name}`).toBe('teammate');
+      expect(c.ticket, `${c.name}`).toBe('unlinked');
+      expect(item.agents.some((a) => a.mode !== 'review'), `${c.name}`).toBe(true);
+    }
+  });
+
+  it('no item of MINE — my PR or my ticket — is ever a parking-lot candidate (R47)', () => {
+    for (const c of combos) {
+      const item = of(c);
+      const mine = item.prs.some((p) => p.isMine === true) || item.ticket?.assignee === '712020:me';
+      if (mine) expect(item.lists.includes('parkingLot'), `${c.name}`).toBe(false);
+    }
+  });
+
+  it('a review agent alone never routes an item into myWork (R48)', () => {
+    for (const c of combos.filter((x) => x.agent === 'review' && x.owner === 'teammate' && x.ticket === 'unlinked')) {
+      expect(of(c).lists, c.name).not.toContain('myWork');
+    }
+  });
+
+  it('every parkingLot id sits in exactly one group, matching its parkingLotGroup', () => {
+    const lists = workListsOf(items);
+    const { reviewing, untouched, someoneOnIt } = lists.parkingLot;
+    const all = [...reviewing, ...untouched, ...someoneOnIt];
+    expect(new Set(all).size).toBe(all.length);
+    expect(all.sort()).toEqual(items.filter((i) => i.lists.includes('parkingLot')).map((i) => i.id).sort());
+    for (const id of reviewing) expect(items.find((i) => i.id === id)!.parkingLotGroup).toBe('reviewing');
+    for (const id of untouched) expect(items.find((i) => i.id === id)!.parkingLotGroup).toBe('untouched');
+    for (const id of someoneOnIt) expect(items.find((i) => i.id === id)!.parkingLotGroup).toBe('someoneOnIt');
   });
 });

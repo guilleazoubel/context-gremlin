@@ -431,8 +431,21 @@ function membership(
   const watch = new Set(input.watchAuthors.map((a) => a.toLowerCase()));
   const lists: WorkListKind[] = [];
 
+  // R47's isMine exclusion is a property of the ITEM, not of one `prs[]`
+  // entry. R61 merges a PR into a ticket candidate ONLY when the result would
+  // be MINE, so a row can hold a teammate's PR and still be my work: my ticket
+  // with their PR on it, or my PR beside theirs. Reading the exclusion per PR
+  // put such a row in `parkingLot` AND `waitingForReview`, which MG-17 requires
+  // to be disjoint, and let `labelOf` relabel my ticket row after their PR.
+  // The coordinator override is untouched: a teammate's PR carrying a review
+  // agent of ours has neither a PR of mine nor a ticket of mine, so it stays.
+  const itemIsMine =
+    prs.some((pr) => pr.isMine === true) ||
+    (ticket !== null && ctx.jiraMe !== null && ticket.assignee === ctx.jiraMe);
+
   const inParkingLot =
-    prs.some(
+    !itemIsMine &&
+    (prs.some(
       (pr) =>
         open(pr) &&
         pr.isMine !== true &&
@@ -447,7 +460,7 @@ function membership(
     // carries our review agent is still listed. It drops the state test but
     // KEEPS the draft test — R47's "open PRs, not drafts" holds whether or
     // not we have an agent on it.
-    (prs.some((pr) => pr.isMine !== true && pr.isDraft !== true) && agents.some((a) => a.mode === 'review'));
+      (prs.some((pr) => pr.isMine !== true && pr.isDraft !== true) && agents.some((a) => a.mode === 'review')));
   if (inParkingLot) lists.push('parkingLot');
 
   if (prs.some((pr) => pr.isMine === true && open(pr))) lists.push('waitingForReview');
