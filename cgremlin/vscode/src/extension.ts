@@ -401,6 +401,13 @@ function buildHost(output: vscode.OutputChannel, state: vscode.Memento): Host {
         return null;
       }
     },
+    fileMtimeMs(path: string) {
+      try {
+        return fs.statSync(path).mtimeMs;
+      } catch {
+        return null;
+      }
+    },
     watchFile(path: string, callback: () => void) {
       return watchFileByRename(path, callback);
     },

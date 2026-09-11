@@ -228,6 +228,28 @@ describe('GET /sessions/:id/changes (Phase 10)', () => {
     expect((res.body as { base: string }).base).toBe('origin/fallback');
   });
 
+  it.each([
+    ['empty string', ''],
+    ['whitespace only', '   '],
+    ['a ref with a space in it', 'origin/my branch'],
+    ['a ref containing ..', 'origin/../etc'],
+  ])('falls back to config.defaultBaseRef when the inventory baseRef is %s', async (_label, badBaseRef) => {
+    const config = resolveCoreConfig({ repos: ['acme/app'], me: 'me-user', defaultBaseRef: 'origin/fallback' }, '/home/x');
+    await startServer({ config });
+    await ih.inventoryStore.save(inventoryWith(badBaseRef));
+    await h.store.save(
+      devSession('s7', { pr: { repo: 'acme/app', number: 42, url: 'u', headSha: null, reviewedSha: null, title: null, author: null } }),
+    );
+    h.git.queueResponse({ stdout: `${HEAD_SHA}\n`, stderr: '' });
+    h.git.queueResponse({ stdout: `${MERGE_BASE_SHA}\n`, stderr: '' });
+    h.git.queueResponse({ stdout: '', stderr: '' });
+    h.git.queueResponse({ stdout: '', stderr: '' });
+    h.git.queueResponse({ stdout: '', stderr: '' });
+    h.git.queueResponse({ stdout: '', stderr: '' });
+    const res = await request('GET', '/sessions/s7/changes');
+    expect((res.body as { base: string }).base).toBe('origin/fallback');
+  });
+
   it('sets baseResolved:false and falls back to a three-dot diff when merge-base fails', async () => {
     await startServer();
     await h.store.save(devSession('s6'));

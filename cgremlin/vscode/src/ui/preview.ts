@@ -24,13 +24,34 @@ export interface WorktreeSwapperDeps {
 }
 
 export class WorktreeSwapper {
+  /** Bumped by every `swapTo` call; a queued or in-flight swap that is no longer the latest one
+   * drops itself rather than act on a plan a later click has already superseded. */
+  private generation = 0;
+  /**
+   * One swap at a time, in the order they were asked for (§5.5, amended): two clicks before the
+   * first's confirm resolves must never both reach `updateWorkspaceFolders` against whatever
+   * folders happened to be open when each was planned. A failed swap does not wedge the ones
+   * behind it.
+   */
+  private queue: Promise<void> = Promise.resolve();
+
   constructor(private readonly deps: WorktreeSwapperDeps) {}
 
   /** No-ops when there is no config yet, or when the worktree is already the only folder. */
-  async swapTo(id: string, worktreePath: string): Promise<void> {
+  swapTo(id: string, worktreePath: string): Promise<void> {
+    const myGeneration = (this.generation += 1);
+    const run = this.queue.then(() => this.runSwap(myGeneration, id, worktreePath));
+    this.queue = run.catch(() => undefined);
+    return run;
+  }
+
+  private async runSwap(myGeneration: number, id: string, worktreePath: string): Promise<void> {
+    // A click queued behind an older one that a still-newer click has since superseded: its turn
+    // has come, but there is no confirm to even show for it (the "at most one dialog" half).
+    if (myGeneration !== this.generation) return;
     const config = this.deps.config();
     if (config === null) return;
-    await applyWorkspace(this.deps.host, id, worktreePath, config);
+    await applyWorkspace(this.deps.host, id, worktreePath, config, () => myGeneration === this.generation);
   }
 }
 
@@ -39,6 +60,7 @@ async function applyWorkspace(
   id: string,
   worktreePath: string,
   config: CoreConfigView,
+  isCurrent: () => boolean,
 ): Promise<void> {
   const plan = planWorkspaceAction({
     workspaceFile: host.workspaceFile(),
@@ -58,6 +80,9 @@ async function applyWorkspace(
         { modal: true },
         SWITCH_ANYWAY,
       );
+      // A newer click landed while this one waited on the user: its answer, whatever it was, is
+      // for a plan nothing acts on any more (the "dismiss/ignore the older one's result" half).
+      if (!isCurrent()) return;
       if (answer !== SWITCH_ANYWAY) return;
     }
     host.updateWorkspaceFolders(0, plan.removeCount, {
@@ -83,6 +108,7 @@ async function applyWorkspace(
     undefined,
     OPEN_MANAGED,
   );
+  if (!isCurrent()) return;
   if (answer === OPEN_MANAGED) {
     await host.executeCommand('vscode.openFolder', host.fileUri(plan.managedPath));
   }

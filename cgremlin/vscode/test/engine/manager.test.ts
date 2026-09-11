@@ -575,6 +575,50 @@ describe('MG-C5: the handshake compares the build id as well as the version', ()
   });
 });
 
+describe("engineStartedAt (R26b's cross-window freshness check)", () => {
+  it('answers the identity probe reports', async () => {
+    fake.probes = [identity({ startedAt: '2026-03-01T00:00:00.000Z' })];
+    expect(await manager.engineStartedAt()).toBe('2026-03-01T00:00:00.000Z');
+  });
+
+  it('is null when nothing answers, and null for a foreign socket', async () => {
+    fake.probes = [null];
+    expect(await manager.engineStartedAt()).toBeNull();
+    fake.probes = ['unreachable', 'unreachable', 'unreachable'];
+    expect(await withClock(manager.engineStartedAt(), 1_000)).toBeNull();
+  });
+});
+
+/**
+ * A second window's manager never needs the freshness check to see that a mismatch is already
+ * fixed: `classify()` reads the *current* probe, so once the engine both windows share has been
+ * restarted onto the bundled version and build id, a second manager's own `ensureRunning()`
+ * reports `running`, never `mismatch` — there is nothing left for it to restart.
+ */
+describe('a second manager sees a mismatch already fixed as running, not mismatch', () => {
+  it('classifies the restarted engine as running for a manager that never restarted it itself', async () => {
+    const stale = identity({ buildId: 'bbbbbbbbbbbbbbbb' });
+    fake.probes = [stale, stale, stale, null];
+    fake.pidFiles = [pidFile()];
+    fake.signalOutcome = 'gone';
+    fake.spawnedAnswer = identity(); // the bundled version and build id, once the restart lands
+    const restarted = await withClock(manager.restart('auto'), 2_000);
+    expect(restarted).toMatchObject({ kind: 'running' });
+
+    const other = new EngineManager({
+      process: fake,
+      bundledVersion: '0.0.1',
+      bundledBuildId: BUNDLED_BUILD_ID,
+      paths: () => PATHS,
+      launch: () => LAUNCH,
+      log: (line) => logs.push(line),
+    });
+    const state = await other.ensureRunning('auto');
+    expect(state).toMatchObject({ kind: 'running' });
+    expect(fake.signals).toHaveLength(1); // `other` never signalled anything itself
+  });
+});
+
 describe('an automatic restart is spent once per engine identity', () => {
   /** A restart whose stop is over immediately, so the engine that answers afterwards is the same. */
   function sameEngineThroughout(who = identity()): void {

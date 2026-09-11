@@ -159,6 +159,8 @@ export class FakeHost implements Host {
   chmodError: Error | null = null;
   /** Permission bits per path; a file with no entry reads as 0600. */
   readonly modes = new Map<string, number>();
+  /** mtime (ms) per path for `fileMtimeMs`; a file with no entry reads as `null` (stat failed). */
+  readonly mtimes = new Map<string, number>();
   /** Run inside `chmod`, after the mode is recorded — a test fires the watch from here. */
   chmodHook: ((path: string, mode: number) => void) | null = null;
   /** Answers handed to the next `showQuickPick` / `showInputBox` / message, in order. */
@@ -388,6 +390,12 @@ export class FakeHost implements Host {
   fileMode(path: string): number | null {
     if (!this.files.has(path)) return null;
     return this.modes.get(path) ?? 0o600;
+  }
+
+  /** No recorded mtime reads as `null` — a test opts in only when it means to drive R26b's check. */
+  fileMtimeMs(path: string): number | null {
+    if (!this.files.has(path)) return null;
+    return this.mtimes.get(path) ?? null;
   }
 
   watchFile(path: string, callback: () => void): DisposableLike {

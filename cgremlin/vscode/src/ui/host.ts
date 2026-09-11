@@ -198,6 +198,13 @@ export interface Host {
   /** The permission bits (`mode & 0o777`), or `null` when the file cannot be stat'ed. */
   fileMode(path: string): number | null;
   /**
+   * The file's mtime in milliseconds since the epoch, or `null` when it cannot be stat'ed. The
+   * config watcher's freshness check (R26b across windows) reads this at the moment a save is
+   * processed: an engine whose own `startedAt` is at or after this already has the bytes on disk,
+   * whichever window's watcher noticed the save.
+   */
+  fileMtimeMs(path: string): number | null;
+  /**
    * Watches one file *through a rename*: the engine replaces `core.json` by renaming a temp file
    * over it, so a watch on the inode would be orphaned by the first save (spec 4.5). The adapter
    * watches the directory and filters by basename.

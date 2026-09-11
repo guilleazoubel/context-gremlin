@@ -191,6 +191,17 @@ export class EngineManager {
     return probe === null || typeof probe === 'string' ? null : probe.activeRuns;
   }
 
+  /**
+   * `GET /version`'s `startedAt`, or `null` when nothing answered. A window's own config watcher
+   * uses this against the config file's mtime (`Host.fileMtimeMs`) to tell whether the *running*
+   * engine already has the bytes that were just saved — the check that keeps a second window from
+   * restarting an engine a first window has already restarted for the very same save.
+   */
+  async engineStartedAt(): Promise<string | null> {
+    const probe = await this.opts.process.probe(this.opts.paths().socketPath);
+    return probe === null || typeof probe === 'string' ? null : probe.startedAt;
+  }
+
   onStateChange(cb: (state: EngineState) => void): () => void {
     this.listeners.add(cb);
     return () => this.listeners.delete(cb);
