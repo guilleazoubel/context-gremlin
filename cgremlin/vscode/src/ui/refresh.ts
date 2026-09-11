@@ -9,7 +9,13 @@
  * every trigger calls `schedule()` and a batch is applied once. The notification diff runs here
  * because it must see exactly the snapshot the panel and the status bar were built from.
  */
-import { CoreHttpError, EngineNotRunningError, type CoreClient } from '../core-client';
+import {
+  CoreHttpError,
+  EngineNotRunningError,
+  engineErrorText,
+  type CoreClient,
+} from '../core-client';
+import { itemsTroubleOf, type SourceTrouble } from '../model/engine-trouble';
 import type { NotificationLevel } from '../model/notify-policy';
 import type { CoreConfigView } from '../model/items';
 import type { ItemsResponse, WorkItem } from '../model/work-items';
@@ -40,6 +46,7 @@ export class RefreshCoordinator {
   private currentWorktreePath: string | null = null;
   private inFlight: Promise<void> | null = null;
   private timerPending = false;
+  private sourceTrouble: SourceTrouble | null = null;
 
   constructor(private readonly deps: RefreshCoordinatorDeps) {}
 
@@ -111,20 +118,30 @@ export class RefreshCoordinator {
   }
 
   /**
-   * `GET /items` 404s on an engine older than Phase 9, and there may be nothing to group before
-   * the first scan. Neither is a reason to tear the panel down: the lists go empty and the next
-   * tick fills them.
+   * An engine that answers but cannot list the work is **said out loud**, never rendered as four
+   * empty lists: a 404 means the engine is older than this extension and the fix is one restart
+   * away, and anything else is shown with the engine's own wording. Both replace the lists and
+   * both warn in the status bar, exactly as engine trouble does (Phase 8's lesson: silence is
+   * the bug).
    */
   private async readItems(): Promise<ItemsResponse | null> {
     try {
-      return await this.deps.client.items();
+      const response = await this.deps.client.items();
+      this.setSourceTrouble(null);
+      return response;
     } catch (err) {
       if (err instanceof CoreHttpError) {
         this.deps.host.log(`cgremlin: GET /items failed (${err.status})`);
+        this.setSourceTrouble(itemsTroubleOf(err.status, engineErrorText(err.body)));
         return null;
       }
       throw err;
     }
+  }
+
+  private setSourceTrouble(trouble: SourceTrouble | null): void {
+    this.sourceTrouble = trouble;
+    this.deps.panel.setSourceTrouble(trouble);
   }
 
   setCurrentSession(sessionId: string | null, worktreePath: string | null): void {
@@ -158,6 +175,7 @@ export class RefreshCoordinator {
       currentSessionId: this.currentSessionId,
       currentPhase: current?.phase ?? null,
       currentWorktreePath: this.currentWorktreePath,
+      sourceTrouble: this.sourceTrouble,
     });
   }
 

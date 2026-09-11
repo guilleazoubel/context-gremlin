@@ -218,7 +218,7 @@ export function render(next: PanelState): void {
     const trouble = el('div', 'trouble');
     trouble.appendChild(el('p', undefined, next.trouble.message));
     const button = document.createElement('button');
-    button.textContent = 'Fix it';
+    button.textContent = next.trouble.actionLabel;
     const command = next.trouble.command;
     button.addEventListener('click', () => post({ type: 'command', command, id: 'engine' }));
     trouble.appendChild(button);

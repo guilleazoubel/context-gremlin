@@ -250,14 +250,62 @@ describe('an engine that is not one this extension can use', () => {
     expect(warnings[0].args[2]).toEqual(['Re-probe', 'Show log']);
   });
 
-  it('keeps the panel alive when the engine serves no /items yet', async () => {
+  it('finding 2 — an engine with no /items says so, with a Restart, not an empty panel', async () => {
     const h = await harness({
       handler: (req) =>
         req.path === '/items' ? { status: 404, body: { error: 'not found' } } : undefined,
     });
     expect(await h.ui.connect()).toBe(true);
     expect(h.state().lists).toHaveLength(0);
+    expect(h.state().trouble?.message).toBe(
+      'The engine is older than this extension (no /items). Restart the engine to load the ' +
+        'bundled version.',
+    );
+    expect(h.state().trouble?.command).toBe('cgremlin.engine.restart');
+    expect(h.state().trouble?.actionLabel).toBe('Restart the engine');
+    expect(h.host.statusBarItems[0].text).toBe('$(warning) cgremlin: engine is out of date');
+    expect(h.host.statusBarItems[0].warning).toBe(true);
     expect(h.host.logs.some((line) => line.includes('GET /items failed'))).toBe(true);
+  });
+
+  it('finding 2 — the Restart action is the engine manager’s user restart', async () => {
+    const h = await harness({
+      handler: (req) =>
+        req.path === '/items' ? { status: 404, body: { error: 'not found' } } : undefined,
+    });
+    expect(await h.ui.connect()).toBe(true);
+    h.toPanel({ type: 'command', command: h.state().trouble?.command ?? '', id: 'engine' });
+    await h.ui.settled();
+    expect(h.engine.calls).toContain('restart:user');
+  });
+
+  it('finding 2 — any other /items failure is surfaced with the engine’s own message', async () => {
+    const h = await harness({
+      handler: (req) =>
+        req.path === '/items'
+          ? { status: 500, body: { error: 'the work model exploded' } }
+          : undefined,
+    });
+    expect(await h.ui.connect()).toBe(true);
+    expect(h.state().lists).toHaveLength(0);
+    expect(h.state().trouble?.message).toContain('the work model exploded');
+    expect(h.state().trouble?.command).toBe('cgremlin.engine.showLog');
+    expect(h.host.statusBarItems[0].warning).toBe(true);
+  });
+
+  it('finding 2 — the trouble clears the moment /items answers again', async () => {
+    let broken = true;
+    const h = await harness({
+      handler: (req) =>
+        req.path === '/items' && broken ? { status: 404, body: { error: 'not found' } } : undefined,
+    });
+    expect(await h.ui.connect()).toBe(true);
+    expect(h.state().trouble).not.toBeNull();
+    broken = false;
+    await h.ui.coordinator.refreshNow();
+    expect(h.state().trouble).toBeNull();
+    expect(h.state().lists).toHaveLength(4);
+    expect(h.host.statusBarItems[0].warning).toBe(false);
   });
 });
 

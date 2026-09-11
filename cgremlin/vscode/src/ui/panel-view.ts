@@ -40,7 +40,13 @@ import {
   type PanelRowView,
   type PanelState,
 } from '../model/panel-protocol';
-import { troubleCommand, troubleMessage, type EngineTrouble } from '../model/engine-trouble';
+import {
+  SHOW_LOG,
+  troubleCommand,
+  troubleMessage,
+  type EngineTrouble,
+  type SourceTrouble,
+} from '../model/engine-trouble';
 import { cspFor } from './item-tab';
 import type {
   DisposableLike,
@@ -71,6 +77,8 @@ export class PanelView implements WebviewViewProviderLike {
   private ready = false;
   private response: ItemsResponse | null = null;
   private trouble: EngineTrouble | null = null;
+  /** The engine answered, but not with work items (a 404 from an older engine, or worse). */
+  private sourceTrouble: SourceTrouble | null = null;
   private connected = false;
   private readonly expanded = new Set<string>();
   private readonly collapsedGroups = new Map<string, boolean>();
@@ -112,6 +120,15 @@ export class PanelView implements WebviewViewProviderLike {
     this.render();
   }
 
+  /**
+   * An engine that cannot answer `GET /items`. Shown only when the engine itself is not already
+   * in trouble — one explanation at a time, and the engine's own is the more fundamental.
+   */
+  setSourceTrouble(trouble: SourceTrouble | null): void {
+    this.sourceTrouble = trouble;
+    this.render();
+  }
+
   setConnected(connected: boolean): void {
     this.connected = connected;
     this.render();
@@ -133,18 +150,34 @@ export class PanelView implements WebviewViewProviderLike {
   }
 
   state(): PanelState {
+    const trouble = this.troubleView();
     return {
-      lists: this.trouble === null ? this.lists() : [],
+      lists: trouble === null ? this.lists() : [],
       banner:
         this.response === null
           ? null
           : ticketBanner(this.response.ticketSource, this.response.threadSource),
-      trouble:
-        this.trouble === null
-          ? null
-          : { message: troubleMessage(this.trouble), command: troubleCommand(this.trouble) },
+      trouble,
       connected: this.connected,
     };
+  }
+
+  private troubleView(): PanelState['trouble'] {
+    if (this.trouble !== null) {
+      return {
+        message: troubleMessage(this.trouble),
+        command: troubleCommand(this.trouble),
+        actionLabel: this.trouble.kind === 'foreign' ? 'Start the engine' : SHOW_LOG,
+      };
+    }
+    if (this.sourceTrouble !== null) {
+      return {
+        message: this.sourceTrouble.message,
+        command: this.sourceTrouble.command,
+        actionLabel: this.sourceTrouble.actionLabel,
+      };
+    }
+    return null;
   }
 
   dispose(): void {

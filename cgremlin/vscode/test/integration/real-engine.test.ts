@@ -258,11 +258,12 @@ describe.skipIf(!coreIsBuilt())('integration: the extension against a real engin
       await ui.dispose();
     }, TIMEOUT);
 
-    it('connects and renders a panel even though this engine serves no /items yet', () => {
-      // The 404 is logged and the lists go empty; `connect()` still returned true above, which
-      // is the behaviour that keeps a pre-Phase-9 engine usable rather than "foreign".
+    it('connects, and says out loud that this engine is too old to list work items', () => {
+      // `connect()` still returned true above — a pre-Phase-9 engine is reachable, just not
+      // able to answer `/items`. That is stated rather than rendered as four empty lists.
       expect(ui.coordinator.items()).toEqual([]);
-      expect(host.statusBarItems[0].text).toContain('0 need you');
+      expect(host.statusBarItems[0].text).toBe('$(warning) cgremlin: engine is out of date');
+      expect(host.statusBarItems[0].warning).toBe(true);
       expect(host.logs.some((line) => line.includes('GET /items failed'))).toBe(true);
     });
 

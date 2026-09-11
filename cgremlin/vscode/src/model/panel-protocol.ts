@@ -71,8 +71,11 @@ export interface PanelState {
   lists: PanelListView[];
   /** A stale ticket or thread source, or the Jira auth failure (R35). */
   banner: { kind: 'stale' | 'auth'; message: string } | null;
-  /** An engine this extension cannot use replaces the lists entirely (Phase 8). */
-  trouble: { message: string; command: string } | null;
+  /**
+   * Something that replaces the lists entirely and says what to do about it: an engine this
+   * extension cannot use (Phase 8), or an engine whose `/items` the extension cannot read.
+   */
+  trouble: { message: string; command: string; actionLabel: string } | null;
   connected: boolean;
 }
 
