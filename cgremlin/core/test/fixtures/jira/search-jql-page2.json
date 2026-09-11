@@ -1,0 +1,15 @@
+{
+  "issues": [
+    {
+      "id": "10003",
+      "key": "GRAC-12",
+      "fields": {
+        "summary": "Last page issue",
+        "updated": "2026-09-07T10:00:00.000+0000",
+        "status": { "name": "Done", "statusCategory": { "key": "done", "name": "Done" } },
+        "assignee": { "accountId": "712020:someone-else", "displayName": "Someone Else" }
+      }
+    }
+  ],
+  "isLast": true
+}

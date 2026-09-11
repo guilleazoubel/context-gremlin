@@ -1,0 +1,19 @@
+{
+  "startAt": 0,
+  "maxResults": 5,
+  "total": 2,
+  "comments": [
+    {
+      "id": "20002",
+      "author": { "accountId": "712020:someone-else", "displayName": "Someone Else" },
+      "created": "2026-09-09T09:00:00.000+0000",
+      "renderedBody": "<p>Newest comment, with a <a href=\"https://example.com\">link</a>.</p>"
+    },
+    {
+      "id": "20001",
+      "author": { "accountId": "712020:f0acd024-8d3a-4b87-9d4b-768ee3eb3f74", "displayName": "Guilherme Azoubel" },
+      "created": "2026-09-08T09:00:00.000+0000",
+      "renderedBody": "<p>Older comment.</p>"
+    }
+  ]
+}

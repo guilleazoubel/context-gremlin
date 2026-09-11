@@ -1,0 +1,18 @@
+{
+  "id": "10001",
+  "key": "HB-627",
+  "fields": {
+    "summary": "Parking lot should not show drafts",
+    "updated": "2026-09-09T10:00:00.000+0000",
+    "status": { "name": "In Progress", "statusCategory": { "key": "indeterminate", "name": "In Progress" } },
+    "assignee": { "accountId": "712020:f0acd024-8d3a-4b87-9d4b-768ee3eb3f74", "displayName": "Guilherme Azoubel" },
+    "reporter": { "accountId": "712020:someone-else", "displayName": "Someone Else" },
+    "issuetype": { "name": "Story" },
+    "priority": { "name": "Medium" },
+    "labels": ["panel"],
+    "attachment": []
+  },
+  "renderedFields": {
+    "description": "<p>The parking lot must show <b>bold</b> open PRs only.</p><ul><li>no drafts</li><li>no mine</li></ul>"
+  }
+}

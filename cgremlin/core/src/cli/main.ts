@@ -21,6 +21,7 @@ Commands:
   scan [--json]                       Run one inventory scan now
   config init [--me login] [--force]  Write a first-run core.json (me from gh when omitted)
   config import-legacy [--force]      Import the legacy ~/.cgremlin/config into core.json
+  config check-jira                   Check the Jira credentials against /rest/api/3/myself
   local start|stop|status [session]   Control the local dev app the engine owns
   release <session-id>                Drop a human-turn claim on a session's conversation
 `;
