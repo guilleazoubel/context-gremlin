@@ -28,6 +28,12 @@ export interface StubRequest {
 export interface StubResponse {
   status: number;
   body?: unknown;
+  /**
+   * A `text/plain` body, sent **verbatim**. `GET /sessions/:id/artifacts/:name` answers this way
+   * (`server.ts:280`), and an artifact that happens to look like JSON must reach the client as
+   * the bytes it is.
+   */
+  text?: string;
 }
 
 export type StubHandler = (req: StubRequest) => StubResponse | undefined;
@@ -72,7 +78,7 @@ function defaultHandler(req: StubRequest): StubResponse | undefined {
     return detail === null ? { status: 404, body: { error: 'no such item' } } : { status: 200, body: detail };
   }
   if (req.method === 'GET' && /^\/sessions\/[^/]+\/artifacts\/[^/]+$/.test(req.path)) {
-    return { status: 200, body: `# ${req.path.split('/').pop()}\n\nbody text` };
+    return { status: 200, text: `# ${req.path.split('/').pop()}\n\nbody text` };
   }
   if (req.method === 'GET' && /^\/sessions\/[^/]+\/artifacts$/.test(req.path)) {
     return {
@@ -206,9 +212,14 @@ export async function startStubServer(opts: StartOptions = {}): Promise<StubServ
           status: 404,
           body: { error: 'not found' },
         };
-        const payload = answer.body === undefined ? '' : JSON.stringify(answer.body);
+        const raw = answer.text !== undefined;
+        const payload = raw
+          ? (answer.text as string)
+          : answer.body === undefined
+            ? ''
+            : JSON.stringify(answer.body);
         res.writeHead(answer.status, {
-          'Content-Type': 'application/json',
+          'Content-Type': raw ? 'text/plain; charset=utf-8' : 'application/json',
           'Content-Length': Buffer.byteLength(payload),
         });
         res.end(payload);

@@ -144,6 +144,36 @@ export class CoreClient {
   // Every id-bearing method is `async` on purpose: its path-parameter check must surface as a
   // *rejected promise*, not a synchronous throw, so one call site can handle both failure modes.
 
+  /**
+   * A response body as **text**, exactly as the engine sent it. Everything else goes through
+   * {@link CoreClient.request}, which parses JSON; an artifact must not, because it is a
+   * document (`server.ts:280` answers `text/plain`) and JSON-parsing then re-serialising one
+   * that happens to look like JSON would silently reorder its keys and eat its whitespace.
+   */
+  requestText(method: string, path: string): Promise<{ status: number; text: string }> {
+    const socketPath = resolveSocketPath(this.socketPath);
+    return new Promise((resolve, reject) => {
+      const req = http.request(
+        { socketPath, path, method, headers: { Accept: 'text/plain, application/json' } },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (chunk: Buffer) => chunks.push(chunk));
+          res.on('error', reject);
+          res.on('end', () =>
+            resolve({
+              status: res.statusCode ?? 0,
+              text: Buffer.concat(chunks).toString('utf8'),
+            }),
+          );
+        },
+      );
+      req.on('error', (err: NodeJS.ErrnoException) => {
+        reject(OFFLINE_CODES.has(err.code ?? '') ? new EngineNotRunningError(socketPath) : err);
+      });
+      req.end();
+    });
+  }
+
   request(method: string, path: string, body?: unknown): Promise<HttpResult> {
     const payload = body === undefined ? undefined : Buffer.from(JSON.stringify(body), 'utf8');
     // Resolved per request, never captured in the constructor (R7).
@@ -207,13 +237,17 @@ export class CoreClient {
     return await this.request('POST', `/items/${assertItemPath(path)}/ack`);
   }
 
-  /** The artifact body, which the host relays over `postMessage` — never a file URI (R19). */
+  /**
+   * The artifact body, which the host relays over `postMessage` — never a file URI (R19).
+   * Returned as the bytes the engine sent: an artifact that parses as JSON is still a document.
+   */
   async artifactText(id: string, name: string): Promise<string> {
-    const body = await this.expect<unknown>(
-      'GET',
-      `/sessions/${assertSessionId(id)}/artifacts/${assertArtifactName(name)}`,
-    );
-    return typeof body === 'string' ? body : JSON.stringify(body);
+    const path = `/sessions/${assertSessionId(id)}/artifacts/${assertArtifactName(name)}`;
+    const result = await this.requestText('GET', path);
+    if (result.status < 200 || result.status >= 300) {
+      throw new CoreHttpError(result.status, parseBody(result.text), 'GET', path);
+    }
+    return result.text;
   }
 
   prs(): Promise<{ inventory: Inventory; groups: InventoryGroups }> {
