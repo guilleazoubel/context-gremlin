@@ -11,6 +11,7 @@
  * Both throw {@link EngineNotRunningError} when the socket is not there.
  */
 import http from 'node:http';
+import { parseChanges, type SessionChanges } from './model/changes';
 import type { ItemDetailResponse, ItemsResponse } from './model/work-items';
 import type {
   ArtifactListingResponse,
@@ -272,6 +273,17 @@ export class CoreClient {
 
   async artifacts(id: string): Promise<ArtifactListingResponse> {
     return await this.expect('GET', `/sessions/${assertSessionId(id)}/artifacts`);
+  }
+
+  /**
+   * "Changes so far" for one session (§4, amended). Answers `null` rather than throwing on a
+   * non-2xx: an engine older than Phase 10 does not serve this route at all, and a 404 there must
+   * paint a `—` in one expanded row — never replace the lists with engine trouble.
+   */
+  async changes(id: string): Promise<SessionChanges | null> {
+    const result = await this.request('GET', `/sessions/${assertSessionId(id)}/changes`);
+    if (result.status < 200 || result.status >= 300) return null;
+    return parseChanges(result.body);
   }
 
   async conversation(id: string): Promise<ConversationView> {

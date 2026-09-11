@@ -107,6 +107,23 @@ describe('CoreClient — reads', () => {
     expect(server.requests[0]?.path).toBe('/sessions/pr-acme-web-102/conversation');
   });
 
+  it('reads the changes route, and answers null for an engine that has no such route', async () => {
+    const wire = {
+      base: 'main',
+      baseResolved: 'a1b2c3d',
+      head: 'e4f5a6b',
+      committed: { files: 8, additions: 240, deletions: 31, entries: [] },
+      workingTree: { files: 2, additions: 12, deletions: 0, entries: [] },
+    };
+    const { core, server } = await client((req) =>
+      req.path === '/sessions/s1/changes' ? { status: 200, body: wire } : { status: 404, body: {} },
+    );
+    expect((await core.changes('s1'))?.committed.additions).toBe(240);
+    expect(server.requests[0]?.path).toBe('/sessions/s1/changes');
+    // A 404 is an older engine, not trouble: the expanded row paints `—` and the lists stay.
+    await expect(core.changes('s2')).resolves.toBeNull();
+  });
+
   it('passes a session id containing a colon through verbatim', async () => {
     const { core, server } = await client();
     await core.artifacts('inv:weird:id');
