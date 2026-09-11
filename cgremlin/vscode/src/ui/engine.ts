@@ -34,6 +34,8 @@ export interface EngineManagerLike {
   restart(trigger?: Trigger): Promise<EngineState>;
   /** `GET /version`'s `activeRuns`, or `null` when nothing answered (R21). */
   activeRuns(): Promise<number | null>;
+  /** `GET /version`'s `startedAt`, or `null` when nothing answered — R26b's cross-window check. */
+  engineStartedAt(): Promise<string | null>;
 }
 
 /**
@@ -349,6 +351,13 @@ export class EngineSurface {
    * feeds itself the next event and the watcher restarts the engine forever, at the period of one
    * restart. An event whose digest matches the content already acted on therefore ends the pass
    * here: before the chmod, and before any restart decision.
+   *
+   * R26b, extended across windows: the once-per-identity auto-restart latch in `EngineManager` is
+   * per *window*, so two windows each restart the one shared engine for a single save (window A
+   * restarts pid1 → pid2; window B, having never latched pid2 itself, restarts it again → pid3).
+   * Before consulting R21's gate, this checks whether the *running* engine already postdates the
+   * save: `engine.startedAt >= configPath`'s own mtime means some window (this one or another) has
+   * already restarted it for these exact bytes, and there is nothing left to do.
    */
   private async onConfigSaved(configPath: string): Promise<void> {
     const { host, manager } = this.deps;
@@ -376,6 +385,16 @@ export class EngineSurface {
         await host.chmod(configPath, CONFIG_MODE);
       } catch (err) {
         host.log(`cgremlin: could not re-assert 0600 on ${configPath}: ${errorMessage(err)}`);
+      }
+    }
+    const mtimeMs = host.fileMtimeMs(configPath);
+    if (mtimeMs !== null) {
+      const startedAt = await manager.engineStartedAt();
+      if (startedAt !== null && new Date(startedAt).getTime() >= mtimeMs) {
+        host.log(
+          `engine.restart_skipped_fresh: the running engine started at ${startedAt}, at or after ${configPath}'s last change; it already has these bytes.`,
+        );
+        return;
       }
     }
     const active = await manager.activeRuns();

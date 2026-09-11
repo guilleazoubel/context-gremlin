@@ -699,3 +699,81 @@ describe('deactivation (R16, R30)', () => {
     expect(manager.calls).toEqual([]);
   });
 });
+
+/**
+ * Two windows, one engine. A config-save latch that is kept per `EngineManager` instance (R26b)
+ * is per *window* — so a second window that never restarted this identity itself would restart it
+ * again, cascading (pid1 → pid2 from window A, then pid2 → pid3 from window B, for one save). The
+ * fix does not depend on the two windows sharing any state: it asks whether the *engine itself*
+ * already has today's bytes, by comparing `GET /version`'s `startedAt` against the config's own
+ * mtime. `manager` here stands for the one physical engine both windows' managers would probe —
+ * `startedAtAfterRestart` moves it forward the way a real restart would.
+ */
+describe('a config save restarts the engine at most once, however many windows are watching', () => {
+  const STALE_STARTED_AT = '2026-01-01T00:00:00.000Z';
+  const CONFIG_MTIME = Date.parse('2026-01-01T00:02:00.000Z');
+  const FRESH_STARTED_AT = '2026-01-01T00:05:00.000Z';
+
+  let hostB: FakeHost;
+  let surfaceB: EngineSurface;
+
+  beforeEach(async () => {
+    manager.runs = 0;
+    manager.startedAt = STALE_STARTED_AT;
+    host.files.set(CONFIG, '{"me":"seed"}');
+    hostB = new FakeHost();
+    hostB.files.set(CONFIG, '{"me":"seed"}');
+    surfaceB = new EngineSurface({
+      host: hostB,
+      manager,
+      bridge,
+      configPath: () => configPath,
+      home: '/home/me',
+      execPath: EXEC,
+      enginePath: ENGINE,
+      resolveLoginPath: async () => loginPath,
+      reconnect: async () => undefined,
+      debounceMs: 500,
+    });
+    await surface.bootstrap();
+    await surfaceB.bootstrap();
+    manager.calls.length = 0;
+  });
+
+  it('restarts once for window A, then skips window B once the engine already has the change', async () => {
+    host.mtimes.set(CONFIG, CONFIG_MTIME);
+    hostB.mtimes.set(CONFIG, CONFIG_MTIME);
+    manager.startedAtAfterRestart = FRESH_STARTED_AT;
+
+    host.touch(CONFIG, '{"me":"changed"}');
+    host.flushTimeouts();
+    await surface.settled();
+    expect(manager.countOf('restart:auto')).toBe(1);
+    expect(manager.startedAt).toBe(FRESH_STARTED_AT);
+
+    // Window B's own watcher fires for the very same save, after A's restart has landed.
+    hostB.touch(CONFIG, '{"me":"changed"}');
+    hostB.flushTimeouts();
+    await surfaceB.settled();
+    expect(manager.countOf('restart:auto')).toBe(1);
+    expect(hostB.logs.some((l) => l.startsWith('engine.restart_skipped_fresh'))).toBe(true);
+  });
+
+  it('does not even ask about active runs once it knows the engine already has the change', async () => {
+    host.mtimes.set(CONFIG, CONFIG_MTIME);
+    manager.startedAt = FRESH_STARTED_AT; // already newer than the save being processed
+    host.touch(CONFIG, '{"me":"changed"}');
+    host.flushTimeouts();
+    await surface.settled();
+    expect(manager.calls).toEqual(['engineStartedAt']);
+  });
+
+  it('restarts normally when the engine really does predate the change (no mtime on record)', async () => {
+    // No `host.mtimes` entry at all — the real host's `fileMtimeMs` returning null (a stat that
+    // failed) must fall through to the old behaviour, not skip a restart it cannot justify.
+    host.touch(CONFIG, '{"me":"changed"}');
+    host.flushTimeouts();
+    await surface.settled();
+    expect(manager.calls).toEqual(['activeRuns', 'restart:auto']);
+  });
+});

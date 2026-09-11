@@ -52,6 +52,15 @@ export class FakeEngineManager implements EngineManagerLike {
   current: EngineState = { kind: 'unknown' };
   /** What `GET /version` reports; `null` means nothing answered. */
   runs: number | null = 0;
+  /** `GET /version`'s `startedAt`, as `engineStartedAt()` answers it; `null` means nothing answered. */
+  startedAt: string | null = null;
+  /**
+   * What `startedAt` becomes the moment `restart()` is called — simulating the engine really
+   * restarting, for a test that drives two `EngineSurface`s over this one fake engine. `undefined`
+   * (the default) leaves `startedAt` untouched, which is what every test that does not care about
+   * R26b's cross-window freshness check wants.
+   */
+  startedAtAfterRestart: string | undefined;
   private readonly listeners = new Set<(state: EngineState) => void>();
 
   state(): EngineState {
@@ -75,12 +84,18 @@ export class FakeEngineManager implements EngineManagerLike {
 
   async restart(trigger: Trigger = 'auto'): Promise<EngineState> {
     this.calls.push(`restart:${trigger}`);
+    if (this.startedAtAfterRestart !== undefined) this.startedAt = this.startedAtAfterRestart;
     return this.current;
   }
 
   async activeRuns(): Promise<number | null> {
     this.calls.push('activeRuns');
     return this.runs;
+  }
+
+  async engineStartedAt(): Promise<string | null> {
+    this.calls.push('engineStartedAt');
+    return this.startedAt;
   }
 
   /** Pushes a state the way the real manager does. */
