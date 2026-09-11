@@ -6,6 +6,7 @@ import type { Inventory, InventoryEntry, TeamActivity } from '../inventory/inven
 import type { JiraScanReport } from '../jira/jira-store';
 import type { SessionMode } from '../schema/session';
 import { isBotLogin } from './bot-login';
+import { sizeTierOf, type SizeTier } from './size-tier';
 import { workItemIdOf, type WorkItemId } from './work-item-id';
 
 /**
@@ -59,6 +60,8 @@ export interface WorkItemPr {
   deletions: number | null;
   ci: CiStatus | null;
   labels: string[] | null;
+  /** Workshop phase 10 §2.1: pure arithmetic on `changedFiles`/`additions`/`deletions`, null when either is null. */
+  sizeTier: SizeTier | null;
 }
 
 export interface WorkItemTicket {
@@ -157,6 +160,7 @@ function prFromEntry(e: InventoryEntry): WorkItemPr {
     deletions: e.deletions,
     ci: e.ci,
     labels: e.labels,
+    sizeTier: sizeTierOf({ changedFiles: e.changedFiles, additions: e.additions, deletions: e.deletions }),
   };
 }
 
@@ -182,6 +186,7 @@ function prFromAgentLinks(repo: string, number: number, url: string | null): Wor
     deletions: null,
     ci: null,
     labels: null,
+    sizeTier: null,
   };
 }
 

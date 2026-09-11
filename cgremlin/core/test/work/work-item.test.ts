@@ -279,6 +279,7 @@ describe('groupWorkItems: list membership (R47–R50, MG-2)', () => {
       deletions: null,
       ci: null,
       labels: null,
+      sizeTier: null,
     });
   });
 
