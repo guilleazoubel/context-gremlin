@@ -590,13 +590,20 @@ describe('R66/R54 the panel is an accessible tree, and the keys are the tree mod
     }
   });
 
-  it('declares the roles in the rendered script, not only in the model', () => {
-    const source = fs.readFileSync(path.join(root, 'src/webview/panel.ts'), 'utf8');
+  it('declares the roles in the bundled script, not only in the model', () => {
+    // The panel is a directory of modules now, and the bundle is all of them: reading only the
+    // entry point would let a role quietly leave with the code that set it.
+    const dir = path.join(root, 'src/webview/panel');
+    const source = fs
+      .readdirSync(dir)
+      .filter((name) => name.endsWith('.ts'))
+      .map((name) => fs.readFileSync(path.join(dir, name), 'utf8'))
+      .join('\n');
     for (const attribute of ['role', 'tree', 'treeitem', 'aria-level', 'aria-expanded', 'aria-selected']) {
       expect(source).toContain(attribute);
     }
     // And the keys come from the same module the roles do (R66).
-    expect(source).toContain("from '../model/panel-tree'");
+    expect(source).toContain("from '../../model/panel-tree'");
     expect(source).toContain('handleKey');
   });
 });
@@ -617,10 +624,29 @@ describe('R54 the look', () => {
     expect(script).not.toContain('codicon');
   });
 
-  it('separates card rows with the panel border and dims the second line', () => {
-    expect(css).toMatch(/\.row\s*\{[^}]*border-bottom:\s*1px solid var\(--vscode-panel-border\)/);
+  it('separates card rows with a hairline and dims the second line', () => {
+    // §2.3: the divider is the panel border at 40%, so it reads as a rhythm and not as a grid.
+    expect(css).toMatch(
+      /--cg-divider:\s*color-mix\(in srgb, var\(--vscode-panel-border\) 40%, transparent\)/,
+    );
+    expect(css).toMatch(/\.row\s*\{[^}]*border-bottom:\s*1px solid var\(--cg-divider\)/);
     expect(css).toMatch(/\.row-meta,\n\.row-state\s*\{[^}]*var\(--vscode-descriptionForeground\)/);
     expect(css).toMatch(/:focus-visible[^}]*outline/);
+  });
+
+  it('changes nothing but the background on hover (§2.2 rule 1)', () => {
+    const hover = /\.row:hover\s*\{([^}]*)\}/.exec(css);
+    expect(hover?.[1].trim()).toBe('background: var(--vscode-list-hoverBackground);');
+    // The gutter fades; it never enters or leaves the flow, which is what used to grow the row.
+    expect(css).toMatch(/\.row-gutter\s*\{[^}]*opacity:\s*0;/);
+    expect(css).not.toMatch(/:hover[^{]*\{[^}]*display:/);
+  });
+
+  it('gives every hit target at least 24 px (§2.2 rule 2)', () => {
+    for (const selector of ['.row-primary', '.row-more', '.slot-start', '.row-overflow-item']) {
+      expect(css).toContain(selector);
+    }
+    expect(css.match(/min-height:\s*24px/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
   });
 });
 
