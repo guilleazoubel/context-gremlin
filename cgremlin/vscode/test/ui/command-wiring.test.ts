@@ -452,6 +452,16 @@ describe('MG-B4 chat-always-runs-in-the-worktree', () => {
     ]);
   });
 
+  it('R48 — an agent child’s Resume chats to THAT agent, not the row’s first', async () => {
+    const h = await connected();
+    const mark = h.mark();
+    await h.host.invoke('cgremlin.chat', HB_ITEM, 'agent:dev-hb-627');
+    expect(paths(h, mark)).toEqual([
+      'GET /sessions/dev-hb-627/conversation',
+      'POST /sessions/dev-hb-627/conversation/claim',
+    ]);
+  });
+
   it('shows a refused claim verbatim and creates no terminal', async () => {
     const h = await connected({
       handler: (req) =>

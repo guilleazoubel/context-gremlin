@@ -133,10 +133,14 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
       await itemTab.open(child.path, child.focus);
     }),
 
-    host.registerCommand('cgremlin.chat', async (arg) => {
-      // A popup and a row hand over an item id; the Item tab hands over a session id directly.
+    host.registerCommand('cgremlin.chat', async (arg, childArg) => {
+      // Three callers: a popup and a row hand over an item id, the Item tab hands over a session
+      // id directly, and an agent child's "Resume" names that agent (R48).
       const item = itemOf(arg);
-      const id = item === null ? idOf(arg) : sessionOf(item);
+      const child = idOf(childArg);
+      const named =
+        child !== null && child.startsWith('agent:') ? child.slice('agent:'.length) : null;
+      const id = named ?? (item === null ? idOf(arg) : sessionOf(item));
       if (id === null) {
         void host.showWarningMessage('That item has no conversation to join.', undefined);
         return;

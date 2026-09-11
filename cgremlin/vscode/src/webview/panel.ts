@@ -118,16 +118,18 @@ function childNode(row: PanelRowView, child: PanelRowView['children'][number]): 
   const goTo = document.createElement('button');
   goTo.className = 'child-goto';
   goTo.textContent = child.goToLabel;
+  // R48's secondary action: the browser for a PR or a ticket, and the conversation for a
+  // session — which is the chat terminal's own path, claim and all (R42).
+  const GO_TO: Record<string, string> = {
+    ticket: 'cgremlin.openTicket',
+    pr: 'cgremlin.openPr',
+    agent: 'cgremlin.chat',
+  };
   goTo.addEventListener('click', (event) => {
     event.stopPropagation();
-    post({
-      type: 'command',
-      command: child.kind === 'ticket' ? 'cgremlin.openTicket' : 'cgremlin.openPr',
-      id: row.id,
-      childId: child.id,
-    });
+    post({ type: 'command', command: GO_TO[child.kind], id: row.id, childId: child.id });
   });
-  if (child.kind !== 'agent') node.appendChild(goTo);
+  node.appendChild(goTo);
   node.addEventListener('click', () =>
     post({ type: 'openChild', id: row.id, childId: child.id }),
   );
