@@ -8,11 +8,14 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  OUTDATED_EXTENSION_MESSAGE,
+  RELOAD_WINDOW,
   RE_PROBE,
   SHOW_LOG,
   SHOW_LOG_ROW,
   healthOf,
   refreshBlockedMessage,
+  troubleActionLabel,
   troubleCommand,
   troubleMessage,
   troubleOf,
@@ -55,12 +58,13 @@ describe('turning an engine state into a health report', () => {
 });
 
 describe('which states are trouble', () => {
-  it('is exactly foreign and failed', () => {
+  it('is exactly foreign, failed and outdated', () => {
     expect(troubleOf(health({ kind: 'foreign' }))).toEqual({ kind: 'foreign', socketPath: SOCKET });
     expect(troubleOf(health({ kind: 'failed', reason: 'boom' }))).toEqual({
       kind: 'failed',
       reason: 'boom',
     });
+    expect(troubleOf(health({ kind: 'outdated' }))).toEqual({ kind: 'outdated' });
     for (const kind of ['unknown', 'stopped', 'starting', 'running', 'stopping', 'mismatch'] as const) {
       expect(troubleOf(health({ kind })), kind).toBeNull();
     }
@@ -71,6 +75,28 @@ describe('which states are trouble', () => {
       kind: 'failed',
       reason: 'the engine did not start',
     });
+  });
+});
+
+/**
+ * The half of the restart ping-pong the user sees. The window that is behind adopts the newer
+ * engine and never signals it — so the only thing left to say is that this window is the stale
+ * one, with the one action that fixes it.
+ */
+describe('the outdated-extension wording', () => {
+  it('asks for a reload, and offers the editor\'s own reload command', () => {
+    const trouble = { kind: 'outdated' } as const;
+    expect(troubleMessage(trouble)).toBe(OUTDATED_EXTENSION_MESSAGE);
+    expect(troubleMessage(trouble)).toContain('older cgremlin extension');
+    expect(troubleMessage(trouble)).toContain('reload the window');
+    expect(troubleCommand(trouble)).toBe('workbench.action.reloadWindow');
+    expect(troubleActionLabel(trouble)).toBe(RELOAD_WINDOW);
+    expect(troubleStatusText(trouble)).toContain('reload this window');
+    expect(troubleRowLabel(trouble)).toBe(OUTDATED_EXTENSION_MESSAGE);
+  });
+
+  it('blocks a refresh with the same sentence', () => {
+    expect(refreshBlockedMessage(health({ kind: 'outdated' }))).toBe(OUTDATED_EXTENSION_MESSAGE);
   });
 });
 

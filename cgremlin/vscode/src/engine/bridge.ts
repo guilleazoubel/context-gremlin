@@ -34,6 +34,12 @@ export interface EngineBridge {
    * `build:engine`. The version is the package's and does not move between phases; this does.
    */
   ENGINE_BUILD_ID: string;
+  /**
+   * When that bundle was built (ISO), or null for an unbundled one. The id says whether two
+   * engines are the same; only this says which is newer, and only the newer side may replace
+   * the engine both windows share.
+   */
+  ENGINE_BUILD_TIME: string | null;
   /** Rejects with the engine's own `ConfigError`, whose message is shown verbatim. */
   loadResolvedConfig(configPath: string, home: string): Promise<ResolvedEnginePaths>;
 }

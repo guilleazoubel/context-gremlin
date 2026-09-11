@@ -14,7 +14,7 @@ import {
   type EngineState,
   type Trigger,
 } from '../../src/engine/manager';
-import { FakeEngineProcess, identity, pidFile } from '../support/fake-engine-process';
+import { BUNDLED_BUILD_TIME, FakeEngineProcess, identity, pidFile } from '../support/fake-engine-process';
 
 const PATHS = {
   configPath: '/home/me/.cgremlin-core/core.json',
@@ -31,6 +31,9 @@ const LAUNCH = {
 
 /** What the bundled `bridge.js` would export beside the version — a content address (MG-C5). */
 const BUNDLED_BUILD_ID = 'aaaaaaaaaaaaaaaa';
+/** An engine built BEFORE this window's bundle, and one built after it. */
+const OLDER = '2026-09-09T09:00:00.000Z';
+const NEWER = '2026-09-11T09:00:00.000Z';
 
 const flush = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 
@@ -47,6 +50,7 @@ beforeEach(() => {
     process: fake,
     bundledVersion: '0.0.1',
     bundledBuildId: BUNDLED_BUILD_ID,
+    bundledBuildTime: BUNDLED_BUILD_TIME,
     paths: () => PATHS,
     launch: () => LAUNCH,
     log: (line) => logs.push(line),
@@ -79,7 +83,7 @@ describe('MG-C1 no-second-engine', () => {
   it('never spawns while the probe answers, whatever it answers', async () => {
     fake.probes = ['foreign'];
     expect((await manager.ensureRunning()).kind).toBe('foreign');
-    fake.probes = [identity({ version: '9.9.9' })];
+    fake.probes = [identity({ version: '9.9.9', buildTime: OLDER })];
     expect((await manager.ensureRunning()).kind).toBe('mismatch');
     expect(fake.spawns).toHaveLength(0);
     expect(fake.signals).toHaveLength(0);
@@ -401,6 +405,7 @@ describe('MG-C2 never-kill-what-we-cannot-prove', () => {
       process: fake,
       bundledVersion: '0.0.1',
       bundledBuildId: BUNDLED_BUILD_ID,
+    bundledBuildTime: BUNDLED_BUILD_TIME,
       paths: () => PATHS,
       launch: () => LAUNCH,
       log: (line) => logs.push(line),
@@ -538,15 +543,15 @@ describe('the serial operation queue', () => {
  * bundle, and the handshake now compares both.
  */
 describe('MG-C5: the handshake compares the build id as well as the version', () => {
-  it('calls the same version with a different build a mismatch', async () => {
-    fake.probes = [identity({ buildId: 'bbbbbbbbbbbbbbbb', pid: 77 })];
+  it('calls the same version with an OLDER build a mismatch', async () => {
+    fake.probes = [identity({ buildId: 'bbbbbbbbbbbbbbbb', buildTime: OLDER, pid: 77 })];
     const state = await manager.ensureRunning();
     expect(state).toMatchObject({ kind: 'mismatch', pid: 77 });
     expect(fake.spawns).toHaveLength(0);
   });
 
   it('treats an engine that reports no build id at all as a mismatch', async () => {
-    fake.probes = [identity({ buildId: undefined, pid: 78 })];
+    fake.probes = [identity({ buildId: undefined, buildTime: undefined, pid: 78 })];
     expect((await manager.ensureRunning()).kind).toBe('mismatch');
   });
 
@@ -561,7 +566,7 @@ describe('MG-C5: the handshake compares the build id as well as the version', ()
   });
 
   it('restarts a same-version different-build engine exactly once when nothing is running', async () => {
-    const stale = identity({ buildId: 'bbbbbbbbbbbbbbbb' });
+    const stale = identity({ buildId: 'bbbbbbbbbbbbbbbb', buildTime: OLDER });
     // The stale engine answers the restart probe and both halves of the ownership proof, and the
     // socket is silent once it is gone.
     fake.probes = [stale, stale, stale, null];
@@ -572,6 +577,111 @@ describe('MG-C5: the handshake compares the build id as well as the version', ()
     expect(fake.signals).toHaveLength(1);
     expect(fake.spawns).toHaveLength(1);
     expect(state).toMatchObject({ kind: 'running' });
+  });
+});
+
+/**
+ * The restart ping-pong, and the ordering that ends it.
+ *
+ * A content address answers "is this my engine?" and nothing else: two windows on two builds
+ * BOTH read "not mine", both restarted the engine, and every restart handed the other window a
+ * brand-new identity — so the once-per-identity latch reset each round and the pair traded
+ * SIGTERMs every 1.5 s for ever, each restart succeeding (`exited with code 0`, never a
+ * "Another process is already listening").
+ *
+ * The build TIME orders them. Only the window whose bundle is strictly newer may replace the
+ * engine; the one that is behind adopts it and asks to be reloaded, which is a thing the loop
+ * cannot be built out of.
+ */
+describe('ordering by build time (the restart ping-pong)', () => {
+  it('adopts an engine NEWER than this window and signals nothing', async () => {
+    fake.probes = [identity({ buildId: 'bbbbbbbbbbbbbbbb', buildTime: NEWER, pid: 77 })];
+    const state = await manager.ensureRunning();
+    expect(state).toMatchObject({ kind: 'outdated', pid: 77 });
+    expect(fake.signals).toHaveLength(0);
+    expect(fake.spawns).toHaveLength(0);
+  });
+
+  it('restarts an engine OLDER than this window exactly once', async () => {
+    const older = identity({ buildId: 'bbbbbbbbbbbbbbbb', buildTime: OLDER });
+    fake.pidFiles = [pidFile()];
+    fake.signalOutcome = 'gone';
+    fake.probes = [older];
+    expect((await manager.ensureRunning()).kind).toBe('mismatch');
+
+    fake.probes = [older, older, older, null];
+    fake.spawnedAnswer = identity();
+    const state = await withClock(manager.restart('auto'), 2_000);
+    expect(state).toMatchObject({ kind: 'running' });
+    expect(fake.signals).toHaveLength(1);
+  });
+
+  it('calls two builds stamped at the same moment one engine, and says so once', async () => {
+    fake.probes = [identity({ buildId: 'bbbbbbbbbbbbbbbb', pid: 77 })];
+    expect(await manager.ensureRunning()).toMatchObject({ kind: 'running', pid: 77 });
+    await manager.ensureRunning();
+    await manager.ensureRunning();
+    expect(fake.signals).toHaveLength(0);
+    expect(logs.filter((l) => l.startsWith('engine.build_time_equal'))).toHaveLength(1);
+  });
+
+  /**
+   * The whole bug, in one case: two windows on two different builds over ONE engine, ten rounds
+   * of each of them probing and acting. Before the ordering this produced a SIGTERM per round,
+   * for ever. Now the newer window replaces the engine once and the older one adopts what it
+   * finds — and ten more rounds change nothing.
+   */
+  it('two windows on different builds trade exactly ONE restart over ten rounds', async () => {
+    const engineBuild = { buildId: 'bbbbbbbbbbbbbbbb', buildTime: OLDER };
+    // One fake engine both managers see: it answers with whatever build last replaced it.
+    let current = identity(engineBuild);
+    fake.probes = [current];
+    fake.pidFiles = [pidFile({ pid: current.pid, startedAt: current.startedAt })];
+    fake.signalOutcome = 'gone';
+
+    const makeManager = (buildId: string, buildTime: string): EngineManager =>
+      new EngineManager({
+        process: fake,
+        bundledVersion: '0.0.1',
+        bundledBuildId: buildId,
+        bundledBuildTime: buildTime,
+        paths: () => PATHS,
+        launch: () => LAUNCH,
+        log: (line) => logs.push(line),
+      });
+
+    // The window that just installed the new vsix, and the one still running the previous build.
+    const fresh = makeManager(BUNDLED_BUILD_ID, BUNDLED_BUILD_TIME);
+    const stale = makeManager('cccccccccccccccc', OLDER);
+
+    let boots = 0;
+    for (let round = 0; round < 10; round += 1) {
+      for (const [who, mgr] of [
+        ['fresh', fresh],
+        ['stale', stale],
+      ] as const) {
+        const state = await withClock(mgr.ensureRunning('auto'), 1_000);
+        if (state.kind !== 'mismatch') continue;
+        // What the surface does with a mismatch and nothing running: restart, silently.
+        boots += 1;
+        // The replacement is the build the restarting window ships, and it answers from now on.
+        current = identity({
+          buildId: who === 'fresh' ? BUNDLED_BUILD_ID : 'cccccccccccccccc',
+          buildTime: who === 'fresh' ? BUNDLED_BUILD_TIME : OLDER,
+          pid: 5000 + boots,
+          startedAt: `2026-09-10T1${boots}:00:00.000Z`,
+        });
+        fake.probes = [current];
+        fake.pidFiles = [pidFile({ pid: current.pid, startedAt: current.startedAt })];
+        fake.spawnedAnswer = current;
+        await withClock(mgr.restart('auto'), 2_000);
+      }
+    }
+
+    expect(boots).toBe(1);
+    expect(fake.signals).toHaveLength(1);
+    expect(fresh.state().kind).toBe('running');
+    expect(stale.state().kind).toBe('outdated');
   });
 });
 
@@ -597,7 +707,7 @@ describe("engineStartedAt (R26b's cross-window freshness check)", () => {
  */
 describe('a second manager sees a mismatch already fixed as running, not mismatch', () => {
   it('classifies the restarted engine as running for a manager that never restarted it itself', async () => {
-    const stale = identity({ buildId: 'bbbbbbbbbbbbbbbb' });
+    const stale = identity({ buildId: 'bbbbbbbbbbbbbbbb', buildTime: OLDER });
     fake.probes = [stale, stale, stale, null];
     fake.pidFiles = [pidFile()];
     fake.signalOutcome = 'gone';
@@ -609,6 +719,7 @@ describe('a second manager sees a mismatch already fixed as running, not mismatc
       process: fake,
       bundledVersion: '0.0.1',
       bundledBuildId: BUNDLED_BUILD_ID,
+    bundledBuildTime: BUNDLED_BUILD_TIME,
       paths: () => PATHS,
       launch: () => LAUNCH,
       log: (line) => logs.push(line),

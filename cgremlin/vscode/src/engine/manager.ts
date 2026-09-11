@@ -24,6 +24,12 @@ export interface EngineIdentity {
    * never equal to the bundled one, which is exactly the verdict that case deserves.
    */
   buildId?: string;
+  /**
+   * When that bundle was built. Absent on an engine older than the field — and, exactly like a
+   * missing `buildId`, that absence is an answer: an engine that cannot say when it was built
+   * orders as older than any extension that can.
+   */
+  buildTime?: string;
   pid: number;
   startedAt: string;
   socketPath: string;
@@ -91,6 +97,12 @@ export type EngineState =
   | { kind: 'running'; version: string; pid: number; adopted: boolean }
   | { kind: 'stopping'; since: number; pid: number; elapsedMs: number }
   | { kind: 'mismatch'; running: string; bundled: string; pid: number }
+  /**
+   * The mirror of `mismatch`: the engine on the socket is NEWER than this window's extension.
+   * It is adopted, never restarted — the window that is behind is the one that has to change,
+   * and the only thing that fixes it is reloading this window onto the installed build.
+   */
+  | { kind: 'outdated'; running: string; bundled: string; pid: number }
   | { kind: 'foreign' }
   | { kind: 'failed'; reason: string; logTail: readonly string[] };
 
@@ -120,6 +132,13 @@ export interface EngineManagerOptions {
   bundledVersion: string;
   /** MG-C5: `bridge.js`'s `ENGINE_BUILD_ID`, the other half of the handshake. */
   bundledBuildId: string;
+  /**
+   * `bridge.js`'s `ENGINE_BUILD_TIME` — when the bundle this window ships was built, or `null`
+   * for an unbundled one. It is what ORDERS two disagreeing builds, and the order is the whole
+   * fix: a content address says "not mine" to both sides of a disagreement, so both windows
+   * restarted the engine and each restart handed the other a fresh identity to restart again.
+   */
+  bundledBuildTime: string | null;
   paths: () => EnginePaths;
   launch: () => EngineLaunch;
   log: (line: string) => void;
@@ -174,6 +193,8 @@ export class EngineManager {
    * would otherwise stop and start one perfectly healthy engine for as long as it kept firing.
    */
   private lastAutoRestartIdentity: string | null = null;
+  /** Two builds stamped at the same moment are one engine; worth one line, not one per probe. */
+  private sameTimeLogged = false;
 
   constructor(private readonly opts: EngineManagerOptions) {}
 
@@ -312,8 +333,24 @@ export class EngineManager {
     const sameVersion = probe.version === this.opts.bundledVersion;
     const sameBuild = probe.buildId === this.opts.bundledBuildId;
     if (!sameVersion || !sameBuild) {
+      const theirs = probe.buildTime ?? null;
+      const ours = this.opts.bundledBuildTime;
+      // Built at the very same moment and still disagreeing about the id is not a disagreement
+      // anybody can act on — and acting on it is exactly how the restart loop started. Said once.
+      if (ours !== null && theirs !== null && ours === theirs) {
+        if (!this.sameTimeLogged) {
+          this.sameTimeLogged = true;
+          this.opts.log(
+            `engine.build_time_equal: the engine reports build ${probe.buildId ?? 'unknown'} and this window ships ${this.opts.bundledBuildId}, both built ${ours}; treating them as the same engine`,
+          );
+        }
+        return this.setState({ kind: 'running', version: probe.version, pid: probe.pid, adopted });
+      }
+      // Only a window that can PROVE its bundle is newer may replace the engine. Everything
+      // else — an engine built later, or a bundle with no time to compare — adopts and says so.
+      const weAreNewer = ours !== null && (theirs === null || ours > theirs);
       return this.setState({
-        kind: 'mismatch',
+        kind: weAreNewer ? 'mismatch' : 'outdated',
         // When only the build differs the two version strings are the same word, and a sentence
         // built from them would say nothing. The build ids are what the user needs to see.
         running: sameVersion ? `${probe.version} (build ${probe.buildId ?? 'unknown'})` : probe.version,

@@ -21,10 +21,14 @@ interface Timer {
   resolve: () => void;
 }
 
+/** The build time the manager tests treat as "the bundle this window ships". */
+export const BUNDLED_BUILD_TIME = '2026-09-10T09:00:00.000Z';
+
 export function identity(over: Partial<EngineIdentity> = {}): EngineIdentity {
   return {
     version: '0.0.1',
     buildId: 'aaaaaaaaaaaaaaaa',
+    buildTime: BUNDLED_BUILD_TIME,
     pid: 4242,
     startedAt: '2026-09-10T10:00:00.000Z',
     socketPath: '/tmp/cg/engine.sock',

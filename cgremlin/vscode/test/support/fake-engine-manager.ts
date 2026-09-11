@@ -31,6 +31,7 @@ export class ConfigErrorLike extends Error {
 export class FakeBridge implements EngineBridge {
   ENGINE_VERSION = '0.0.1';
   ENGINE_BUILD_ID = 'fakebuildid00000';
+  ENGINE_BUILD_TIME: string | null = '2026-09-10T09:00:00.000Z';
   paths: ResolvedEnginePaths = FAKE_PATHS;
   /** Thrown by the next `loadResolvedConfig` call, then cleared. */
   failWith: Error | null = null;

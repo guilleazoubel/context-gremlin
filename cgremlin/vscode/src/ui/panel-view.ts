@@ -44,7 +44,7 @@ import {
   type PanelState,
 } from '../model/panel-protocol';
 import {
-  SHOW_LOG,
+  troubleActionLabel,
   troubleCommand,
   troubleMessage,
   type EngineTrouble,
@@ -264,7 +264,7 @@ export class PanelView implements WebviewViewProviderLike {
       return {
         message: troubleMessage(this.trouble),
         command: troubleCommand(this.trouble),
-        actionLabel: this.trouble.kind === 'foreign' ? 'Start the engine' : SHOW_LOG,
+        actionLabel: troubleActionLabel(this.trouble),
       };
     }
     if (this.sourceTrouble !== null) {
