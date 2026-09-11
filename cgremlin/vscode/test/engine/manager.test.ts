@@ -514,6 +514,65 @@ describe('the serial operation queue', () => {
   });
 });
 
+/**
+ * R26's second belt, and the other half of the config-watcher flap.
+ *
+ * The backoff bounds spawns that *fail*. Nothing bounded restarts that *succeed* — and a trigger
+ * that repeats (a watcher firing on its own chmod, a settings event that arrives twice) would
+ * therefore stop and start one perfectly healthy engine over and over. An automatic restart is
+ * now spent once per engine identity: the same pid and the same boot is refused with one line,
+ * a person asking is never refused, and a genuinely different engine is restartable again.
+ */
+describe('an automatic restart is spent once per engine identity', () => {
+  /** A restart whose stop is over immediately, so the engine that answers afterwards is the same. */
+  function sameEngineThroughout(who = identity()): void {
+    fake.probes = [who];
+    fake.pidFiles = [pidFile({ pid: who.pid, startedAt: who.startedAt })];
+    fake.signalOutcome = 'gone';
+  }
+
+  it('refuses a second automatic restart against the same pid and boot, and says so once', async () => {
+    sameEngineThroughout();
+    expect((await withClock(manager.restart('auto'), 1_000)).kind).toBe('running');
+    expect(fake.signals).toHaveLength(1);
+
+    expect((await withClock(manager.restart('auto'), 1_000)).kind).toBe('running');
+    expect(fake.signals).toHaveLength(1);
+    expect(logs.filter((l) => l.startsWith('engine.auto_restart_refused'))).toHaveLength(1);
+  });
+
+  it('never refuses a person', async () => {
+    sameEngineThroughout();
+    await withClock(manager.restart('auto'), 1_000);
+    await withClock(manager.restart('auto'), 1_000);
+    expect(fake.signals).toHaveLength(1);
+
+    await withClock(manager.restart('user'), 1_000);
+    await withClock(manager.restart('user'), 1_000);
+    expect(fake.signals).toHaveLength(3);
+  });
+
+  it('restarts again automatically once the engine is a different one', async () => {
+    sameEngineThroughout();
+    await withClock(manager.restart('auto'), 1_000);
+    await withClock(manager.restart('auto'), 1_000);
+    expect(fake.signals).toHaveLength(1);
+
+    sameEngineThroughout(identity({ pid: 5_150, startedAt: '2026-09-10T11:00:00.000Z' }));
+    await withClock(manager.restart('auto'), 1_000);
+    expect(fake.signals).toHaveLength(2);
+    expect(fake.signals.at(-1)?.pid).toBe(5_150);
+  });
+
+  it('restarts again automatically when only the boot time is new (a reused pid)', async () => {
+    sameEngineThroughout();
+    await withClock(manager.restart('auto'), 1_000);
+    sameEngineThroughout(identity({ startedAt: '2026-09-10T12:00:00.000Z' }));
+    await withClock(manager.restart('auto'), 1_000);
+    expect(fake.signals).toHaveLength(2);
+  });
+});
+
 describe('restart', () => {
   it('starts without a stop when nothing answers', async () => {
     fake.spawnedAnswer = identity();

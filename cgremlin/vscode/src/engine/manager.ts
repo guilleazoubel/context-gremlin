@@ -159,6 +159,13 @@ export class EngineManager {
   private lastAttemptEndedAt: number | null = null;
   /** R20: the fallback is worth one line, not one per retry. */
   private pathFallbackLogged = false;
+  /**
+   * R26b: `<pid>@<startedAt>` of the engine the last *automatic* restart acted on. The backoff
+   * bounds spawns that fail; nothing bounded restarts that succeed — and a trigger that repeats
+   * itself (a config watcher firing on its own `chmod`, a settings event that arrives twice)
+   * would otherwise stop and start one perfectly healthy engine for as long as it kept firing.
+   */
+  private lastAutoRestartIdentity: string | null = null;
 
   constructor(private readonly opts: EngineManagerOptions) {}
 
@@ -234,6 +241,19 @@ export class EngineManager {
   private async runRestart(trigger: Trigger): Promise<EngineState> {
     const before = await this.probeOrRetry(this.opts.paths().socketPath);
     if (before === null) return await this.runEnsure(trigger);
+    // R26b. A person is never refused (and never latched: what they asked for is the point). An
+    // automatic trigger gets one restart per engine — the same pid at the same boot — because a
+    // second one is not a new decision, it is the same one arriving again.
+    if (trigger === 'auto' && before !== 'foreign') {
+      const who = `${before.pid}@${before.startedAt}`;
+      if (who === this.lastAutoRestartIdentity) {
+        this.opts.log(
+          `engine.auto_restart_refused: pid ${before.pid} (booted ${before.startedAt}) has already been restarted automatically once; restart it yourself if it really needs another`,
+        );
+        return this.current;
+      }
+      this.lastAutoRestartIdentity = who;
+    }
     const stopped = await this.runStop();
     if (stopped.kind !== 'stopped') return stopped;
     return await this.runEnsure(trigger);
