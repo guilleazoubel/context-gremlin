@@ -94,6 +94,19 @@ describe('watchFileByRename', () => {
     });
     cleanups.push(() => handle.dispose());
 
+    // fs.watch's constructor returning is not the same moment as the OS watch
+    // descriptor actually being armed — under CPU load there is a real gap,
+    // and a chmod issued into that gap is silently missed. Probe with a
+    // write+rename (the same event class we already know is delivered — see
+    // the first case in this file) and wait for it to be acknowledged before
+    // trusting the watcher is up for the chmod under test.
+    // Keep the probe file at 0o600 too, so the mode the chmod below asserts
+    // against ("unchanged") is still actually unchanged by the probe itself.
+    fs.writeFileSync(`${target}.probe.tmp`, '{"me":"someone"}', { mode: 0o600 });
+    fs.renameSync(`${target}.probe.tmp`, target);
+    await waitFor(() => events > 0);
+    events = 0;
+
     // The very same call `ui/engine.ts` makes, with the mode the file already has.
     fs.chmodSync(target, 0o600);
     await waitFor(() => events > 0);
