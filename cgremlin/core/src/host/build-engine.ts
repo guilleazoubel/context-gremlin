@@ -25,6 +25,7 @@ import { NodeSessionWatcher } from '../fs/node-session-watcher';
 import type { SessionWatcher } from '../fs/session-watcher';
 import { EnvironmentService } from '../env/environment-service';
 import { AckStore } from '../attention/ack-store';
+import { WorkItemService } from '../work/work-item-service';
 import {
   AttentionService,
   PrSourceAdapter,
@@ -60,6 +61,7 @@ export interface Engine {
   config: CoreConfig;
   environment: EnvironmentService | null;
   attention: AttentionService;
+  workItems: WorkItemService;
   eventRing: EventRing;
   /** What `GET /version` reports and what `serve()` records in its `engine.json` lock — one object, so the two can never disagree. */
   engineInfo: EngineInfo;
@@ -239,6 +241,24 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     now: adapters.now,
   });
 
+  // R1: a GROUPING over the attention items, never a second derivation, and
+  // it takes no session lock (MG-1). `serve()` owns start()/stop(), exactly
+  // as it does for AttentionService.
+  const workItems = new WorkItemService({
+    attention,
+    inventory: inventoryStore,
+    jira: jiraScanner,
+    events,
+    config: {
+      me: config.me,
+      watchAuthors: config.watchAuthors,
+      showAllRepoPrs: config.showAllRepoPrs,
+      projectKeys: config.jira?.projectKeys ?? [],
+      botLogins: config.botLogins,
+      ...(config.jira?.siteUrl !== undefined ? { jiraSiteUrl: config.jira.siteUrl } : {}),
+    },
+  });
+
   const tickable = opts.makeTickable
     ? opts.makeTickable({ gh: adapters.gh, store, pipeline, events, lock, inventoryStore, scanner })
     : scanner;
@@ -261,6 +281,7 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     events,
     inventory: { scanner, scheduler, factory, inventoryStore, config: { me: config.me } },
     attention,
+    workItems,
     eventRing,
     lock,
     config,
@@ -268,5 +289,5 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     ...(environment ? { environment } : {}),
   });
 
-  return { server, scheduler, scanner, pipeline, events, store, lock, config, environment, attention, eventRing, engineInfo };
+  return { server, scheduler, scanner, pipeline, events, store, lock, config, environment, attention, workItems, eventRing, engineInfo };
 }

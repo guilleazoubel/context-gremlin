@@ -396,7 +396,18 @@ export class AttentionService {
     }
   }
 
-  async list(opts: { all?: boolean } = {}): Promise<{ evaluatedAt: string; items: AttentionItem[] }> {
+  /**
+   * R27 — `dedupe` defaults to TRUE, so `/attention` and every existing
+   * caller are unchanged byte-for-byte. `WorkItemService` passes
+   * `dedupe: false` and gets the PRE-DEDUPE items: both the session item and
+   * the `source: 'pr'` item for a PR under review. `dedupe()` drops the PR
+   * item and keeps only three of its link fields, so a deduped list cannot
+   * tell a work item whether the PR is a draft, who requested review, or
+   * whether a human has reviewed it — and re-reading the inventory inside
+   * `src/work/` would be a second copy of the attention rule, which R1
+   * exists to forbid.
+   */
+  async list(opts: { all?: boolean; dedupe?: boolean } = {}): Promise<{ evaluatedAt: string; items: AttentionItem[] }> {
     const acks = await this.loadAcks();
     const collected: Array<{ source: ItemSource; item: CollectedItem }> = [];
     for (const adapter of this.deps.adapters) {
@@ -404,7 +415,8 @@ export class AttentionService {
         collected.push({ source: adapter.source, item });
       }
     }
-    const items = dedupe(collected).map(({ source, item }) => this.evaluate(source, item, acks));
+    const kept = opts.dedupe === false ? collected : dedupe(collected);
+    const items = kept.map(({ source, item }) => this.evaluate(source, item, acks));
     return {
       evaluatedAt: this.now().toISOString(),
       items: opts.all ? items : items.filter((item) => item.attention.needsAttention),

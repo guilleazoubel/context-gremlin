@@ -596,3 +596,30 @@ describe('R18: a third source is an adapter, not a refactor', () => {
     expect((await stubFx.service.list()).items).toEqual([]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 9 / Task A6 — R27: the pre-dedupe list WorkItemService needs.
+// ---------------------------------------------------------------------------
+
+describe('AttentionService.list({ dedupe }) (R27)', () => {
+  async function reviewSessionAndItsPr(): Promise<void> {
+    await fx.h.store.save(reviewSession('r1'));
+    fx.setInventory(inventory([entry({ ours: { status: 'none' } })]));
+  }
+
+  it('still dedupes by default, so /attention and every existing caller are unchanged', async () => {
+    await reviewSessionAndItsPr();
+    const { items } = await fx.service.list({ all: true });
+    expect(items.filter((i) => i.source === 'pr')).toEqual([]);
+    const host = items.find((i) => i.source === 'session')!;
+    expect(host.links.prRepo).toBe('acme/app');
+    expect(host.links.prNumber).toBe(12);
+  });
+
+  it('dedupe: false returns BOTH the session item and its source: pr item', async () => {
+    await reviewSessionAndItsPr();
+    const { items } = await fx.service.list({ all: true, dedupe: false });
+    expect(items.filter((i) => i.source === 'pr').length).toBe(1);
+    expect(items.filter((i) => i.source === 'session').length).toBe(1);
+  });
+});

@@ -27,6 +27,7 @@ import type { ReviewSessionFactory, CandidatePR } from '../pipeline/review-sessi
 import type { EnvironmentService, LocalAppStatus } from '../env/environment-service';
 import { redactBypassUrls, redactCoreConfig, type CoreConfig } from '../config/core-config';
 import { handleEventStream, type EventRing } from './event-stream';
+import type { WorkItemService } from '../work/work-item-service';
 import type { AttentionService } from '../attention/attention-service';
 import { ITEM_SOURCES, parseItemRef, prRef, sessionRef, type ItemRef, type ItemSource } from '../attention/item-ref';
 import { OwnPrError } from '../gh/own-pr-error';
@@ -76,6 +77,8 @@ export interface ApiServerDeps {
   environment?: EnvironmentService;
   /** Absent for a wiring with no attention model: every /attention route (and both ack aliases) then 404s. */
   attention?: AttentionService;
+  /** The work-item layer (Phase 9). Absent leaves every `/items` route a clean 404. */
+  workItems?: WorkItemService;
   /** Absent for a wiring with no event ring: GET /events then 404s. */
   eventRing?: EventRing;
   /** Absent for a wiring built without one (every test server that doesn't need it): `GET /config` then 404s. */

@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  ATTENTION_REASONS,
   NEEDS_YOU_REASONS,
   deriveSessionReasons,
   derivePrReasons,
@@ -190,16 +191,24 @@ describe('deriveSessionReasons', () => {
 });
 
 describe('derivePrReasons', () => {
-  it('fires changes_requested for my own PR with CHANGES_REQUESTED', () => {
-    const derived = derivePrReasons(entry({ isMine: true, reviewDecision: 'CHANGES_REQUESTED' }));
-    expect(derived).toEqual([{ reason: 'changes_requested', at: '2026-09-03T00:00:00.000Z' }]);
+  it('fires changes_requested for my own PR with CHANGES_REQUESTED, timestamped from reviewDecisionAt (R58)', () => {
+    const derived = derivePrReasons(
+      entry({ isMine: true, reviewDecision: 'CHANGES_REQUESTED', reviewDecisionAt: '2026-09-03T09:00:00.000Z' }),
+    );
+    expect(derived).toEqual([{ reason: 'changes_requested', at: '2026-09-03T09:00:00.000Z' }]);
   });
 
-  it('fires changes_requested for my own PR with fresh team activity', () => {
+  it('R50: fresh HUMAN activity on my own PR is review_arrived, not changes_requested', () => {
     const derived = derivePrReasons(
-      entry({ isMine: true, teamActivity: [{ login: 'bob', kind: 'comment', at: '2026-09-03T10:00:00.000Z' }] }),
+      entry({
+        isMine: true,
+        // deliberately NOT in watchAuthors — teamActivity stays empty and the
+        // reason still fires, which is the widening R50 asks for.
+        teamActivity: [],
+        humanActivity: { reviewedBy: [], commentedBy: ['stranger'], lastAt: '2026-09-03T10:00:00.000Z' },
+      }),
     );
-    expect(derived.map((d) => d.reason)).toEqual(['changes_requested']);
+    expect(derived).toEqual([{ reason: 'review_arrived', at: '2026-09-03T10:00:00.000Z' }]);
   });
 
   // MG-A8 no-parking-lot-attention
@@ -306,8 +315,8 @@ describe('evaluateAttention', () => {
     ).toBe(run.finishedAt);
   });
 
-  it('uses entry.updatedAt for changes_requested and entry.seenAt as the fallback', () => {
-    const e = entry({ isMine: true, reviewDecision: 'CHANGES_REQUESTED' });
+  it('uses reviewDecisionAt for changes_requested and entry.seenAt as the fallback', () => {
+    const e = entry({ isMine: true, reviewDecision: 'CHANGES_REQUESTED', reviewDecisionAt: '2026-09-03T00:00:00.000Z' });
     const state = evaluateAttention({
       derived: derivePrReasons(e),
       fallbackSince: e.seenAt,
@@ -382,5 +391,93 @@ describe('MG-A1 attention-is-pure-and-source-agnostic', () => {
     const body = end === -1 ? rest : rest.slice(0, end);
     expect(body).not.toMatch(/session/i);
     expect(body).not.toMatch(/entry/i);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 9 / Task A6 — R63's pinned array and R50/R58's PR reasons.
+// ---------------------------------------------------------------------------
+
+describe('ATTENTION_REASONS is pinned verbatim (R63)', () => {
+  it('matches R63 element-for-element, positions included', () => {
+    expect([...ATTENTION_REASONS]).toEqual([
+      'plan_ready',
+      'needs_input',
+      'blocked',
+      'run_failed',
+      'review_ready',
+      'rereview_ready',
+      'comments_ready',
+      'local_prereq_failed',
+      'changes_requested',
+      'review_arrived',
+      'approved',
+    ]);
+  });
+
+  it('NEEDS_YOU_REASONS contains all three new reasons', () => {
+    for (const reason of ['comments_ready', 'review_arrived', 'approved'] as const) {
+      expect(NEEDS_YOU_REASONS).toContain(reason);
+    }
+  });
+});
+
+describe('derivePrReasons: the three my-own-PR reasons (R50, R58)', () => {
+  const human = (at: string) => ({ reviewedBy: ['jane'], commentedBy: [], lastAt: at });
+
+  it('a non-bot review on my PR fires review_arrived, stamped from humanActivity.lastAt', () => {
+    const derived = derivePrReasons(entry({ isMine: true, humanActivity: human('2026-09-05T00:00:00.000Z') }));
+    expect(derived).toContainEqual({ reason: 'review_arrived', at: '2026-09-05T00:00:00.000Z' });
+  });
+
+  it('APPROVED fires approved, stamped from reviewDecisionAt and NEVER from updatedAt', () => {
+    const derived = derivePrReasons(
+      entry({
+        isMine: true,
+        reviewDecision: 'APPROVED',
+        reviewDecisionAt: '2026-09-05T00:00:00.000Z',
+        updatedAt: '2026-09-09T00:00:00.000Z',
+      }),
+    );
+    const approved = derived.find((d) => d.reason === 'approved');
+    expect(approved?.at).toBe('2026-09-05T00:00:00.000Z');
+  });
+
+  it('a bot-only review fires nothing', () => {
+    expect(derivePrReasons(entry({ isMine: true }))).toEqual([]);
+  });
+
+  it("a teammate's PR fires nothing however loud it is (MG-A8 unchanged)", () => {
+    expect(
+      derivePrReasons(
+        entry({
+          isMine: false,
+          reviewDecision: 'CHANGES_REQUESTED',
+          reviewDecisionAt: '2026-09-05T00:00:00.000Z',
+          humanActivity: human('2026-09-05T00:00:00.000Z'),
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  it('R58, named: "a push to an approved, acked PR re-fires nothing"', () => {
+    const before = entry({
+      isMine: true,
+      reviewDecision: 'APPROVED',
+      reviewDecisionAt: '2026-09-05T00:00:00.000Z',
+      humanActivity: human('2026-09-05T00:00:00.000Z'),
+      updatedAt: '2026-09-05T00:00:00.000Z',
+      headSha: 'sha1',
+    });
+    const first = evaluateAttention({ derived: derivePrReasons(before), fallbackSince: before.seenAt, ack: null });
+    const ack = { signature: first.signature, ackedAt: '2026-09-06T00:00:00.000Z' };
+    expect(evaluateAttention({ derived: derivePrReasons(before), fallbackSince: before.seenAt, ack }).acked).toBe(true);
+
+    // the push: updatedAt and headSha move, no new review.
+    const after = { ...before, updatedAt: '2026-09-09T12:00:00.000Z', headSha: 'sha2' };
+    const second = evaluateAttention({ derived: derivePrReasons(after), fallbackSince: after.seenAt, ack });
+    expect(second.signature).toBe(first.signature);
+    expect(second.acked).toBe(true);
+    expect(second.needsAttention).toBe(false);
   });
 });

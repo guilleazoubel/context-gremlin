@@ -12,6 +12,7 @@ describe('ENGINE_EVENT_TYPES', () => {
       'inventory.updated',
       'attention.changed',
       'artifact.changed',
+      'item.changed',
     ];
     expect([...ENGINE_EVENT_TYPES].sort()).toEqual([...expected].sort());
     expect(new Set(ENGINE_EVENT_TYPES).size).toBe(ENGINE_EVENT_TYPES.length);

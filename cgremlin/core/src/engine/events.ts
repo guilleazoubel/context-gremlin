@@ -17,6 +17,18 @@ export interface EngineEventMap {
    */
   'attention.changed': { item: AttentionItem };
   /**
+   * R16/R41 — one work item's state moved. Registered HERE and in
+   * ENGINE_EVENT_TYPES below; an event added to only the first is silently
+   * never carried by `/events`. The payload is MINIMAL on purpose: the
+   * event ring buffers 256 frames, and 256 whole `WorkItem`s would be
+   * resident memory paid for frames nobody reads. It is a HINT — the client
+   * refetches `GET /items` (or `GET /items/<path>` for an open tab) and
+   * renders from that, so two engines' answers can never disagree.
+   * `changedFields` is advisory: nothing may branch on its ABSENCE into a
+   * different correctness path.
+   */
+  'item.changed': { id: string; kind: string; changedFields?: string[] };
+  /**
    * A session artifact changed on disk, reported by the SessionWatcher — the
    * agent writes its artifacts directly, inside its turn, with no engine
    * involvement (R7), so the watch is the only thing that can see it.
@@ -38,6 +50,7 @@ export const ENGINE_EVENT_TYPES = [
   'inventory.updated',
   'attention.changed',
   'artifact.changed',
+  'item.changed',
 ] as const satisfies readonly (keyof EngineEventMap)[];
 
 type Listener<K extends keyof EngineEventMap> = (payload: EngineEventMap[K]) => void;
