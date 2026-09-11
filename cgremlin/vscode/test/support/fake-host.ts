@@ -494,6 +494,11 @@ export class FakeHost implements Host {
     };
   }
 
+  /** The delays of every timeout still waiting, so a test can pin the window it was given. */
+  pendingTimeouts(): number[] {
+    return this.timers.filter((t) => t.kind === 'timeout' && !t.cancelled).map((t) => t.ms);
+  }
+
   /** Runs every due timeout (and no interval) — the coalescing window. */
   flushTimeouts(): void {
     for (const timer of [...this.timers]) {

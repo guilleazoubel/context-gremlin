@@ -129,9 +129,10 @@ export function createUi(options: UiOptions): Ui {
     disposables.push({ dispose: unsubscribe });
   }
 
+  // P0-1: a drop is reported to the coordinator, which decides whether it has lasted long enough
+  // to be worth saying. Nothing here blanks a list: the last snapshot outlives a hiccup.
   const offline = async (): Promise<void> => {
-    coordinator.markOffline();
-    notifications.reportOffline();
+    coordinator.connectionDropped();
     await Promise.resolve();
   };
 
@@ -166,6 +167,8 @@ export function createUi(options: UiOptions): Ui {
     },
     offline,
     handleFrame(frame: unknown) {
+      // A frame arriving is proof the stream is up, whatever the frame says (P0-1).
+      coordinator.reportAlive();
       const { event, id } = addressOf(frame);
       if (event === 'item.changed' && id !== null && id === itemTab.itemId()) {
         void itemTab.itemChanged(id);
