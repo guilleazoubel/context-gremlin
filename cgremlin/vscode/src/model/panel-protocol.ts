@@ -12,9 +12,12 @@ import {
   SORT_OPTIONS,
   WORK_LIST_KINDS,
   type ParkingLotGroup,
+  type RowMetaCell,
   type WorkListKind,
   type WorkSortKind,
 } from './work-items';
+
+export type { RowMetaCell } from './work-items';
 
 export interface PanelRowView {
   id: string;
@@ -27,6 +30,14 @@ export interface PanelRowView {
   age: string;
   size: string;
   ci: string;
+  /** P0-3: the second line as cells, so the view lays them out instead of clipping a sentence. */
+  meta: RowMetaCell[];
+  /** P1-7: the third line, for `myWork`. Empty everywhere else. */
+  stateLine: RowMetaCell[];
+  /** P1-6: `S` | `M` | `L` | `XL` | `—`. */
+  tier: string;
+  /** R47: "someone is on it" — the core's answer, rendered as a dimmed row. */
+  demoted: boolean;
   needsYou: boolean;
   hasChildren: boolean;
   expanded: boolean;

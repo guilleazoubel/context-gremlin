@@ -20,6 +20,7 @@ export type WorkListKind = 'parkingLot' | 'myWork' | 'investigations' | 'waiting
 export type ParkingLotGroup = 'reviewing' | 'untouched' | 'someoneOnIt';
 export type WorkAgentMode = 'review' | 'investigation' | 'development' | 'respond';
 export type CiStatus = 'success' | 'pending' | 'failure' | 'none';
+export type SizeTier = 'S' | 'M' | 'L' | 'XL';
 
 /** `ticket:HB-627` | `pr:owner/repo#12` | `session:<id>` (R14, R25). Opaque to the panel. */
 export type WorkItemId = string;
@@ -51,6 +52,12 @@ export interface WorkItemPr {
   deletions: number | null;
   ci: CiStatus | null;
   labels: string[] | null;
+  /**
+   * P1-6: the core's own S/M/L/XL verdict (`WorkItemPr.sizeTier`). **Optional**: an engine older
+   * than Phase 10 does not send it, and the panel derives the same tier locally rather than
+   * rendering nothing.
+   */
+  sizeTier?: SizeTier | null;
   /**
    * R48's PR focus wants per-reviewer summaries, the open-thread count and the CI checks by
    * name. They are **optional** on the wire: the list response has no use for them, and the tab
@@ -256,13 +263,48 @@ export interface WorkChild {
   path: string | null;
 }
 
+/**
+ * One signal on a row's second line. P0-3: the panel used to join these into a sentence and
+ * then clip it after the author in a 300 px sidebar — so they cross as CELLS and the view lays
+ * them out (the `·` separators are CSS, §2.3).
+ */
+export type RowMetaKind =
+  | 'author'
+  | 'age'
+  | 'tier'
+  | 'size'
+  | 'ci'
+  | 'review'
+  | 'activity'
+  | 'landed'
+  | 'ticketStatus'
+  | 'prState'
+  | 'agentPhase';
+
+export interface RowMetaCell {
+  kind: RowMetaKind;
+  /** Empty only for `ci`, which renders as a dot and says the rest in its title. */
+  text: string;
+  /** The hover title — the full ISO date behind `12d`, the CI state behind the dot. */
+  title?: string;
+  tone?: 'good' | 'warn' | 'bad';
+}
+
 export interface WorkRow {
   id: WorkItemId;
   list: WorkListKind;
   item: WorkItem;
   label: string;
-  /** The dimmed second line, already joined. */
+  /** The dimmed second line, already joined — the accessible text behind `meta`. */
   description: string;
+  /** P0-3: the second line as cells. */
+  meta: RowMetaCell[];
+  /** P1-7: the third line, for `myWork` — ticket status · PR state · agent phase. */
+  stateLine: RowMetaCell[];
+  /** P1-6: `S` | `M` | `L` | `XL` | `—`. */
+  tier: string;
+  /** R47: the core's own answer, so "someone is on it" can be dimmed without re-deriving it. */
+  demoted: boolean;
   badges: string[];
   chips: string[];
   age: string;
@@ -377,21 +419,22 @@ function rowsOf(
 
 export function toRow(item: WorkItem, list: WorkListKind, now: number): WorkRow {
   const primary = item.prs[0];
-  const age = ageOf(primary?.createdAt ?? null, now);
+  // A row with no PR is as old as the work behind it; a PR row whose `createdAt` defaulted says
+  // `—` rather than borrowing the attention timestamp and implying a date it does not have.
+  const openedIso = primary === undefined ? item.attention.since : primary.createdAt;
+  const age = compactAge(openedIso, now);
   const size = sizeOf(primary);
+  const tier = tierOf(primary);
   const ci = ciDot(primary?.ci ?? null);
   const activity = activityOf(primary);
   const badges = item.agents.map(badgeOf);
   const chips = item.prs.map((pr) => `${pr.repo}#${pr.number}`);
+  const meta = metaOf(item, list, { age, size, tier, openedIso, activity });
+  const stateLine = list === 'myWork' ? stateLineOf(item) : [];
   // The `—` placeholders stay in the line: a row whose age and size took their R45 defaults
   // must say it has none, never imply a zero (MG-12).
-  const description = [
-    primary?.author === null || primary?.author === undefined ? '' : `@${primary.author}`,
-    primary === undefined ? '' : age,
-    primary === undefined ? '' : size,
-    activity,
-    item.attention.reasons.join(', '),
-  ]
+  const description = meta
+    .map((cell) => cell.text)
     .filter((part) => part !== '')
     .join(' · ');
   return {
@@ -400,6 +443,10 @@ export function toRow(item: WorkItem, list: WorkListKind, now: number): WorkRow 
     item,
     label: labelOf(item, list),
     description,
+    meta,
+    stateLine,
+    tier,
+    demoted: item.demoted,
     badges,
     chips,
     age,
@@ -478,18 +525,6 @@ export function ciDot(ci: CiStatus | null): string {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** MG-12: a row whose `createdAt` took its R45 default renders `—`, never "opened today". */
-export function ageOf(createdAt: string | null, now: number): string {
-  if (createdAt === null) return '—';
-  const at = Date.parse(createdAt);
-  if (Number.isNaN(at)) return '—';
-  const elapsed = Math.max(0, now - at);
-  const days = Math.floor(elapsed / DAY_MS);
-  if (days >= 1) return `opened ${days}d ago`;
-  const hours = Math.floor(elapsed / (60 * 60 * 1000));
-  return hours >= 1 ? `opened ${hours}h ago` : 'opened <1h ago';
-}
-
 /** MG-12 again: no fabricated `0 files`. */
 export function sizeOf(pr: WorkItemPr | undefined): string {
   if (pr === undefined || pr.changedFiles === null) return '—';
@@ -509,6 +544,167 @@ export function activityOf(pr: WorkItemPr | undefined): string {
   const requested = pr.reviewRequests ?? [];
   if (requested.length > 0) return `👤 @${requested[0]} requested`;
   return '';
+}
+
+/**
+ * P0-3: the second line as cells, per list, because each list answers a different question
+ * (§1). The parking lot asks "should I pick this up?"; waiting-for-review asks "what landed?";
+ * my work and investigations ask "where is it?".
+ */
+function metaOf(
+  item: WorkItem,
+  list: WorkListKind,
+  parts: { age: string; size: string; tier: string; openedIso: string | null; activity: string },
+): RowMetaCell[] {
+  const primary = item.prs[0];
+  const cells: RowMetaCell[] = [];
+  const openedTitle = parts.openedIso === null ? undefined : { title: parts.openedIso };
+
+  if (list === 'investigations') {
+    const agent = item.agents[0];
+    if (agent !== undefined) {
+      cells.push({ kind: 'agentPhase', text: `${MODE_GLYPH[agent.mode] ?? '•'} ${agent.phase}` });
+    }
+    cells.push({ kind: 'age', text: parts.age, ...openedTitle });
+    return cells;
+  }
+
+  if (primary?.author !== null && primary?.author !== undefined) {
+    cells.push({ kind: 'author', text: `@${primary.author}` });
+  }
+  cells.push({ kind: 'age', text: parts.age, ...openedTitle });
+  cells.push({ kind: 'tier', text: parts.tier, title: parts.size === '—' ? undefined : parts.size });
+  if (list !== 'waitingForReview') cells.push({ kind: 'size', text: parts.size });
+
+  const ci = ciCell(primary?.ci ?? null);
+  if (ci !== null) cells.push(ci);
+
+  if (list === 'waitingForReview') {
+    const landed = landedOf(primary);
+    if (landed !== '') cells.push({ kind: 'landed', text: landed });
+  } else {
+    const decision = reviewText(primary?.reviewDecision ?? null);
+    if (decision !== null) cells.push({ kind: 'review', text: decision });
+    if (parts.activity !== '') cells.push({ kind: 'activity', text: parts.activity });
+  }
+  return cells;
+}
+
+const CI_TONE: Record<CiStatus, 'good' | 'warn' | 'bad' | null> = {
+  success: 'good',
+  pending: 'warn',
+  failure: 'bad',
+  none: null,
+};
+
+/** §2.2 rule 9: a dot with a title, not an emoji — emoji size inconsistently in the sidebar. */
+export function ciCell(ci: CiStatus | null): RowMetaCell | null {
+  if (ci === null) return null;
+  const tone = CI_TONE[ci];
+  return tone === null ? null : { kind: 'ci', text: '', title: `CI: ${ci}`, tone };
+}
+
+const REVIEW_TEXT: Record<string, string> = {
+  REVIEW_REQUIRED: 'review required',
+  APPROVED: 'approved',
+  CHANGES_REQUESTED: 'changes requested',
+};
+
+function reviewText(decision: string | null): string | null {
+  if (decision === null || decision === '') return null;
+  return REVIEW_TEXT[decision] ?? null;
+}
+
+/**
+ * P1-8: what actually landed on my own PR. The verdict first, then who delivered it — "a review
+ * arrived" with no name is the state the user said tells him nothing.
+ */
+export function landedOf(pr: WorkItemPr | undefined): string {
+  if (pr === undefined) return '';
+  const who = pr.humanActivity?.reviewedBy[0] ?? pr.humanActivity?.commentedBy[0] ?? null;
+  const by = who === null ? '' : `@${who} `;
+  if (pr.reviewDecision === 'CHANGES_REQUESTED') return `💬 ${by}requested changes`;
+  if (pr.reviewDecision === 'APPROVED') return `💬 ${by}approved`;
+  if (who !== null) return `💬 ${by}review arrived`;
+  return '';
+}
+
+/**
+ * P1-7: the my-work row reads as state rather than as a title — ticket status, then every PR's
+ * state, then every agent's phase, so the row answers "where is it?" without expanding.
+ */
+export function stateLineOf(item: WorkItem): RowMetaCell[] {
+  const cells: RowMetaCell[] = [];
+  if (item.ticket !== null) {
+    cells.push({ kind: 'ticketStatus', text: `🎫 ${item.ticket.status}` });
+  }
+  for (const pr of item.prs) {
+    cells.push({ kind: 'prState', text: `🔀 ${pr.repo}#${pr.number} ${prState(pr)}` });
+  }
+  for (const agent of item.agents) {
+    cells.push({
+      kind: 'agentPhase',
+      text: `${MODE_GLYPH[agent.mode] ?? '•'} ${agent.phase}`,
+    });
+  }
+  return cells;
+}
+
+const HOUR_MS = 60 * 60 * 1000;
+const WEEK_MS = 7 * DAY_MS;
+
+/**
+ * §2.2 rule 7: `4h`, `12d`, `6w`. The word "opened" cost seven characters in a 300 px sidebar,
+ * which is how the size ended up ellipsised. `—` for a defaulted date stays (MG-12), and a
+ * clock skew that puts the date in the future reads `<1h` rather than a negative age.
+ */
+export function compactAge(createdAt: string | null, now: number): string {
+  if (createdAt === null) return '—';
+  const at = Date.parse(createdAt);
+  if (Number.isNaN(at)) return '—';
+  const elapsed = Math.max(0, now - at);
+  if (elapsed >= 14 * DAY_MS) return `${Math.floor(elapsed / WEEK_MS)}w`;
+  if (elapsed >= 2 * DAY_MS) return `${Math.floor(elapsed / DAY_MS)}d`;
+  if (elapsed >= HOUR_MS) return `${Math.floor(elapsed / HOUR_MS)}h`;
+  return '<1h';
+}
+
+const FILE_TIERS: [number, SizeTier][] = [
+  [3, 'S'],
+  [10, 'M'],
+  [25, 'L'],
+];
+const LINE_TIERS: [number, SizeTier][] = [
+  [50, 'S'],
+  [300, 'M'],
+  [1000, 'L'],
+];
+
+function bucket(value: number, table: [number, SizeTier][]): SizeTier {
+  for (const [limit, tier] of table) if (value <= limit) return tier;
+  return 'XL';
+}
+
+/**
+ * P1-6, §2.2 rule 6: the harsher of the file count and the line count — a one-file 1800-line
+ * generated diff is not an S. The core's own `sizeTier` wins when the engine sends one, so the
+ * CLI and the panel cannot disagree; an older engine gets the same arithmetic locally.
+ * Unknown is `—`, never a fabricated `S` (MG-12).
+ */
+export function tierOf(pr: WorkItemPr | undefined): string {
+  if (pr === undefined) return '—';
+  if (pr.sizeTier !== undefined && pr.sizeTier !== null) return pr.sizeTier;
+  const lines =
+    pr.additions === null && pr.deletions === null ? null : (pr.additions ?? 0) + (pr.deletions ?? 0);
+  if (pr.changedFiles === null && lines === null) return '—';
+  const byFiles = pr.changedFiles === null ? null : bucket(pr.changedFiles, FILE_TIERS);
+  const byLines = lines === null ? null : bucket(lines, LINE_TIERS);
+  const order: SizeTier[] = ['S', 'M', 'L', 'XL'];
+  const worst = Math.max(
+    byFiles === null ? -1 : order.indexOf(byFiles),
+    byLines === null ? -1 : order.indexOf(byLines),
+  );
+  return order[worst];
 }
 
 // ---------------------------------------------------------------------------
@@ -534,7 +730,14 @@ function compare(a: WorkRow, b: WorkRow, sort: EffectiveSort): number {
     case 'needsYouThenOldest':
       return byNeedsYou(a, b) || ascending(openedAt(a.item), openedAt(b.item)) || byId(a, b);
     case 'smallestChange':
-      return ascending(changedFilesOf(a.item), changedFilesOf(b.item)) || byId(a, b);
+      // P1-6's acceptance criterion: the chips must agree with the order, so the tier leads and
+      // the raw file count only breaks ties inside one tier. Sorting on `changedFiles` alone put
+      // a one-file, 900-line XL above a seven-file M.
+      return (
+        ascending(tierRankOf(a.item), tierRankOf(b.item)) ||
+        ascending(changedFilesOf(a.item), changedFilesOf(b.item)) ||
+        byId(a, b)
+      );
     case 'newest':
       return descending(recencyOf(a.item), recencyOf(b.item)) || byId(a, b);
     case 'untouchedFirstThenOldest':
@@ -589,6 +792,13 @@ export function recencyOf(item: WorkItem): number | null {
 
 function changedFilesOf(item: WorkItem): number | null {
   return item.prs[0]?.changedFiles ?? null;
+}
+
+const TIER_RANK: Record<string, number> = { S: 0, M: 1, L: 2, XL: 3 };
+
+/** `null` for an unknown size, which `ascending` already sorts last in both directions. */
+function tierRankOf(item: WorkItem): number | null {
+  return TIER_RANK[tierOf(item.prs[0])] ?? null;
 }
 
 /**

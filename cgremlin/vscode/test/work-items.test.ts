@@ -153,11 +153,12 @@ describe('MG-B8 the row description', () => {
     if (hb === undefined) throw new Error('no HB-627 row');
     expect(hb.badges).toEqual(['I❗', 'D🔄']);
     expect(hb.chips).toEqual(['acme/web#310', 'acme/api#88']);
-    expect(hb.age).toBe('opened 6d ago');
+    // §2.2 rule 7: compact. "opened … ago" cost seven characters in a 300 px sidebar.
+    expect(hb.age).toBe('6d');
     expect(hb.size).toBe('12 files +300/−80');
     expect(hb.ci).toBe('🟢');
     expect(hb.activity).toBe('👤 @dana reviewed');
-    expect(hb.description).toContain('opened 6d ago');
+    expect(hb.description).toContain('6d');
     expect(hb.description).toContain('12 files +300/−80');
   });
 

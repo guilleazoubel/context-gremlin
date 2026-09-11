@@ -11,6 +11,7 @@
 import { handleKey, panelTreeNodes, type PanelTreeNode } from '../model/panel-tree';
 import type {
   HostToPanel,
+  RowMetaCell,
   PanelListView,
   PanelRowView,
   PanelSectionView,
@@ -53,7 +54,10 @@ function root(): HTMLElement {
 
 function rowNode(row: PanelRowView, list: PanelListView): HTMLElement {
   const key = `row:${list.kind}:${row.id}`;
-  const node = el('div', row.needsYou ? 'row needs-you' : 'row');
+  const classes = ['row'];
+  if (row.needsYou) classes.push('needs-you');
+  if (row.demoted) classes.push('demoted');
+  const node = el('div', classes.join(' '));
   node.dataset.key = key;
   node.tabIndex = focusedKey === key ? 0 : -1;
   node.setAttribute('role', 'treeitem');
@@ -73,11 +77,11 @@ function rowNode(row: PanelRowView, list: PanelListView): HTMLElement {
   line1.appendChild(el('span', 'row-label', row.label));
   for (const badge of row.badges) line1.appendChild(el('span', 'badge', badge));
   if (row.ci !== '') line1.appendChild(el('span', 'ci', row.ci));
-  if (row.needsYou) line1.appendChild(el('span', 'badge needs-you-badge', '❗'));
+
   node.appendChild(line1);
 
-  const line2 = el('div', 'row-line2', row.description);
-  node.appendChild(line2);
+  node.appendChild(metaNode('row-meta', row.meta));
+  if (row.stateLine.length > 0) node.appendChild(metaNode('row-state', row.stateLine));
 
   if (row.actions.length > 0) {
     const actions = el('div', 'row-actions');
@@ -103,6 +107,20 @@ function rowNode(row: PanelRowView, list: PanelListView): HTMLElement {
     focusedKey = key;
     post({ type: 'openItem', id: row.id });
   });
+  return node;
+}
+
+/**
+ * P0-3: one element per signal, so the `·` separators are CSS (§2.3) and a narrow sidebar
+ * wraps or truncates the *last* cell instead of ellipsising the whole sentence after the author.
+ */
+function metaNode(className: string, cells: readonly RowMetaCell[]): HTMLElement {
+  const node = el('div', className);
+  for (const cell of cells) {
+    const span = el('span', `cell cell-${cell.kind}${cell.tone === undefined ? '' : ` tone-${cell.tone}`}`, cell.text);
+    if (cell.title !== undefined) span.title = cell.title;
+    node.appendChild(span);
+  }
   return node;
 }
 

@@ -607,7 +607,7 @@ describe('R54 the look', () => {
 
   it('separates card rows with the panel border and dims the second line', () => {
     expect(css).toMatch(/\.row\s*\{[^}]*border-bottom:\s*1px solid var\(--vscode-panel-border\)/);
-    expect(css).toMatch(/\.row-line2\s*\{[^}]*var\(--vscode-descriptionForeground\)/);
+    expect(css).toMatch(/\.row-meta,\n\.row-state\s*\{[^}]*var\(--vscode-descriptionForeground\)/);
     expect(css).toMatch(/:focus-visible[^}]*outline/);
   });
 });
