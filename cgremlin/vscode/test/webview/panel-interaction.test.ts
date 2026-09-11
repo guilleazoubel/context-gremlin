@@ -159,6 +159,19 @@ describe('R66 — the keys do what the mouse does', () => {
     expect(dom.posted).toHaveLength(1);
   });
 
+  it('puts the caret back where it was, and never takes it from somewhere else', () => {
+    panel.render(stateOf());
+    // Nobody has touched the panel: a background refresh must not pull the caret into it.
+    panel.render(stateOf());
+    expect(dom.document.activeElement).toBeNull();
+
+    dom.document.emit('keydown', { key: 'ArrowDown' });
+    const focused = dom.document.activeElement;
+    expect(focused).not.toBeNull();
+    panel.render(stateOf());
+    expect(dom.document.activeElement).toBe(focused);
+  });
+
   it('ignores a key before anything has rendered', async () => {
     vi.resetModules();
     const fresh = installDom();

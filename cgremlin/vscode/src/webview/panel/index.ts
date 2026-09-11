@@ -66,6 +66,9 @@ export function render(next: PanelState): void {
 function paint(next: PanelState): void {
   const container = root();
   const context: ListContext = { focusedKey, onPointer };
+  // Whether the panel HAD the caret, decided before the reconcile. A refresh must put focus back
+  // where it was, and must not take it from the editor the user has since typed into.
+  const held = heldFocus();
   reconcile(
     container,
     entriesOf(next),
@@ -74,7 +77,14 @@ function paint(next: PanelState): void {
   );
   keyed.clear();
   collectKeys(container);
-  restoreFocus();
+  if (held) restoreFocus();
+}
+
+function heldFocus(): boolean {
+  const active = document.activeElement;
+  if (active === null) return false;
+  for (const node of keyed.values()) if (node === active) return true;
+  return false;
 }
 
 /**
