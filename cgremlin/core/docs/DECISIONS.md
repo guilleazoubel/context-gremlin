@@ -413,3 +413,164 @@ Rulings live in `docs/superpowers/specs/2026-09-10-cgremlin-phase9-work-items-de
   brief itself; and the respond-flow tests run against a `GhRunner` fake that throws on any
   mutation. The legacy `--reply-comment` / `--resolve-comment` / `--push-fix` verbs are not ported.
   v1 ends at "the fix is committed locally"; the drafted replies live in `COMMENTS.md`. *A9, R55.*
+
+### The shape of the thing (D1–D8, R1–R46)
+
+- **A work item is a GROUPING over attention items, never a second derivation** (R1, D1).
+  `src/work/` reads no session document, no `AGENT_STATE` and no artifact mtime, and takes no
+  session lock: `deriveSessionReasons`/`evaluateAttention` is the one place the "does this want
+  me" rule lives, and a second reader would be both a second copy of that rule and a second
+  thing that could block a stage run. The grouping function itself is pure — no clock, no I/O.
+- **Membership is the core's answer; ordering and badges are the client's** (D2). The engine
+  decides which list a row is in, whether somebody is already on a PR, and which parking-lot
+  group it belongs to; the panel re-sorts with the user's selection and renders. A client that
+  re-derived membership would be a second answer to the same question.
+- **The ack key stays the `ItemRef`, and the fan-out is server-side** (R3, R31). An ack keyed to
+  the *view* would silently un-ack the moment the view changed shape, so an item is acked only
+  when every contributing ref is, and `POST /items/<path>/ack` walks them itself rather than
+  making each client re-derive which refs an item owns.
+- **An item is addressed by a PATH, never by its own id** (R14, R65). Once a PR names a ticket
+  the item's id becomes the ticket's, so an id lookup would 404 on exactly the merged rows this
+  phase exists to create. `pr/:o/:r/:n` resolves to the item *containing* that PR — and answers
+  with `id: "ticket:HB-627"`, which is not a contradiction but the point.
+- **`POST /items/<path>/agents` composes the existing creation paths** (R15) under the **same**
+  `pr:<slug>#<n>` lock key the review routes take, so it cannot race `POST /prs/…/review` or
+  `POST /reviews`. There is no second creation path to keep in step.
+- **The engine fetches the ticket text; the agent never sees a credential** (R18), and the
+  `## Ticket` brief block is composed in exactly one place.
+- **No HTML crosses the port, the API or `postMessage`** (R33). `renderedFields` is flattened in
+  `src/jira/html-to-text.ts`; MG-10 greps for any identifier ending in `Html` on the boundary.
+  The **core renders no HTML at all**, which is why the markdown renderer could not live there
+  however convenient that would have been.
+- **The Jira leg reports, never throws** (R34, R35). It runs after the PR half publishes, is not
+  awaited, is single-flight, is bounded by one budget for the whole leg, and degrades to
+  `unavailable`/`auth` while keeping the last tickets that were scanned. `notConfigured` says
+  **nothing** in the UI — a permanent red banner for somebody mid-setup is the failure R35 names.
+- **No Jira writes, ever.** `JiraSource` has three read methods and no fourth; the adapter issues
+  only `GET`. This is a posture, not an omission: there is no "post a comment to Jira" task
+  deferred to a later phase.
+- **Ticket linking is off unless `jira.projectKeys` is set** (R46), logged once per process. The
+  bare key regex links `SHA-256`, `UTF-8` and `PR-123`, and a wrong merge puts two unrelated PRs
+  on one row — so the failure mode is "no linking" rather than "confident wrong linking".
+- **`jira.apiToken` is treated exactly like `vercel.bypassSecret`** (R44): `hasAnySecret`, the
+  0600 load refusal, `redactCoreConfig`, and never in a brief, a log line, an event frame, an
+  HTTP response or `jira.json`.
+- **The markdown-preview path is gone** (R23). The panel opened work in VS Code's built-in
+  markdown preview, which could show one file with no PR context, no ticket and no agent
+  switcher; the Item tab replaces it outright, and `cgremlin.refreshPreview` goes with it.
+- **R40 narrows Phase 7 R13 ("the extension has zero dependencies")** to zero **runtime**
+  dependencies. `esbuild` and `markdown-it` are devDependencies, bundled into `media/*.js` at
+  build time, and the `.vsix` still carries no `node_modules/`. The alternative — a hand-written
+  markdown renderer — is a security surface nobody would maintain. The accepted cost of
+  `html: false` is that the review contract's `<a id="fN"></a>` anchors render as **text**, so
+  the in-page footnote *targets* are synthesised by matching markdown-it's escaped output; the
+  `[N](#fN)` references need nothing.
+- **A window reload closes the Item tab, by design** (R39). A `WebviewPanel` is not serialised,
+  and restoring one would mean re-fetching an item that may no longer exist. The `ready`
+  handshake is what makes the first open reliable instead: the host renders only once the script
+  says it is listening, because a render posted before that is dropped silently and the panel
+  stays blank.
+- **Claims belong to the chat terminal alone** (R42). Opening an item, switching agents and
+  focusing a PR are *browsing*; none of them claim or release. MG-B9 asserts zero claim calls on
+  a tab switch.
+
+### The re-scope (R47–R55)
+
+- **Four lists, not five** (R47). Parking lot / my dev work / investigations / PRs waiting for
+  review. **Drafts are in no list at all** — a draft is not asking for anything — and that
+  includes **my own** draft PR, which appears only once it carries an agent of mine or its
+  ticket is assigned to me.
+- **"Someone is on it" is an exclusion signal, not a badge** (R47). Any human review or comment
+  demotes a PR into a collapsed group, **and so does a pending review request to somebody else**
+  (R47.1, decided): GitHub has already assigned that PR to a named person, and picking it up is
+  duplicated work. What the eye should land on is the *untouched* count.
+- **The coordinator override replaced the `reviewing` list** (R47/R48). A teammate's PR that our
+  review agent is on stays in the **parking lot**, in a `'reviewing'` group pinned on top, and
+  **never enters `myWork`** — a teammate's PR is a teammate's PR, whatever we have running on it.
+  This is what let the fourth list go without dropping its members on the floor.
+- **A ticket-linked investigation is `myWork`, not `investigations`** (R49). `investigations` is
+  literally "the sessions I only have an investigation for": no PR, no ticket, investigation
+  agents only. A ticket is a commitment to deliver.
+- **A fourth session mode, `respond`** (R51) — see R56 below for the click, and the entries at
+  the end of this section for what the merge found. Its worktree is the PR's **own head branch**,
+  because the point of the mode is to commit a fix onto that branch.
+- **The engine's first GraphQL call, and its cost decision** (R52). Review threads are the one
+  signal `gh pr list` cannot see, and they go through the existing `GhRunner` (`gh api graphql`),
+  so there is no new port and no new fake. "Threads for all 58 PRs every tick" was the risk, so
+  the fetch policy is narrow (my open non-draft PRs, plus a parking-lot candidate whose
+  `humanActivity` is empty from reviews and comments alone) and the cache is keyed on the PR's
+  `updatedAt` — a steady-state tick makes **zero** calls.
+- **The side panel is a webview, and the `TreeView` is deleted** (R54). A tree cannot render
+  two-line card rows, badges, a collapsible group or an inline sort control. The consequence,
+  accepted: under `font-src 'none'` there are no codicons, so every glyph is a **unicode
+  character**. The risk this buys — a webview that fails to load renders blank rather than
+  throwing — is covered by the `ready` handshake, a manifest assertion that the view is
+  `"type": "webview"`, and MG-B10's proof that the bundle actually shipped.
+- **Nothing posts to GitHub in v1** (R55). The legacy tool's `--reply-comment`,
+  `--resolve-comment` and `--push-fix` are deliberately **not** ported. v1 ends at "the fix is
+  committed locally"; the drafted replies live in `COMMENTS.md` for a human to paste.
+
+### The re-check (R56–R67)
+
+- **R57: `isDraft !== true`, not `=== false`.** Every pre-Phase-9 row and every agent-only row
+  has an *unknown* draft state, and `=== false` would unlist all of them. Paired with the
+  live-agent totality invariant: a **merged** teammate PR that still carries our review agent is
+  still listed, and a merged own PR with a respond agent is still in `myWork` — the agent, not
+  the inventory row, keeps the item alive.
+- **R58: attention timestamps are pinned to something only a human moves.** `approved` and
+  `changes_requested` take `reviewDecisionAt` (the newest review whose state matches the current
+  decision) and `humanActivity.lastAt`, never `updatedAt` — otherwise a push to an approved,
+  acked PR re-fires the notification.
+- **R61: the pr↔ticket merge is one-sided.** A PR and a ticket become one row only when the
+  **resulting item would be mine**. Two teammates' PRs naming one ticket key stay two items:
+  merging them hides one behind the other and makes "how many files changed" meaningless, and in
+  the parking lot the user is choosing between PRs to *read*.
+- **R62: the webview script and stylesheet are injected TEXT.** `extension.ts` reads them from
+  disk at activation and hands them to the UI modules, so no unit test depends on the bundler
+  having run — a red test means bad HTML, never a missing bundle.
+- **R66: the panel is an ARIA tree.** One tab stop, `role="treeitem"` rows with `aria-level` and
+  `aria-expanded`, and the arrow keys moving within it — a list of nested clickable `div`s is
+  not navigable otherwise.
+
+### Deviations the two streams found, and what was done about them
+
+- **`groupWorkItems` returns `items` ordered by `id`; per-list order lives in `lists`.** One
+  array cannot carry four different orders at once, so `items` is a *set* keyed by id and the
+  four id arrays carry presentation order. Every comparator is total, deterministic and stable,
+  with ties broken on `id`, so the CLI and any future client agree. C1 pins the committed
+  extension fixture to that order against the live engine.
+- **Comment pagination is addressed by node id.** A review thread with more than one page of
+  comments is followed with `node(id:) { ... on PullRequestReviewThread { comments(after:) } }`
+  rather than re-walking `reviewThreads`, capped at five pages; past the cap the thread is marked
+  `truncated` rather than coming back silently short. The legacy query's `comments(first:1)` is
+  exactly why the old brief had to reconcile replies by hand.
+- **`ApiServerDeps.now`** exists so the claim check on the respond parity path
+  (`isClaimed(existing, deps.now())`) is testable without a fake clock inside the route.
+- **`chatTargetOf` is one rule, used by the button and by the click.** A respond agent is
+  chat-eligible only from `addressing` onwards — chatting into a session whose `BRIEF.md` is
+  still being written is the failure R50's ordering prevents — and among several eligible agents
+  a running one wins, then a claimed one, then the core's own order. Both the action's presence
+  and its target come from that one function, so they cannot disagree.
+- **A `/items` that 404s is engine trouble, said out loud.** An engine older than the extension
+  cannot answer the route; the panel replaces the lists with one row that says "restart the
+  engine" and the status bar warns, rather than rendering four empty lists. Silence was Phase 8's
+  lesson.
+- **`artifactText` returns the bytes the engine sent.** An artifact that happens to parse as JSON
+  is still a document, so the client does not parse it.
+
+### Three defects the convergence found
+
+- **`RespondSessionFactory` could never create a worktree.** It branched with `-b <headRefName>`,
+  and the bare mirror already carries `refs/heads/<that branch>` from `clone --bare` — so every
+  respond session failed with *"a branch named X already exists"*. `createWorktree` gained an
+  opt-in `resetBranch` (`-B`), used only by respond, which is also the only way the worktree gets
+  the **fetched** head: `fetch --prune` updates `refs/remotes/origin/*`, never the mirror's own
+  `refs/heads/*`.
+- **`ticketTrouble` was dead code.** R35 asks for a row **and** a status-bar state on
+  `ticketSource.kind === 'auth'`; the helper existed and was unit-tested but nothing called it.
+  It is kept deliberately apart from the `/items` trouble: an engine that cannot list the work
+  replaces the lists, whereas a rejected Jira token leaves every PR row where it is.
+- **`COMMENTS.md` was not a readable artifact.** The respond mode's only output 400'd on
+  `GET /sessions/:id/artifacts/COMMENTS.md`, so the Item tab could never show it. Added to the
+  allow-list, with a matching `pickPrimaryArtifact` branch so a respond row opens on its verdicts
+  and falls back to the brief while the agent is still triaging.
