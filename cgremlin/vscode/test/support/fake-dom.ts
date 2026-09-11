@@ -161,6 +161,12 @@ export class FakeElement {
     return this.descendants().filter(predicate);
   }
 
+  /** The one selector form the panel uses: a single class, searched depth-first. */
+  querySelector(selector: string): FakeElement | null {
+    if (!selector.startsWith('.')) throw new Error(`unsupported selector: ${selector}`);
+    return this.byClass(selector.slice(1))[0] ?? null;
+  }
+
   byClass(name: string): FakeElement[] {
     return this.findAll((el) => el.className.split(' ').includes(name));
   }
