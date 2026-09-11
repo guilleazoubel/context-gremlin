@@ -252,18 +252,21 @@ export class EngineManager {
     // R26b. A person is never refused (and never latched: what they asked for is the point). An
     // automatic trigger gets one restart per engine — the same pid at the same boot — because a
     // second one is not a new decision, it is the same one arriving again.
+    let who: string | undefined;
     if (trigger === 'auto' && before !== 'foreign') {
-      const who = `${before.pid}@${before.startedAt}`;
+      who = `${before.pid}@${before.startedAt}`;
       if (who === this.lastAutoRestartIdentity) {
         this.opts.log(
           `engine.auto_restart_refused: pid ${before.pid} (booted ${before.startedAt}) has already been restarted automatically once; restart it yourself if it really needs another`,
         );
         return this.current;
       }
-      this.lastAutoRestartIdentity = who;
     }
     const stopped = await this.runStop();
     if (stopped.kind !== 'stopped') return stopped;
+    // Only a stop that actually proved ownership and succeeded spends the identity — a failed or
+    // timed-out stop leaves it untouched so the next legitimate auto trigger may try again (R26).
+    if (who !== undefined) this.lastAutoRestartIdentity = who;
     return await this.runEnsure(trigger);
   }
 

@@ -623,6 +623,25 @@ describe('an automatic restart is spent once per engine identity', () => {
     await withClock(manager.restart('auto'), 1_000);
     expect(fake.signals).toHaveLength(2);
   });
+
+  it('does not spend the identity on a stop that never proved ownership, so the next auto trigger tries again', async () => {
+    // The engine answers the restart probe, but its identity file is gone by the time the stop
+    // tries to prove ownership — the stop fails and nothing is ever signalled.
+    const who = identity();
+    fake.probes = [who];
+    fake.pidFiles = [null];
+    const first = await withClock(manager.restart('auto'), 1_000);
+    expect(first.kind).toBe('failed');
+    expect(fake.signals).toHaveLength(0);
+
+    // Nothing was latched: the same identity gets a second attempt, not a refusal.
+    fake.probes = [who];
+    fake.pidFiles = [null];
+    const second = await withClock(manager.restart('auto'), 1_000);
+    expect(second.kind).toBe('failed');
+    expect(fake.calls.filter((c) => c.kind === 'readPidFile')).toHaveLength(2);
+    expect(logs.filter((l) => l.startsWith('engine.auto_restart_refused'))).toHaveLength(0);
+  });
 });
 
 describe('restart', () => {
