@@ -8,9 +8,11 @@
  * that did nothing visible, and one warning the user never saw. Silence is the bug; the words
  * below are the fix, so they live in one place and are tested on their own.
  *
- * Two states are "trouble", and only two: `foreign` (something answers the socket and is not the
- * engine) and `failed` (the engine did not come up). Everything else is either healthy or in
- * motion, and the panel keeps showing what it always showed.
+ * Three states are "trouble": `foreign` (something answers the socket and is not the engine),
+ * `failed` (the engine did not come up) and `outdated` (the engine is NEWER than this window's
+ * extension — it is adopted rather than restarted, and the window is what has to change).
+ * Everything else is either healthy or in motion, and the panel keeps showing what it always
+ * showed.
  */
 import type { EngineState } from '../engine/manager';
 
@@ -18,6 +20,8 @@ import type { EngineState } from '../engine/manager';
 export const RE_PROBE = 'Re-probe';
 /** The notification's other action, and the status bar's click target while `failed`. */
 export const SHOW_LOG = 'Show log';
+/** The only thing that fixes a window running behind the engine it adopted. */
+export const RELOAD_WINDOW = 'Reload window';
 /** The same offer inside a sentence (the tree row is one line of prose, not a button). */
 export const SHOW_LOG_ROW = 'show log';
 
@@ -27,6 +31,8 @@ const START_COMMAND = 'cgremlin: Start the engine';
 /** The command ids the row and the status bar dispatch. Mirrored in `package.json`. */
 const START_ID = 'cgremlin.engine.start';
 const SHOW_LOG_ID = 'cgremlin.engine.showLog';
+/** The editor's own; nothing this package registers. */
+const RELOAD_WINDOW_ID = 'workbench.action.reloadWindow';
 
 /**
  * The engine state as the surfaces need it: its kind, the socket it was looked for on, and the
@@ -44,7 +50,8 @@ export interface EngineHealth {
 
 export type EngineTrouble =
   | { kind: 'foreign'; socketPath: string | null }
-  | { kind: 'failed'; reason: string };
+  | { kind: 'failed'; reason: string }
+  | { kind: 'outdated' };
 
 /** The state machine's answer, flattened to what the surfaces read. */
 export function healthOf(state: EngineState, socketPath: string | null): EngineHealth {
@@ -62,11 +69,13 @@ export function troubleOf(health: EngineHealth): EngineTrouble | null {
   if (health.kind === 'failed') {
     return { kind: 'failed', reason: health.reason ?? 'the engine did not start' };
   }
+  if (health.kind === 'outdated') return { kind: 'outdated' };
   return null;
 }
 
 /** The whole explanation, in one sentence pair. Shown in the row, the tooltip and the popup. */
 export function troubleMessage(trouble: EngineTrouble): string {
+  if (trouble.kind === 'outdated') return OUTDATED_EXTENSION_MESSAGE;
   if (trouble.kind === 'failed') return `The cgremlin engine failed: ${trouble.reason}`;
   const where = trouble.socketPath ?? 'the cgremlin socket';
   return (
@@ -83,15 +92,31 @@ export function troubleRowLabel(trouble: EngineTrouble): string {
 
 /** Clicking the row (or the status bar): a re-probe for a stranger, the log for a failure. */
 export function troubleCommand(trouble: EngineTrouble): string {
+  if (trouble.kind === 'outdated') return RELOAD_WINDOW_ID;
   return trouble.kind === 'foreign' ? START_ID : SHOW_LOG_ID;
+}
+
+/** The row's (and the notification's) button, beside the same sentence. */
+export function troubleActionLabel(trouble: EngineTrouble): string {
+  if (trouble.kind === 'outdated') return RELOAD_WINDOW;
+  return trouble.kind === 'foreign' ? 'Start the engine' : SHOW_LOG;
 }
 
 /** The status bar's short form. The bar has no room for the sentence; the tooltip carries it. */
 export function troubleStatusText(trouble: EngineTrouble): string {
+  if (trouble.kind === 'outdated') return '$(warning) cgremlin: reload this window';
   return trouble.kind === 'foreign'
     ? '$(warning) cgremlin: engine not usable'
     : '$(warning) cgremlin: engine failed';
 }
+
+/**
+ * The engine on the socket was built AFTER this window's extension. It is adopted — never
+ * restarted, because a window that restarts an engine newer than itself is one half of a loop
+ * that restarts it for ever — and this is the one thing that ends it.
+ */
+export const OUTDATED_EXTENSION_MESSAGE =
+  'This window runs an older cgremlin extension than the engine — reload the window.';
 
 /**
  * The engine answered, but not with work items.

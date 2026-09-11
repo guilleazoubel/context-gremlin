@@ -54,6 +54,8 @@ function asIdentity(body: unknown): EngineIdentity | null {
     // Absent on an engine older than the build id; left absent here, because "this engine does
     // not say" is the answer the handshake has to see (MG-C5).
     ...(typeof b.buildId === 'string' ? { buildId: b.buildId } : {}),
+    // Same rule for the time that orders two builds: absent stays absent.
+    ...(typeof b.buildTime === 'string' ? { buildTime: b.buildTime } : {}),
     pid: b.pid,
     startedAt: b.startedAt,
     socketPath: b.socketPath,

@@ -81,7 +81,7 @@ async function deadPid(): Promise<number> {
 }
 
 describe('the engine.json lock (R22)', () => {
-  it('creates engine.json 0600 with exactly { pid, version, buildId, socketPath, startedAt }, matching GET /version', async () => {
+  it('creates engine.json 0600 with exactly { pid, version, buildId, buildTime, socketPath, startedAt }, matching GET /version', async () => {
     const config = testConfig();
     const handle = await serve(config, testAdapters(), { log: () => {} });
     try {
@@ -89,7 +89,14 @@ describe('the engine.json lock (R22)', () => {
       expect(existsSync(lockPath)).toBe(true);
       expect((await stat(lockPath)).mode & 0o777).toBe(0o600);
       const record = JSON.parse(await readFile(lockPath, 'utf8')) as Record<string, unknown>;
-      expect(Object.keys(record).sort()).toEqual(['buildId', 'pid', 'socketPath', 'startedAt', 'version']);
+      expect(Object.keys(record).sort()).toEqual([
+        'buildId',
+        'buildTime',
+        'pid',
+        'socketPath',
+        'startedAt',
+        'version',
+      ]);
       expect(record.pid).toBe(process.pid);
       expect(record.version).toBe(ENGINE_VERSION);
       expect(record.socketPath).toBe(config.socketPath);
@@ -99,6 +106,8 @@ describe('the engine.json lock (R22)', () => {
       expect(record.version).toBe(body.version);
       // MG-C5: the lock and the probe agree about the *build*, not only the version string.
       expect(record.buildId).toBe(body.buildId);
+      // …and about WHEN it was built, which is the half that orders two of them.
+      expect(record.buildTime).toBe(body.buildTime);
       expect(record.startedAt).toBe(body.startedAt);
       expect(record.socketPath).toBe(body.socketPath);
     } finally {

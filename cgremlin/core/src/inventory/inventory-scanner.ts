@@ -107,7 +107,17 @@ export class InventoryScanner implements Tickable<ScanReport> {
     // yet) instead of dropping the repo's PRs entirely for one bad tick — a
     // transient gh failure must not make PRs vanish from the inventory or
     // 404 an in-flight POST .../review. Loaded at most once per run().
+    // Also the source of every known PR's `seenAt`, which is why it is read up front on the
+    // first tick of a process rather than only on a failure: `seenAt` is FIRST-seen, and a
+    // restart that re-dated every PR would fire one attention change per PR for nothing.
     let fallbackInventory: Inventory | null = this._lastReport?.inventory ?? null;
+    if (fallbackInventory === null) {
+      fallbackInventory = await this.deps.inventoryStore.load().catch(() => null);
+    }
+    const previousSeenAt = new Map<string, string>();
+    for (const previous of fallbackInventory?.entries ?? []) {
+      previousSeenAt.set(`${previous.repo}#${previous.number}`, previous.seenAt);
+    }
 
     const listArgs = (repo: string, fields: string): string[] => [
       'pr', 'list',
@@ -126,7 +136,7 @@ export class InventoryScanner implements Tickable<ScanReport> {
         entry.threads.flatMap((t) => t.comments.map((c) => ({ login: c.author, at: c.createdAt }))),
       );
     }
-    const scanConfig = { ...this.deps.config, threadComments };
+    const scanConfig = { ...this.deps.config, threadComments, previousSeenAt };
 
     const entries: InventoryEntry[] = [];
     for (const repo of this.deps.config.repos) {

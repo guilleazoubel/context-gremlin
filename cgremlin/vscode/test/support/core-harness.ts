@@ -317,6 +317,11 @@ export interface ManagerOptions {
   bundledVersion?: string;
   /** MG-C5's content address; override it to make a same-version engine look stale. */
   bundledBuildId?: string;
+  /**
+   * What ORDERS this window's bundle against the engine's. Override it to make a window look
+   * newer than the engine (which may restart it) or older (which may not, ever).
+   */
+  bundledBuildTime?: string | null;
   /** R25 supplies the editor's own `Code Helper (Plugin)` here. */
   execPath?: string;
   env?: NodeJS.ProcessEnv;
@@ -330,6 +335,10 @@ export function createManager(seed: SeededStateDir, opts: ManagerOptions = {}): 
       opts.process ?? new NodeEngineProcess({ env: opts.env ?? seed.env, shell: seed.loginShell }),
     bundledVersion: opts.bundledVersion ?? loadEngineBridge().ENGINE_VERSION,
     bundledBuildId: opts.bundledBuildId ?? loadEngineBridge().ENGINE_BUILD_ID,
+    bundledBuildTime:
+      opts.bundledBuildTime === undefined
+        ? loadEngineBridge().ENGINE_BUILD_TIME
+        : opts.bundledBuildTime,
     paths: () => ({
       configPath: seed.configPath,
       socketPath: seed.socketPath,

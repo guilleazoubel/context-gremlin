@@ -57,6 +57,7 @@ export interface InventoryEntry {
   isMine: boolean;
   teamActivity: TeamActivity[];
   ours: OursStatus;
+  /** When this PR FIRST entered the inventory; carried forward across scans (see below). */
   seenAt: string;
   // ---- Phase 9 (R45: every one optional-with-a-default on the schema) ----
   branch: string | null;
@@ -101,6 +102,14 @@ export interface InventoryConfig {
    * publishes (R34), so this is deliberately one tick behind.
    */
   threadComments?: ReadonlyMap<string, ReadonlyArray<{ login: string; at: string }>>;
+  /**
+   * The `seenAt` each PR already carries, keyed `"<repo>#<n>"`, from the PREVIOUS scan. `seenAt`
+   * is when a PR was FIRST seen, not when it was last looked at: it is the only timestamp
+   * attention has to fall back on for a PR whose reasons carry none, and a value that moved with
+   * the scan clock rewrote that PR's attention signature once a tick — a `changed` event a
+   * second for every open PR, with nothing changed.
+   */
+  previousSeenAt?: ReadonlyMap<string, string>;
 }
 
 function buildTeamActivity(
@@ -225,7 +234,7 @@ export function buildEntries(
     isMine: item.author.login.toLowerCase() === meLower,
     teamActivity: buildTeamActivity(item, watchSet, meLower),
     ours: buildOursStatus(repo, item.number, item.headRefOid, sessions),
-    seenAt: now,
+    seenAt: cfg.previousSeenAt?.get(`${repo}#${item.number}`) ?? now,
     branch: item.headRefName,
     ticketKeys: ticketKeysOf(item, cfg.projectKeys ?? []),
     reviewRequests: flattenReviewRequests(item.reviewRequests),

@@ -40,9 +40,16 @@ function bundle(entry, outfile, define) {
 
 await bundle('src/host/engine-main.ts', ENGINE_OUT, {});
 const buildId = createHash('sha256').update(readFileSync(ENGINE_OUT)).digest('hex').slice(0, 16);
-const define = { __CGREMLIN_BUILD_ID__: JSON.stringify(buildId) };
+// The build id says WHICH engine; the build time says WHEN, which is the only thing that can
+// order two of them. Deliberately not part of the hashed build: the id stays a pure content
+// address, so rebuilding the same sources still reports the same id.
+const buildTime = new Date().toISOString();
+const define = {
+  __CGREMLIN_BUILD_ID__: JSON.stringify(buildId),
+  __CGREMLIN_BUILD_TIME__: JSON.stringify(buildTime),
+};
 
 await bundle('src/host/engine-main.ts', ENGINE_OUT, define);
 await bundle('src/host/extension-bridge.ts', BRIDGE_OUT, define);
 
-process.stdout.write(`engine build id: ${buildId}\n`);
+process.stdout.write(`engine build id: ${buildId} (built ${buildTime})\n`);

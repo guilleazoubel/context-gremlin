@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createApiServer, type ApiServerDeps } from '../../src/api/server';
 import type { PipelineService } from '../../src/pipeline/pipeline-service';
 import type { EnvironmentService } from '../../src/env/environment-service';
-import { ENGINE_BUILD_ID, ENGINE_NAME, ENGINE_VERSION } from '../../src/version';
+import { ENGINE_BUILD_ID, ENGINE_BUILD_TIME, ENGINE_NAME, ENGINE_VERSION } from '../../src/version';
 
 function requestOn(socketPath: string, method: string, urlPath: string): Promise<{ status: number; body: unknown }> {
   return new Promise((resolve, reject) => {
@@ -56,6 +56,7 @@ async function bareServer(counters: Counters = {}) {
       name: ENGINE_NAME,
       version: ENGINE_VERSION,
       buildId: ENGINE_BUILD_ID,
+      buildTime: ENGINE_BUILD_TIME,
       pid: process.pid,
       startedAt: STARTED_AT,
       socketPath: sock,
@@ -84,6 +85,15 @@ describe('ENGINE_BUILD_ID', () => {
     expect(ENGINE_BUILD_ID).not.toBe('');
     expect(ENGINE_BUILD_ID).toBe('dev');
   });
+
+  /**
+   * The id says WHICH build; only the time says which of two is NEWER, and without that two
+   * windows on two builds both read "not mine" and restarted the engine at each other for ever.
+   * An engine that was never bundled has no time, and orders as older than one that has.
+   */
+  it('has no build time outside the bundle', () => {
+    expect(ENGINE_BUILD_TIME).toBeNull();
+  });
 });
 
 describe('ENGINE_VERSION', () => {
@@ -107,6 +117,7 @@ describe('GET /version', () => {
         name: 'cgremlin-core',
         version: ENGINE_VERSION,
         buildId: ENGINE_BUILD_ID,
+        buildTime: ENGINE_BUILD_TIME,
         pid: process.pid,
         startedAt: STARTED_AT,
         socketPath: srv.sock,

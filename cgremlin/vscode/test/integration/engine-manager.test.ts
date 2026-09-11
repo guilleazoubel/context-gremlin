@@ -202,7 +202,11 @@ describe.skipIf(!coreIsBuilt())('integration: the bundled engine through its man
 
   it('restarts a mismatched engine silently when nothing is running (R21)', async () => {
     const seed = await seedStateDir();
-    const manager = createManager(seed, { bundledVersion: '99.99.99-not-the-bundled-one' });
+    // Newer than the engine it will find: only the newer side may replace it.
+    const manager = createManager(seed, {
+      bundledVersion: '99.99.99-not-the-bundled-one',
+      bundledBuildTime: new Date(Date.now() + 600_000).toISOString(),
+    });
     cleanups.push(async () => {
       await manager.stop();
       await rm(seed.stateDir, { recursive: true, force: true });
@@ -270,6 +274,8 @@ describe.skipIf(!coreIsBuilt())('integration: the bundled engine through its man
     const manager = createManager(seed, {
       process: process_,
       bundledBuildId: 'not-the-bundled-build-id',
+      // …and stamped after it, which is what makes this window the one allowed to replace it.
+      bundledBuildTime: new Date(Date.now() + 600_000).toISOString(),
     });
     cleanups.push(async () => {
       await manager.stop();
@@ -333,6 +339,89 @@ describe.skipIf(!coreIsBuilt())('integration: the bundled engine through its man
     expect(engineProcessCount(seed.configPath)).toBe(1);
     expect(host.callsOf('showInformationMessage')).toHaveLength(0);
   }, STOP_TIMEOUT);
+
+  /**
+   * The restart ping-pong, against the real engine.
+   *
+   * Two VS Code windows on two different extension builds shared one engine. A content address
+   * says "not mine" to BOTH of them, so both restarted it, and every restart gave the other a
+   * new identity to restart again: a SIGTERM every 1.54 s in `engine.log`, each one a clean
+   * `exited with code 0`, for as long as both windows were open.
+   *
+   * The build TIME orders the two. Here the fresh window ships a bundle stamped AFTER the engine
+   * it finds and the stale one a bundle stamped before it — the shape of "I just installed a new
+   * vsix while my other window still runs the old one". The fresh window replaces the engine
+   * once; the stale one adopts it and says the window is what needs reloading. Twenty seconds of
+   * both windows probing is what proves the loop is gone.
+   */
+  it('two windows on different builds leave exactly ONE SIGTERM in the log (the ping-pong)', async () => {
+    const seed = await seedStateDir();
+    const bridge = loadBridge(EXTENSION_ROOT);
+    const engineBuiltAt = Date.parse(bridge.ENGINE_BUILD_TIME ?? '');
+    expect(Number.isFinite(engineBuiltAt)).toBe(true);
+    const iso = (offsetMs: number): string => new Date(engineBuiltAt + offsetMs).toISOString();
+
+    const freshProcess = new CountingProcess({ env: seed.env, shell: seed.loginShell });
+    const staleProcess = new CountingProcess({ env: seed.env, shell: seed.loginShell });
+    // Only what each window ADVERTISES is faked; the bundle both of them spawn is the real one.
+    const fresh = createManager(seed, {
+      process: freshProcess,
+      bundledBuildId: 'the-newly-installed-build',
+      bundledBuildTime: iso(60_000),
+    });
+    const stale = createManager(seed, {
+      process: staleProcess,
+      bundledBuildId: 'the-build-the-other-window-runs',
+      bundledBuildTime: iso(-60_000),
+    });
+    cleanups.push(async () => {
+      await fresh.stop();
+      await rm(seed.stateDir, { recursive: true, force: true });
+    });
+
+    const surfaceFor = (manager: typeof fresh): EngineSurface =>
+      new EngineSurface({
+        host: new FakeHost(),
+        manager,
+        bridge,
+        configPath: () => seed.configPath,
+        home: seed.stateDir,
+        execPath: process.execPath,
+        enginePath: ENGINE_BUNDLE,
+        resolveLoginPath: () =>
+          new NodeEngineProcess({ env: seed.env, shell: seed.loginShell }).resolveLoginPath(),
+        reconnect: async () => {},
+      });
+    const surfaces = [surfaceFor(fresh), surfaceFor(stale)];
+    cleanups.push(async () => {
+      for (const surface of surfaces) {
+        surface.dispose();
+        await surface.settled();
+      }
+    });
+
+    // The fresh window starts the engine and finds a bundle older than its own: one restart.
+    expect((await fresh.ensureRunning('user')).kind).toBe('mismatch');
+    // The stale window adopts whatever is there — it can never prove it is the newer of the two.
+    expect((await stale.ensureRunning('user')).kind).toBe('outdated');
+
+    // Twenty seconds of both windows doing what activation, a settings change and a config save
+    // all do. A loop would spend one SIGTERM per round here.
+    const until = Date.now() + 20_000;
+    while (Date.now() < until) {
+      await fresh.ensureRunning('auto');
+      await stale.ensureRunning('auto');
+      for (const surface of surfaces) await surface.settled();
+      await sleep(500);
+    }
+
+    const sigterms = (readEngineLog(seed.engineLogPath).match(/"signal":"SIGTERM"/g) ?? []).length;
+    expect(sigterms).toBe(1);
+    expect(freshProcess.sigterms + staleProcess.sigterms).toBe(1);
+    expect(staleProcess.sigterms).toBe(0);
+    expect(stale.state().kind).toBe('outdated');
+    expect(engineProcessCount(seed.configPath)).toBe(1);
+  }, 90_000);
 
   it('resolves the same paths the harness chose, through the bundled bridge (MG-C6)', async () => {
     const h = await boot();

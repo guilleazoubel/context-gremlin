@@ -23,3 +23,20 @@ declare const __CGREMLIN_BUILD_ID__: string | undefined;
 
 export const ENGINE_BUILD_ID: string =
   typeof __CGREMLIN_BUILD_ID__ === 'string' ? __CGREMLIN_BUILD_ID__ : DEV_BUILD_ID;
+
+/**
+ * The ORDER the build id cannot carry. A content address answers "is this the engine I ship?"
+ * and nothing else — two builds are equal or unequal, never older or newer. Two windows on
+ * different builds therefore both read "unequal", both restarted the engine, and each restart
+ * gave the other a brand-new identity to restart again: a SIGTERM every 1.5 s, for ever.
+ *
+ * `ENGINE_BUILD_TIME` is the ISO time `scripts/build-engine.mjs` stamped both bundles at, so the
+ * two sides can be ordered: the newer one replaces the engine, the older one adopts it and asks
+ * its window to reload. `null` for an engine that was never bundled (a checkout, `dist/`, a
+ * test), which orders as "older than anything that has a time" — the safe direction, because a
+ * side that cannot prove it is newer never signals.
+ */
+declare const __CGREMLIN_BUILD_TIME__: string | undefined;
+
+export const ENGINE_BUILD_TIME: string | null =
+  typeof __CGREMLIN_BUILD_TIME__ === 'string' ? __CGREMLIN_BUILD_TIME__ : null;

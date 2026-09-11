@@ -427,7 +427,9 @@ export class EngineSurface {
     const status = healthOf(state, this.socketPath());
     this.publish(status);
     this.deps.host.appendOutput(`cgremlin engine: ${describe(state)}`);
-    if (state.kind === 'starting' || state.kind === 'running') this.startTail();
+    if (state.kind === 'starting' || state.kind === 'running' || state.kind === 'outdated') {
+      this.startTail();
+    }
     if (state.kind === 'mismatch') this.pending.track(this.handleMismatch(state));
     // Edge-triggered, and every edge: entering `foreign` again after the socket was usable is
     // news again, and a socket that has been foreign all along is not.
@@ -436,7 +438,10 @@ export class EngineSurface {
     }
     // The way out of the explanatory row: the probe adopted a usable engine, so the panel goes
     // back to being a panel — which it can only do once it has refetched.
-    if (state.kind === 'running' && (previous === 'foreign' || previous === 'failed')) {
+    if (
+      (state.kind === 'running' || state.kind === 'outdated') &&
+      (previous === 'foreign' || previous === 'failed')
+    ) {
       this.pending.track(this.deps.reconnect());
     }
   }
@@ -538,6 +543,8 @@ function describe(state: EngineState): string {
       return `stopping (pid ${state.pid}, ${Math.round(state.elapsedMs / 1000)}s)`;
     case 'mismatch':
       return `version mismatch: running ${state.running}, bundled ${state.bundled}`;
+    case 'outdated':
+      return `this window is behind the engine: running ${state.running}, bundled ${state.bundled} — reload the window`;
     case 'failed':
       return `failed: ${state.reason}`;
     default:
