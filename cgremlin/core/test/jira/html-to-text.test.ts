@@ -53,4 +53,30 @@ describe('htmlToText (R33) — the renderedFields flattener', () => {
     expect(htmlToText('')).toBe('');
     expect(htmlToText('<p>   </p>')).toBe('');
   });
+
+  // R33 — a <script>/<style> body is not prose. Stripping the TAGS alone left
+  // the JavaScript or the CSS behind as "text" in a brief and in the tab.
+  it('drops a <script> body, not just its tags', () => {
+    expect(htmlToText('<p>before</p><script>var x = 1 < 2;</script><p>after</p>')).toBe('before\n\nafter');
+  });
+
+  it('drops a <style> body, not just its tags', () => {
+    expect(htmlToText('<p>before</p><style>.a { color: red; }</style><p>after</p>')).toBe('before\n\nafter');
+  });
+
+  it('drops both, case-insensitively and with attributes on the opening tag', () => {
+    const html = [
+      '<h1>Title</h1>',
+      '<STYLE type="text/css" media="screen">body { margin: 0 }</STYLE>',
+      '<p>Real content.</p>',
+      '<SCRIPT type="text/javascript">alert("nope"); if (a && b) { c(); }</SCRIPT>',
+      '<p>More content.</p>',
+    ].join('');
+    expect(htmlToText(html)).toBe('Title\n\nReal content.\n\nMore content.');
+  });
+
+  it('an UNTERMINATED script or style drops everything to the end of the input', () => {
+    expect(htmlToText('<p>before</p><script>var x = 1;<p>after</p>')).toBe('before');
+    expect(htmlToText('<p>before</p><style media="all">.a { color: red; }<p>after</p>')).toBe('before');
+  });
 });

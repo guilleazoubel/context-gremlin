@@ -41,6 +41,16 @@ function decodeEntities(text: string): string {
 const TAG = /<(\/?)([a-zA-Z][a-zA-Z0-9]*)((?:[^>"']|"[^"]*"|'[^']*')*)>/g;
 const PRE_BLOCK = /<pre\b[^>]*>([\s\S]*?)<\/pre\s*>/gi;
 
+/**
+ * `<script>` and `<style>` hold raw text, not markup: stripping only their
+ * TAGS leaves the JavaScript or the CSS behind as prose in a brief and in the
+ * tab. Both are dropped body and all, case-insensitively and whatever
+ * attributes the opening tag carries.
+ */
+const RAW_TEXT_BLOCK = /<(script|style)\b[^>]*>[\s\S]*?<\/\1\s*>/gi;
+/** No closing tag: a browser swallows the rest of the document, and so do we. */
+const UNTERMINATED_RAW_TEXT = /<(script|style)\b[^>]*>[\s\S]*$/i;
+
 function attr(rawAttrs: string, name: string): string | null {
   const match = new RegExp(`\\b${name}\\s*=\\s*("([^"]*)"|'([^']*)'|([^\\s>]+))`, 'i').exec(rawAttrs);
   if (!match) return null;
@@ -58,8 +68,12 @@ const HORIZONTAL_WHITESPACE = /[^\S\n]+/g;
 export function htmlToText(html: string): string {
   // Code blocks are pulled out first and re-inserted at the end, so the
   // whitespace collapsing and tag stripping below can never touch them.
+  // Raw-text elements go first, so a `<pre>` or a stray `<` inside one can
+  // never reach the extraction and the tag walk below.
+  const withoutRawText = html.replace(RAW_TEXT_BLOCK, ' ').replace(UNTERMINATED_RAW_TEXT, ' ');
+
   const fences: string[] = [];
-  const withoutPre = html.replace(PRE_BLOCK, (_match, inner: string) => {
+  const withoutPre = withoutRawText.replace(PRE_BLOCK, (_match, inner: string) => {
     const body = decodeEntities(inner.replace(/<\/?code\b[^>]*>/gi, '')).replace(/^\n+|\s+$/g, '');
     fences.push(body);
     return ` ${FENCE_SENTINEL}${fences.length - 1}${FENCE_SENTINEL} `;
