@@ -7,7 +7,7 @@ import { changeSummary, parseChanges, UNKNOWN } from '../../src/model/changes';
 
 const WIRE = {
   base: 'main',
-  baseResolved: 'a1b2c3d',
+  baseResolved: true,
   head: 'e4f5a6b',
   committed: {
     files: 8,
@@ -21,7 +21,7 @@ const WIRE = {
 describe('parsing the changes route', () => {
   it('reads the shape the engine sends', () => {
     const changes = parseChanges(WIRE);
-    expect(changes?.baseResolved).toBe('a1b2c3d');
+    expect(changes?.baseResolved).toBe(true);
     expect(changes?.committed).toEqual({ files: 8, additions: 240, deletions: 31 });
     expect(changes?.workingTree).toEqual({ files: 2, additions: 12, deletions: 0 });
   });

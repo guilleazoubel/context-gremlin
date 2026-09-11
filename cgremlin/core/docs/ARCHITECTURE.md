@@ -328,6 +328,15 @@ second copy of that rule *and* a second thing that could block a stage run.
 - **`isBotLogin`** (`src/work/bot-login.ts`) is the ONE bot predicate in the engine: the
   parsed author's `is_bot` when gh emitted one, then a `[bot]` suffix, then the default list
   widened (never replaced) by `config.botLogins`. MG-4 asserts no second `[bot]` literal exists.
+- **`sizeTier`** (`src/work/size-tier.ts`) is the core's own `S | M | L | XL` verdict on a PR,
+  carried on every `WorkItemPr`. It is pure arithmetic on `changedFiles` and
+  `additions + deletions`: a tier is computed from **each dimension independently**
+  (files ≤ 3 / 10 / 25, lines ≤ 50 / 300 / 1000) and the **worse of the two wins**, so a
+  one-file 1800-line generated diff is not an `S` and neither is a thirty-file rename sweep.
+  `null` whenever any of the three inputs is null — a missing field is unknown, never a
+  fabricated zero (R45/MG-12). It lives in the core so the CLI and every client agree on one
+  answer; a client that wants to sort by size sorts on the tier first and on the raw file count
+  only to break ties inside one tier.
 - **`WorkItemService`** (`src/work/work-item-service.ts`) composes the grouping with the
   attention service, the inventory store, the Jira scanner and the review-thread scanner, and
   emits `item.changed` deltas. `serve()` owns its `start()`/`stop()`, exactly as it does for
@@ -347,11 +356,13 @@ keyed by id, sorted by `id`, because one array cannot carry four different order
 | `investigations` | Literally "the sessions I only have an investigation for" — no PR, no ticket, investigation agents only. A **ticket-linked** investigation is a commitment to deliver, so it is `myWork` instead (R49) |
 | `waitingForReview` | My own open PRs. Clicking one creates a `respond` session and **starts its run** (R51/R56) |
 
-`demoted` is "somebody is already on this PR": any human review or comment (`humanActivity`,
-computed at scan time from the **unfiltered** reviews and comments, never from the
-watch-filtered `teamActivity`), **or** a pending review request to somebody other than me
-(R47.1 — GitHub has already assigned that PR to a named person). A **draft** is in no list at
-all, mine included.
+`demoted` is "somebody is already on this PR", and since Phase 10 it is **exactly one thing**:
+`humanActivity.lastAt !== null` — a human has actually reviewed or commented, computed at scan
+time from the **unfiltered** reviews and comments, never from the watch-filtered `teamActivity`.
+A pending **review request** no longer demotes anything (R47.1, reversed): GitHub asking somebody
+is not that somebody having looked, and a row hidden behind the collapsed group is a row nobody
+reads. The request is still carried on the PR and still rendered on the row — it is information,
+not a verdict. A **draft** is in no list at all, mine included.
 
 The ticket merge is deliberately one-sided (R61): a PR and a ticket become one row only when
 the **resulting item would be mine**, so two teammates' PRs naming one ticket key stay two
@@ -527,15 +538,16 @@ All routes are on the Unix socket at `config.socketPath`, JSON in/out.
 | GET | `/sessions/:id` | load one session | 404 unknown id |
 | GET | `/sessions/:id/artifacts` | list a session's artifacts, with mtimes and the core-chosen `primary` | 200, 404 unknown session |
 | GET | `/sessions/:id/artifacts/:name` | read an allow-listed file from the session dir | 400 bad name, 404 not found |
+| GET | `/sessions/:id/changes` | "changes so far" for one session's worktree: `{base, baseResolved, head, committed, workingTree}`, each summary `{files, additions, deletions, entries[]}`. `committed` is the diff from `git merge-base <base> HEAD` to `HEAD` — the merge base, so a stale or rebased base never inflates the count — and `workingTree` is `git diff HEAD`, which is uncommitted work on **tracked** files only. `base` is the PR's own `baseRef` from the current inventory when the session carries a PR, else `config.defaultBaseRef`; `baseResolved` is a **boolean** saying whether `merge-base` resolved, and `false` means the committed half fell back to a three-dot diff against `base` itself rather than failing the request. A pure read of the worktree, deliberately **not** under the session lock — it never contends with a run | 200 (with every field `null` when the session has no worktree), 404 unknown session or no git configured |
 | GET | `/items` | the four work-item lists: `{evaluatedAt, lists, items, ticketSource, threadSource}`. `?list=parkingLot\|myWork\|investigations\|waitingForReview` narrows it (`reviewing` is a **group**, not a list, and is rejected). A pure read — it starts nothing (MG-8) | 200, 400 unknown list, 404 no work-item layer wired |
 | GET | `/items/ticket/:key`, `/items/pr/:owner/:repo/:n`, `/items/session/:id` | `{item, ticket, ticketError, artifacts}` for the item **containing** that part (R65) — a `pr/` path on a ticket-linked PR answers with the `ticket:` item, and `artifacts` is keyed by session id. `ticket` is the full Jira detail as text, fetched on demand; a Jira that is down answers `ticket: null` with `ticketError` rather than failing the route | 200, 404 no item owns that path |
 | POST | `/items/<path>/ack` | acknowledge the item — the fan-out over **every** contributing `ItemRef` happens server-side, so no client re-derives which refs an item owns (R31) | 200 `{item, acked, failed}`, 502 when every ack failed |
-| POST | `/items/<path>/agents` `{mode, repoUrl?, intent?, driveToCompletion?}` | create (or report) an agent on this item, **composing the existing creation paths** rather than inventing a second one. `review` and `respond` take the same `pr:<slug>#<n>` lock key the review routes take, so they cannot race `POST /prs/…/review`. `respond` creates AND starts the run (R56) | 202 `{session, created, started, item}`, 200 `{…, reason}` when an existing session is left alone (a run in flight, or a human holds the claim), 400 no PR / no repoUrl for a ticket-only item, 409 own PR (`review`) or **not** my PR (`respond`) |
+| POST | `/items/<path>/agents` `{mode, repoUrl?, intent?, driveToCompletion?, selfReview?}` | create (or report) an agent on this item, **composing the existing creation paths** rather than inventing a second one. `review` and `respond` take the same `pr:<slug>#<n>` lock key the review routes take, so they cannot race `POST /prs/…/review`. `respond` creates AND starts the run (R56) | 202 `{session, created, started, item}`, 200 `{…, reason}` when an existing session is left alone (a run in flight, or a human holds the claim), 400 no PR / no repoUrl for a ticket-only item, 409 own PR (`review`) or **not** my PR (`respond`). **`selfReview: true`** (mode `review` only) is the one way past `OwnPrError`: it is a deliberate request to review your **own** PR, it is recorded on the created review session's `lineage.selfReview`, and the review prompt says so — an agent that did not know would write a review addressed to somebody else. No other caller can set it, so `POST /reviews` and `POST /prs/…/review` keep refusing own PRs |
 | GET | `/attention` | `?all=1` for every evaluated item (default: only `needsAttention`); `?source=session\|pr` to filter | 200 |
 | POST | `/attention/ack` `{ref}` | acknowledge one item by `ItemRef` | 200, 400 unparseable ref, 404 |
 | POST | `/sessions/:id/ack` | alias for `{ref: sessionRef(id)}` | 200, 404 |
 | POST | `/prs/:owner/:repo/:number/ack` | alias for `{ref: prRef(slug, n)}` | 200, 404 |
-| GET | `/version` | `{version, pid, startedAt, socketPath, activeRuns}` — the liveness/identity probe. Built with **no dependencies at all**, so it answers 200 on any engine; `/config` 404s on an engine with no config dep, which is why `/config` cannot be a probe. `activeRuns` is computed **per request** as `pipeline.activeSessionIds().length + environment.inFlightCount()`: the first term misses a stage still *preparing* its environment, and cancelling one of those is just as destructive as cancelling a run, so a restart decision needs both | 200 |
+| GET | `/version` | `{name, version, buildId, pid, startedAt, socketPath, activeRuns}` — the liveness/identity probe. **`buildId`** is a content address of the engine bundle and is the other half of the adoption handshake: `version` is the *package's* and does not move between phases, so a version-only check adopted a stale engine and then found routes missing on it for as long as it kept running. A client adopts only when **both** agree. Built with **no dependencies at all**, so it answers 200 on any engine; `/config` 404s on an engine with no config dep, which is why `/config` cannot be a probe. `activeRuns` is computed **per request** as `pipeline.activeSessionIds().length + environment.inFlightCount()`: the first term misses a stage still *preparing* its environment, and cancelling one of those is just as destructive as cancelling a run, so a restart decision needs both | 200 |
 | GET | `/config` | the resolved, redacted `CoreConfig` | 200 |
 | POST | `/sessions` | save a raw session record | |
 | POST | `/sessions/investigations` | create an investigation session (+ workspace) | 201 |
@@ -792,6 +804,20 @@ copy of `NEEDS_YOU_REASONS`.
   `gh`, and it strips `NODE_OPTIONS` and every `VSCODE_*` key from the child's environment (the
   engine bundle scrubs the same keys from its own `process.env` at startup, so an agent it later
   spawns cannot inherit them either).
+- **`engine.json` is the lock, and it carries the identity.** `serve()` writes
+  `{pid, version, buildId, socketPath, startedAt}` **before** it listens (R22), so a losing second
+  engine is refused without having cleared the winner's claims. `buildId` is there for the same
+  reason `/version` carries it: a window that reads the lock can tell a stale engine from the one
+  it ships without asking the socket.
+- **Since Phase 10 an upgrade restarts the engine exactly once.** The extension's handshake
+  compares `version` **and** `buildId`, so a rebuilt bundle under an unchanged package version is
+  recognised as a mismatch. The restart it earns is one: the config watcher is **content-addressed**
+  (a `chmod`, a touch or any write that changes no bytes restarts nothing — on macOS a `chmod` of a
+  watched file is itself an event for it, which is how a window used to feed itself), and an
+  automatic restart is spent **once per engine identity** (`pid@startedAt`), so the same running
+  engine cannot be restarted twice by the same decision arriving again. A person is never refused.
+  The client also waits out a short window (8 s, past the third reconnect backoff) before saying
+  the engine is unreachable, so a restart passes in silence instead of flapping a banner.
 - **It never unlinks a socket and never signals a process it cannot prove is cgremlin-core.**
   Stale-socket recovery stays `listenOnSocket`'s job. A stop is one `SIGTERM` against the
   freshly re-proved pid, then polling — never a second signal, never `SIGKILL`, whatever the wait:

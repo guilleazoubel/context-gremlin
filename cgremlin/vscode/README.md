@@ -38,8 +38,8 @@ no codicons, so every glyph is a unicode character.
 
 | List | What is in it |
 |---|---|
-| **Parking lot** | My teammates' open, non-draft PRs, in three ordered groups: **Reviewing** (we already have a review agent on it) pinned on top, then **Untouched** — the ones the eye should land on — then a collapsed **Someone is on it**. Age and change size on every row, sortable by both |
-| **My dev work** | Jira tickets assigned to me ∪ my open PRs ∪ my investigation / development / respond sessions, merged into one row per piece of work. A row **expands** into its parts (each agent, the ticket, each PR), and every part is clickable on its own |
+| **Parking lot** | My teammates' open, non-draft PRs, in three ordered groups: **Reviewing** (we already have a review agent on it) pinned on top, then **Untouched** — the ones the eye should land on — then a collapsed **Someone is on it**. Only real human activity demotes a row into that last group: a bot's review does not, and neither does a pending **review request** (the row still says who was asked) |
+| **My dev work** | Jira tickets assigned to me ∪ my open PRs ∪ my investigation / development / respond sessions, merged into one row per piece of work |
 | **Investigations** | The work whose only agent is an investigation, with no PR and no ticket. A ticket-linked investigation is a commitment to deliver, so it lives in My dev work instead |
 | **PRs waiting for review** | My own open PRs, lighting up when a review arrives |
 
@@ -48,13 +48,61 @@ belongs at the top of the parking lot. A **draft is in no list at all**, mine in
 remembers its own sort (persisted in `globalState`); the parking lot's default is untouched-first
 then oldest.
 
+### What a row says before you click it
+
+A row is two lines (three in My dev work) of **cells**, not a sentence that clips:
+
+- the title, prefixed by `owner/repo#n` on a parking-lot row, plus a badge per agent;
+- `@author · age · **tier** · size · CI · review decision · who is on it`.
+
+The **tier** is the engine's own `S`/`M`/`L`/`XL` verdict, and it is the worse of two independent
+readings — by file count and by lines changed — so a one-file 1800-line generated diff is not an
+`S`. Hovering it shows the raw `N files +A/−D`. A field the scan does not have renders `—`; no row
+anywhere claims `0 files` or a date it does not know. CI is a coloured **dot** with a tooltip
+rather than an emoji, because emoji size inconsistently in a 300 px sidebar.
+
+### One click, three consequences
+
+Clicking a row **selects** it (a persistent highlight, distinct from the keyboard's focus ring),
+**expands** it in place — an accordion: at most one row is open, and the choice survives a reload —
+and **swaps the managed workspace** to that item's current worktree. They are one message on the
+wire because they are one act; a row with no session swaps nothing rather than guessing.
+
+The expanded row shows three things:
+
+- the **lifecycle**, always as three slots — 🔍 Investigation → 🔨 Development → 🔎 Review — each
+  reading `not started`, `running · <phase>`, `needs you · <phase>` or `done · 2h`. A missing stage
+  is information; a list of the agents that happen to exist changes shape per row and cannot be read
+  at a glance;
+- **changes so far**, from `GET /sessions/:id/changes`: what the session has **committed** (against
+  the merge base, so a moved base does not inflate it) and what is still only in its **working
+  tree**;
+- the **parts** — the ticket and each PR, each clickable on its own. The agents are the slots, so
+  they are not listed twice.
+
+### Forward only
+
+The lifecycle is investigation → development → review, and a row offers **only the stage after the
+furthest one it has reached**. A PR *is* the development stage's output, so a row with a PR offers
+*Start review* — spelled **Start self-review**, and sent with `selfReview: true`, when the PR is
+your own — and never *Start development* or *Start investigation*. A parking-lot row offers
+*Start review* alone: on somebody else's branch the other two verbs could only ever produce a
+nonsensical session, and a button whose only outcome is a 409 is what made the old panel
+untrustworthy. The rule lives in one module, and each lifecycle slot takes its button **from the
+row's own actions**, so the two cannot disagree.
+
+There is exactly **one** visible primary button per row. Everything else — opening the PR, opening
+the ticket, acknowledging — is behind `⋯`, which overlays rather than pushing rows down, closes
+when another opens, and dismisses on `Escape`, on an outside click and on a scroll.
+
 Row content crosses the message channel as **data**, never as markup: the script sets every string
 with `textContent`, the one `innerHTML` assignment is markdown-it's output, and the CSP carries no
-`unsafe-inline`.
+`unsafe-inline`. Rows are reconciled by key across renders, so a refresh never moves the node under
+the pointer, drops focus or closes the open `⋯`.
 
 ## The Item tab
 
-Clicking a row (or one of its parts) opens **one** editor tab for that piece of work, moves the
+Opening a row (or one of its parts) opens **one** editor tab for that piece of work, moves the
 managed workspace to the selected agent's worktree, and lets you switch between the agents attached
 to the item. It has three focuses:
 
@@ -125,9 +173,16 @@ alive and fails the whole run loudly if it finds one — that means some test's 
 
 `test/integration/real-engine.test.ts` drives `CoreClient`, `SseClient` and the whole host wiring
 against a real engine — that is what proves the structural `*View` types here match what the engine
-really returns — and `test/integration/engine-manager.test.ts` boots that engine the way the editor
-does, through the real `EngineManager` and the bundled `engine/engine.js`. Both skip themselves with
-a clear message when the bundles have not been built.
+really returns, and it holds the committed `/items` fixture to the live response's key shape.
+`test/integration/panel-flows.test.ts` does the same for the Phase 10 panel against a **real git
+worktree**: one click producing exactly one workspace swap and one `GET /sessions/:id/changes`, the
+committed and working-tree counts of a real commit and a real dirty file, twenty irrelevant frames
+costing the open row nothing, and `Start self-review` really creating a review session on the user's
+own PR. `test/integration/engine-manager.test.ts` boots the engine the way the editor does, through
+the real `EngineManager` and the bundled `engine/engine.js` — including the build-id handshake and
+the single restart it earns — and `test/integration/config-chmod-storm.test.ts` reproduces the
+restart storm across two windows. All of them skip themselves with a clear message when the bundles
+have not been built.
 
 Then either:
 
@@ -145,11 +200,12 @@ carries no `node_modules/`. `out/*.js` loads directly in the extension host, unm
 
 **No `@vscode/test-electron`.** This package has no Electron-hosted test suite — the purity split
 above plus the integration suite cover the policy and client layers, but the actual VS Code surface
-(tree rendering, the workspace swap, the terminal) and the paths that need a real `gh` or a real
-agent still need a human pass: run the manual smoke checklist in [`docs/SMOKE.md`](docs/SMOKE.md)
-before calling a change to this package verified. Three things in particular have **no** automated
-coverage anywhere and only that pass can answer: a live `claude --resume` (step 4), a live
-Atlassian instance (step 10), and what a real `gh api graphql` costs over two idle ticks (step 6a).
+(the webview's own rendering, the modal, the workspace swap as the user sees it, the terminal) and
+the paths that need a real `gh` or a real agent still need a human pass: run the manual smoke
+checklist in [`docs/SMOKE.md`](docs/SMOKE.md) before calling a change to this package verified.
+Three things in particular have **no** automated coverage anywhere and only that pass can answer: a
+live `claude --resume` (step 9.2), a live Atlassian instance (section 14), and what a real
+`gh api graphql` costs over two idle ticks (step 10.12).
 
 ## Settings
 
@@ -225,12 +281,26 @@ config logic — the extension derives no state path of its own.
   cgremlin output channel from the point activation began (never a replay of old content). Past
   8 MB it is rotated to `engine.log.1`, before the next start recreates it. `Show the engine log`
   reveals the channel and offers to open the file.
-- **The version handshake.** Every probe reads `GET /version`. If the running engine's version is
-  not the one this build ships, the extension does **not** race it or kill it: with nothing running
-  it restarts it silently and says so in the output channel; with work in flight it asks, in a modal
-  naming both versions and the number of items a restart would stop, and remembers `Not now` for the
-  rest of the window. Saving `core.json` behaves the same way — validate, then restart silently or
-  ask.
+- **The version handshake, and the build id.** Every probe reads `GET /version` and compares two
+  things: the version **and** the `buildId`, a content address of the bundle. The version alone was
+  not enough — `ENGINE_VERSION` is the package's and stayed `0.0.1` across two phases of engine
+  changes, so a stale engine looked identical and was adopted, and then had no `/items` on it for as
+  long as it kept running. When only the build differs the message names the two **build ids**,
+  because two identical version strings say nothing. Given a mismatch the extension does **not**
+  race it or kill it: with nothing running it restarts it silently and says so in the output
+  channel; with work in flight it asks, in a modal naming both builds and the number of items a
+  restart would stop, and remembers `Not now` for the rest of the window.
+- **An upgrade costs exactly one restart.** The `core.json` watcher is **content-addressed** — it
+  restarts on a change of bytes, never on a bare filesystem event, because on macOS a `chmod` of a
+  watched file is an event for it and a window that re-asserted the mode after each event fed itself
+  at the period of one engine restart. On top of that, an **automatic** restart is spent once per
+  engine identity (`pid@startedAt`): the same decision arriving twice about the same running engine
+  is refused, with the reason logged. A person is never refused.
+- **A dropped stream is not immediately "offline".** The event stream drops on every restart and
+  every hiccup, and the consumer reconnects on a 1/2/5/10 s backoff — so the drop has to last **8 s**
+  (past the third reconnect) before anything is said, and anything that gets through clears it. The
+  last snapshot stays on screen throughout: four empty lists would claim something the extension does
+  not know.
 - **What it will never do.** It never unlinks a socket (stale-socket recovery is the engine's own
   job), never sends `SIGKILL` or a second signal, and never signals a process it cannot prove is
   this engine: `engine.json` and `GET /version` must agree on both the pid and the boot time,

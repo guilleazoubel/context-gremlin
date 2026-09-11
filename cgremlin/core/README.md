@@ -202,7 +202,7 @@ hold, and they are treated identically.
   transcript and in its browser-tool call arguments. Nothing in this package protects
   against that.
 
-## API surface (Phase 7 additions)
+## API surface (beyond sessions, workspaces and the PR inventory)
 
 Beyond session/workspace/PR-inventory routes, the socket API also answers:
 
@@ -210,13 +210,14 @@ Beyond session/workspace/PR-inventory routes, the socket API also answers:
 |---|---|
 | `GET /events` | Server-Sent Events — every engine event, with `Last-Event-ID` replay |
 | `GET /attention`, `POST /attention/ack` (+ `POST /sessions/:id/ack`, `POST /prs/:o/:r/:n/ack`) | which items need attention/you, and acknowledging one |
-| `GET /version` | `{version, pid, startedAt, socketPath, activeRuns}` — dependency-free, so it answers **200 on any engine**, which is what makes it a liveness/identity probe (`GET /config` 404s on an engine built without a config dep). `activeRuns` counts active stage runs **plus** environment preparations still in flight, and is computed per request: it is the only input to "is it safe to restart?" |
+| `GET /version` | `{name, version, buildId, pid, startedAt, socketPath, activeRuns}` — dependency-free, so it answers **200 on any engine**, which is what makes it a liveness/identity probe (`GET /config` 404s on an engine built without a config dep). **`buildId`** is a content address of the engine bundle: `version` is the package's and does not move between phases, so a client that adopts a running engine must match **both** or it will adopt a stale one and then find routes missing on it. `activeRuns` counts active stage runs **plus** environment preparations still in flight, and is computed per request: it is the only input to "is it safe to restart?" |
 | `GET /config` | the resolved, redacted `CoreConfig` |
 | `GET /sessions/:id/artifacts` | artifact listing with mtimes and the core-chosen `primary` file |
+| `GET /sessions/:id/changes` | "changes so far" for that session's worktree: `{base, baseResolved, head, committed, workingTree}`, each summary `{files, additions, deletions, entries[]}`. `committed` is measured from `git merge-base <base> HEAD`, so a base that has moved since the branch was cut never reports the whole of `main` as this session's work; `workingTree` is `git diff HEAD` — uncommitted work on tracked files. `baseResolved` is a **boolean**: `false` means the base ref was never fetched into that worktree and the committed half fell back to a three-dot diff, rather than the request failing. A pure read, not under the session lock |
 | `GET /sessions/:id/conversation`, `POST .../conversation/claim`, `POST .../conversation/release` | the human-turn claim/release/resume contract |
 | `POST /sessions/developments` | create a development session directly (no investigation, starts nothing) |
 | `GET /items`, `GET /items/<path>` | the four **work-item** lists (parking lot / my dev work / investigations / PRs waiting for review) and one item's detail, including its Jira ticket as text. Pure reads — they start nothing |
-| `POST /items/<path>/ack`, `POST /items/<path>/agents` | acknowledge a work item (the fan-out over every contributing ref is server-side), or put an agent on it — `{mode: 'respond'}` creates **and starts** a session that addresses the reviews on your own PR |
+| `POST /items/<path>/ack`, `POST /items/<path>/agents` | acknowledge a work item (the fan-out over every contributing ref is server-side), or put an agent on it — `{mode: 'respond'}` creates **and starts** a session that addresses the reviews on your own PR, and `{mode: 'review', selfReview: true}` is the one way to review **your own** PR (every other route keeps refusing with `OwnPrError`; the flag is recorded on the review session and stated in its prompt) |
 | `POST /reviews` `{prUrl}` | review **any** PR URL, including a repo outside `config.repos` — this is the only way to review an off-config repo; an already-tracked PR answers **200** `{created:false}` (matching `POST /prs/:o/:r/:n/review`'s own behavior), a genuinely new one **202**, and a PR authored by `config.me` **409** |
 
 Full request/response shapes, status codes and the event/attention/human-turn models are in
@@ -264,7 +265,7 @@ never read except by `config import-legacy`, and never written at all):
 ~/.cgremlin-core/
   core.json                    # config (0600 if it holds a secret)
   engine.sock                  # the API socket serve listens on (mode 0600)
-  engine.json                  # {pid, version, socketPath, startedAt} — written with O_EXCL
+  engine.json                  # {pid, version, buildId, socketPath, startedAt} — written with O_EXCL
                                # BEFORE the socket is opened, so it is both the ownership proof
                                # and the lock that admits one engine per state dir; removed on stop
   engine.log                   # a detached engine's stdout+stderr (engine.log.1 after a rotation)

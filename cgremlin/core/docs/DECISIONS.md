@@ -577,3 +577,139 @@ Rulings live in `docs/superpowers/specs/2026-09-10-cgremlin-phase9-work-items-de
   `GET /sessions/:id/artifacts/COMMENTS.md`, so the Item tab could never show it. Added to the
   allow-list, with a matching `pickPrimaryArtifact` branch so a respond row opens on its verdicts
   and falls back to the brief while the agent is still triaging.
+
+## 2026-09-11 — Phase 10 (the panel workshop, and the restart storm)
+
+Rulings live in `docs/superpowers/specs/2026-09-11-cgremlin-phase10-panel-workshop.md`. Recorded
+here as the phase lands. Two of them reverse or amend something written above, and both say so.
+
+### R47.1 reversed — a review request never counts as someone being on it
+
+Phase 9 made `demoted` true for *"any human review or comment, **or** a pending review request to
+somebody other than me"*, on the reasoning that GitHub had already assigned the PR to a named
+person. **That half is removed.** `someoneIsOnIt` is now `humanActivity.lastAt !== null` and
+nothing else.
+
+The evidence is `gh#2125`: a PR sat in the collapsed *someone is on it* group for days with a
+review requested from a teammate who had not opened it once. A request is GitHub's *intention*;
+`humanActivity` is what actually happened, and only what actually happened should hide a row from
+the person deciding what to pick up. The request itself is not thrown away — it is still carried
+on the `WorkItemPr` and still rendered on the row (`👤 @dana requested`), because it is useful
+information about who *ought* to look. What changed is that it no longer suppresses the row.
+
+This is deliberately asymmetric with a bot's review, which never demoted a row and still does not
+(R6's bot predicate): both are cases where something happened to the PR and nobody read it.
+
+### The size tier — per dimension, worse wins
+
+`WorkItemPr.sizeTier` is `S | M | L | XL | null`, computed in the core rather than in each client,
+because the CLI and the panel disagreeing about how big a change is would be worse than either
+answer. The thresholds are read **per dimension** — files ≤ 3 / 10 / 25, lines ≤ 50 / 300 / 1000 —
+and the worse of the two wins. A single "whichever number is larger" rule was tried first and is
+wrong in both directions: it makes a one-file 1800-line generated diff an `S`, and a thirty-file
+40-line rename sweep an `S` as well. Either dimension alone is allowed to push a PR up a tier.
+
+`null` when any input is null. A tier is a judgement about a number the scan does not have, and
+MG-12's rule holds: unknown renders `—`, never a fabricated `S`.
+
+### Forward only — the lifecycle offers one stage, the one after the furthest reached
+
+The lifecycle is investigation → development → review, and a row offers **only the stage after the
+furthest one it has reached**. A PR *is* the development stage's output, whether or not this tool
+ever saw the agent that opened it, so an item with a PR is already past development.
+
+This replaces a rule that offered *Start investigation* and *Start development* on every row of
+every list. On a parking-lot row — a teammate's PR — both verbs could only ever produce a
+nonsensical session on somebody else's branch, and a button whose only outcome is a 409 is what
+made the old panel untrustworthy. The rule lives in exactly one module (`model/row-actions`), and
+the expanded row's lifecycle slots take their Start button **from the row's own actions** rather
+than deriving it a second time: a slot that offered a verb the row refuses would be the same
+defect wearing a different hat.
+
+### Click = select + expand + swap, as one decision
+
+One click on a row does three things: the row becomes the selected one, it expands in place
+(accordion — at most one row open), and the workspace swaps to that item's current worktree. They
+are **one message** on the wire, because they are one user act; three messages would let the panel
+end up highlighted on one row and swapped to another if any were dropped. The repaint happens
+before the swap is asked for, so the highlight and the expansion are on screen before a
+dirty-editor modal can appear in front of them.
+
+Which session the row *is* — the worktree a click opens and the session "changes so far" counts —
+is decided once: a session with no worktree is not a candidate, among the rest a running agent
+wins because it is the one writing files, and otherwise the furthest stage wins, `respond`
+included (answering a review is the most recent thing to have happened on a PR).
+
+### `GET /sessions/:id/changes` — the merge base, and a boolean
+
+"Changes so far" is a route rather than a field because it is the number that moves *while an
+agent works*, and a field on a listing would be stale by the time it was rendered. The committed
+half diffs from `git merge-base <base> HEAD`, not from `base`: a base that has moved since the
+branch was cut would otherwise report the whole of `main` as this session's work. `base` comes
+from the PR's own `baseRef` in the current inventory when there is a PR, and from
+`config.defaultBaseRef` otherwise — never from a persisted field on the session, because there
+isn't one and inventing one would make it wrong the moment the PR was retargeted.
+
+`baseResolved` is a **boolean**, not a sha: it says whether `merge-base` resolved at all. A base
+ref that was never fetched into that worktree is a normal state, not an error, so the route falls
+back to a three-dot diff and says it did rather than failing. (The extension had parsed this field
+as a string and therefore always read it as null; found by the Phase 10 integration pass.)
+
+The route is deliberately **not** under the session lock. It is a pure read of the worktree, and
+making a sidebar refresh able to queue behind a running stage would be a new way to make the panel
+feel broken.
+
+### `selfReview` — the one way past `OwnPrError`
+
+Reviewing your own PR is a legitimate thing to want and the engine refused it flatly. It now
+refuses it *by default*: only `POST /items/<path>/agents` with `{mode: 'review', selfReview: true}`
+bypasses `OwnPrError`, and that request is only ever produced by the row's own *Start self-review*
+button, whose wording says what it is. `POST /reviews` and `POST /prs/…/review` still refuse.
+
+The flag is recorded on the **review session's** `lineage.selfReview` and never inherited from the
+source session it links to — it is a fact about this review, not about the ticket — and the review
+prompt states it, because an agent that does not know it is reading its own work writes a review
+addressed to somebody else.
+
+### The default bot list
+
+`config.botLogins` is now optional and **adds to** a default list shipped in the engine
+(`github-actions`, `dependabot`, `renovate`, `codecov`, `vercel`, `sonarcloud`, `copilot`,
+`coderabbitai`, `snyk-bot`, …). Every user was maintaining the same list by hand, and the cost of
+forgetting one is a PR wrongly demoted out of sight. It widens, never replaces, so a user's own
+entry is still honoured and a default can never be *removed* by configuring the field.
+
+### The build id, the content-addressed watcher, and the once-per-identity restart
+
+Three rulings, one failure. The flap: two windows restarting one engine forever, phase-locked into
+paired SIGTERMs and spawn races, with the loser's *"Another process is already listening"* in the
+log.
+
+- **The adoption handshake compares a build id as well as a version.** `ENGINE_VERSION` is the
+  package's and it stayed `0.0.1` across two phases of engine changes, so a Phase 8 engine looked
+  identical to a Phase 9 extension, which adopted it and then found no `/items` on it for as long
+  as it kept running. `buildId` is a content address of the bundle; adoption requires both to
+  agree, and the mismatch message is built from the **build ids** when the version words are the
+  same, because "0.0.1 and 0.0.1 disagree" tells the user nothing.
+- **The config watcher is content-addressed.** It restarts on a change of *bytes*, not on a
+  filesystem event. The surface used to re-assert the file's mode after every event, and on macOS a
+  `chmod` of a watched file is itself an event for it — so each window fed itself at the period of
+  one engine restart.
+- **An automatic restart is spent once per engine identity** (`pid@startedAt`). A second automatic
+  trigger against the same running engine is not a new decision, it is the same one arriving again,
+  and it is refused with a logged reason. Only a stop that actually proved ownership **and**
+  succeeded spends the identity, so a failed stop leaves the next legitimate trigger free to try.
+  A person is never refused and never latched: what they asked for is the point.
+
+Two windows still cost two restarts for a genuine save, one each — neither window can know the
+other has already acted. Making that one would take a cross-window handshake (the engine recording
+which config digest it booted with); that is deliberately not this change.
+
+### Eight seconds of hysteresis before "offline"
+
+The event stream drops on every engine restart and every hiccup, and the consumer reconnects on a
+1/2/5/10 s backoff — so a banner raised on the first drop flaps for a reason the user cannot act
+on. The drop is reported, and only a window that stays down for **8 s** (past the third reconnect)
+is said out loud. Anything that gets through — a request, a frame — clears it, pending or already
+said. Throughout, the **last snapshot stays on screen**: four empty lists claim something the
+extension does not know.
