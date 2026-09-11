@@ -14,11 +14,10 @@
  * Takes its editor surface as a parameter (no editor import).
  */
 import crypto from 'node:crypto';
+import { itemActionFacts, rowActions } from '../model/row-actions';
 import {
-  agentChildId,
   buildItemChildren,
   buildWorkLists,
-  chatTargetOf,
   readSort,
   readSorts,
   ticketBanner,
@@ -240,7 +239,7 @@ export class PanelView implements WebviewViewProviderLike {
       hasChildren: row.hasChildren,
       expanded,
       children: expanded ? buildItemChildren(row.item).map(childView) : [],
-      actions: actionsFor(row.item),
+      actions: actionsFor(row.item, row.list),
     };
   }
 
@@ -337,54 +336,11 @@ function childView(child: WorkChild): PanelChildView {
 }
 
 /**
- * The row's actions (R42, R50, R51, R26). Which ones apply is a rule about the work, so it is
- * decided here and the webview only renders what it is given:
- *  - **Start review** on a PR that is not mine and has no review agent — the core answers 409
- *    `OwnPrError` on my own, and a button whose only outcome is an error is what made the old
- *    panel untrustworthy;
- *  - **Address review comments** exactly on my own non-draft PR (R51), which is the click that
- *    creates AND starts the respond run (R56);
- *  - **Chat** only where `chatTargetOf` finds an agent to chat to — a respond agent counts only
- *    once its run has finished, `addressing` or `ready` (R50) — and the action carries that
- *    agent's id;
- *  - **Open PR** once per entry in `prs` (R26).
+ * The row's actions (R42, R50, R51, R26) — **which ones apply is a rule about the list**, so it
+ * is asked of the one shared module (`model/row-actions`) rather than decided twice. The Item
+ * tab's `buttonsFor` asks the same function, over the union of `item.lists`, so the panel and
+ * the tab cannot disagree about what a click would do.
  */
-export function actionsFor(item: WorkItem): PanelActionView[] {
-  const actions: PanelActionView[] = [];
-  const primary = item.prs[0];
-  // The action names the agent it would open, so the click has no second rule to get wrong.
-  const chatTarget = chatTargetOf(item);
-  if (chatTarget !== null) {
-    actions.push({
-      command: 'cgremlin.chat',
-      label: 'Chat',
-      childId: agentChildId(chatTarget),
-    });
-  }
-  if (primary !== undefined && primary.isMine !== true) {
-    if (!item.agents.some((agent) => agent.mode === 'review')) {
-      actions.push({ command: 'cgremlin.startReview', label: 'Start review' });
-    }
-  }
-  if (primary !== undefined && primary.isMine === true && primary.isDraft === false) {
-    actions.push({ command: 'cgremlin.addressReview', label: 'Address review comments' });
-  }
-  actions.push({ command: 'cgremlin.startInvestigation', label: 'Start investigation' });
-  actions.push({ command: 'cgremlin.startDevelopment', label: 'Start development' });
-  for (const pr of item.prs) {
-    actions.push({
-      command: 'cgremlin.openPr',
-      label: `Open ${pr.repo}#${pr.number}`,
-      childId: `pr:${pr.repo}#${pr.number}`,
-    });
-  }
-  if (item.ticket !== null) {
-    actions.push({
-      command: 'cgremlin.openTicket',
-      label: `Open ${item.ticket.key}`,
-      childId: `ticket:${item.ticket.key}`,
-    });
-  }
-  actions.push({ command: 'cgremlin.ack', label: 'Ack' });
-  return actions;
+export function actionsFor(item: WorkItem, list: WorkListKind): PanelActionView[] {
+  return rowActions(itemActionFacts(item), list);
 }

@@ -723,9 +723,23 @@ describe('R50/R56/R42 the respond click records one run start and zero claim att
 
   it('offers Address review comments, and Chat only from addressing onwards (R50)', async () => {
     const h = await connected();
-    const actions = h.rowOf(MY_PR_ITEM).actions.map((a) => a.command);
-    expect(actions).toContain('cgremlin.addressReview');
+    // P0-2: the verb belongs to the waiting-for-review row. The same item's `myWork` row is a
+    // different question ("what is the state of the thing I'm building?") and a different rule.
+    const row = h.state().lists
+      .find((list) => list.kind === 'waitingForReview')
+      ?.sections.flatMap((section) => section.rows)
+      .find((candidate) => candidate.id === MY_PR_ITEM);
+    const actions = (row?.actions ?? []).map((a) => a.command);
+    // #200 already has a respond agent, still triaging: no second respond run, and no Chat
+    // until it is past `triaging` (R50).
+    expect(actions).not.toContain('cgremlin.addressReview');
     expect(actions).not.toContain('cgremlin.chat');
+
+    const hb = h.state().lists
+      .find((list) => list.kind === 'waitingForReview')
+      ?.sections.flatMap((section) => section.rows)
+      .find((candidate) => candidate.id === HB_ITEM);
+    expect((hb?.actions ?? []).map((a) => a.command)).toContain('cgremlin.addressReview');
   });
 });
 

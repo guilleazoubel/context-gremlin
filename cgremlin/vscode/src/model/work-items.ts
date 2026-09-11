@@ -602,7 +602,17 @@ function changedFilesOf(item: WorkItem): number | null {
  * then by phase age). Every caller uses THIS, so the button and the click can never disagree.
  */
 export function chatTargetOf(item: WorkItem): string | null {
-  const eligible = item.agents.filter(
+  return chatTargetOfAgents(item.agents);
+}
+
+/**
+ * The same rule over the agent list alone, so the Item tab — which holds `TabAgent`s rather than
+ * `WorkItemAgent`s — asks the one function rather than growing a second copy of R50's gate.
+ */
+export function chatTargetOfAgents(
+  agents: readonly { sessionId: string; mode: string; phase: string; running: boolean; claimed: boolean }[],
+): string | null {
+  const eligible = agents.filter(
     (agent) =>
       agent.mode !== 'respond' || agent.phase === 'addressing' || agent.phase === 'ready',
   );

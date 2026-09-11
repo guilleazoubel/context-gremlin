@@ -293,34 +293,67 @@ describe('R54 the messages the panel acts on', () => {
   });
 });
 
-describe('R42/R51 the row actions', () => {
-  function actionsOf(h: Built, id: string): string[] {
-    const row = h
+describe('R42/R51/P0-2 the row actions are a rule about the LIST', () => {
+  function rowIn(h: Built, list: string, id: string) {
+    return h
       .state()
-      .lists.flatMap((l) => l.sections.flatMap((s) => s.rows))
+      .lists.find((l) => l.kind === list)
+      ?.sections.flatMap((s) => s.rows)
       .find((r) => r.id === id);
-    return (row?.actions ?? []).map((a) => a.command);
+  }
+
+  function actionsOf(h: Built, list: string, id: string): string[] {
+    return (rowIn(h, list, id)?.actions ?? []).map((a) => a.command);
   }
 
   it('offers Start review on a teammate PR with no review agent, and never on mine', () => {
     const h = build();
     h.ready();
-    expect(actionsOf(h, 'pr:acme/web#101')).toContain('cgremlin.startReview');
-    expect(actionsOf(h, 'pr:acme/web#102')).not.toContain('cgremlin.startReview');
-    expect(actionsOf(h, 'pr:acme/web#200')).not.toContain('cgremlin.startReview');
+    expect(actionsOf(h, 'parkingLot', 'pr:acme/web#101')).toContain('cgremlin.startReview');
+    expect(actionsOf(h, 'parkingLot', 'pr:acme/web#102')).not.toContain('cgremlin.startReview');
+    expect(actionsOf(h, 'waitingForReview', 'pr:acme/web#200')).not.toContain(
+      'cgremlin.startReview',
+    );
   });
 
-  it('offers "Address review comments" exactly on my own non-draft PR (R51)', () => {
+  it('P0-2 — a parking-lot row offers Start review, Open PR and nothing else', () => {
     const h = build();
     h.ready();
-    expect(actionsOf(h, 'pr:acme/web#200')).toContain('cgremlin.addressReview');
-    expect(actionsOf(h, 'pr:acme/web#101')).not.toContain('cgremlin.addressReview');
+    expect(actionsOf(h, 'parkingLot', 'pr:acme/web#101')).toEqual([
+      'cgremlin.startReview',
+      'cgremlin.openPr',
+    ]);
+  });
+
+  it('P0-2 — no list offers Start development or Start investigation on somebody else’s PR', () => {
+    const h = build();
+    h.ready();
+    const every = h.state().lists.flatMap((l) => l.sections.flatMap((s) => s.rows));
+    const parking = every.filter((r) => r.list === 'parkingLot');
+    expect(parking.length).toBeGreaterThan(0);
+    for (const row of parking) {
+      const commands = row.actions.map((a) => a.command);
+      expect(commands, row.id).not.toContain('cgremlin.startDevelopment');
+      expect(commands, row.id).not.toContain('cgremlin.startInvestigation');
+    }
+  });
+
+  it('offers "Address review comments" on my own non-draft PR with no respond agent (R51)', () => {
+    const h = build();
+    h.ready();
+    // HB-627 is mine, waiting for review, and has no respond agent yet.
+    expect(actionsOf(h, 'waitingForReview', 'ticket:HB-627')).toContain('cgremlin.addressReview');
+    // #200 already has one — a second respond run is exactly the nonsensical session P0-2 kills.
+    expect(actionsOf(h, 'waitingForReview', 'pr:acme/web#200')).not.toContain(
+      'cgremlin.addressReview',
+    );
+    expect(actionsOf(h, 'parkingLot', 'pr:acme/web#101')).not.toContain('cgremlin.addressReview');
   });
 
   it('R50 — Chat is offered on a respond agent only from addressing onwards', () => {
     const h = build();
     h.ready();
-    expect(actionsOf(h, 'pr:acme/web#200')).not.toContain('cgremlin.chat');
+    expect(actionsOf(h, 'waitingForReview', 'pr:acme/web#200')).not.toContain('cgremlin.chat');
 
     const payload = response();
     const item = payload.items.find((i) => i.id === 'pr:acme/web#200');
@@ -328,29 +361,26 @@ describe('R42/R51 the row actions', () => {
     item.agents[0].phase = 'addressing';
     const later = build({ response: payload });
     later.ready();
-    expect(actionsOf(later, 'pr:acme/web#200')).toContain('cgremlin.chat');
+    expect(actionsOf(later, 'waitingForReview', 'pr:acme/web#200')).toContain('cgremlin.chat');
   });
 
   it('R26 — one Open PR entry per PR, plus Open ticket when there is one', () => {
     const h = build();
     h.ready();
-    const row = h
-      .state()
-      .lists.flatMap((l) => l.sections.flatMap((s) => s.rows))
-      .find((r) => r.id === 'ticket:HB-627');
+    const row = rowIn(h, 'myWork', 'ticket:HB-627');
     const opens = (row?.actions ?? []).filter((a) => a.command === 'cgremlin.openPr');
     expect(opens.map((a) => a.label)).toEqual(['Open acme/web#310', 'Open acme/api#88']);
     expect((row?.actions ?? []).map((a) => a.command)).toContain('cgremlin.openTicket');
+    // The links are the overflow's job, never the one primary button (P1-5).
+    for (const action of opens) expect(action.placement).toBe('overflow');
   });
 
   it('finding 1 — the Chat action names the agent it would open', () => {
     const h = build();
     h.ready();
-    const row = h
-      .state()
-      .lists.flatMap((l) => l.sections.flatMap((s) => s.rows))
-      .find((r) => r.id === 'pr:acme/api#77');
-    const chat = (row?.actions ?? []).find((a) => a.command === 'cgremlin.chat');
+    const chat = (rowIn(h, 'myWork', 'pr:acme/api#77')?.actions ?? []).find(
+      (a) => a.command === 'cgremlin.chat',
+    );
     // The row carries a triaging respond agent AND a chat-eligible dev agent: the action must
     // name the dev agent, not "whatever the item's first agent happens to be".
     expect(chat?.childId).toBe('agent:dev-acme-api-77');
@@ -359,17 +389,24 @@ describe('R42/R51 the row actions', () => {
   it('finding 1 — a row whose only agent is triaging offers no Chat at all', () => {
     const h = build();
     h.ready();
-    const row = h
-      .state()
-      .lists.flatMap((l) => l.sections.flatMap((s) => s.rows))
-      .find((r) => r.id === 'pr:acme/web#200');
-    expect((row?.actions ?? []).map((a) => a.command)).not.toContain('cgremlin.chat');
+    expect(actionsOf(h, 'waitingForReview', 'pr:acme/web#200')).not.toContain('cgremlin.chat');
   });
 
-  it('always offers Ack', () => {
+  it('P0-2 — Ack only where the item needs you, never unconditionally', () => {
     const h = build();
     h.ready();
-    expect(actionsOf(h, 'pr:acme/api#55')).toContain('cgremlin.ack');
+    expect(actionsOf(h, 'parkingLot', 'pr:acme/api#55')).not.toContain('cgremlin.ack');
+    expect(actionsOf(h, 'parkingLot', 'pr:acme/web#102')).toContain('cgremlin.ack');
+  });
+
+  it('P1-5 — every row flags exactly one primary action', () => {
+    const h = build();
+    h.ready();
+    for (const row of h.state().lists.flatMap((l) => l.sections.flatMap((s) => s.rows))) {
+      const primaries = row.actions.filter((a) => a.placement === 'primary');
+      expect(primaries.length, `${row.list}/${row.id}`).toBeLessThanOrEqual(1);
+      if (row.actions.length > 0) expect(primaries.length, `${row.list}/${row.id}`).toBe(1);
+    }
   });
 });
 

@@ -8,6 +8,8 @@
  * Pure module — no editor API (MG-B1).
  */
 
+import type { WorkListKind } from './work-items';
+
 export type ItemFocusMessage =
   | { kind: 'agent'; sessionId: string }
   | { kind: 'ticket' }
@@ -75,6 +77,11 @@ export interface ItemTabState {
   itemId: string;
   title: string;
   needsYou: boolean;
+  /**
+   * The lists the item is in (`ItemDetailResponse.item.lists`). The tab is not scoped to one, so
+   * its buttons are the union of what each of them allows — the same rule the panel rows use.
+   */
+  lists: WorkListKind[];
   chips: { label: string; url: string }[];
   focus: ItemFocusMessage;
   selectedSessionId: string | null;

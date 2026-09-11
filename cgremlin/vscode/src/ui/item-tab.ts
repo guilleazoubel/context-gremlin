@@ -25,6 +25,7 @@ import {
   type TabPr,
 } from '../model/item-tab-protocol';
 import type { ItemDetailResponse } from '../model/work-items';
+import { rowActionsForLists, type ActionFacts } from '../model/row-actions';
 import type { CoreConfigView } from '../model/items';
 import type { WorktreeSwapper } from './preview';
 import type { DisposableLike, Host, WebviewPanelLike } from './host';
@@ -285,6 +286,7 @@ export class ItemTab {
               comments: detail.ticket.comments,
             },
       ticketError: detail.ticketError,
+      lists: [...item.lists],
       buttons: [],
     };
     state.buttons = buttonsFor(state);
@@ -432,45 +434,41 @@ function selectedFor(item: WorkItem | undefined, focus: ItemFocusMessage): strin
 }
 
 /**
- * The button row, as a rule rather than a style (R42, R50, R51):
- *  - **Start review** only on a PR that is not mine and has no review agent yet — the core would
- *    answer 409 `OwnPrError` on my own, and a button whose only outcome is an error is what made
- *    the old panel untrustworthy;
- *  - **Address review comments** takes its place exactly when the PR is mine and not a draft;
- *  - **Chat** is disabled on a respond agent still at `triaging`: chatting into a session whose
- *    `BRIEF.md` is still being written is the failure R50's ordering prevents.
+ * The button row, as a rule rather than a style (R42, R50, R51) — and the **same** rule the
+ * panel rows use: `model/row-actions` decides which verbs apply, over the union of the lists the
+ * item is in, so the tab can never offer a verb a row would refuse (or the reverse).
+ *
+ * The one thing the tab decides for itself is **Chat**, because here it is about the *selected*
+ * agent rather than about the item: a respond agent still at `triaging` renders a disabled
+ * button with R50's reason, where a row simply has no Chat at all.
  */
 export function buttonsFor(state: ItemTabState): TabButton[] {
-  const buttons: TabButton[] = [];
   const selected = state.agents.find((agent) => agent.sessionId === state.selectedSessionId);
-  const triaging = selected !== undefined && selected.mode === 'respond' && selected.phase === 'triaging';
-  buttons.push({
-    id: 'cgremlin.chat',
-    label: 'Chat',
-    enabled: selected !== undefined && !triaging,
-    ...(triaging
-      ? {
-          reason:
-            'The respond agent is still triaging the review threads — chat opens once it has written them up.',
-        }
-      : {}),
-  });
-  const primary = state.prs[0];
-  if (primary !== undefined && primary.isMine !== true) {
-    if (!state.agents.some((agent) => agent.mode === 'review')) {
-      buttons.push({ id: 'cgremlin.startReview', label: 'Start review', enabled: true });
-    }
+  const triaging =
+    selected !== undefined && selected.mode === 'respond' && selected.phase === 'triaging';
+  const buttons: TabButton[] = [
+    {
+      id: 'cgremlin.chat',
+      label: 'Chat',
+      enabled: selected !== undefined && !triaging,
+      ...(triaging
+        ? {
+            reason:
+              'The respond agent is still triaging the review threads — chat opens once it has written them up.',
+          }
+        : {}),
+    },
+  ];
+  const facts: ActionFacts = {
+    agents: state.agents,
+    prs: state.prs,
+    ticketKey: state.ticket?.key ?? null,
+    needsYou: state.needsYou,
+  };
+  for (const action of rowActionsForLists(facts, state.lists)) {
+    if (action.command === 'cgremlin.chat') continue;
+    buttons.push({ id: action.command, label: action.label, enabled: true });
   }
-  if (primary !== undefined && primary.isMine === true && primary.isDraft === false) {
-    buttons.push({
-      id: 'cgremlin.addressReview',
-      label: 'Address review comments',
-      enabled: true,
-    });
-  }
-  buttons.push({ id: 'cgremlin.startInvestigation', label: 'Start investigation', enabled: true });
-  buttons.push({ id: 'cgremlin.startDevelopment', label: 'Start development', enabled: true });
-  buttons.push({ id: 'cgremlin.ack', label: 'Ack', enabled: true });
   return buttons;
 }
 

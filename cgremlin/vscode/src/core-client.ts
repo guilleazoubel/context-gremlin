@@ -227,7 +227,15 @@ export class CoreClient {
   /** R15/R56. `{ mode: 'respond' }` creates AND starts, in this one request. */
   async startAgent(
     path: string,
-    body: { mode: string; repoUrl?: string; intent?: string; driveToCompletion?: boolean },
+    body: {
+      mode: string;
+      repoUrl?: string;
+      intent?: string;
+      driveToCompletion?: boolean;
+      /** A review of MY OWN change (the forward-only ladder's last stage) — the core would
+       *  otherwise answer 409 `OwnPrError`. */
+      selfReview?: boolean;
+    },
   ): Promise<HttpResult> {
     return await this.request('POST', `/items/${assertItemPath(path)}/agents`, body);
   }

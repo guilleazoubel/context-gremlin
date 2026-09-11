@@ -7,6 +7,7 @@
  *
  * Pure module — no editor API (MG-B1).
  */
+import type { ActionPlacement } from './row-actions';
 import {
   SORT_OPTIONS,
   WORK_LIST_KINDS,
@@ -47,6 +48,8 @@ export interface PanelActionView {
   label: string;
   /** Which part of the row the action is about, when the row has more than one (R26). */
   childId?: string;
+  /** Where it renders: the one primary button, an inline button, or the `⋯` menu (P1-5). */
+  placement: ActionPlacement;
 }
 
 export interface PanelSectionView {

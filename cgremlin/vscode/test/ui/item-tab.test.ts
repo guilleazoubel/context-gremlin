@@ -385,6 +385,7 @@ describe('R42/R51 the button row', () => {
       itemId: item.id,
       title: item.title,
       needsYou: item.needsYou,
+      lists: item.lists,
       chips: [],
       focus: { kind: 'ticket' },
       selectedSessionId: selected,
@@ -421,15 +422,25 @@ describe('R42/R51 the button row', () => {
       buttons: [],
     }) as ItemTabState;
 
-  it('offers Start review on a teammate PR with no review agent, and hides it on mine', () => {
+  it('offers Start review on a teammate PR, and only a SELF-review on mine', () => {
     const teammate = buttonsFor(tabState(itemOf('pr:acme/web#101'), null));
-    expect(teammate.map((b) => b.id)).toContain('cgremlin.startReview');
+    expect(teammate.map((b) => b.label)).toContain('Start review');
+    // My own PR is past the development stage, so the forward-only ladder offers the review of
+    // my own work — labelled as such, never the teammate wording the core would 409 on.
     const mine = buttonsFor(tabState(itemOf('pr:acme/web#200'), 'respond-acme-web-200'));
-    expect(mine.map((b) => b.id)).not.toContain('cgremlin.startReview');
+    expect(mine.map((b) => b.label)).not.toContain('Start review');
+    expect(mine.map((b) => b.label)).toContain('Start self-review');
   });
 
   it('offers "Address review comments" exactly when the PR is mine and not a draft (R51)', () => {
-    const mine = itemOf('pr:acme/web#200');
+    // #200 is mine and waiting for review, but a respond agent is already on it — a SECOND
+    // respond run is the nonsensical session P0-2 exists to stop, so the button is gone.
+    const withRespondAgent = itemOf('pr:acme/web#200');
+    expect(buttonsFor(tabState(withRespondAgent, null)).map((b) => b.label)).not.toContain(
+      'Address review comments',
+    );
+    const mine = JSON.parse(JSON.stringify(withRespondAgent)) as WorkItem;
+    mine.agents = [];
     expect(buttonsFor(tabState(mine, null)).map((b) => b.label)).toContain(
       'Address review comments',
     );
@@ -440,6 +451,18 @@ describe('R42/R51 the button row', () => {
     );
     expect(buttonsFor(tabState(itemOf('pr:acme/web#101'), null)).map((b) => b.label)).not.toContain(
       'Address review comments',
+    );
+  });
+
+  it('P0-2 — the tab never offers a verb the row would refuse', () => {
+    // The tab shares `model/row-actions`, so the parking lot's hard list holds here too.
+    const teammate = buttonsFor(tabState(itemOf('pr:acme/web#101'), null)).map((b) => b.id);
+    expect(teammate).not.toContain('cgremlin.startDevelopment');
+    expect(teammate).not.toContain('cgremlin.startInvestigation');
+    // …and Ack is no longer unconditional.
+    expect(teammate).not.toContain('cgremlin.ack');
+    expect(buttonsFor(tabState(itemOf('ticket:HB-627'), null)).map((b) => b.id)).toContain(
+      'cgremlin.ack',
     );
   });
 
