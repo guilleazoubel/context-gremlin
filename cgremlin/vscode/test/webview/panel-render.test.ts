@@ -80,7 +80,9 @@ describe('P0-4 keyed reconciliation', () => {
     dom.document.clearLog();
 
     const fewer = itemsResponse();
-    fewer.lists.parkingLot.untouched = ['pr:acme/web#101'];
+    // Exactly one row leaves `untouched`, so "only the rows that left" is a number and not a
+    // coincidence of the whole group emptying out.
+    fewer.lists.parkingLot.untouched = ['pr:acme/web#101', 'pr:acme/api#56'];
     panel.render(stateOf({ response: fewer }));
 
     expect(dom.document.log.filter((m) => m.kind === 'remove')).toHaveLength(1);

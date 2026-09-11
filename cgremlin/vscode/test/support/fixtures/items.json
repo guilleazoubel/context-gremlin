@@ -7,11 +7,11 @@
       ],
       "untouched": [
         "pr:acme/web#101",
+        "pr:acme/api#56",
         "pr:acme/legacy#9"
       ],
       "someoneOnIt": [
-        "pr:acme/api#55",
-        "pr:acme/api#56"
+        "pr:acme/api#55"
       ]
     },
     "myWork": [
@@ -77,7 +77,8 @@
           "ci": "pending",
           "labels": [
             "infra"
-          ]
+          ],
+          "sizeTier": "XL"
         }
       ],
       "ticket": null,
@@ -98,8 +99,8 @@
       "lists": [
         "parkingLot"
       ],
-      "demoted": true,
-      "parkingLotGroup": "someoneOnIt",
+      "demoted": false,
+      "parkingLotGroup": "untouched",
       "title": "acme/api#56 — Retire the v1 endpoint",
       "prs": [
         {
@@ -127,7 +128,8 @@
           "additions": 4,
           "deletions": 900,
           "ci": "none",
-          "labels": []
+          "labels": [],
+          "sizeTier": "L"
         }
       ],
       "ticket": null,
@@ -176,7 +178,8 @@
           "additions": 70,
           "deletions": 20,
           "ci": "success",
-          "labels": []
+          "labels": [],
+          "sizeTier": "M"
         }
       ],
       "ticket": null,
@@ -245,7 +248,8 @@
           "additions": null,
           "deletions": null,
           "ci": null,
-          "labels": null
+          "labels": null,
+          "sizeTier": null
         }
       ],
       "ticket": null,
@@ -295,7 +299,8 @@
           "ci": "success",
           "labels": [
             "backend"
-          ]
+          ],
+          "sizeTier": "M"
         }
       ],
       "ticket": null,
@@ -343,7 +348,8 @@
           "additions": 20,
           "deletions": 400,
           "ci": "failure",
-          "labels": []
+          "labels": [],
+          "sizeTier": "L"
         }
       ],
       "ticket": null,
@@ -409,7 +415,8 @@
           "additions": 60,
           "deletions": 12,
           "ci": "success",
-          "labels": []
+          "labels": [],
+          "sizeTier": "M"
         }
       ],
       "ticket": null,
@@ -510,7 +517,8 @@
           "additions": 300,
           "deletions": 80,
           "ci": "success",
-          "labels": []
+          "labels": [],
+          "sizeTier": "L"
         },
         {
           "repo": "acme/api",
@@ -535,7 +543,8 @@
           "additions": 40,
           "deletions": 4,
           "ci": "pending",
-          "labels": []
+          "labels": [],
+          "sizeTier": "S"
         }
       ],
       "ticket": {

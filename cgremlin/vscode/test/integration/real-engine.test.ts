@@ -327,11 +327,13 @@ describe.skipIf(!coreIsBuilt())('integration: the extension against a real engin
         // Our review agent pins #3 to the top of the parking lot and does NOT move it to myWork
         // (R47/R48, the coordinator override).
         reviewing: ['pr:fake/repo#3'],
-        // #7 has only bot activity, so it is still untouched; #4 is a teammate's PR whose review
-        // was requested from ME, which outranks the watch list (R30).
-        untouched: ['pr:fake/repo#7', 'pr:fake/repo#4'],
-        // #8 a human reviewed, #9 GitHub already asked somebody else (R47.1).
-        someoneOnIt: ['pr:fake/repo#8', 'pr:fake/repo#9'],
+        // #7 has only bot activity, so it is still untouched; #9 has only a TEAM review request,
+        // which R47.1 (reversed in Phase 10) no longer counts as somebody being on it; #4 is a
+        // teammate's PR whose review was requested from ME, which outranks the watch list (R30).
+        untouched: ['pr:fake/repo#7', 'pr:fake/repo#9', 'pr:fake/repo#4'],
+        // Only #8 is demoted, and only because a HUMAN actually reviewed it: `someoneIsOnIt` is
+        // `humanActivity.lastAt !== null` and nothing else (R47.1, reversed).
+        someoneOnIt: ['pr:fake/repo#8'],
       });
       expect(listing.lists.myWork).toEqual([
         'pr:fake/repo#5',
@@ -401,6 +403,31 @@ describe.skipIf(!coreIsBuilt())('integration: the extension against a real engin
       expect(loose.lists).toEqual(['investigations']);
       expect(loose.prs).toEqual([]);
       expect(loose.ticket).toBeNull();
+    });
+
+    it('carries the core\'s own S/M/L/XL verdict, worse dimension wins (P1-6, §2.1 rule 6)', () => {
+      const tierOfPr = (id: string): string | null | undefined => itemOf(listing, id).prs[0]?.sizeTier;
+      // #3 is 3 files / 34 lines — S on both dimensions.
+      expect(tierOfPr('pr:fake/repo#3')).toBe('S');
+      // #5 is 4 files (M) / 72 lines (M).
+      expect(tierOfPr('pr:fake/repo#5')).toBe('M');
+      // #8 is the per-dimension proof: 11 files is L, but 121 lines is only M — the WORSE of the
+      // two is what the core answers, so a wide-but-shallow change is never reported as an M.
+      expect(itemOf(listing, 'pr:fake/repo#8').prs[0]).toMatchObject({
+        changedFiles: 11,
+        additions: 110,
+        deletions: 11,
+        sizeTier: 'L',
+      });
+      // Every PR the fixture gives counts for gets a tier; none of them is left undefined.
+      for (const item of listing.items) {
+        for (const pr of item.prs) {
+          expect(pr.sizeTier).not.toBeUndefined();
+          if (pr.changedFiles !== null && pr.additions !== null && pr.deletions !== null) {
+            expect(['S', 'M', 'L', 'XL']).toContain(pr.sizeTier);
+          }
+        }
+      }
     });
 
     /**
@@ -570,9 +597,10 @@ describe.skipIf(!coreIsBuilt())('integration: the extension against a real engin
       const parking = state.lists[0];
       expect(parking.sections.map((section) => [section.title, section.count, section.collapsed])).toEqual([
         ['Reviewing', 1, false],
-        ['Untouched', 2, false],
-        // Only "someone is on it" collapses, and it starts collapsed (R47).
-        ['Someone is on it', 2, true],
+        ['Untouched', 3, false],
+        // Only "someone is on it" collapses, and it starts collapsed (R47). One row, because
+        // R47.1 reversed: a review request is shown on the row and never demotes it.
+        ['Someone is on it', 1, true],
       ]);
       expect(parking.sections[0].rows[0].label).toContain('fake/repo#3');
       // MG-12 has nothing to hide behind here: every fixture PR carries age and size.

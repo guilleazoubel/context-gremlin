@@ -255,9 +255,13 @@ describe('R54 the messages the panel acts on', () => {
       'untouched',
       'someoneOnIt',
     ]);
-    expect(parking.sections[2].rows.map((r) => r.id)).toEqual([
+    expect(parking.sections[2].rows.map((r) => r.id)).toEqual(['pr:acme/api#55']);
+    // #56 is an L and #101 an M, so the smallest-change order inside `untouched` is 101 then 56
+    // — the sort really did move a row that changed group, and never across the group boundary.
+    expect(parking.sections[1].rows.map((r) => r.id)).toEqual([
+      'pr:acme/web#101',
       'pr:acme/api#56',
-      'pr:acme/api#55',
+      'pr:acme/legacy#9',
     ]);
   });
 

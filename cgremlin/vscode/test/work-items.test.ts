@@ -174,12 +174,14 @@ describe('MG-B8 the row description', () => {
   it('summarises human activity as reviewed, commented or requested', () => {
     const built = lists();
     const someoneOnIt = built.parkingLot.sections.find((s) => s.group === 'someoneOnIt');
-    expect(someoneOnIt?.rows.map((r) => r.activity)).toEqual([
-      '👤 @dana reviewed',
-      '👤 @dana requested',
-    ]);
+    expect(someoneOnIt?.rows.map((r) => r.activity)).toEqual(['👤 @dana reviewed']);
     const untouched = built.parkingLot.sections.find((s) => s.group === 'untouched');
     expect(untouched?.rows[0].activity).toBe('');
+    // R47.1, reversed in Phase 10: a review request is still SAID on the row, and it no longer
+    // demotes it — #56's only signal is dana's request, and #56 is untouched.
+    expect(untouched?.rows.find((r) => r.id === 'pr:acme/api#56')?.activity).toBe(
+      '👤 @dana requested',
+    );
   });
 
   it('renders no draft marker and no no-human-review badge anywhere (R47)', () => {
@@ -204,12 +206,26 @@ describe('MG-12 defaults render as unknown', () => {
     expect(row?.description).not.toContain('opened today');
   });
 
-  it('sorts the defaulted row last under oldest and under smallestChange', () => {
-    for (const sort of ['oldest', 'smallestChange'] as const) {
-      const built = lists({ sorts: { parkingLot: sort } });
-      const untouched = built.parkingLot.sections.find((s) => s.group === 'untouched');
-      expect(untouched?.rows.map((r) => r.id).at(-1)).toBe('pr:acme/legacy#9');
-    }
+  it('sorts the row with no size last under smallestChange', () => {
+    const built = lists({ sorts: { parkingLot: 'smallestChange' } });
+    const untouched = built.parkingLot.sections.find((s) => s.group === 'untouched');
+    expect(untouched?.rows.map((r) => r.id).at(-1)).toBe('pr:acme/legacy#9');
+  });
+
+  /**
+   * `oldest` is the one sort the defaulted row does NOT fall to the bottom of, and that is
+   * deliberate: `openedAt` falls back from a missing `createdAt` to the item's `attention.since`,
+   * so the row has a real date to be ordered by. Unknown means unknown only where nothing else
+   * answers (MG-12) — here something does.
+   */
+  it('orders the defaulted row by attention.since when its createdAt is missing', () => {
+    const built = lists({ sorts: { parkingLot: 'oldest' } });
+    const untouched = built.parkingLot.sections.find((s) => s.group === 'untouched');
+    expect(untouched?.rows.map((r) => r.id)).toEqual([
+      'pr:acme/web#101',
+      'pr:acme/legacy#9',
+      'pr:acme/api#56',
+    ]);
   });
 });
 
@@ -253,8 +269,8 @@ describe('R47 the sorts', () => {
       'pr:acme/web#102',
       'pr:acme/web#101',
       'pr:acme/legacy#9',
-      'pr:acme/api#55',
       'pr:acme/api#56',
+      'pr:acme/api#55',
     ]);
     // waitingForReview: createdAt ascending.
     expect(rowIds(built.waitingForReview)).toEqual([
@@ -280,8 +296,8 @@ describe('R47 the sorts', () => {
     expect(rowIds(built.parkingLot)).toEqual([
       'pr:acme/web#102',
       'pr:acme/web#101',
-      'pr:acme/legacy#9',
       'pr:acme/api#56',
+      'pr:acme/legacy#9',
       'pr:acme/api#55',
     ]);
   });
@@ -339,8 +355,8 @@ describe('R47 the parking lot renders three ordered groups', () => {
     const built = lists();
     expect(built.parkingLot.sections.map((s) => [s.title, s.count, s.collapsed])).toEqual([
       ['Reviewing', 1, false],
-      ['Untouched', 2, false],
-      ['Someone is on it', 2, true],
+      ['Untouched', 3, false],
+      ['Someone is on it', 1, true],
     ]);
   });
 
@@ -521,7 +537,7 @@ describe('R48/MG-15 the children are the item parts', () => {
     const myWork = built.myWork.sections[0].rows;
     expect(myWork.find((r) => r.id === 'ticket:HB-627')?.hasChildren).toBe(true);
     const untouched = built.parkingLot.sections.find((s) => s.group === 'untouched');
-    expect(untouched?.rows.map((r) => r.hasChildren)).toEqual([false, false]);
+    expect(untouched?.rows.map((r) => r.hasChildren)).toEqual([false, false, false]);
     expect(built.investigations.sections[0].rows[0].hasChildren).toBe(false);
     const reviewing = built.parkingLot.sections.find((s) => s.group === 'reviewing');
     expect(reviewing?.rows[0].hasChildren).toBe(true);

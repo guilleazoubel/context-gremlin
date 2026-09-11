@@ -146,7 +146,7 @@ describe('P0-3 the parking-lot signals line', () => {
     const section = lists().parkingLot.sections.find((s) => s.group === 'someoneOnIt');
     expect(section?.collapsed).toBe(true);
     expect(section?.collapsible).toBe(true);
-    expect(section?.count).toBe(2);
+    expect(section?.count).toBe(1);
   });
 });
 
