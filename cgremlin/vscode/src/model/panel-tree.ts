@@ -148,3 +148,52 @@ function expand(node: PanelTreeNode, expanded: boolean): KeyIntent {
   }
   return node.id === null ? null : { kind: 'toggleRow', id: node.id, expanded };
 }
+
+// ---------------------------------------------------------------------------
+// Order freezing (§2.2 rule 4, P0-4)
+// ---------------------------------------------------------------------------
+
+/** The row ids actually painted, per section — the key is `<list>:<group>`. */
+export type PaintedOrder = Map<string, string[]>;
+
+export function paintedOrderOf(state: PanelState): PaintedOrder {
+  const order: PaintedOrder = new Map();
+  for (const list of state.lists) {
+    for (const section of list.sections) {
+      order.set(sectionKey(list.kind, section.group), section.rows.map((row) => row.id));
+    }
+  }
+  return order;
+}
+
+function sectionKey(list: WorkListKind, group: ParkingLotGroup | null): string {
+  return `${list}:${group ?? ''}`;
+}
+
+/**
+ * "No re-sorting while the pointer is inside the list": the CONTENT of a frozen render still
+ * lands (a phase that moved on is news), but the sequence keeps the order already on screen, so
+ * the row under the cursor cannot slide out from under it. Rows that are new to the section join
+ * at the end, in the incoming order, and rows that left simply drop out.
+ *
+ * Pure, so the rule is asserted without a DOM.
+ */
+export function freezeOrder(next: PanelState, painted: PaintedOrder): PanelState {
+  return {
+    ...next,
+    lists: next.lists.map((list) => ({
+      ...list,
+      sections: list.sections.map((section) => {
+        const prior = painted.get(sectionKey(list.kind, section.group));
+        if (prior === undefined) return section;
+        const byId = new Map(section.rows.map((row) => [row.id, row]));
+        const kept = prior.flatMap((id) => {
+          const row = byId.get(id);
+          return row === undefined ? [] : [row];
+        });
+        const added = section.rows.filter((row) => !prior.includes(row.id));
+        return { ...section, rows: [...kept, ...added] };
+      }),
+    })),
+  };
+}
