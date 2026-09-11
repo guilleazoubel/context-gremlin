@@ -15,7 +15,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "lint": "eslint .",
-    "build:engine": "esbuild src/host/engine-main.ts --bundle --platform=node --format=cjs --target=node20 --sourcemap=inline --outfile=../vscode/engine/engine.js && esbuild src/host/extension-bridge.ts --bundle --platform=node --format=cjs --target=node20 --sourcemap=inline --outfile=../vscode/engine/bridge.js"
+    "build:engine": "node scripts/build-engine.mjs"
   },
   "dependencies": {
     "zod": "^3.23.8"

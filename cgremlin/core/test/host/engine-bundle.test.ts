@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ENGINE_VERSION } from '../../src/version';
+import { createHash } from 'node:crypto';
 
 const CORE_ROOT = path.join(__dirname, '../..');
 const ENGINE_DIR = path.join(CORE_ROOT, '../vscode/engine');
@@ -94,6 +95,37 @@ describeBundle('the esbuild bundles (R8, R24, R28)', () => {
     expect(bridge.ENGINE_VERSION).toBe(ENGINE_VERSION);
   });
 
+  /**
+   * The cross-package guard the same-version upgrade needed: the version string stayed `0.0.1`
+   * across two phases, so a stale engine and a fresh extension agreed about everything the
+   * handshake asked. `bridge.js` now also carries a content address of the engine bundle beside
+   * it, and the engine reports that same address on `GET /version`.
+   */
+  it('bridge.js carries a build id that is neither dev nor the version', () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const bridge = require(BRIDGE_JS) as { ENGINE_BUILD_ID: string };
+    expect(bridge.ENGINE_BUILD_ID).toMatch(/^[0-9a-f]{16}$/);
+    expect(bridge.ENGINE_BUILD_ID).not.toBe('dev');
+    expect(bridge.ENGINE_BUILD_ID).not.toBe(ENGINE_VERSION);
+  });
+
+  it('rebuilding the same sources produces the same build id, and a changed engine a new one', () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const before = (require(BRIDGE_JS) as { ENGINE_BUILD_ID: string }).ENGINE_BUILD_ID;
+    const rebuild = spawnSync(process.execPath, ['scripts/build-engine.mjs'], { cwd: CORE_ROOT, encoding: 'utf8' });
+    expect(rebuild.status).toBe(0);
+    const after = JSON.parse(
+      spawnSync(process.execPath, ['-e', `console.log(JSON.stringify(require(${JSON.stringify(BRIDGE_JS)}).ENGINE_BUILD_ID))`], {
+        encoding: 'utf8',
+      }).stdout,
+    ) as string;
+    expect(after).toBe(before);
+    // And it really is a content address: a different engine bundle hashes differently.
+    const engine = readFileSync(ENGINE_JS);
+    const other = createHash('sha256').update(Buffer.concat([engine, Buffer.from('x')])).digest('hex').slice(0, 16);
+    expect(other).not.toBe(after);
+  }, 120_000);
+
   it('scrubs the editor variables out of its own environment (R24)', () => {
     const res = spawnSync(process.execPath, [ENGINE_JS], {
       encoding: 'utf8',
@@ -144,6 +176,10 @@ describeBundle('the esbuild bundles (R8, R24, R28)', () => {
       expect(body!.name).toBe('cgremlin-core');
       expect(body!.pid).toBe(child.pid);
       expect(body!.activeRuns).toBe(0);
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const bridge = require(BRIDGE_JS) as { ENGINE_BUILD_ID: string };
+      // The handshake, end to end: the engine reports the very id the bridge beside it exports.
+      expect(body!.buildId).toBe(bridge.ENGINE_BUILD_ID);
     } finally {
       child.kill('SIGTERM');
       await new Promise<void>((resolve) => child.once('exit', () => resolve()));

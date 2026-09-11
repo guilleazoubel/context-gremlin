@@ -29,6 +29,9 @@ const LAUNCH = {
   cwd: '/home/me',
 };
 
+/** What the bundled `bridge.js` would export beside the version — a content address (MG-C5). */
+const BUNDLED_BUILD_ID = 'aaaaaaaaaaaaaaaa';
+
 const flush = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 
 let fake: FakeEngineProcess;
@@ -43,6 +46,7 @@ beforeEach(() => {
   manager = new EngineManager({
     process: fake,
     bundledVersion: '0.0.1',
+    bundledBuildId: BUNDLED_BUILD_ID,
     paths: () => PATHS,
     launch: () => LAUNCH,
     log: (line) => logs.push(line),
@@ -396,6 +400,7 @@ describe('MG-C2 never-kill-what-we-cannot-prove', () => {
     const other = new EngineManager({
       process: fake,
       bundledVersion: '0.0.1',
+      bundledBuildId: BUNDLED_BUILD_ID,
       paths: () => PATHS,
       launch: () => LAUNCH,
       log: (line) => logs.push(line),
@@ -523,6 +528,53 @@ describe('the serial operation queue', () => {
  * now spent once per engine identity: the same pid and the same boot is refused with one line,
  * a person asking is never refused, and a genuinely different engine is restartable again.
  */
+/**
+ * MG-C5's second half: the same version can be two different engines.
+ *
+ * `ENGINE_VERSION` is the package's version, and it stayed `0.0.1` across Phases 8 and 9 while
+ * the engine itself changed underneath it — so an upgrade was invisible to a handshake that
+ * compared version strings, and the extension adopted a stale engine (no `/items`, four empty
+ * lists) for as long as that engine kept running. The build id is a content address of the
+ * bundle, and the handshake now compares both.
+ */
+describe('MG-C5: the handshake compares the build id as well as the version', () => {
+  it('calls the same version with a different build a mismatch', async () => {
+    fake.probes = [identity({ buildId: 'bbbbbbbbbbbbbbbb', pid: 77 })];
+    const state = await manager.ensureRunning();
+    expect(state).toMatchObject({ kind: 'mismatch', pid: 77 });
+    expect(fake.spawns).toHaveLength(0);
+  });
+
+  it('treats an engine that reports no build id at all as a mismatch', async () => {
+    fake.probes = [identity({ buildId: undefined, pid: 78 })];
+    expect((await manager.ensureRunning()).kind).toBe('mismatch');
+  });
+
+  it('adopts an engine whose version and build id both match', async () => {
+    fake.probes = [identity({ pid: 79 })];
+    expect(await manager.ensureRunning()).toEqual({
+      kind: 'running',
+      version: '0.0.1',
+      pid: 79,
+      adopted: true,
+    });
+  });
+
+  it('restarts a same-version different-build engine exactly once when nothing is running', async () => {
+    const stale = identity({ buildId: 'bbbbbbbbbbbbbbbb' });
+    // The stale engine answers the restart probe and both halves of the ownership proof, and the
+    // socket is silent once it is gone.
+    fake.probes = [stale, stale, stale, null];
+    fake.pidFiles = [pidFile()];
+    fake.signalOutcome = 'gone';
+    fake.spawnedAnswer = identity();
+    const state = await withClock(manager.restart('auto'), 2_000);
+    expect(fake.signals).toHaveLength(1);
+    expect(fake.spawns).toHaveLength(1);
+    expect(state).toMatchObject({ kind: 'running' });
+  });
+});
+
 describe('an automatic restart is spent once per engine identity', () => {
   /** A restart whose stop is over immediately, so the engine that answers afterwards is the same. */
   function sameEngineThroughout(who = identity()): void {

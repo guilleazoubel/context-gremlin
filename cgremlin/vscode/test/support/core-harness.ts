@@ -310,6 +310,8 @@ export async function stateDirFiles(stateDir: string): Promise<string[]> {
 export interface ManagerOptions {
   /** Override to drive the version handshake (R2/R21) against a real engine. */
   bundledVersion?: string;
+  /** MG-C5's content address; override it to make a same-version engine look stale. */
+  bundledBuildId?: string;
   /** R25 supplies the editor's own `Code Helper (Plugin)` here. */
   execPath?: string;
   env?: NodeJS.ProcessEnv;
@@ -321,6 +323,7 @@ export function createManager(seed: SeededStateDir, opts: ManagerOptions = {}): 
   return new EngineManager({
     process: new NodeEngineProcess({ env: opts.env ?? seed.env, shell: seed.loginShell }),
     bundledVersion: opts.bundledVersion ?? loadEngineBridge().ENGINE_VERSION,
+    bundledBuildId: opts.bundledBuildId ?? loadEngineBridge().ENGINE_BUILD_ID,
     paths: () => ({
       configPath: seed.configPath,
       socketPath: seed.socketPath,

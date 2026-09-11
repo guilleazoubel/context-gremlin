@@ -24,6 +24,7 @@ interface Timer {
 export function identity(over: Partial<EngineIdentity> = {}): EngineIdentity {
   return {
     version: '0.0.1',
+    buildId: 'aaaaaaaaaaaaaaaa',
     pid: 4242,
     startedAt: '2026-09-10T10:00:00.000Z',
     socketPath: '/tmp/cg/engine.sock',

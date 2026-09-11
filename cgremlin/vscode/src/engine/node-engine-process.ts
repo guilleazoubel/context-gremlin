@@ -51,6 +51,9 @@ function asIdentity(body: unknown): EngineIdentity | null {
   if (typeof b.activeRuns !== 'number') return null;
   return {
     version: b.version,
+    // Absent on an engine older than the build id; left absent here, because "this engine does
+    // not say" is the answer the handshake has to see (MG-C5).
+    ...(typeof b.buildId === 'string' ? { buildId: b.buildId } : {}),
     pid: b.pid,
     startedAt: b.startedAt,
     socketPath: b.socketPath,

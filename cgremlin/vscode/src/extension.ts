@@ -67,6 +67,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const manager = new EngineManager({
     process: new NodeEngineProcess(),
     bundledVersion: bridge.ENGINE_VERSION,
+    bundledBuildId: bridge.ENGINE_BUILD_ID,
     paths: () => {
       const resolved = engineSurface?.paths();
       return {

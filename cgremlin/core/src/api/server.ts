@@ -110,6 +110,12 @@ export interface ApiServerDeps {
 export interface EngineInfo {
   name: string;
   version: string;
+  /**
+   * A content address of the engine bundle, stamped in by `scripts/build-engine.mjs`, or `dev`
+   * for an engine that was never bundled. The version string is the package's and does not move
+   * between phases; this does, which is what lets the extension tell a stale engine from its own.
+   */
+  buildId: string;
   pid: number;
   startedAt: string;
   socketPath: string;
@@ -762,12 +768,12 @@ async function handleRequest(
         sendJson(res, 404, { error: 'version not available' });
         return;
       }
-      const { name, version, pid, startedAt, socketPath } = deps.engineInfo;
+      const { name, version, buildId, pid, startedAt, socketPath } = deps.engineInfo;
       // R21: recomputed per request. Live StageRunner runs PLUS environment
       // preparations still in flight — a stage still preparing has no active
       // run for pipeline.stop() to find, yet a restart aborts it.
       const activeRuns = deps.pipeline.activeSessionIds().length + (deps.environment?.inFlightCount() ?? 0);
-      sendJson(res, 200, { name, version, pid, startedAt, socketPath, activeRuns });
+      sendJson(res, 200, { name, version, buildId, pid, startedAt, socketPath, activeRuns });
       return;
     }
 
