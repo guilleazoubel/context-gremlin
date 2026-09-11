@@ -17,7 +17,7 @@ import { heartbeatIntervalMs } from '../../src/ui/terminal';
 import { FakeHost, FakeWebviewView } from '../support/fake-host';
 import { FakeBridge, FakeEngineManager } from '../support/fake-engine-manager';
 import { EngineSurface } from '../../src/ui/engine';
-import { startStubServer, type StubHandler, type StubServerHandle } from '../support/stub-server';
+import { fixtures, startStubServer, type StubHandler, type StubServerHandle } from '../support/stub-server';
 import itemsFixture from '../support/fixtures/items.json';
 import type { NotificationLevel } from '../../src/model/notify-policy';
 import type { PanelRowView, PanelState } from '../../src/model/panel-protocol';
@@ -759,6 +759,95 @@ describe('the row commands', () => {
       path: '/items/session/inv-stacktrace-1/agents',
       body: { mode: 'investigation', repoUrl: 'https://github.com/acme/web.git' },
     });
+  });
+
+  /**
+   * The defect behind "I click Start investigation and nothing happens": the pick is opened from
+   * a webview click, and the panel takes its own focus back on the very next render (the script's
+   * `restoreFocus`). A quick pick without `ignoreFocusOut` is dismissed by that, resolves
+   * `undefined`, and the command returns in silence.
+   */
+  it('opens the repo pick so a panel refresh cannot dismiss it', async () => {
+    const h = await connected();
+    h.host.quickPickAnswers = ['acme/web'];
+    await h.host.invoke('cgremlin.startInvestigation', 'session:inv-stacktrace-1');
+    const pick = h.host.callsOf('showQuickPick')[0];
+    expect(pick.args[0]).toEqual(['acme/web', 'acme/api']);
+    expect(pick.args[1]).toMatchObject({ ignoreFocusOut: true });
+  });
+
+  it('never asks when core configures exactly one repo', async () => {
+    const h = await connected({
+      handler: (req) =>
+        req.method === 'GET' && req.path === '/config'
+          ? { status: 200, body: { config: { ...(fixtures.config as { config: Record<string, unknown> }).config, repos: ['acme/only'] } } }
+          : undefined,
+    });
+    const mark = h.mark();
+    await h.host.invoke('cgremlin.startInvestigation', 'session:inv-stacktrace-1');
+    expect(h.host.callsOf('showQuickPick')).toEqual([]);
+    expect(h.since(mark).filter((r) => r.path.endsWith('/agents'))).toEqual([
+      {
+        method: 'POST',
+        path: '/items/session/inv-stacktrace-1/agents',
+        body: { mode: 'investigation', repoUrl: 'https://github.com/acme/only.git' },
+      },
+    ]);
+  });
+
+  it('remembers the repo per item, so the second start does not ask again', async () => {
+    const h = await connected();
+    h.host.quickPickAnswers = ['acme/api'];
+    await h.host.invoke('cgremlin.startInvestigation', 'session:inv-stacktrace-1');
+    const mark = h.mark();
+    await h.host.invoke('cgremlin.startDevelopment', 'session:inv-stacktrace-1');
+    expect(h.host.callsOf('showQuickPick')).toHaveLength(1);
+    expect(h.since(mark).filter((r) => r.path.endsWith('/agents'))).toEqual([
+      {
+        method: 'POST',
+        path: '/items/session/inv-stacktrace-1/agents',
+        body: { mode: 'development', repoUrl: 'https://github.com/acme/api.git' },
+      },
+    ]);
+  });
+
+  it('surfaces the engine refusal verbatim, and remembers nothing from a failed start', async () => {
+    const h = await connected({
+      handler: (req) =>
+        req.method === 'POST' && req.path.endsWith('/agents')
+          ? { status: 400, body: { error: 'repoUrl is required for a ticket-only item' } }
+          : undefined,
+    });
+    h.host.quickPickAnswers = ['acme/web', 'acme/api'];
+    await h.host.invoke('cgremlin.startInvestigation', 'session:inv-stacktrace-1');
+    expect(h.host.callsOf('showWarningMessage')[0].args[0]).toBe(
+      'repoUrl is required for a ticket-only item',
+    );
+    // A repo that produced a refusal is not the answer to remember: the next click asks again.
+    await h.host.invoke('cgremlin.startInvestigation', 'session:inv-stacktrace-1');
+    expect(h.host.callsOf('showQuickPick')).toHaveLength(2);
+  });
+
+  it('says so when the engine is gone, instead of failing in silence', async () => {
+    const h = await connected();
+    h.host.quickPickAnswers = ['acme/web'];
+    await h.server.dispose();
+    servers.splice(servers.indexOf(h.server), 1);
+    await h.host.invoke('cgremlin.startInvestigation', 'session:inv-stacktrace-1');
+    const warning = h.host.callsOf('showWarningMessage').at(-1);
+    // Whatever the socket failure is called, the user is told the start did not happen.
+    expect(String(warning?.args[0])).toContain('Could not start the investigation');
+  });
+
+  it('selects and opens the row it started work on', async () => {
+    const h = await connected();
+    h.host.quickPickAnswers = ['acme/web'];
+    h.toPanel({ type: 'selectRow', id: MY_PR_ITEM, list: 'myWork' });
+    await h.host.invoke('cgremlin.startInvestigation', 'session:inv-stacktrace-1');
+    await settleDetail();
+    const row = h.rowOf('session:inv-stacktrace-1');
+    expect(row.selected).toBe(true);
+    expect(row.expanded).toBe(true);
   });
 });
 
