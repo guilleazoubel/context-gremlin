@@ -36,7 +36,7 @@ describe('PipelineService — createDevelopmentSession (R16)', () => {
     expect(dev.agent).toBeNull();
     expect(dev.lastRun).toBeNull();
     expect(dev.pr).toBeNull();
-    expect(dev.lineage).toEqual({ pipelineId: dev.id, parentSessionId: null, ticket: 'ABC-1' });
+    expect(dev.lineage).toEqual({ pipelineId: dev.id, parentSessionId: null, ticket: 'ABC-1', selfReview: false });
     expect(dev.workspace.branch).toBe('feature/ABC-1');
     expect(dev.workspace.worktreePath).toBe(`${WORKTREES_DIR}/${dev.id}`);
     expect(dev.workspace.repoUrl).toBe(DEV_INPUT.repoUrl);

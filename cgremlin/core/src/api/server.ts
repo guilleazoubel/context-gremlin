@@ -184,6 +184,8 @@ async function handleReviewStart(
   inv: InventoryDeps,
   repoSlug: string,
   number: number,
+  /** Phase 10 — only `POST /items/<path>/agents` with `{ selfReview: true }` sets this; every other caller keeps OwnPrError. */
+  selfReview = false,
 ): Promise<void> {
   const inventory = await loadCurrentInventory(inv);
   if (!inventory) throw new NoScanYetError();
@@ -195,7 +197,7 @@ async function handleReviewStart(
   // Re-check against the live config rather than trusting entry.isMine (a
   // snapshot from whenever the inventory was last scanned) — the same
   // never-trust-a-stale-snapshot reasoning as the fresh session lookup below.
-  if (entry.author.toLowerCase() === inv.config.me.toLowerCase()) {
+  if (!selfReview && entry.author.toLowerCase() === inv.config.me.toLowerCase()) {
     throw new OwnPrError(repoSlug, number);
   }
 
@@ -215,7 +217,7 @@ async function handleReviewStart(
   }
 
   const candidate: CandidatePR = {
-    kind: 'review',
+    kind: selfReview ? 'own' : 'review',
     repo: repoSlug,
     number,
     url: entry.url,
@@ -257,7 +259,10 @@ async function handleItemAgents(
       return;
     }
     const inv = deps.inventory;
-    await lock.withLock(`pr:${pr.repo}#${pr.number}`, () => handleReviewStart(res, deps, inv, pr.repo, pr.number));
+    const selfReview = request.selfReview === true;
+    await lock.withLock(`pr:${pr.repo}#${pr.number}`, () =>
+      handleReviewStart(res, deps, inv, pr.repo, pr.number, selfReview),
+    );
     return;
   }
 
@@ -704,6 +709,8 @@ interface AgentsRequest {
   repoUrl?: string;
   intent?: 'investigate_only' | 'development';
   driveToCompletion?: boolean;
+  /** Phase 10 — mode 'review' only: deliberately review the caller's OWN PR, bypassing OwnPrError. */
+  selfReview?: boolean;
 }
 
 function parseAgentsRequest(body: unknown): AgentsRequest {
@@ -721,6 +728,7 @@ function parseAgentsRequest(body: unknown): AgentsRequest {
   }
   if (raw.intent === 'investigate_only' || raw.intent === 'development') request.intent = raw.intent;
   if (typeof raw.driveToCompletion === 'boolean') request.driveToCompletion = raw.driveToCompletion;
+  if (typeof raw.selfReview === 'boolean') request.selfReview = raw.selfReview;
   return request;
 }
 

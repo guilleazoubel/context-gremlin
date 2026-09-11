@@ -347,7 +347,7 @@ export class PipelineService {
       mode: 'investigation',
       createdAt: this.now().toISOString(),
       workspace: { repoUrl: input.repoUrl, worktreePath, branch },
-      lineage: { pipelineId: id, parentSessionId: null, ticket: input.ticket },
+      lineage: { pipelineId: id, parentSessionId: null, ticket: input.ticket, selfReview: false },
       stageStatus: 'findings',
       agent: null,
       lastRun: null,
@@ -409,7 +409,7 @@ export class PipelineService {
       createdAt: this.now().toISOString(),
       workspace: { repoUrl: input.repoUrl, worktreePath, branch },
       // Self-rooted, unlike promote()'s child session.
-      lineage: { pipelineId: id, parentSessionId: null, ticket: input.ticket },
+      lineage: { pipelineId: id, parentSessionId: null, ticket: input.ticket, selfReview: false },
       stageStatus: 'active',
       agent: null,
       lastRun: null,
@@ -590,7 +590,7 @@ export class PipelineService {
         mode: 'development',
         createdAt: this.now().toISOString(),
         workspace: fresh.workspace,
-        lineage: { pipelineId: fresh.lineage.pipelineId, parentSessionId: fresh.id, ticket: fresh.lineage.ticket },
+        lineage: { pipelineId: fresh.lineage.pipelineId, parentSessionId: fresh.id, ticket: fresh.lineage.ticket, selfReview: false },
         stageStatus: 'active',
         agent: null,
         lastRun: null,
@@ -741,7 +741,12 @@ export class PipelineService {
     const prep = await this.prepareEnvironment(id, 'review', session);
     // A review session with no pr is rejected by the locked preRun below
     // before this brief is ever written, so the fallback number is dead.
-    const brief = renderReviewBrief({ sessionDir, prNumber: session.pr?.number ?? 0, env: prep.ctx });
+    const brief = renderReviewBrief({
+      sessionDir,
+      prNumber: session.pr?.number ?? 0,
+      env: prep.ctx,
+      selfReview: session.lineage.selfReview,
+    });
     const prompt = renderReviewPrompt({
       sessionDir,
       reviewSkillCommand: this.deps.config.reviewSkillCommand,

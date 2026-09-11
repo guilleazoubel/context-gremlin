@@ -12,10 +12,24 @@ const WorkspaceSchema = z.object({
   branch: z.string().min(1).optional(),
 });
 
-const LineageSchema = z.object({
+// V1 predates the self-review concept entirely, so its lineage keeps the
+// original shape — a separate schema (rather than reusing LineageSchema)
+// keeps `selfReview` out of `SessionV1`'s TS type so every v1 fixture across
+// the codebase (there is no self-review pre-Phase-10) does not need to name
+// a field it never had.
+const V1LineageSchema = z.object({
   pipelineId: z.string().min(1),
   parentSessionId: z.string().min(1).nullable(),
   ticket: z.string().min(1).nullable(),
+});
+
+const LineageSchema = V1LineageSchema.extend({
+  // Phase 10: additive, defaulted (R45-style) — every session.json already on
+  // disk predates this flag and loads as `selfReview: false`. Marks a review
+  // session deliberately created on the author's own PR (bypassing OwnPrError
+  // via the `selfReview` request flag), so attention/inventory can tell a
+  // self-review apart from a review of a teammate's PR.
+  selfReview: z.boolean().optional().default(false),
 });
 
 // ---- v1 (Phase 0) — kept so old documents on disk still parse ----
@@ -24,7 +38,7 @@ const V1Base = z.object({
   id: z.string().min(1),
   createdAt: z.string().datetime(),
   workspace: WorkspaceSchema,
-  lineage: LineageSchema,
+  lineage: V1LineageSchema,
 });
 export const SessionV1Schema = z.discriminatedUnion('mode', [
   V1Base.extend({ mode: z.literal('investigation'), stageStatus: z.enum(INVESTIGATION_PHASES) }),

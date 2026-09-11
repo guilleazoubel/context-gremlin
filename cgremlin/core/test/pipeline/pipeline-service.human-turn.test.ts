@@ -86,7 +86,7 @@ function investigation(
   return {
     schemaVersion: 2, id, mode: 'investigation', createdAt: '2026-09-10T10:00:00.000Z',
     workspace: { repoUrl: REPO_URL, worktreePath: `${WORKTREES_DIR}/${id}`, branch: `investigate/${id}` },
-    lineage: { pipelineId: id, parentSessionId: null, ticket: 'APP-1' },
+    lineage: { pipelineId: id, parentSessionId: null, ticket: 'APP-1', selfReview: false },
     stageStatus, agent: null, lastRun: null, pr: null,
     intent: 'investigate_only', driveToCompletion,
   };
@@ -96,7 +96,7 @@ function development(id: string, stageStatus: 'active' | 'pr_opened' = 'active')
   return {
     schemaVersion: 2, id, mode: 'development', createdAt: '2026-09-10T10:00:00.000Z',
     workspace: { repoUrl: REPO_URL, worktreePath: `${WORKTREES_DIR}/${id}`, branch: 'feature/x' },
-    lineage: { pipelineId: id, parentSessionId: null, ticket: 'APP-1' },
+    lineage: { pipelineId: id, parentSessionId: null, ticket: 'APP-1', selfReview: false },
     stageStatus, agent: null, lastRun: null, pr: null,
   };
 }
@@ -105,7 +105,7 @@ function review(id: string, stageStatus: 'queued' | 'ready' | 'changes_requested
   return {
     schemaVersion: 2, id, mode: 'review', createdAt: '2026-09-10T10:00:00.000Z',
     workspace: { repoUrl: REPO_URL, worktreePath: `${WORKTREES_DIR}/${id}`, branch: 'pr-1' },
-    lineage: { pipelineId: id, parentSessionId: null, ticket: null },
+    lineage: { pipelineId: id, parentSessionId: null, ticket: null, selfReview: false },
     stageStatus, agent: null, lastRun: null,
     pr: {
       repo: 'acme/app', number: 1, url: 'https://github.com/acme/app/pull/1',

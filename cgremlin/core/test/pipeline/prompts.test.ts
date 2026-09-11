@@ -289,6 +289,18 @@ describe('renderReviewBrief / renderRereviewBrief', () => {
     expect(withoutEnv).toContain('## Output — write `REVIEW.md` in this directory, EXACTLY this structure');
   });
 
+  it('Phase 10: selfReview:true adds one line stating this is a self-review of the author\'s own PR; absent by default', () => {
+    const selfReviewBrief = renderReviewBrief({ sessionDir, prNumber: 123, selfReview: true });
+    expect(selfReviewBrief).toContain('self-review');
+    expect(selfReviewBrief.toLowerCase()).toContain('own pr');
+
+    const ordinaryBrief = renderReviewBrief({ sessionDir, prNumber: 123 });
+    expect(ordinaryBrief).not.toContain('self-review');
+
+    const explicitFalse = renderReviewBrief({ sessionDir, prNumber: 123, selfReview: false });
+    expect(explicitFalse).not.toContain('self-review');
+  });
+
   it('rereview brief contains the header and the commit count', () => {
     const t = renderRereviewBrief({ sessionDir, prNumber: 123, commitCount: 2 });
     expect(t).toContain('# RE-REVIEW — PR #123');

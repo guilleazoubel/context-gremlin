@@ -484,6 +484,9 @@ Rulings live in `docs/superpowers/specs/2026-09-10-cgremlin-phase9-work-items-de
   demotes a PR into a collapsed group, **and so does a pending review request to somebody else**
   (R47.1, decided): GitHub has already assigned that PR to a named person, and picking it up is
   duplicated work. What the eye should land on is the *untouched* count.
+  **Phase 10 errata: R47.1 is REVERSED** (gh#2125 false positive) — a pending review request, to a
+  user or a team slug, no longer demotes; only actual `humanActivity` does, and `reviewRequests`
+  keeps driving R30 and display only.
 - **The coordinator override replaced the `reviewing` list** (R47/R48). A teammate's PR that our
   review agent is on stays in the **parking lot**, in a `'reviewing'` group pinned on top, and
   **never enters `myWork`** — a teammate's PR is a teammate's PR, whatever we have running on it.

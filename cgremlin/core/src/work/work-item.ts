@@ -5,7 +5,7 @@ import type { CiStatus } from '../gh/pr-view';
 import type { Inventory, InventoryEntry, TeamActivity } from '../inventory/inventory';
 import type { JiraScanReport } from '../jira/jira-store';
 import type { SessionMode } from '../schema/session';
-import { isBotLogin } from './bot-login';
+import { sizeTierOf, type SizeTier } from './size-tier';
 import { workItemIdOf, type WorkItemId } from './work-item-id';
 
 /**
@@ -59,6 +59,8 @@ export interface WorkItemPr {
   deletions: number | null;
   ci: CiStatus | null;
   labels: string[] | null;
+  /** Workshop phase 10 §2.1: pure arithmetic on `changedFiles`/`additions`/`deletions`, null when either is null. */
+  sizeTier: SizeTier | null;
 }
 
 export interface WorkItemTicket {
@@ -157,6 +159,7 @@ function prFromEntry(e: InventoryEntry): WorkItemPr {
     deletions: e.deletions,
     ci: e.ci,
     labels: e.labels,
+    sizeTier: sizeTierOf({ changedFiles: e.changedFiles, additions: e.additions, deletions: e.deletions }),
   };
 }
 
@@ -182,6 +185,7 @@ function prFromAgentLinks(repo: string, number: number, url: string | null): Wor
     deletions: null,
     ci: null,
     labels: null,
+    sizeTier: null,
   };
 }
 
@@ -365,7 +369,7 @@ function finish(cand: Candidate, ctx: FinishContext): WorkItem {
     cand.ticket !== null ? (prs.length > 0 ? 'pr+ticket' : 'ticket') : prs.length > 0 ? 'pr' : 'session';
 
   const lists = membership(prs, agents, cand.ticket, ctx);
-  const demoted = prs.some((pr) => someoneIsOnIt(pr, ctx));
+  const demoted = prs.some((pr) => someoneIsOnIt(pr));
   const parkingLotGroup: ParkingLotGroup | null = !lists.includes('parkingLot')
     ? null
     : agents.some((a) => a.mode === 'review')
@@ -406,19 +410,19 @@ function finish(cand: Candidate, ctx: FinishContext): WorkItem {
 /** R47: `open(pr)` is `isDraft !== true` (R57), NOT `=== false` — an unknown draft state is treated as not-a-draft. */
 const open = (pr: WorkItemPr): boolean => pr.isDraft !== true;
 
-function requestedFromOthers(pr: WorkItemPr, ctx: FinishContext): string[] {
-  return (pr.reviewRequests ?? []).filter(
-    (r) => r.toLowerCase() !== ctx.meLower && !isBotLogin(r, { extra: ctx.bots }),
-  );
-}
-
 /**
- * R47/R47.1 — "someone is already on it". A pending review request to
- * somebody ELSE counts, because GitHub has already assigned that PR to a
- * named person and picking it up is duplicated work.
+ * R47.1 REVERSED (gh#2125, coordinator ruling): a pending review request —
+ * to a user OR a team slug — never contributes to "someone is on it". A
+ * live false positive demoted a PR purely because it carried open team
+ * review requests with zero human activity: `reviewRequests` mixes user
+ * logins and team slugs with no marker distinguishing them, and treating an
+ * unclaimed team request as "somebody is already on it" is backwards —
+ * nobody named has picked it up yet. `reviewRequests` still drives R30
+ * ("requested of me -> parking lot regardless") and display; only actual
+ * human review/comment activity (`humanActivity.lastAt`) demotes.
  */
-function someoneIsOnIt(pr: WorkItemPr, ctx: FinishContext): boolean {
-  return (pr.humanActivity?.lastAt ?? null) !== null || requestedFromOthers(pr, ctx).length > 0;
+function someoneIsOnIt(pr: WorkItemPr): boolean {
+  return (pr.humanActivity?.lastAt ?? null) !== null;
 }
 
 function membership(

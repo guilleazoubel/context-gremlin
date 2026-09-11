@@ -42,7 +42,7 @@ function devSession(id: string): Session {
     mode: 'development',
     stageStatus: 'active',
     workspace: { repoUrl: REPO_URL, worktreePath: WT, branch: 'feat/x' },
-    lineage: { pipelineId: 'p1', parentSessionId: null, ticket: 'GS-1' },
+    lineage: { pipelineId: 'p1', parentSessionId: null, ticket: 'GS-1', selfReview: false },
     agent: null,
     lastRun: null,
     pr: null,

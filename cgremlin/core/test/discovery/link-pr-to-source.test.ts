@@ -60,9 +60,16 @@ describe('linkPrToSource', () => {
     const result = linkPrToSource(rev, [source]);
     expect(result.source).toEqual(source);
     expect(result.linked.lineage).toEqual({
-      pipelineId: source.lineage.pipelineId, parentSessionId: source.id, ticket: null,
+      pipelineId: source.lineage.pipelineId, parentSessionId: source.id, ticket: null, selfReview: false,
     });
     expect(result.supersede).toBe(false);
+  });
+
+  it('Phase 10: a self-review keeps lineage.selfReview true through linking', () => {
+    const source = development('dev-1', 'active', { pr: { repo: 'acme/app', number: 5 } });
+    const rev: ReviewSession = { ...review('pr-app-5-x', 'acme/app', 5), lineage: { ...review('pr-app-5-x', 'acme/app', 5).lineage, selfReview: true } };
+    const result = linkPrToSource(rev, [source]);
+    expect(result.linked.lineage.selfReview).toBe(true);
   });
 
   it('the same PR number in a different repo is not a pass-1 match', () => {

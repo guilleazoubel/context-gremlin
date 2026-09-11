@@ -418,6 +418,43 @@ describe('POST /items/<path>/agents (MG-8, R15)', () => {
     expect(res.body.error).toContain('own');
   });
 
+  it('Phase 10: mode review with selfReview:true on MY OWN PR creates a review session instead of 409', async () => {
+    await start();
+    await scan([prFixture(12, 'me-user')]);
+    ih.gh.queueResponse({
+      stdout: JSON.stringify({
+        number: 12,
+        title: 'PR #12',
+        author: { login: 'me-user' },
+        headRefName: 'feature/HB-6212-x',
+        headRefOid: 'a'.repeat(40),
+        baseRefName: 'main',
+        url: 'https://github.com/acme/app/pull/12',
+        state: 'OPEN',
+        isDraft: false,
+        reviewDecision: '',
+        mergedAt: null,
+        closedAt: null,
+        latestReviews: [],
+        statusCheckRollup: [],
+      }),
+    });
+    const res = await request('POST', '/items/pr/acme/app/12/agents', { mode: 'review', selfReview: true });
+    expect(res.status).toBe(202);
+    expect(res.body.created).toBe(true);
+    expect(res.body.session.lineage.selfReview).toBe(true);
+    expect(agentStarts).toBe(1);
+    expect(runStarts).toEqual(['review']);
+  });
+
+  it('Phase 10: mode review WITHOUT selfReview on MY OWN PR still 409s (every other path keeps OwnPrError)', async () => {
+    await start();
+    await scan([prFixture(13, 'me-user')]);
+    const res = await request('POST', '/items/pr/acme/app/13/agents', { mode: 'review', selfReview: false });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toContain('own');
+  });
+
   it('mode review on a ticket-only item is a 400', async () => {
     jira = {
       ...jira,

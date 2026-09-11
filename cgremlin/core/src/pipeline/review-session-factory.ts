@@ -24,6 +24,7 @@ export interface CandidatePR {
 
 export interface CreateFromPrUrlOptions {
   refuseAuthor?: string;
+  selfReview?: boolean;
 }
 
 export interface ReviewSessionFactoryDeps {
@@ -51,7 +52,10 @@ export class ReviewSessionFactory {
   }
 
   async createFromCandidate(candidate: CandidatePR): Promise<ReviewSession> {
-    return this.create(candidate.repo, candidate.number);
+    // Phase 10: a candidate seeded `kind: 'own'` is a deliberate self-review
+    // (the `selfReview` request flag bypassed OwnPrError upstream) — record
+    // it on lineage so attention/inventory can tell the two apart.
+    return this.create(candidate.repo, candidate.number, { selfReview: candidate.kind === 'own' });
   }
 
   private async create(slug: string, number: number, opts?: CreateFromPrUrlOptions): Promise<ReviewSession> {
@@ -87,7 +91,12 @@ export class ReviewSessionFactory {
       mode: 'review',
       createdAt: nowDate.toISOString(),
       workspace: { repoUrl, worktreePath, branch: branchName },
-      lineage: { pipelineId: id, parentSessionId: null, ticket: extractTicketKey(mapped.headRefName) },
+      lineage: {
+        pipelineId: id,
+        parentSessionId: null,
+        ticket: extractTicketKey(mapped.headRefName),
+        selfReview: opts?.selfReview === true,
+      },
       agent: null,
       lastRun: null,
       pr: mapped.pr,

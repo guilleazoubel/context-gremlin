@@ -197,6 +197,20 @@ describe('groupWorkItems: list membership (R47–R50, MG-2)', () => {
     expect(items[0].lists.sort()).toEqual(['myWork', 'waitingForReview']);
   });
 
+  // Phase 10 self-review (POST /items/.../agents { mode:'review', selfReview:true }):
+  // a review agent of ours on our OWN PR must not put the item in the parking
+  // lot — R47's itemIsMine exclusion already guards this unconditionally,
+  // regardless of what agents the item carries.
+  it('Phase 10: a self-review agent on my OWN PR never puts the item in parkingLot', () => {
+    const e = entry({ number: 70, isMine: true, author: ME });
+    const items = group({
+      inventory: inv([e]),
+      items: [prAttention(e), agentAttention({ id: 'sr1', mode: 'review', prRepo: REPO, prNumber: 70 })],
+    });
+    expect(items[0].lists).not.toContain('parkingLot');
+    expect(items[0].parkingLotGroup).toBeNull();
+  });
+
   it("MG-2: a non-watched author's PR is in NO list with showAllRepoPrs false, and parkingLot with it true", () => {
     const e = entry({ number: 3, author: 'stranger' });
     expect(group({ inventory: inv([e]), items: [prAttention(e)] })[0].lists).toEqual([]);
@@ -279,6 +293,7 @@ describe('groupWorkItems: list membership (R47–R50, MG-2)', () => {
       deletions: null,
       ci: null,
       labels: null,
+      sizeTier: null,
     });
   });
 
@@ -460,14 +475,13 @@ describe('groupWorkItems: R28 — identity follows the link, not the snapshot', 
   });
 });
 
-describe('groupWorkItems: demoted and parkingLotGroup (R47, R47.1, MG-17)', () => {
+describe('groupWorkItems: demoted and parkingLotGroup (R47, R47.1 REVERSED gh#2125, MG-17)', () => {
   const withReviewer = entry({ number: 60, humanActivity: { reviewedBy: ['jane'], commentedBy: [], lastAt: '2026-09-02T00:00:00.000Z' } });
   const withCommenter = entry({ number: 61, humanActivity: { reviewedBy: [], commentedBy: ['jane'], lastAt: '2026-09-02T00:00:00.000Z' } });
   const withThreadReply = entry({ number: 62, humanActivity: { reviewedBy: [], commentedBy: ['jane'], lastAt: '2026-09-02T00:00:00.000Z' } });
-  const requestedOfOther = entry({ number: 63, reviewRequests: ['jane'] });
 
-  it('all four demoting signals set demoted true and leave the row LISTED', () => {
-    for (const e of [withReviewer, withCommenter, withThreadReply, requestedOfOther]) {
+  it('the three human-activity signals set demoted true and leave the row LISTED', () => {
+    for (const e of [withReviewer, withCommenter, withThreadReply]) {
       const items = group({ inventory: inv([e]), items: [prAttention(e)] });
       expect(items[0].demoted).toBe(true);
       expect(items[0].lists).toEqual(['parkingLot']);
@@ -485,6 +499,50 @@ describe('groupWorkItems: demoted and parkingLotGroup (R47, R47.1, MG-17)', () =
   it('a bot-only review request is not demoting', () => {
     const e = entry({ number: 65, reviewRequests: ['dependabot[bot]'] });
     expect(group({ inventory: inv([e]), items: [prAttention(e)] })[0].demoted).toBe(false);
+  });
+
+  // R47.1 REVERSED (gh#2125): a pending review request to somebody else — a
+  // USER or a TEAM slug — is no longer a demoting signal. reviewRequests is
+  // used only for "requested of me -> parking lot" (R30) and for display.
+  it("R47.1 reversed: a review request to a USER other than me does NOT demote", () => {
+    const e = entry({ number: 63, reviewRequests: ['jane'] });
+    const items = group({ inventory: inv([e]), items: [prAttention(e)] });
+    expect(items[0].demoted).toBe(false);
+    expect(items[0].parkingLotGroup).toBe('untouched');
+  });
+
+  it('R47.1 reversed: a review request to a TEAM slug does NOT demote', () => {
+    const e = entry({ number: 67, reviewRequests: ['aplaceformom/grace-b2b'] });
+    const items = group({ inventory: inv([e]), items: [prAttention(e)] });
+    expect(items[0].demoted).toBe(false);
+    expect(items[0].parkingLotGroup).toBe('untouched');
+  });
+
+  // gh#2125 itself: the PR's only "activity" is the author's own review
+  // comments (already excluded upstream by buildHumanActivity), bot reviews
+  // from gitstream-cm/github-actions, a bot comment from apfm-sonar, and
+  // pending review requests to three teams. None of that should demote.
+  it('gh#2125: author-only activity + bot reviews/comments + three team review requests is untouched', () => {
+    const e = entry({
+      number: 2125,
+      humanActivity: { reviewedBy: [], commentedBy: [], lastAt: null },
+      reviewRequests: ['aplaceformom/grace-b2b', 'aplaceformom/grace-b2c', 'aplaceformom/grace-platform'],
+    });
+    const items = group({ inventory: inv([e]), items: [prAttention(e)] });
+    expect(items[0].prs[0].humanActivity).toEqual({ reviewedBy: [], commentedBy: [], lastAt: null });
+    expect(items[0].demoted).toBe(false);
+    expect(items[0].parkingLotGroup).toBe('untouched');
+  });
+
+  it('gh#2125 contrast: a TEAMMATE comment on the same shape of PR DOES demote to someoneOnIt', () => {
+    const e = entry({
+      number: 2126,
+      humanActivity: { reviewedBy: [], commentedBy: ['ateammate'], lastAt: '2026-09-05T00:00:00.000Z' },
+      reviewRequests: ['aplaceformom/grace-b2b', 'aplaceformom/grace-b2c', 'aplaceformom/grace-platform'],
+    });
+    const items = group({ inventory: inv([e]), items: [prAttention(e)] });
+    expect(items[0].demoted).toBe(true);
+    expect(items[0].parkingLotGroup).toBe('someoneOnIt');
   });
 
   it("a demoted PR that also carries a review agent is 'reviewing', not 'someoneOnIt'", () => {
