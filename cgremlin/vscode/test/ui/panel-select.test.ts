@@ -150,7 +150,7 @@ describe('what an expanded row asks the engine for', () => {
         artifactAt: { 'inv-hb-627': '2026-09-10T10:00:00.000Z' },
         changes: {
           base: 'main',
-          baseResolved: 'a1b2c3d',
+          baseResolved: true,
           head: 'e4f5a6b',
           committed: { files: 8, additions: 240, deletions: 31 },
           workingTree: { files: 2, additions: 12, deletions: 0 },

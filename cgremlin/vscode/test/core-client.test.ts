@@ -110,7 +110,7 @@ describe('CoreClient — reads', () => {
   it('reads the changes route, and answers null for an engine that has no such route', async () => {
     const wire = {
       base: 'main',
-      baseResolved: 'a1b2c3d',
+      baseResolved: true,
       head: 'e4f5a6b',
       committed: { files: 8, additions: 240, deletions: 31, entries: [] },
       workingTree: { files: 2, additions: 12, deletions: 0, entries: [] },

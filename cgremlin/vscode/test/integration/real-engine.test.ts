@@ -327,9 +327,10 @@ describe.skipIf(!coreIsBuilt())('integration: the extension against a real engin
         // Our review agent pins #3 to the top of the parking lot and does NOT move it to myWork
         // (R47/R48, the coordinator override).
         reviewing: ['pr:fake/repo#3'],
-        // #7 has only bot activity, so it is still untouched; #9 has only a TEAM review request,
-        // which R47.1 (reversed in Phase 10) no longer counts as somebody being on it; #4 is a
-        // teammate's PR whose review was requested from ME, which outranks the watch list (R30).
+        // #7 has only bot activity, so it is still untouched; #9 has only a REVIEW REQUEST
+        // (GitHub asked dana), which R47.1 — reversed in Phase 10 — no longer counts as somebody
+        // being on it; #4 is a teammate's PR whose review was requested from ME, which outranks
+        // the watch list (R30).
         untouched: ['pr:fake/repo#7', 'pr:fake/repo#9', 'pr:fake/repo#4'],
         // Only #8 is demoted, and only because a HUMAN actually reviewed it: `someoneIsOnIt` is
         // `humanActivity.lastAt !== null` and nothing else (R47.1, reversed).
@@ -365,6 +366,33 @@ describe.skipIf(!coreIsBuilt())('integration: the extension against a real engin
       const bots = itemOf(listing, 'pr:fake/repo#7');
       expect(bots.demoted).toBe(false);
       expect(bots.prs[0]?.humanActivity).toEqual({ reviewedBy: [], commentedBy: [], lastAt: null });
+    });
+
+    /**
+     * R47.1, reversed (Phase 10). `someoneIsOnIt` is `humanActivity.lastAt !== null` and nothing
+     * else: neither a bot's review nor GitHub's request of a human demotes a row. Both halves are
+     * proved on live rows rather than on the rule, because the evidence that reversed R47.1
+     * (gh#2125) was precisely that a *requested* reviewer had not looked at the PR yet — a row
+     * hidden behind the collapsed group is a row nobody reads.
+     */
+    it('leaves a row nobody has actually touched in `untouched`, bot or request (R47.1 reversed)', () => {
+      const bots = itemOf(listing, 'pr:fake/repo#7');
+      expect(bots.prs[0]?.humanActivity).toEqual({ reviewedBy: [], commentedBy: [], lastAt: null });
+      expect(bots.demoted).toBe(false);
+      expect(bots.parkingLotGroup).toBe('untouched');
+
+      const requested = itemOf(listing, 'pr:fake/repo#9');
+      // GitHub really did ask somebody, and the row still says so — it is the GROUPING that no
+      // longer treats a request as work already done.
+      expect(requested.prs[0]?.reviewRequests).toEqual(['dana']);
+      expect(requested.prs[0]?.humanActivity).toEqual({ reviewedBy: [], commentedBy: [], lastAt: null });
+      expect(requested.demoted).toBe(false);
+      expect(requested.parkingLotGroup).toBe('untouched');
+
+      // The contrast, on the one row a human genuinely reviewed.
+      const reviewed = itemOf(listing, 'pr:fake/repo#8');
+      expect(reviewed.prs[0]?.humanActivity?.lastAt).not.toBeNull();
+      expect(reviewed.parkingLotGroup).toBe('someoneOnIt');
     });
 
     it('makes the review agent an agent OF the PR item, never a row of its own (R48)', () => {

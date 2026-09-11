@@ -20,7 +20,13 @@ export interface ChangeSet {
 
 export interface SessionChanges {
   base: string | null;
-  baseResolved: string | null;
+  /**
+   * The engine's own `baseResolved` is a BOOLEAN, not a sha: it says whether `git merge-base
+   * <base> HEAD` resolved in that worktree, and `false` means the committed counts come from a
+   * plain three-dot diff against `base` instead. Anything that is not a boolean is `null` —
+   * "the engine did not say" — so an older engine is never read as `false`.
+   */
+  baseResolved: boolean | null;
   head: string | null;
   committed: ChangeSet;
   workingTree: ChangeSet;
@@ -43,6 +49,10 @@ function text(value: unknown): string | null {
   return typeof value === 'string' && value !== '' ? value : null;
 }
 
+function flag(value: unknown): boolean | null {
+  return typeof value === 'boolean' ? value : null;
+}
+
 function changeSet(value: unknown): ChangeSet {
   const body = record(value);
   if (body === null) return { files: null, additions: null, deletions: null };
@@ -61,7 +71,7 @@ export function parseChanges(raw: unknown): SessionChanges | null {
   if (body.committed === undefined && body.workingTree === undefined) return null;
   return {
     base: text(body.base),
-    baseResolved: text(body.baseResolved),
+    baseResolved: flag(body.baseResolved),
     head: text(body.head),
     committed: changeSet(body.committed),
     workingTree: changeSet(body.workingTree),

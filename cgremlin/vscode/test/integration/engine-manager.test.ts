@@ -22,7 +22,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { EngineSurface } from '../../src/ui/engine';
 import { loadBridge } from '../../src/engine/bridge';
 import { NodeEngineProcess } from '../../src/engine/node-engine-process';
-import type { EngineIdentity } from '../../src/engine/manager';
+import type { EngineIdentity, SignalOutcome } from '../../src/engine/manager';
 import { FakeHost } from '../support/fake-host';
 import {
   coreIsBuilt,
@@ -63,6 +63,16 @@ const STOP_TIMEOUT = { timeout: 90_000, retry: 1 };
  */
 const CODE_HELPER =
   '/Applications/Visual Studio Code.app/Contents/Frameworks/Code Helper (Plugin).app/Contents/MacOS/Code Helper (Plugin)';
+
+/** A real port that counts the one call a "how many restarts?" question is about. */
+class CountingProcess extends NodeEngineProcess {
+  sigterms = 0;
+
+  override signal(pid: number, sig: 'SIGTERM'): SignalOutcome {
+    this.sigterms += 1;
+    return super.signal(pid, sig);
+  }
+}
 
 /**
  * How many engine processes exist for one state dir. `--config <path>` is unique to the temp dir,
@@ -237,6 +247,92 @@ describe.skipIf(!coreIsBuilt())('integration: the bundled engine through its man
     expect(host.output.join('\n')).toContain('it is being restarted');
     surface.dispose();
   }, TIMEOUT);
+
+  /**
+   * MG-C5's other half, and the reason the handshake has two parts at all.
+   *
+   * `ENGINE_VERSION` is the package's, and it stayed `0.0.1` across two phases of engine changes —
+   * so a version-only handshake adopted a stale engine and then found no `/items` on it for as
+   * long as it kept running. The build id is a content address of the bundle, and a differing one
+   * is a mismatch even when the two version strings are the same word.
+   *
+   * The restart it earns is ONE. Here the replacement is the very same bundle, so it mismatches
+   * again the moment it is probed; a surface that acted on every `mismatch` state would restart
+   * the engine forever, which is the flap this phase set out to end. The latch is what stops it,
+   * and one SIGTERM — counted on the real port, against the real pid — is what says so.
+   */
+  it('restarts a build-id mismatch exactly ONCE, and leaves the replacement alone (MG-C5)', async () => {
+    const seed = await seedStateDir();
+    const process_ = new CountingProcess({ env: seed.env, shell: seed.loginShell });
+    const bridge = loadBridge(EXTENSION_ROOT);
+    // The bundle really is the shipping one. Only the content address the extension ADVERTISES is
+    // faked, which is exactly the shape of an upgrade: same package version, different bundle.
+    const manager = createManager(seed, {
+      process: process_,
+      bundledBuildId: 'not-the-bundled-build-id',
+    });
+    cleanups.push(async () => {
+      await manager.stop();
+      await rm(seed.stateDir, { recursive: true, force: true });
+    });
+
+    const host = new FakeHost();
+    const surface = new EngineSurface({
+      host,
+      manager,
+      bridge,
+      configPath: () => seed.configPath,
+      home: seed.stateDir,
+      execPath: process.execPath,
+      enginePath: ENGINE_BUNDLE,
+      resolveLoginPath: () =>
+        new NodeEngineProcess({ env: seed.env, shell: seed.loginShell }).resolveLoginPath(),
+      reconnect: async () => {},
+    });
+    cleanups.push(async () => {
+      surface.dispose();
+      await surface.settled();
+    });
+
+    const first = await manager.ensureRunning('user');
+    expect(first.kind).toBe('mismatch');
+    // The two version words are identical, so the sentence is built from the BUILD ids instead —
+    // "0.0.1 and 0.0.1 disagree" would tell the user nothing at all.
+    const mismatch = first as Extract<typeof first, { kind: 'mismatch' }>;
+    expect(mismatch.running).toBe(`${bridge.ENGINE_VERSION} (build ${bridge.ENGINE_BUILD_ID})`);
+    expect(mismatch.bundled).toBe(`${bridge.ENGINE_VERSION} (build not-the-bundled-build-id)`);
+    expect(mismatch.running).not.toBe(mismatch.bundled);
+
+    const before = JSON.parse(readFileSync(seed.enginePidPath, 'utf8')) as { startedAt: string };
+    expect(await manager.activeRuns()).toBe(0);
+
+    await surface.settled();
+    // Nothing was at stake, so nothing was asked — and the engine really was replaced (R21).
+    expect(host.callsOf('showInformationMessage')).toHaveLength(0);
+    const after = await waitUntil(
+      async () => {
+        try {
+          return JSON.parse(readFileSync(seed.enginePidPath, 'utf8')) as { startedAt: string };
+        } catch {
+          return null;
+        }
+      },
+      (file) => file !== null && file.startedAt !== before.startedAt,
+      { what: 'the restarted engine to write a new engine.json' },
+    );
+    expect(after?.startedAt).not.toBe(before.startedAt);
+    expect(process_.sigterms).toBe(1);
+
+    // The replacement is the same bundle, so it is STILL a mismatch — and it is left alone. A
+    // generous window, because a second restart would be a real process doing real work and this
+    // is the only way to say it did not happen.
+    expect(manager.state().kind).toBe('mismatch');
+    await sleep(1_000);
+    await surface.settled();
+    expect(process_.sigterms).toBe(1);
+    expect(engineProcessCount(seed.configPath)).toBe(1);
+    expect(host.callsOf('showInformationMessage')).toHaveLength(0);
+  }, STOP_TIMEOUT);
 
   it('resolves the same paths the harness chose, through the bundled bridge (MG-C6)', async () => {
     const h = await boot();
