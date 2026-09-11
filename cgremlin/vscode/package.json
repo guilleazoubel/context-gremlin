@@ -240,10 +240,11 @@
     }
   },
   "scripts": {
-    "build": "pnpm --dir ../core build:engine && tsc -p tsconfig.json",
-    "vscode:prepublish": "pnpm build",
+    "build": "pnpm --dir ../core build:engine && pnpm build:webview && tsc -p tsconfig.json",
+    "build:webview": "esbuild src/webview/item-tab.ts --outfile=media/item-tab.js --bundle --format=iife --platform=browser --target=es2020 --minify && esbuild src/webview/panel.ts --outfile=media/panel.js --bundle --format=iife --platform=browser --target=es2020 --minify",
+    "vscode:prepublish": "pnpm build:webview && pnpm build",
     "package": "vsce package --no-dependencies",
-    "typecheck": "tsc -p tsconfig.typecheck.json --noEmit",
+    "typecheck": "tsc -p tsconfig.typecheck.json --noEmit && tsc -p tsconfig.webview.json --noEmit",
     "test": "vitest run",
     "test:integration": "pnpm --dir ../core build && pnpm --dir ../core build:engine && vitest run test/integration",
     "test:watch": "vitest",
@@ -251,10 +252,13 @@
   },
   "devDependencies": {
     "@eslint/js": "^9.13.0",
+    "@types/markdown-it": "14.2.0",
     "@types/node": "^20.19.43",
     "@types/vscode": "1.85.0",
     "@vscode/vsce": "3.9.2",
+    "esbuild": "0.28.2",
     "eslint": "^9.13.0",
+    "markdown-it": "14.3.1",
     "typescript": "^5.6.3",
     "typescript-eslint": "^8.11.0",
     "vitest": "^2.1.4"

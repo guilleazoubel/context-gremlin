@@ -1,0 +1,14 @@
+{
+  "//": "The webview bundles run in a browser context, not in the extension host: they need the DOM lib and they must never see Node's types. esbuild produces the real artifact; this config exists so `pnpm typecheck` covers `src/webview/**` too.",
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "noEmit": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2020", "DOM"],
+    "types": []
+  },
+  "include": ["src/webview"],
+  "exclude": []
+}
