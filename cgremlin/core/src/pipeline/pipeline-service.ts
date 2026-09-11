@@ -13,6 +13,7 @@
 // still doing a single, atomic, brand-new-id-only write (nothing else can
 // reference that id yet) — those don't need the lock.
 import { assertSafeSessionId, InvalidSessionIdError, type SessionStore } from '../engine/session-store';
+import { applyTransition } from '../engine/session-transition';
 import type { WorkspaceManager } from '../workspace/workspace-manager';
 import type { StageRunner } from './stage-runner';
 import type { SessionFileSystem } from '../fs/session-file-system';
@@ -793,12 +794,15 @@ export class PipelineService {
       return await this.lock.withLock(id, async () => {
         const before = await this.deps.store.load(id);
         const to = outcome === 'ready' ? 'ready' : 'failed';
-        let after = await this.deps.store.transition(id, to);
-        this.deps.events.emit('session.transitioned', { session: after, from: before.stageStatus, to });
+        // Apply the transition and the reviewedSha patch as ONE save (not
+        // transition-then-save): a reader between two separate writes could
+        // observe stageStatus already 'ready' with reviewedSha still stale/null.
+        let after = applyTransition(before, to);
         if (outcome === 'ready' && after.mode === 'review' && after.pr) {
           after = { ...after, pr: { ...after.pr, reviewedSha: after.pr.headSha } };
-          await this.deps.store.save(after);
         }
+        await this.deps.store.save(after);
+        this.deps.events.emit('session.transitioned', { session: after, from: before.stageStatus, to });
         return after;
       });
     } finally {
@@ -920,16 +924,19 @@ export class PipelineService {
       return await this.lock.withLock(id, async () => {
         const before = await this.deps.store.load(id);
         const to = outcome === 'ready' ? 'ready' : 'failed';
-        let after = await this.deps.store.transition(id, to);
-        this.deps.events.emit('session.transitioned', { session: after, from: before.stageStatus, to });
+        // Same single-save fix as runReview: transition and the
+        // reviewedSha/summary patch must land in one write, or a reader can
+        // observe stageStatus='ready' with the pr fields not yet updated.
+        let after = applyTransition(before, to);
         if (outcome === 'ready' && after.mode === 'review' && after.pr) {
           after = {
             ...after,
             pr: { ...after.pr, reviewedSha: newCommit, headSha: newCommit },
             lastRereviewSummary: summary,
           };
-          await this.deps.store.save(after);
         }
+        await this.deps.store.save(after);
+        this.deps.events.emit('session.transitioned', { session: after, from: before.stageStatus, to });
         return after;
       });
     } finally {
