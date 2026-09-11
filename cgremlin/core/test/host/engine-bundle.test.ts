@@ -109,6 +109,14 @@ describeBundle('the esbuild bundles (R8, R24, R28)', () => {
     expect(bridge.ENGINE_BUILD_ID).not.toBe(ENGINE_VERSION);
   });
 
+  /** The half that ORDERS two builds — without it neither window can tell whose bundle is newer. */
+  it('bridge.js carries an ISO build time', () => {
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const bridge = require(BRIDGE_JS) as { ENGINE_BUILD_TIME: string | null };
+    expect(typeof bridge.ENGINE_BUILD_TIME).toBe('string');
+    expect(new Date(bridge.ENGINE_BUILD_TIME!).toISOString()).toBe(bridge.ENGINE_BUILD_TIME);
+  });
+
   it('rebuilding the same sources produces the same build id, and a changed engine a new one', () => {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const before = (require(BRIDGE_JS) as { ENGINE_BUILD_ID: string }).ENGINE_BUILD_ID;
@@ -176,10 +184,14 @@ describeBundle('the esbuild bundles (R8, R24, R28)', () => {
       expect(body!.name).toBe('cgremlin-core');
       expect(body!.pid).toBe(child.pid);
       expect(body!.activeRuns).toBe(0);
+      // Freshly, not from the module cache: a case above rebuilds both bundles, and a cached
+      // bridge would be compared against an engine.js built seconds later.
+      delete require.cache[require.resolve(BRIDGE_JS)];
       // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const bridge = require(BRIDGE_JS) as { ENGINE_BUILD_ID: string };
+      const bridge = require(BRIDGE_JS) as { ENGINE_BUILD_ID: string; ENGINE_BUILD_TIME: string };
       // The handshake, end to end: the engine reports the very id the bridge beside it exports.
       expect(body!.buildId).toBe(bridge.ENGINE_BUILD_ID);
+      expect(body!.buildTime).toBe(bridge.ENGINE_BUILD_TIME);
     } finally {
       child.kill('SIGTERM');
       await new Promise<void>((resolve) => child.once('exit', () => resolve()));

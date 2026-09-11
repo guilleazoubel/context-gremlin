@@ -23,6 +23,8 @@ interface EngineLockRecord {
   version: string;
   /** The engine bundle's content address, or `dev`; the same value `GET /version` reports. */
   buildId: string;
+  /** When that bundle was built (ISO), or null when it was never bundled — what orders two. */
+  buildTime: string | null;
   socketPath: string;
   startedAt: string;
 }
@@ -277,6 +279,7 @@ export async function serve(config: CoreConfig, adapters: EngineAdapters, opts: 
       pid: engineInfo.pid,
       version: engineInfo.version,
       buildId: engineInfo.buildId,
+      buildTime: engineInfo.buildTime,
       socketPath: engineInfo.socketPath,
       startedAt: engineInfo.startedAt,
     },

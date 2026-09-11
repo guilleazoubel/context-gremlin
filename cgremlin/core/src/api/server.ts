@@ -120,6 +120,12 @@ export interface EngineInfo {
    * between phases; this does, which is what lets the extension tell a stale engine from its own.
    */
   buildId: string;
+  /**
+   * When that bundle was built (ISO), or null for an engine that was never bundled. The build id
+   * says whether two engines are the same; only this says which of them is newer — the question a
+   * window has to answer before it may replace the engine another window is also using.
+   */
+  buildTime: string | null;
   pid: number;
   startedAt: string;
   socketPath: string;
@@ -839,12 +845,12 @@ async function handleRequest(
         sendJson(res, 404, { error: 'version not available' });
         return;
       }
-      const { name, version, buildId, pid, startedAt, socketPath } = deps.engineInfo;
+      const { name, version, buildId, buildTime, pid, startedAt, socketPath } = deps.engineInfo;
       // R21: recomputed per request. Live StageRunner runs PLUS environment
       // preparations still in flight — a stage still preparing has no active
       // run for pipeline.stop() to find, yet a restart aborts it.
       const activeRuns = deps.pipeline.activeSessionIds().length + (deps.environment?.inFlightCount() ?? 0);
-      sendJson(res, 200, { name, version, buildId, pid, startedAt, socketPath, activeRuns });
+      sendJson(res, 200, { name, version, buildId, buildTime, pid, startedAt, socketPath, activeRuns });
       return;
     }
 
