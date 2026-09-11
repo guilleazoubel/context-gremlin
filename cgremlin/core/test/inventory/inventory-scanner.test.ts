@@ -234,8 +234,11 @@ describe('InventoryScanner', () => {
     expect(report2.inventory.errors).toEqual([{ repo: REPO2, error: expect.stringContaining('rate limited') }]);
     const carried99 = report2.inventory.entries.find((e) => e.number === 99 && e.repo === REPO2);
     expect(carried99?.seenAt).toBe('2026-09-04T18:00:00.000Z'); // preserved, not overwritten
+    // `seenAt` is FIRST-seen: the healthy repo's PR keeps the timestamp of the scan that found
+    // it, because a value that moved with the scan clock rewrote every PR's attention signature
+    // once a tick (see test/work/change-storm.test.ts).
     const repoEntry = report2.inventory.entries.find((e) => e.repo === REPO && e.number === 1974);
-    expect(repoEntry?.seenAt).toBe('2026-09-04T19:00:00.000Z'); // the healthy repo still gets the new timestamp
+    expect(repoEntry?.seenAt).toBe('2026-09-04T18:00:00.000Z');
   });
 
   it('F3: never throws when inventoryStore.save rejects; the error lands in inventory.errors and inventory.updated still fires', async () => {
