@@ -116,6 +116,15 @@ describe('PipelineService/StageRunner shared per-session lock', () => {
       const id = 'pr-lock-rereview';
       await saveReviewSession(h, id, 'ready');
 
+      // Both concurrent calls run their (unguarded, pre-lock) git sequence —
+      // rev-parse HEAD, fetch, rev-parse FETCH_HEAD, reset, log, diff — six
+      // calls each, interleaved unpredictably. FakeGitRunner defaults to an
+      // empty stdout when nothing is queued, which produced an empty
+      // (schema-invalid) headSha/reviewedSha here; real git never returns an
+      // empty rev-parse, so queue a real-shaped, non-empty response for
+      // every one of those 12 calls regardless of interleaving.
+      for (let i = 0; i < 12; i += 1) h.git.queueResponse({ stdout: 'c'.repeat(40), stderr: '' });
+
       const t1 = track(h.service.runRereview(id));
       const t2 = track(h.service.runRereview(id));
       await flush();

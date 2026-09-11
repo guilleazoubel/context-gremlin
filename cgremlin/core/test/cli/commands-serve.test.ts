@@ -2,7 +2,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import http from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { serveCommand } from '../../src/cli/commands/serve';
 import { InMemoryFileSystem } from '../support/in-memory-file-system';
 import { resolveCoreConfig, writeCoreConfig } from '../../src/config/core-config';
@@ -73,7 +73,12 @@ describe('serve command', () => {
     const { io, out, err } = await testIo(socketPath);
 
     const commandPromise = serveCommand([], io);
-    await new Promise((resolve) => setTimeout(resolve, 50)); // let it start listening
+    // serveCommand registers its SIGINT handler only after config load + serve()
+    // have both resolved; poll for that registration instead of a fixed sleep,
+    // which under CPU load can fire before the handler exists and hang the test.
+    await vi.waitFor(() => {
+      if (process.listenerCount('SIGINT') <= before) throw new Error('SIGINT handler not registered yet');
+    }, { timeout: 10_000, interval: 5 });
     process.emit('SIGINT');
     const code = await commandPromise;
 
@@ -81,5 +86,5 @@ describe('serve command', () => {
     expect(out()).toBe('');
     expect(err().length).toBeGreaterThan(0);
     expect(process.listenerCount('SIGINT')).toBe(before);
-  });
+  }, 15_000);
 });
