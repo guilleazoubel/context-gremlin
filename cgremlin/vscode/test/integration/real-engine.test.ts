@@ -52,6 +52,17 @@ const JIRA_TOKEN = 'integration-jira-token-do-not-leak';
 // Booting a child engine, a real fs watch and an SSE reconnect are all wall-clock work.
 const TIMEOUT = 30_000;
 
+/**
+ * `h.restart()` pays the manager's real `STOP_BUDGET_MS` (45 s, `src/engine/manager.ts`) before
+ * it would fall back to `waitOutStop`, on top of a real reboot and a real SSE reconnect. In
+ * isolation the stop is near-instant, but under full-suite parallel load (several real engines
+ * competing for CPU/FDs at once) the SIGTERM-to-exit poll was occasionally slow enough to trip
+ * the shared 30 s `TIMEOUT` — this is one of the two known-flaky real-process cases (the other is
+ * `engine-manager.test.ts`'s "stops the engine it can prove is its own…", which pays the same
+ * stop budget directly). Sized past the 45 s budget itself, with one retry as a last-resort net.
+ */
+const RESTART_TIMEOUT = { timeout: 90_000, retry: 1 };
+
 interface RedactedEnvironments {
   [repo: string]: { vercel?: { bypassSecret?: string } } | undefined;
 }
@@ -1058,7 +1069,7 @@ describe.skipIf(!coreIsBuilt())('integration: the extension against a real engin
       expect((await h.client.conversation(id)).claimed).toBe(false);
       expect((await sessionById(h, id)).agent?.humanTurn ?? null).toBeNull();
       expect(h.stderr()).toContain('conversation.claims_cleared');
-    }, TIMEOUT);
+    }, RESTART_TIMEOUT);
   });
 });
 

@@ -260,7 +260,8 @@
     "package": "vsce package --no-dependencies",
     "typecheck": "tsc -p tsconfig.typecheck.json --noEmit && tsc -p tsconfig.webview.json --noEmit",
     "test": "vitest run",
-    "test:integration": "pnpm --dir ../core build && pnpm --dir ../core build:engine && vitest run test/integration",
+    "test:integration": "pnpm --dir ../core build && pnpm --dir ../core build:engine && vitest run --config vitest.integration.config.ts",
+    "test:all": "pnpm test && pnpm test:integration",
     "test:watch": "vitest",
     "lint": "eslint ."
   },

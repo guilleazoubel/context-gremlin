@@ -44,6 +44,20 @@ import {
 const TIMEOUT = 30_000;
 
 /**
+ * A real stop's budget is `STOP_BUDGET_MS` (45 s, `src/engine/manager.ts`) before the manager
+ * gives up polling and settles for `waitOutStop`'s bound. Under `test:integration`'s serialized
+ * `pool: 'forks'` run this always lands in well under a second, but historically — run alongside
+ * other real-engine suites under full parallel load — the real SIGTERM-to-exit poll and the
+ * process-count check that follows it were occasionally slow enough to trip the shared 30 s
+ * `TIMEOUT` even though the engine itself was shutting down correctly; that is what made this
+ * case (and `real-engine.test.ts`'s "clears every claim at boot…" restart case, which pays the
+ * same stop budget plus the SSE reconnect's own offline window) flaky under load while always
+ * green in isolation. Sized generously past the 45 s budget itself, with one retry as a
+ * last-resort net for a genuinely slow CI box.
+ */
+const STOP_TIMEOUT = { timeout: 90_000, retry: 1 };
+
+/**
  * The `Code Helper (Plugin)` binary R25 names. Absent on a machine without VS Code installed, in
  * which case the case below skips loudly rather than passing quietly.
  */
@@ -156,7 +170,7 @@ describe.skipIf(!coreIsBuilt())('integration: the bundled engine through its man
       what: 'the engine process to exit',
     });
     expect(() => process.kill(pid, 0)).toThrow();
-  }, TIMEOUT);
+  }, STOP_TIMEOUT);
 
   it('refuses to signal a pid the socket does not confirm (MG-C2)', async () => {
     const h = await boot();
