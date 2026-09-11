@@ -14,6 +14,13 @@ import { ReviewSessionFactory } from '../pipeline/review-session-factory';
 import { ReconciliationTick } from '../discovery/reconciliation';
 import { DiscoveryScheduler, type Clock, type Tickable } from '../discovery/scheduler';
 import { InventoryScanner, type ScanReport } from '../inventory/inventory-scanner';
+import { JiraRestSource } from '../jira/jira-rest-source';
+import { JiraScanner } from '../jira/jira-scanner';
+import { JiraStore, TicketDetailCache } from '../jira/jira-store';
+import { ReviewThreadScanner, ReviewThreadStore, threadCacheKey, type ReviewThreadCache } from '../gh/review-threads';
+import { RespondSessionFactory } from '../pipeline/respond-session-factory';
+import { PR_VIEW_FIELDS, failingChecks, parsePrView } from '../gh/pr-view';
+import type { JiraSource } from '../jira/jira-source';
 import { InventoryStore } from '../inventory/inventory-store';
 import { createApiServer, type EngineInfo } from '../api/server';
 import { EventRing, attachEventRing } from '../api/event-stream';
@@ -21,6 +28,7 @@ import { NodeSessionWatcher } from '../fs/node-session-watcher';
 import type { SessionWatcher } from '../fs/session-watcher';
 import { EnvironmentService } from '../env/environment-service';
 import { AckStore } from '../attention/ack-store';
+import { WorkItemService } from '../work/work-item-service';
 import {
   AttentionService,
   PrSourceAdapter,
@@ -56,6 +64,7 @@ export interface Engine {
   config: CoreConfig;
   environment: EnvironmentService | null;
   attention: AttentionService;
+  workItems: WorkItemService;
   eventRing: EventRing;
   /** What `GET /version` reports and what `serve()` records in its `engine.json` lock — one object, so the two can never disagree. */
   engineInfo: EngineInfo;
@@ -80,6 +89,12 @@ export interface BuildEngineOptions {
    * `scheduler.runNow()`/the interval actually invoke.
    */
   makeTickable?: (parts: TickableParts) => Tickable<ScanReport>;
+  /**
+   * Overrides the Jira source — a test/harness seam (D7 also allows pointing
+   * `jira.baseUrl` at a stub server, which is what the integration harness
+   * does). `null` forces R35's `notConfigured`.
+   */
+  jiraSource?: JiraSource | null;
 }
 
 /**
@@ -146,6 +161,78 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     now: adapters.now,
     lock,
     environment: environment ?? undefined,
+    // R18: the engine fetches the ticket text; the agent never sees a
+    // credential, and the `## Ticket` block is composed in exactly one place.
+    /**
+     * R50/R52 — everything the respond brief carries beyond the ticket: the
+     * cached review threads, the per-reviewer states, the failing checks and
+     * the diff summary. One read-only `gh pr view` per respond run, the same
+     * call `RespondSessionFactory` already makes.
+     */
+    respondContext: async (session) => {
+      const empty = {
+        threads: [],
+        reviews: [],
+        reviewDecision: null,
+        failingChecks: [],
+        changedFiles: null,
+        additions: null,
+        deletions: null,
+      };
+      const pr = session.pr;
+      if (pr === null) return empty;
+      const cache: ReviewThreadCache = await threadScanner.cached().catch(() => ({}));
+      const threads = cache[threadCacheKey(pr.repo, pr.number)]?.threads ?? [];
+      const inventoryEntry = (await inventoryStore.load().catch(() => null))?.entries.find(
+        (e) => e.repo === pr.repo && e.number === pr.number,
+      );
+      try {
+        const { stdout } = await adapters.gh.run([
+          'pr', 'view', String(pr.number), '--repo', pr.repo, '--json', PR_VIEW_FIELDS,
+        ]);
+        const view = parsePrView(stdout);
+        return {
+          threads,
+          reviews: view.latestReviews.map((r) => ({
+            author: r.author.login,
+            state: r.state,
+            body: typeof r.body === 'string' ? r.body : null,
+            submittedAt: r.submittedAt,
+          })),
+          reviewDecision: view.reviewDecision,
+          failingChecks: failingChecks(view.statusCheckRollup ?? []),
+          changedFiles: inventoryEntry?.changedFiles ?? null,
+          additions: inventoryEntry?.additions ?? null,
+          deletions: inventoryEntry?.deletions ?? null,
+        };
+      } catch {
+        // A brief with the threads but no review summary still beats no run.
+        return { ...empty, threads };
+      }
+    },
+    tickets: {
+      forBrief: async (key) => {
+        const { ticket } = await ticketDetail.detail(key);
+        if (ticket === null) return null;
+        return {
+          key: ticket.key,
+          summary: ticket.summary,
+          status: ticket.status,
+          url: ticket.url,
+          descriptionText: ticket.descriptionText,
+          comments: ticket.comments,
+        };
+      },
+    },
+  });
+  const respondFactory = new RespondSessionFactory({
+    gh: adapters.gh,
+    store,
+    workspace,
+    events,
+    worktreesDir,
+    me: config.me,
+    now: adapters.now,
   });
   const factory = new ReviewSessionFactory({
     gh: adapters.gh,
@@ -158,7 +245,45 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
   });
 
   const inventoryStore = new InventoryStore(adapters.fs, inventoryPath);
+
+  // R35: no `jira` block, or one with no token, is `notConfigured` — the
+  // scanner is still wired, so the report shape is always the same, but it
+  // has no source and therefore makes no request.
+  const jiraSource: JiraSource | null =
+    opts.jiraSource ??
+    (config.jira !== undefined && config.jira.apiToken !== undefined && config.jira.apiToken !== ''
+      ? new JiraRestSource({
+          baseUrl: config.jira.baseUrl ?? config.jira.siteUrl,
+          siteUrl: config.jira.siteUrl,
+          email: config.jira.email,
+          apiToken: config.jira.apiToken,
+          timeoutMs: config.jira.timeoutMs,
+          maxResults: config.jira.maxResults,
+          extraFields: config.jira.extraFields,
+        })
+      : null);
+  const ticketDetail = new TicketDetailCache({
+    source: jiraSource,
+    snapshot: () => jiraScanner.lastReport(),
+    now: adapters.now,
+  });
+  const jiraScanner = new JiraScanner({
+    source: jiraSource,
+    store: new JiraStore(adapters.fs, config.jiraCachePath!),
+    jql: config.jira?.jql ?? '',
+    scanBudgetMs: config.jira?.scanBudgetMs ?? 20_000,
+    ...(config.jira?.maxResults !== undefined ? { maxResults: config.jira.maxResults } : {}),
+    now: adapters.now,
+  });
   const tick = new ReconciliationTick({ gh: adapters.gh, store, pipeline, events, lock, now: adapters.now });
+  // R52 — the review-thread leg: the engine's first GraphQL call, cached on
+  // the PR's `updatedAt` so a steady-state tick makes ZERO of them.
+  const threadScanner = new ReviewThreadScanner({
+    gh: adapters.gh,
+    store: new ReviewThreadStore(adapters.fs, config.reviewThreadsCachePath!),
+    scanBudgetMs: config.reviewThreads.scanBudgetMs,
+    now: adapters.now,
+  });
   const scanner = new InventoryScanner({
     gh: adapters.gh,
     store,
@@ -170,8 +295,12 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
       me: config.me,
       watchAuthors: config.watchAuthors,
       prListLimit: config.prListLimit,
+      botLogins: config.botLogins,
+      projectKeys: config.jira?.projectKeys ?? [],
     },
     now: adapters.now,
+    jira: jiraScanner,
+    threads: threadScanner,
   });
 
   // The attention model: one adapter per source (R18), an ack store of its
@@ -201,6 +330,25 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     now: adapters.now,
   });
 
+  // R1: a GROUPING over the attention items, never a second derivation, and
+  // it takes no session lock (MG-1). `serve()` owns start()/stop(), exactly
+  // as it does for AttentionService.
+  const workItems = new WorkItemService({
+    attention,
+    inventory: inventoryStore,
+    jira: jiraScanner,
+    threads: threadScanner,
+    events,
+    config: {
+      me: config.me,
+      watchAuthors: config.watchAuthors,
+      showAllRepoPrs: config.showAllRepoPrs,
+      projectKeys: config.jira?.projectKeys ?? [],
+      botLogins: config.botLogins,
+      ...(config.jira?.siteUrl !== undefined ? { jiraSiteUrl: config.jira.siteUrl } : {}),
+    },
+  });
+
   const tickable = opts.makeTickable
     ? opts.makeTickable({ gh: adapters.gh, store, pipeline, events, lock, inventoryStore, scanner })
     : scanner;
@@ -223,6 +371,10 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     events,
     inventory: { scanner, scheduler, factory, inventoryStore, config: { me: config.me } },
     attention,
+    workItems,
+    ticketDetail,
+    respondFactory,
+    now: adapters.now,
     eventRing,
     lock,
     config,
@@ -230,5 +382,5 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     ...(environment ? { environment } : {}),
   });
 
-  return { server, scheduler, scanner, pipeline, events, store, lock, config, environment, attention, eventRing, engineInfo };
+  return { server, scheduler, scanner, pipeline, events, store, lock, config, environment, attention, workItems, eventRing, engineInfo };
 }

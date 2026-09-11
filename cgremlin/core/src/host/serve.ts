@@ -223,7 +223,7 @@ export async function serve(config: CoreConfig, adapters: EngineAdapters, opts: 
   await adapters.fs.mkdir(mirrorsDir, { recursive: true });
 
   const engine = buildEngine(config, adapters, { makeTickable: opts.makeTickable });
-  const { server, scheduler, pipeline, events, environment, attention, engineInfo } = engine;
+  const { server, scheduler, scanner, pipeline, events, environment, attention, workItems, engineInfo } = engine;
   const lockPath = config.enginePidPath!;
 
   const unsubscribers: Array<() => void> = [
@@ -247,6 +247,9 @@ export async function serve(config: CoreConfig, adapters: EngineAdapters, opts: 
     ),
     events.on('artifact.changed', (e) =>
       logLine(opts.log, 'artifact.changed', { sessionId: e.sessionId, name: e.name, mtime: e.mtime }),
+    ),
+    events.on('item.changed', (e) =>
+      logLine(opts.log, 'item.changed', { id: e.id, kind: e.kind, changedFields: e.changedFields ?? null }),
     ),
   ];
   if (opts.verbose) {
@@ -324,6 +327,9 @@ export async function serve(config: CoreConfig, adapters: EngineAdapters, opts: 
   // Subscribes the attention model to the engine events and starts the
   // session-directory watch it owns (R7). Nothing here starts an agent.
   attention.start();
+  // R16: the work-item layer re-emits `attention.changed`/`inventory.updated`
+  // at item granularity. It starts nothing and locks nothing.
+  workItems.start();
 
   const signals = opts.signals ?? (['SIGINT', 'SIGTERM'] as const);
   const signalHandler = (sig: NodeJS.Signals): void => {
@@ -356,6 +362,11 @@ export async function serve(config: CoreConfig, adapters: EngineAdapters, opts: 
       // rereview/agent after we've already begun tearing everything down,
       // leaving it running forever with nothing left to stop it.
       await scheduler.stop();
+      // R34: the Jira and review-thread legs are deliberately NOT awaited by
+      // a tick, so `scheduler.stop()` alone can return while one is still
+      // mid-write. Draining them here is what keeps a shutdown from leaving
+      // a half-written cache behind.
+      await scanner.stop();
       try {
         // StageRunner's in-memory active map is the only trustworthy source
         // of "what's actually running" — an on-disk lastRun.outcome==='running'
@@ -396,6 +407,7 @@ export async function serve(config: CoreConfig, adapters: EngineAdapters, opts: 
       // Detached first, so a failed shutdown still leaves no watch behind and
       // no refresh racing the teardown.
       attention.stop();
+      workItems.stop();
       server.closeAllConnections();
       await closeServerWithTimeout(server, opts.serverCloseTimeoutMs ?? DEFAULT_SERVER_CLOSE_TIMEOUT_MS, opts.log);
       await unlink(socketPath).catch((err: NodeJS.ErrnoException) => {

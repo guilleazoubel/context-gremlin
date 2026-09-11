@@ -1,0 +1,780 @@
+import { describe, expect, it } from 'vitest';
+import {
+  groupWorkItems,
+  parkingLotOrder,
+  workListsOf,
+  type GroupWorkItemsInput,
+  type WorkItem,
+} from '../../src/work/work-item';
+import type { AttentionItem } from '../../src/attention/attention-service';
+import { prRef, sessionRef } from '../../src/attention/item-ref';
+import { derivePrReasons, evaluateAttention } from '../../src/attention/attention';
+import type { Inventory, InventoryEntry } from '../../src/inventory/inventory';
+import { PHASE9_ENTRY_DEFAULTS } from '../support/inventory-entry';
+import type { JiraScanReport } from '../../src/jira/jira-store';
+import type { JiraIssueSummary } from '../../src/jira/jira-source';
+import type { SessionMode } from '../../src/schema/session';
+
+const ME = 'me-user';
+const REPO = 'acme/app';
+const SEEN = '2026-09-04T00:00:00.000Z';
+
+function entry(over: Partial<InventoryEntry> & { number: number }): InventoryEntry {
+  return {
+    ...PHASE9_ENTRY_DEFAULTS,
+    repo: REPO,
+    url: `https://github.com/${REPO}/pull/${over.number}`,
+    title: `PR ${over.number}`,
+    author: 'bob',
+    isDraft: false,
+    headSha: 'sha',
+    baseRef: 'main',
+    updatedAt: '2026-09-03T00:00:00.000Z',
+    createdAt: '2026-09-01T00:00:00.000Z',
+    reviewDecision: '',
+    isMine: false,
+    teamActivity: [],
+    ours: { status: 'none' },
+    seenAt: SEEN,
+    ...over,
+  };
+}
+
+/** The `source: 'pr'` AttentionItem the pre-dedupe list preserves (R27). */
+function prAttention(e: InventoryEntry): AttentionItem {
+  return {
+    source: 'pr',
+    ref: prRef(e.repo, e.number),
+    id: `${e.repo}#${e.number}`,
+    title: e.title,
+    repoOrContext: e.repo,
+    attention: evaluateAttention({ derived: derivePrReasons(e), fallbackSince: e.seenAt, ack: null }),
+    links: {
+      sessionId: e.ours.status === 'none' ? null : e.ours.sessionId,
+      worktreePath: null,
+      prRepo: e.repo,
+      prNumber: e.number,
+      prUrl: e.url,
+      ticket: null,
+      primaryArtifact: null,
+    },
+    mode: null,
+    stageStatus: null,
+    running: false,
+    claimed: false,
+  };
+}
+
+interface AgentOpts {
+  id: string;
+  mode: SessionMode;
+  prRepo?: string;
+  prNumber?: number;
+  prUrl?: string;
+  ticket?: string | null;
+  needsYou?: boolean;
+  stageStatus?: string;
+  since?: string;
+  title?: string;
+  acked?: boolean;
+}
+
+function agentAttention(o: AgentOpts): AttentionItem {
+  const reasons = o.needsYou === true ? (['needs_input'] as const) : ([] as const);
+  const since = o.since ?? '2026-09-02T00:00:00.000Z';
+  return {
+    source: 'session',
+    ref: sessionRef(o.id),
+    id: o.id,
+    title: o.title ?? o.id,
+    repoOrContext: o.prRepo ?? REPO,
+    attention: {
+      needsAttention: reasons.length > 0 && o.acked !== true,
+      needsYou: reasons.length > 0 && o.acked !== true,
+      reasons: [...reasons],
+      since,
+      signature: `${reasons.join(',')}|${since}`,
+      acked: o.acked === true,
+    },
+    links: {
+      sessionId: o.id,
+      worktreePath: `/wt/${o.id}`,
+      prRepo: o.prRepo ?? null,
+      prNumber: o.prNumber ?? null,
+      prUrl: o.prUrl ?? (o.prRepo !== undefined ? `https://github.com/${o.prRepo}/pull/${o.prNumber}` : null),
+      ticket: o.ticket ?? null,
+      primaryArtifact: 'REVIEW.md',
+    },
+    mode: o.mode,
+    stageStatus: o.stageStatus ?? 'reviewing',
+    running: false,
+    claimed: false,
+  };
+}
+
+function jiraReport(issues: Partial<JiraIssueSummary>[], over: Partial<JiraScanReport> = {}): JiraScanReport {
+  return {
+    scannedAt: SEEN,
+    me: '712020:me',
+    issues: issues.map((i) => ({
+      key: 'HB-627',
+      summary: 'a ticket',
+      status: 'In Progress',
+      statusCategory: 'indeterminate',
+      assignee: null,
+      updated: '2026-09-03T00:00:00.000Z',
+      url: 'https://example.atlassian.net/browse/HB-627',
+      ...i,
+    })),
+    error: null,
+    kind: 'ok',
+    ...over,
+  };
+}
+
+function group(over: Partial<GroupWorkItemsInput> = {}): WorkItem[] {
+  const entries = over.inventory?.entries ?? [];
+  const inventory: Inventory | null =
+    over.inventory === undefined ? null : { scannedAt: SEEN, repos: [REPO], entries, errors: [] };
+  return groupWorkItems({
+    items: over.items ?? [],
+    inventory,
+    jira: over.jira ?? null,
+    me: over.me ?? ME,
+    watchAuthors: over.watchAuthors ?? ['bob'],
+    showAllRepoPrs: over.showAllRepoPrs ?? false,
+    projectKeys: over.projectKeys ?? ['HB', 'GRAC'],
+  });
+}
+
+function inv(entries: InventoryEntry[]): Inventory {
+  return { scannedAt: SEEN, repos: [REPO], entries, errors: [] };
+}
+
+function listsOf(items: WorkItem[], id: string): string[] {
+  return items.find((i) => i.id === id)?.lists ?? [];
+}
+
+// ---------------------------------------------------------------------------
+// The D2 table, as re-scoped by R47–R50.
+// ---------------------------------------------------------------------------
+
+describe('groupWorkItems: list membership (R47–R50, MG-2)', () => {
+  it("a teammate PR with no agent is ONLY in parkingLot, group 'untouched'", () => {
+    const e = entry({ number: 1 });
+    const items = group({ inventory: inv([e]), items: [prAttention(e)] });
+    expect(items.length).toBe(1);
+    expect(items[0].lists).toEqual(['parkingLot']);
+    expect(items[0].parkingLotGroup).toBe('untouched');
+    expect(items[0].kind).toBe('pr');
+  });
+
+  it("the same PR once we start a REVIEW stays in parkingLot, group 'reviewing', and is NOT in myWork", () => {
+    const e = entry({ number: 1 });
+    const items = group({
+      inventory: inv([e]),
+      items: [prAttention(e), agentAttention({ id: 'r1', mode: 'review', prRepo: REPO, prNumber: 1 })],
+    });
+    expect(items.length).toBe(1);
+    expect(items[0].lists).toEqual(['parkingLot']);
+    expect(items[0].parkingLotGroup).toBe('reviewing');
+    expect(items[0].agents.map((a) => a.mode)).toEqual(['review']);
+  });
+
+  it('the same PR with an INVESTIGATION instead is in parkingLot AND myWork', () => {
+    const e = entry({ number: 1 });
+    const items = group({
+      inventory: inv([e]),
+      items: [prAttention(e), agentAttention({ id: 'i1', mode: 'investigation', prRepo: REPO, prNumber: 1 })],
+    });
+    expect(items[0].lists.sort()).toEqual(['myWork', 'parkingLot']);
+    expect(items[0].parkingLotGroup).toBe('untouched');
+  });
+
+  it('my own open non-draft PR is never in parkingLot, and is in BOTH waitingForReview and myWork', () => {
+    const e = entry({ number: 2, isMine: true, author: ME });
+    const items = group({ inventory: inv([e]), items: [prAttention(e)] });
+    expect(items[0].lists.sort()).toEqual(['myWork', 'waitingForReview']);
+  });
+
+  it("MG-2: a non-watched author's PR is in NO list with showAllRepoPrs false, and parkingLot with it true", () => {
+    const e = entry({ number: 3, author: 'stranger' });
+    expect(group({ inventory: inv([e]), items: [prAttention(e)] })[0].lists).toEqual([]);
+    expect(group({ inventory: inv([e]), items: [prAttention(e)], showAllRepoPrs: true })[0].lists).toEqual([
+      'parkingLot',
+    ]);
+  });
+
+  it("R30: a non-watched author's PR whose reviewRequests include me is in parkingLot regardless", () => {
+    const e = entry({ number: 3, author: 'stranger', reviewRequests: ['ME-USER'] });
+    expect(group({ inventory: inv([e]), items: [prAttention(e)] })[0].lists).toEqual(['parkingLot']);
+  });
+
+  it('R47: a DRAFT PR — mine and a teammate\'s — is in NO list at all', () => {
+    const teammate = entry({ number: 4, isDraft: true });
+    const mine = entry({ number: 5, isDraft: true, isMine: true, author: ME });
+    const items = group({ inventory: inv([teammate, mine]), items: [prAttention(teammate), prAttention(mine)] });
+    expect(items.map((i) => i.lists)).toEqual([[], []]);
+  });
+
+  it('a ticket with no PR, assigned to me, is in myWork', () => {
+    const items = group({ jira: jiraReport([{ key: 'HB-627', assignee: '712020:me' }]) });
+    expect(items.length).toBe(1);
+    expect(items[0].kind).toBe('ticket');
+    expect(items[0].id).toBe('ticket:HB-627');
+    expect(items[0].lists).toEqual(['myWork']);
+  });
+
+  it('R49: an investigation session with neither PR nor ticket is in investigations and NOT myWork', () => {
+    const items = group({ items: [agentAttention({ id: 'inv-1', mode: 'investigation', title: 'a stack trace' })] });
+    expect(items[0].kind).toBe('session');
+    expect(items[0].id).toBe('session:inv-1');
+    expect(items[0].lists).toEqual(['investigations']);
+  });
+
+  it('R49: the same session WITH a ticket goes to myWork, not investigations', () => {
+    const items = group({
+      items: [agentAttention({ id: 'inv-1', mode: 'investigation', ticket: 'HB-627' })],
+      jira: jiraReport([{ key: 'HB-627' }]),
+    });
+    expect(items[0].lists).toEqual(['myWork']);
+  });
+
+  it('R49: an investigation PLUS a dev session on one item is myWork', () => {
+    const items = group({
+      items: [
+        agentAttention({ id: 'inv-1', mode: 'investigation', ticket: 'HB-627' }),
+        agentAttention({ id: 'dev-1', mode: 'development', ticket: 'HB-627' }),
+      ],
+    });
+    expect(items.length).toBe(1);
+    expect(items[0].lists).toEqual(['myWork']);
+    expect(items[0].agents.length).toBe(2);
+  });
+
+  it('R25: a review agent whose PR has been merged is still kind pr, with nulls everywhere but repo/number/url', () => {
+    const items = group({
+      inventory: inv([]),
+      items: [agentAttention({ id: 'r1', mode: 'review', prRepo: REPO, prNumber: 99 })],
+    });
+    expect(items[0].kind).toBe('pr');
+    expect(items[0].prs.length).toBe(1);
+    expect(items[0].prs[0]).toEqual({
+      repo: REPO,
+      number: 99,
+      url: `https://github.com/${REPO}/pull/99`,
+      title: null,
+      author: null,
+      branch: null,
+      isDraft: null,
+      isMine: null,
+      reviewDecision: null,
+      humanActivity: null,
+      reviewRequests: null,
+      teamActivity: null,
+      updatedAt: null,
+      createdAt: null,
+      changedFiles: null,
+      additions: null,
+      deletions: null,
+      ci: null,
+      labels: null,
+    });
+  });
+
+  it('two agents on one item are both in agents, ordered review -> respond -> investigation -> development', () => {
+    const e = entry({ number: 1 });
+    const items = group({
+      inventory: inv([e]),
+      items: [
+        prAttention(e),
+        agentAttention({ id: 'd1', mode: 'development', prRepo: REPO, prNumber: 1 }),
+        agentAttention({ id: 'i1', mode: 'investigation', prRepo: REPO, prNumber: 1 }),
+        agentAttention({ id: 'r1', mode: 'review', prRepo: REPO, prNumber: 1 }),
+      ],
+    });
+    expect(items[0].agents.map((a) => a.mode)).toEqual(['review', 'investigation', 'development']);
+  });
+
+  it('needsYou rolls up from any agent', () => {
+    const items = group({
+      items: [
+        agentAttention({ id: 'a', mode: 'investigation', ticket: 'HB-1' }),
+        agentAttention({ id: 'b', mode: 'development', ticket: 'HB-1', needsYou: true }),
+      ],
+      projectKeys: ['HB'],
+    });
+    expect(items[0].needsYou).toBe(true);
+  });
+});
+
+describe('groupWorkItems: the pr<->ticket merge (R4, R26, R46, R61)', () => {
+  it('merges by branch, by title and by body into ONE row whose id is the TICKET', () => {
+    for (const e of [
+      entry({ number: 10, isMine: true, author: ME, branch: 'feature/HB-627-x', ticketKeys: ['HB-627'] }),
+      entry({ number: 11, isMine: true, author: ME, title: 'HB-627 do the thing', ticketKeys: ['HB-627'] }),
+      entry({ number: 12, isMine: true, author: ME, ticketKeys: ['HB-627'] }),
+    ]) {
+      const items = group({ inventory: inv([e]), items: [prAttention(e)], jira: jiraReport([{ key: 'HB-627' }]) });
+      expect(items.length).toBe(1);
+      expect(items[0].kind).toBe('pr+ticket');
+      expect(items[0].id).toBe('ticket:HB-627');
+    }
+  });
+
+  it('R26: one ticket with two of MY PRs is one row, prs.length 2, newest first, needsYou from either', () => {
+    const older = entry({
+      number: 20,
+      isMine: true,
+      author: ME,
+      ticketKeys: ['HB-627'],
+      updatedAt: '2026-09-01T00:00:00.000Z',
+    });
+    const newer = entry({
+      number: 21,
+      isMine: true,
+      author: ME,
+      ticketKeys: ['HB-627'],
+      updatedAt: '2026-09-05T00:00:00.000Z',
+      reviewDecision: 'CHANGES_REQUESTED',
+      reviewDecisionAt: '2026-09-05T00:00:00.000Z',
+    });
+    const items = group({
+      inventory: inv([older, newer]),
+      items: [prAttention(older), prAttention(newer)],
+      jira: jiraReport([{ key: 'HB-627' }]),
+    });
+    expect(items.length).toBe(1);
+    expect(items[0].prs.map((p) => p.number)).toEqual([21, 20]);
+    expect(items[0].needsYou).toBe(true);
+    expect(items[0].attention.refs).toContain('pr:acme/app#20');
+    expect(items[0].attention.refs).toContain('pr:acme/app#21');
+  });
+
+  it("R61: two TEAMMATES' PRs naming HB-627 stay two items with two ids", () => {
+    const a = entry({ number: 30, ticketKeys: ['HB-627'] });
+    const b = entry({ number: 31, ticketKeys: ['HB-627'] });
+    const items = group({
+      inventory: inv([a, b]),
+      items: [prAttention(a), prAttention(b)],
+      jira: jiraReport([{ key: 'HB-627' }]),
+    });
+    const prItems = items.filter((i) => i.id.startsWith('pr:'));
+    expect(prItems.map((i) => i.id).sort()).toEqual(['pr:acme/app#30', 'pr:acme/app#31']);
+    expect(prItems.every((i) => i.lists.includes('parkingLot'))).toBe(true);
+  });
+
+  it('R61: the same pair with one of them MINE produces the R26 two-PR row', () => {
+    const mine = entry({ number: 30, isMine: true, author: ME, ticketKeys: ['HB-627'] });
+    const theirs = entry({ number: 31, ticketKeys: ['HB-627'] });
+    const items = group({
+      inventory: inv([mine, theirs]),
+      items: [prAttention(mine), prAttention(theirs)],
+      jira: jiraReport([{ key: 'HB-627' }]),
+    });
+    const merged = items.find((i) => i.id === 'ticket:HB-627')!;
+    expect(merged.prs.map((p) => p.number).sort()).toEqual([30, 31]);
+  });
+
+  it("R61: a ticket assigned to me absorbs a teammate's PR that names it", () => {
+    const theirs = entry({ number: 31, ticketKeys: ['HB-627'] });
+    const items = group({
+      inventory: inv([theirs]),
+      items: [prAttention(theirs)],
+      jira: jiraReport([{ key: 'HB-627', assignee: '712020:me' }]),
+    });
+    expect(items.length).toBe(1);
+    expect(items[0].id).toBe('ticket:HB-627');
+  });
+
+  it('R46: with projectKeys empty nothing merges — the PR keeps its own id', () => {
+    const e = entry({ number: 40, isMine: true, author: ME, ticketKeys: [] });
+    const items = group({
+      inventory: inv([e]),
+      items: [prAttention(e)],
+      jira: jiraReport([{ key: 'HB-627' }]),
+      projectKeys: [],
+    });
+    expect(items.some((i) => i.id === 'pr:acme/app#40')).toBe(true);
+  });
+
+  it('R29: a session whose lineage.ticket is SHA-256 joins nothing (filtered at group time)', () => {
+    const items = group({ items: [agentAttention({ id: 's1', mode: 'investigation', ticket: 'SHA-256' })] });
+    expect(items[0].id).toBe('session:s1');
+    expect(items[0].ticket).toBeNull();
+  });
+});
+
+describe('groupWorkItems: R28 — identity follows the link, not the snapshot', () => {
+  it('named: "ticket leaves the JQL -> id unchanged"', () => {
+    const e = entry({ number: 50, isMine: true, author: ME, ticketKeys: ['HB-627'] });
+    const withIssue = group({
+      inventory: inv([e]),
+      items: [prAttention(e)],
+      jira: jiraReport([{ key: 'HB-627' }]),
+    });
+    const withoutIssue = group({ inventory: inv([e]), items: [prAttention(e)], jira: jiraReport([]) });
+    expect(withIssue[0].id).toBe('ticket:HB-627');
+    expect(withoutIssue[0].id).toBe('ticket:HB-627');
+    expect(withoutIssue[0].lists).toEqual(withIssue[0].lists);
+    expect(withoutIssue[0].ticket?.key).toBe('HB-627');
+    expect(withoutIssue[0].ticket?.summary).toBe('');
+  });
+
+  it('the same holds with ticketSource kind unavailable', () => {
+    const e = entry({ number: 50, isMine: true, author: ME, ticketKeys: ['HB-627'] });
+    const items = group({
+      inventory: inv([e]),
+      items: [prAttention(e)],
+      jira: jiraReport([], { kind: 'unavailable', error: 'boom' }),
+    });
+    expect(items[0].id).toBe('ticket:HB-627');
+  });
+
+  it("a session's filtered lineage.ticket also seeds a ticket candidate", () => {
+    const items = group({ items: [agentAttention({ id: 'd1', mode: 'development', ticket: 'GRAC-12' })] });
+    expect(items[0].id).toBe('ticket:GRAC-12');
+  });
+});
+
+describe('groupWorkItems: demoted and parkingLotGroup (R47, R47.1, MG-17)', () => {
+  const withReviewer = entry({ number: 60, humanActivity: { reviewedBy: ['jane'], commentedBy: [], lastAt: '2026-09-02T00:00:00.000Z' } });
+  const withCommenter = entry({ number: 61, humanActivity: { reviewedBy: [], commentedBy: ['jane'], lastAt: '2026-09-02T00:00:00.000Z' } });
+  const withThreadReply = entry({ number: 62, humanActivity: { reviewedBy: [], commentedBy: ['jane'], lastAt: '2026-09-02T00:00:00.000Z' } });
+  const requestedOfOther = entry({ number: 63, reviewRequests: ['jane'] });
+
+  it('all four demoting signals set demoted true and leave the row LISTED', () => {
+    for (const e of [withReviewer, withCommenter, withThreadReply, requestedOfOther]) {
+      const items = group({ inventory: inv([e]), items: [prAttention(e)] });
+      expect(items[0].demoted).toBe(true);
+      expect(items[0].lists).toEqual(['parkingLot']);
+      expect(items[0].parkingLotGroup).toBe('someoneOnIt');
+    }
+  });
+
+  it('a review request to ME and nothing else is NOT demoted', () => {
+    const e = entry({ number: 64, reviewRequests: ['me-user'] });
+    const items = group({ inventory: inv([e]), items: [prAttention(e)] });
+    expect(items[0].demoted).toBe(false);
+    expect(items[0].parkingLotGroup).toBe('untouched');
+  });
+
+  it('a bot-only review request is not demoting', () => {
+    const e = entry({ number: 65, reviewRequests: ['dependabot[bot]'] });
+    expect(group({ inventory: inv([e]), items: [prAttention(e)] })[0].demoted).toBe(false);
+  });
+
+  it("a demoted PR that also carries a review agent is 'reviewing', not 'someoneOnIt'", () => {
+    const items = group({
+      inventory: inv([withReviewer]),
+      items: [prAttention(withReviewer), agentAttention({ id: 'r1', mode: 'review', prRepo: REPO, prNumber: 60 })],
+    });
+    expect(items[0].demoted).toBe(true);
+    expect(items[0].parkingLotGroup).toBe('reviewing');
+  });
+
+  it('parkingLotGroup is null off the parking lot', () => {
+    const mine = entry({ number: 66, isMine: true, author: ME });
+    expect(group({ inventory: inv([mine]), items: [prAttention(mine)] })[0].parkingLotGroup).toBeNull();
+  });
+});
+
+describe('groupWorkItems: R57 — open(pr) is isDraft !== true, and a live agent is always listed', () => {
+  it('a WorkItemPr with isDraft null (an agent-only row) is listed, not dropped', () => {
+    const items = group({ items: [agentAttention({ id: 'r1', mode: 'review', prRepo: REPO, prNumber: 99 })] });
+    expect(items[0].prs[0].isDraft).toBeNull();
+    expect(items[0].lists).toEqual(['parkingLot']);
+    expect(items[0].parkingLotGroup).toBe('reviewing');
+  });
+
+  it('a MERGED teammate PR that still carries our review agent is in parkingLot.reviewing', () => {
+    const items = group({
+      inventory: inv([]),
+      items: [agentAttention({ id: 'r1', mode: 'review', prRepo: REPO, prNumber: 99 })],
+    });
+    expect(items[0].lists).toEqual(['parkingLot']);
+    expect(items[0].parkingLotGroup).toBe('reviewing');
+  });
+
+  it('a merged own PR with a development agent is still in myWork', () => {
+    const items = group({
+      inventory: inv([]),
+      items: [agentAttention({ id: 'd1', mode: 'development', prRepo: REPO, prNumber: 98 })],
+    });
+    expect(items[0].lists).toContain('myWork');
+  });
+
+  it('a teammate DRAFT PR with a review agent is in NO list — the disjunct keeps the draft test', () => {
+    const draft = entry({ number: 70, isDraft: true });
+    const items = group({
+      inventory: inv([draft]),
+      items: [prAttention(draft), agentAttention({ id: 'r1', mode: 'review', prRepo: REPO, prNumber: 70 })],
+    });
+    expect(items[0].lists).toEqual([]);
+    expect(items[0].parkingLotGroup).toBeNull();
+  });
+});
+
+describe('groupWorkItems: the four DEFAULT sort orders (R47, §4.1 step 5)', () => {
+  it('parkingLot applies the sort WITHIN each of the three groups and never across them', () => {
+    const untouchedOld = entry({ number: 1, createdAt: '2026-01-01T00:00:00.000Z' });
+    const untouchedNew = entry({ number: 2, createdAt: '2026-06-01T00:00:00.000Z' });
+    const demotedOld = entry({
+      number: 3,
+      createdAt: '2025-01-01T00:00:00.000Z',
+      humanActivity: { reviewedBy: ['jane'], commentedBy: [], lastAt: '2026-01-01T00:00:00.000Z' },
+    });
+    const reviewingNew = entry({ number: 4, createdAt: '2026-09-01T00:00:00.000Z' });
+    const lists = workListsOf(
+      group({
+        inventory: inv([untouchedOld, untouchedNew, demotedOld, reviewingNew]),
+        items: [
+          prAttention(untouchedOld),
+          prAttention(untouchedNew),
+          prAttention(demotedOld),
+          prAttention(reviewingNew),
+          agentAttention({ id: 'r1', mode: 'review', prRepo: REPO, prNumber: 4 }),
+        ],
+      }),
+    );
+    expect(lists.parkingLot.reviewing).toEqual(['pr:acme/app#4']);
+    expect(lists.parkingLot.untouched).toEqual(['pr:acme/app#1', 'pr:acme/app#2']);
+    expect(lists.parkingLot.someoneOnIt).toEqual(['pr:acme/app#3']);
+    // reviewing first even though it is the NEWEST; the demoted one last
+    // despite being the oldest.
+    expect(parkingLotOrder(lists)).toEqual([
+      'pr:acme/app#4',
+      'pr:acme/app#1',
+      'pr:acme/app#2',
+      'pr:acme/app#3',
+    ]);
+  });
+
+  it('the reviewing group sorts needsYou first, then createdAt ascending', () => {
+    const a = entry({ number: 1, createdAt: '2026-01-01T00:00:00.000Z' });
+    const b = entry({ number: 2, createdAt: '2026-06-01T00:00:00.000Z' });
+    const lists = workListsOf(
+      group({
+        inventory: inv([a, b]),
+        items: [
+          prAttention(a),
+          prAttention(b),
+          agentAttention({ id: 'ra', mode: 'review', prRepo: REPO, prNumber: 1 }),
+          agentAttention({ id: 'rb', mode: 'review', prRepo: REPO, prNumber: 2, needsYou: true }),
+        ],
+      }),
+    );
+    expect(lists.parkingLot.reviewing).toEqual(['pr:acme/app#2', 'pr:acme/app#1']);
+  });
+
+  it('waitingForReview is createdAt ascending', () => {
+    const a = entry({ number: 1, isMine: true, author: ME, createdAt: '2026-06-01T00:00:00.000Z' });
+    const b = entry({ number: 2, isMine: true, author: ME, createdAt: '2026-01-01T00:00:00.000Z' });
+    const lists = workListsOf(group({ inventory: inv([a, b]), items: [prAttention(a), prAttention(b)] }));
+    expect(lists.waitingForReview).toEqual(['pr:acme/app#2', 'pr:acme/app#1']);
+  });
+
+  it('a missing sort key sorts LAST, and ties break on id', () => {
+    const noAge = entry({ number: 1, createdAt: null });
+    const aged = entry({ number: 2, createdAt: '2026-06-01T00:00:00.000Z' });
+    expect(
+      workListsOf(group({ inventory: inv([noAge, aged]), items: [prAttention(noAge), prAttention(aged)] })).parkingLot
+        .untouched,
+    ).toEqual(['pr:acme/app#2', 'pr:acme/app#1']);
+
+    const tieA = entry({ number: 7, createdAt: '2026-06-01T00:00:00.000Z' });
+    const tieB = entry({ number: 8, createdAt: '2026-06-01T00:00:00.000Z' });
+    expect(
+      workListsOf(group({ inventory: inv([tieB, tieA]), items: [prAttention(tieB), prAttention(tieA)] })).parkingLot
+        .untouched,
+    ).toEqual(['pr:acme/app#7', 'pr:acme/app#8']);
+  });
+
+  it('myWork is needsYou first then most-recently-updated; investigations is most-recently-updated', () => {
+    const investigations = workListsOf(
+      group({
+        items: [
+          agentAttention({ id: 'i-old', mode: 'investigation', since: '2026-01-01T00:00:00.000Z' }),
+          agentAttention({ id: 'i-new', mode: 'investigation', since: '2026-08-01T00:00:00.000Z' }),
+        ],
+      }),
+    ).investigations;
+    expect(investigations).toEqual(['session:i-new', 'session:i-old']);
+
+    const a = entry({ number: 1, isMine: true, author: ME, updatedAt: '2026-09-01T00:00:00.000Z' });
+    const b = entry({ number: 2, isMine: true, author: ME, updatedAt: '2026-01-01T00:00:00.000Z' });
+    const lists = workListsOf(
+      group({
+        inventory: inv([a, b]),
+        items: [
+          prAttention(a),
+          prAttention(b),
+          agentAttention({ id: 'd2', mode: 'development', prRepo: REPO, prNumber: 2, needsYou: true }),
+        ],
+      }),
+    );
+    expect(lists.myWork).toEqual(['pr:acme/app#2', 'pr:acme/app#1']);
+  });
+
+  it('every id in lists.parkingLot appears in exactly ONE of its three groups (MG-17)', () => {
+    const untouched = entry({ number: 1 });
+    const demoted = entry({
+      number: 2,
+      humanActivity: { reviewedBy: ['jane'], commentedBy: [], lastAt: '2026-09-01T00:00:00.000Z' },
+    });
+    const reviewing = entry({ number: 3 });
+    const items = group({
+      inventory: inv([untouched, demoted, reviewing]),
+      items: [
+        prAttention(untouched),
+        prAttention(demoted),
+        prAttention(reviewing),
+        agentAttention({ id: 'r3', mode: 'review', prRepo: REPO, prNumber: 3 }),
+      ],
+    });
+    const lists = workListsOf(items);
+    const all = parkingLotOrder(lists);
+    expect(new Set(all).size).toBe(all.length);
+    for (const item of items.filter((i) => i.lists.includes('parkingLot'))) {
+      expect(lists.parkingLot[item.parkingLotGroup!]).toContain(item.id);
+    }
+  });
+
+  it('reads no clock: two calls over the same input are byte-identical', () => {
+    const e = entry({ number: 1 });
+    const input = { inventory: inv([e]), items: [prAttention(e)] };
+    expect(JSON.stringify(group(input))).toBe(JSON.stringify(group(input)));
+  });
+});
+
+describe('groupWorkItems: the row label (R13, R47)', () => {
+  it('prefers the ticket summary, falls back to the bare KEY', () => {
+    const withSummary = group({ jira: jiraReport([{ key: 'HB-627', summary: 'Do the thing', assignee: '712020:me' }]) });
+    expect(withSummary[0].title).toBe('HB-627 — Do the thing');
+    const seeded = group({ items: [agentAttention({ id: 'd1', mode: 'development', ticket: 'HB-999' })] });
+    expect(seeded[0].title).toBe('HB-999');
+  });
+
+  it('a PR with no ticket is "<repo>#<n> — <title>", and "<repo>#<n>" when the title is null', () => {
+    const e = entry({ number: 1, title: 'Add thing' });
+    expect(group({ inventory: inv([e]), items: [prAttention(e)] })[0].title).toBe('acme/app#1 — Add thing');
+    const agentOnly = group({ items: [agentAttention({ id: 'r1', mode: 'review', prRepo: REPO, prNumber: 9 })] });
+    expect(agentOnly[0].title).toBe('acme/app#9');
+  });
+
+  it('a session item uses the session title', () => {
+    const items = group({ items: [agentAttention({ id: 's1', mode: 'investigation', title: 'a stack trace' })] });
+    expect(items[0].title).toBe('a stack trace');
+  });
+
+  it("R47: a parkingLot row is always <repo>#<n> — title even when it carries a ticket key", () => {
+    const e = entry({ number: 1, ticketKeys: ['HB-627'], title: 'Add thing' });
+    const items = group({
+      inventory: inv([e]),
+      items: [prAttention(e)],
+      jira: jiraReport([{ key: 'HB-627', summary: 'Do the thing', assignee: '712020:me' }]),
+    });
+    const row = items.find((i) => i.lists.includes('parkingLot'))!;
+    expect(row.title).toBe('acme/app#1 — Add thing');
+  });
+});
+
+describe('groupWorkItems: attention roll-up (R3, R26, R31)', () => {
+  it('attention.refs carries every agent ref AND every PR ref', () => {
+    const e = entry({ number: 1, isMine: true, author: ME, ticketKeys: ['HB-627'] });
+    const items = group({
+      inventory: inv([e]),
+      items: [prAttention(e), agentAttention({ id: 'd1', mode: 'development', prRepo: REPO, prNumber: 1 })],
+      jira: jiraReport([{ key: 'HB-627' }]),
+    });
+    expect(items[0].attention.refs.sort()).toEqual(['pr:acme/app#1', 'session:d1']);
+  });
+
+  it('acked is true only when EVERY ref is acked', () => {
+    const items = group({
+      items: [
+        agentAttention({ id: 'a', mode: 'development', ticket: 'HB-1', needsYou: true, acked: true }),
+        agentAttention({ id: 'b', mode: 'investigation', ticket: 'HB-1', needsYou: true, acked: false }),
+      ],
+      projectKeys: ['HB'],
+    });
+    expect(items[0].attention.acked).toBe(false);
+
+    const allAcked = group({
+      items: [
+        agentAttention({ id: 'a', mode: 'development', ticket: 'HB-1', needsYou: true, acked: true }),
+        agentAttention({ id: 'b', mode: 'investigation', ticket: 'HB-1', needsYou: true, acked: true }),
+      ],
+      projectKeys: ['HB'],
+    });
+    expect(allAcked[0].attention.acked).toBe(true);
+  });
+
+  it('reasons are the union, in ATTENTION_REASONS order, with no sort', () => {
+    const mine = entry({
+      number: 1,
+      isMine: true,
+      author: ME,
+      reviewDecision: 'APPROVED',
+      reviewDecisionAt: '2026-09-05T00:00:00.000Z',
+      humanActivity: { reviewedBy: ['jane'], commentedBy: [], lastAt: '2026-09-05T00:00:00.000Z' },
+    });
+    const items = group({
+      inventory: inv([mine]),
+      items: [prAttention(mine), agentAttention({ id: 'd1', mode: 'development', prRepo: REPO, prNumber: 1, needsYou: true })],
+    });
+    expect(items[0].attention.reasons).toEqual(['needs_input', 'review_arrived', 'approved']);
+  });
+});
+
+describe('groupWorkItems: MG-17 totality and disjointness', () => {
+  it('over a fixture covering every branch, the invariants hold', () => {
+    const teammate = entry({ number: 1 });
+    const teammateReviewed = entry({ number: 2 });
+    const teammateDemoted = entry({
+      number: 3,
+      humanActivity: { reviewedBy: ['jane'], commentedBy: [], lastAt: '2026-09-02T00:00:00.000Z' },
+    });
+    const draft = entry({ number: 4, isDraft: true });
+    const stranger = entry({ number: 5, author: 'stranger' });
+    const mine = entry({ number: 6, isMine: true, author: ME });
+    const items = group({
+      inventory: inv([teammate, teammateReviewed, teammateDemoted, draft, stranger, mine]),
+      items: [
+        prAttention(teammate),
+        prAttention(teammateReviewed),
+        prAttention(teammateDemoted),
+        prAttention(draft),
+        prAttention(stranger),
+        prAttention(mine),
+        agentAttention({ id: 'r2', mode: 'review', prRepo: REPO, prNumber: 2 }),
+        agentAttention({ id: 'inv-only', mode: 'investigation' }),
+      ],
+    });
+
+    // every review-carrying teammate PR is in parkingLot exactly once, in 'reviewing'
+    const reviewed = items.find((i) => i.prs[0]?.number === 2)!;
+    expect(reviewed.lists.filter((l) => l === 'parkingLot').length).toBe(1);
+    expect(reviewed.parkingLotGroup).toBe('reviewing');
+    expect(reviewed.lists).not.toContain('myWork');
+
+    // myWork never contains a review-only item
+    for (const item of items.filter((i) => i.lists.includes('myWork'))) {
+      expect(item.agents.every((a) => a.mode === 'review') && item.prs.every((p) => p.isMine !== true)).toBe(false);
+    }
+
+    // investigations never intersects myWork
+    for (const item of items) {
+      expect(item.lists.includes('investigations') && item.lists.includes('myWork')).toBe(false);
+    }
+
+    // deliberately in no list: the draft and the non-watched author's PR
+    expect(listsOf(items, 'pr:acme/app#4')).toEqual([]);
+    expect(listsOf(items, 'pr:acme/app#5')).toEqual([]);
+    // everything else lands somewhere
+    for (const item of items) {
+      if (item.id === 'pr:acme/app#4' || item.id === 'pr:acme/app#5') continue;
+      expect(item.lists.length).toBeGreaterThan(0);
+    }
+  });
+});

@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   bareSkillName, EMPTY_ENVIRONMENT, renderDevelopBrief, renderFindingsBrief, renderPlanBrief,
   renderRereviewBrief, renderRereviewPrompt, renderReviewBrief, renderReviewContract,
-  renderReviewPrompt, renderUiCheckProtocol, renderEnvironmentSection, STAGE_ENTRY_PROMPT,
+  renderReviewPrompt, renderUiCheckProtocol, renderEnvironmentSection, renderTicketSection, renderRespondBrief,
+  STAGE_ENTRY_PROMPT,
   type EnvironmentBriefContext,
 } from '../../src/pipeline/prompts';
 
@@ -375,5 +376,269 @@ describe('F3: renderFindingsBrief gets the "## Environment" section (mirrors ren
     expect(t).toContain('## Environment');
     expect(t).toContain(`Local app: ${localCtx.localUrl}`);
     expect(t).toContain(localCtx.localLogPath as string);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 9 / Task A7 — the gated `## Ticket` brief section (R18).
+// ---------------------------------------------------------------------------
+
+describe('renderTicketSection (R18)', () => {
+  const base = {
+    key: 'HB-627',
+    summary: 'Parking lot should not show drafts',
+    status: 'In Progress',
+    url: 'https://aplaceformom.atlassian.net/browse/HB-627',
+    descriptionText: 'The parking lot must show open PRs only.',
+    comments: [
+      { author: 'Jane', at: '2026-09-09T09:00:00.000Z', bodyText: 'Newest comment.' },
+      { author: 'Bob', at: '2026-09-08T09:00:00.000Z', bodyText: 'Older comment.' },
+    ],
+  };
+
+  it('returns the empty string for an empty context', () => {
+    expect(renderTicketSection(null)).toBe('');
+  });
+
+  it('renders the key, summary, status, description and comments', () => {
+    const text = renderTicketSection(base);
+    expect(text.startsWith('## Ticket HB-627 — Parking lot should not show drafts')).toBe(true);
+    expect(text).toContain('In Progress');
+    expect(text).toContain('The parking lot must show open PRs only.');
+    expect(text).toContain('Jane');
+    expect(text).toContain('Newest comment.');
+    expect(text).toContain('Older comment.');
+  });
+
+  it('caps at 5 comments and SAYS SO', () => {
+    const many = {
+      ...base,
+      comments: Array.from({ length: 9 }, (_, i) => ({
+        author: `A${i}`,
+        at: `2026-09-0${i + 1}T00:00:00.000Z`,
+        bodyText: `body ${i}`,
+      })),
+    };
+    const text = renderTicketSection(many);
+    expect(text).toContain('body 0');
+    expect(text).toContain('body 4');
+    expect(text).not.toContain('body 5');
+    expect(text.toLowerCase()).toContain('truncated');
+  });
+
+  it('caps each comment at 2000 characters and says so', () => {
+    const long = { ...base, comments: [{ author: 'Jane', at: '2026-09-09T09:00:00.000Z', bodyText: 'x'.repeat(5000) }] };
+    const text = renderTicketSection(long);
+    expect(text).not.toContain('x'.repeat(2100));
+    expect(text.toLowerCase()).toContain('truncated');
+  });
+
+  it('caps the whole section at 12000 characters and says so', () => {
+    const huge = {
+      ...base,
+      descriptionText: 'y'.repeat(11_000),
+      comments: [
+        { author: 'Jane', at: '2026-09-09T09:00:00.000Z', bodyText: 'z'.repeat(2000) },
+        { author: 'Bob', at: '2026-09-08T09:00:00.000Z', bodyText: 'z'.repeat(2000) },
+      ],
+    };
+    const text = renderTicketSection(huge);
+    expect(text.length).toBeLessThanOrEqual(12_000);
+    expect(text.toLowerCase()).toContain('truncated');
+  });
+
+  it('never carries a credential (MG-5)', () => {
+    expect(renderTicketSection(base)).not.toContain('apiToken');
+    expect(renderTicketSection(base)).not.toContain('Authorization');
+  });
+});
+
+describe('the ## Ticket block in the findings and develop briefs (R18)', () => {
+  const ticket = {
+    key: 'HB-627',
+    summary: 'Do the thing',
+    status: 'In Progress',
+    url: 'https://aplaceformom.atlassian.net/browse/HB-627',
+    descriptionText: 'the description',
+    comments: [],
+  };
+
+  it('appears only when a ticket was fetched', () => {
+    const without = renderFindingsBrief({ sessionDir: '/s', ticket: 'HB-627', intent: 'investigate_only' });
+    expect(without).not.toContain('## Ticket HB-627');
+    const with_ = renderFindingsBrief({ sessionDir: '/s', ticket: 'HB-627', intent: 'investigate_only', ticketContext: ticket });
+    expect(with_).toContain('## Ticket HB-627 — Do the thing');
+    expect(with_).toContain('the description');
+  });
+
+  it('the develop brief carries it too', () => {
+    const brief = renderDevelopBrief({ sessionDir: '/s', ticket: 'HB-627', hasPlan: false, ticketContext: ticket });
+    expect(brief).toContain('## Ticket HB-627 — Do the thing');
+  });
+
+  it('the existing "fetch it via getJiraIssue" line is reworded rather than deleted', () => {
+    const brief = renderFindingsBrief({ sessionDir: '/s', ticket: 'HB-627', intent: 'investigate_only', ticketContext: ticket });
+    expect(brief).toContain('getJiraIssue');
+    expect(brief.toLowerCase()).toContain('only if you need more');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 9 / Task A9 — renderRespondBrief (R50, R55).
+// ---------------------------------------------------------------------------
+
+describe('renderRespondBrief (R50)', () => {
+  const thread = (id: string, comments: Array<{ author: string; body: string }>) => ({
+    id,
+    isResolved: false,
+    isOutdated: false,
+    path: 'src/a.ts',
+    line: 12,
+    truncated: false,
+    comments: comments.map((c, i) => ({
+      author: c.author,
+      body: c.body,
+      createdAt: `2026-09-0${i + 1}T00:00:00Z`,
+      url: `https://github.com/acme/app/pull/12#discussion_r${id}${i}`,
+    })),
+  });
+
+  const ctx = {
+    sessionDir: '/s/respond-1',
+    prRepo: 'acme/app',
+    prNumber: 12,
+    threads: [
+      thread('T1', [
+        { author: 'jane', body: 'comment one' },
+        { author: 'me-user', body: 'comment two' },
+        { author: 'jane', body: 'comment three' },
+      ]),
+      thread('T2', [
+        { author: 'bob', body: 'comment four' },
+        { author: 'me-user', body: 'comment five' },
+      ]),
+    ],
+    reviews: [
+      { author: 'jane', state: 'CHANGES_REQUESTED', body: 'see inline', submittedAt: '2026-09-03T00:00:00Z' },
+      { author: 'bob', state: 'APPROVED', body: null, submittedAt: '2026-09-04T00:00:00Z' },
+    ],
+    reviewDecision: 'CHANGES_REQUESTED',
+    failingChecks: [{ name: 'unit', detailsUrl: 'https://ci/unit' }],
+    changedFiles: 7,
+    additions: 120,
+    deletions: 3,
+  };
+
+  it("returns '' with nothing fetched", () => {
+    expect(
+      renderRespondBrief({
+        sessionDir: '/s/x',
+        prRepo: 'acme/app',
+        prNumber: 12,
+        threads: [],
+        reviews: [],
+        reviewDecision: null,
+        failingChecks: [],
+        changedFiles: null,
+        additions: null,
+        deletions: null,
+      }),
+    ).toBe('');
+  });
+
+  it('contains EVERY one of the five comment bodies — the regression the legacy comments(first:1) caused', () => {
+    const text = renderRespondBrief(ctx);
+    for (const body of ['comment one', 'comment two', 'comment three', 'comment four', 'comment five']) {
+      expect(text).toContain(body);
+    }
+    expect(text).toContain('src/a.ts:12');
+    expect(text).toContain('@jane');
+  });
+
+  it('labels resolved and outdated threads rather than dropping them', () => {
+    const text = renderRespondBrief({
+      ...ctx,
+      threads: [{ ...thread('T3', [{ author: 'jane', body: 'old point' }]), isResolved: true, isOutdated: true }],
+    });
+    expect(text).toContain('old point');
+    expect(text).toContain('resolved');
+    expect(text).toContain('outdated');
+  });
+
+  it('carries the per-reviewer states, the reviewDecision, the failing checks and the diff summary', () => {
+    const text = renderRespondBrief(ctx);
+    expect(text).toContain('**@jane** — CHANGES_REQUESTED');
+    expect(text).toContain('**@bob** — APPROVED');
+    expect(text).toContain('**Decision:** CHANGES_REQUESTED');
+    expect(text).toContain('unit — https://ci/unit');
+    expect(text).toContain('7 files changed, +120/−3');
+  });
+
+  it('the ## Ticket block is renderTicketSection output BYTE-FOR-BYTE', () => {
+    const ticketContext = {
+      key: 'HB-627',
+      summary: 'Do the thing',
+      status: 'In Progress',
+      url: 'https://aplaceformom.atlassian.net/browse/HB-627',
+      descriptionText: 'the description',
+      comments: [],
+    };
+    const text = renderRespondBrief({ ...ctx, ticketContext });
+    expect(text).toContain(renderTicketSection(ticketContext));
+  });
+
+  it('the caps truncate and SAY so', () => {
+    const many = {
+      ...ctx,
+      threads: Array.from({ length: 60 }, (_, i) => thread(`T${i}`, [{ author: 'jane', body: `body ${i}` }])),
+    };
+    const text = renderRespondBrief(many);
+    expect(text).toContain('body 49');
+    expect(text).not.toContain('body 50');
+    expect(text.toLowerCase()).toContain('truncated');
+
+    const chatty = {
+      ...ctx,
+      threads: [thread('T1', Array.from({ length: 30 }, (_, i) => ({ author: 'jane', body: `c${i}` })))],
+    };
+    expect(renderRespondBrief(chatty).toLowerCase()).toContain('truncated');
+
+    const verbose = { ...ctx, threads: [thread('T1', [{ author: 'jane', body: 'x'.repeat(5000) }])] };
+    const verboseText = renderRespondBrief(verbose);
+    expect(verboseText).not.toContain('x'.repeat(2100));
+    expect(verboseText.toLowerCase()).toContain('truncated');
+    expect(verboseText.length).toBeLessThanOrEqual(40_000);
+  });
+
+  it('carries the reconcile-first instruction and the legacy COMMENTS.md entry shape', () => {
+    const text = renderRespondBrief(ctx);
+    expect(text).toContain('Reconcile FIRST');
+    for (const field of [
+      '**Thread:**',
+      '**From:**',
+      '**Where:**',
+      '**Comment:**',
+      '**Verdict:**',
+      '**Reasoning:**',
+      '**Proposed reply:**',
+      '**Proposed fix:**',
+      '**Status:**',
+    ]) {
+      expect(text).toContain(field);
+    }
+    expect(text).toContain('COMMENTS.md');
+  });
+
+  it('MG-14 / R55: no instruction to reply, resolve or push — and the out-of-scope line is IN the brief', () => {
+    const text = renderRespondBrief(ctx);
+    expect(text).toContain('Out of scope in v1');
+    expect(text).toContain('Do NOT reply to a comment');
+    expect(text).toContain('do NOT resolve a thread');
+    expect(text).toContain('do NOT push');
+    expect(text).not.toContain('gh pr comment');
+    expect(text).not.toContain('gh pr review');
+    expect(text).not.toContain('--reply-comment');
+    expect(text).not.toContain('--resolve-comment');
+    expect(text).not.toContain('--push-fix');
   });
 });

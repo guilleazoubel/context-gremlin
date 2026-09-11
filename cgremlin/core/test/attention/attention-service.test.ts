@@ -19,6 +19,7 @@ import type { HumanTurn } from '../../src/schema/stage';
 import { createHarness, SESSIONS_DIR, type PipelineHarness } from '../support/pipeline-harness';
 import { FakeSessionWatcher } from '../support/fake-session-watcher';
 import { InMemoryFileSystem } from '../support/in-memory-file-system';
+import { PHASE9_ENTRY_DEFAULTS } from '../support/inventory-entry';
 
 const ACKS_PATH = '/state/attention-acks.json';
 const NOW = new Date('2026-09-10T12:00:00.000Z');
@@ -76,6 +77,7 @@ function reviewSession(id: string, over: Record<string, unknown> = {}): Session 
 
 function entry(over: Partial<InventoryEntry> = {}): InventoryEntry {
   return {
+    ...PHASE9_ENTRY_DEFAULTS,
     repo: 'acme/app',
     number: 12,
     url: 'https://github.com/acme/app/pull/12',
@@ -592,5 +594,32 @@ describe('R18: a third source is an adapter, not a refactor', () => {
     const acked = await stubFx.service.ack('stub:x');
     expect(acked.attention.acked).toBe(true);
     expect((await stubFx.service.list()).items).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 9 / Task A6 — R27: the pre-dedupe list WorkItemService needs.
+// ---------------------------------------------------------------------------
+
+describe('AttentionService.list({ dedupe }) (R27)', () => {
+  async function reviewSessionAndItsPr(): Promise<void> {
+    await fx.h.store.save(reviewSession('r1'));
+    fx.setInventory(inventory([entry({ ours: { status: 'none' } })]));
+  }
+
+  it('still dedupes by default, so /attention and every existing caller are unchanged', async () => {
+    await reviewSessionAndItsPr();
+    const { items } = await fx.service.list({ all: true });
+    expect(items.filter((i) => i.source === 'pr')).toEqual([]);
+    const host = items.find((i) => i.source === 'session')!;
+    expect(host.links.prRepo).toBe('acme/app');
+    expect(host.links.prNumber).toBe(12);
+  });
+
+  it('dedupe: false returns BOTH the session item and its source: pr item', async () => {
+    await reviewSessionAndItsPr();
+    const { items } = await fx.service.list({ all: true, dedupe: false });
+    expect(items.filter((i) => i.source === 'pr').length).toBe(1);
+    expect(items.filter((i) => i.source === 'session').length).toBe(1);
   });
 });

@@ -43,6 +43,10 @@ function defaultStageStatus(mode: SessionMode): string {
       return 'active';
     case 'investigation':
       return 'findings';
+    // A legacy session can never be `respond` (the mode did not exist), but
+    // the switch is exhaustive over SessionMode, so it needs the arm.
+    case 'respond':
+      return 'triaging';
   }
 }
 

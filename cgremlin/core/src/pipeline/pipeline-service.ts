@@ -19,7 +19,7 @@ import type { SessionFileSystem } from '../fs/session-file-system';
 import type { GitRunner } from '../git/git-runner';
 import type { EngineEvents } from '../engine/events';
 import type { DevelopmentSession, InvestigationSession, Session } from '../schema/session';
-import type { ReviewPhase } from '../schema/pipeline';
+import type { RespondPhase, ReviewPhase } from '../schema/pipeline';
 import type { LastRun, StageName } from '../schema/stage';
 import { KeyedLock } from '../api/keyed-lock';
 import { awaitRunStart } from './run-start';
@@ -27,6 +27,9 @@ import {
   EMPTY_ENVIRONMENT,
   renderDevelopBrief,
   renderFindingsBrief,
+  renderRespondBrief,
+  type RespondBriefContext,
+  type TicketBriefContext,
   renderPlanBrief,
   renderRereviewBrief,
   renderRereviewPrompt,
@@ -68,6 +71,22 @@ export interface PipelineServiceDeps {
   lock: KeyedLock;
   /** Optional: a wiring with no local-app adapter has no environment at all, and every stage then behaves exactly as it did before Phase 5 (R14). */
   environment?: EnvironmentService;
+  /**
+   * R18 — the ticket text a brief carries, fetched by the ENGINE (never by
+   * the agent, and never a credential). Optional: with no Jira configured
+   * the `## Ticket` section renders '' and the briefs read exactly as they
+   * did before Phase 9.
+   */
+  tickets?: { forBrief(key: string): Promise<TicketBriefContext | null> };
+  /**
+   * R50/R52 — the review threads, review summaries, CI and diff summary the
+   * respond brief carries, gathered by the host (which owns the thread cache
+   * and the inventory). Absent means an empty brief body, exactly as an
+   * absent `tickets` means no `## Ticket` block.
+   */
+  respondContext?: (
+    session: Session,
+  ) => Promise<Omit<RespondBriefContext, 'sessionDir' | 'prRepo' | 'prNumber' | 'ticketContext'>>;
 }
 
 /** What `prepareEnvironment` hands back: the brief context, whether THIS call started the app, and the teardown that undoes both. */
@@ -131,6 +150,16 @@ export class PipelineService {
     this.now = deps.now ?? (() => new Date());
     this.newId = deps.newId ?? ((prefix, slug, key) => `${prefix}-${slug.replace('/', '-')}-${key}-${stamp(this.now())}`);
     this.lock = deps.lock;
+  }
+
+  /**
+   * R18 — the gated ticket context. A fetch failure is not a run failure:
+   * the brief simply renders without the `## Ticket` block, exactly as it
+   * does with no Jira configured.
+   */
+  private async ticketContext(key: string | null): Promise<TicketBriefContext | null> {
+    if (key === null || this.deps.tickets === undefined) return null;
+    return this.deps.tickets.forBrief(key).catch(() => null);
   }
 
   private sessionDir(id: string): string {
@@ -418,7 +447,13 @@ export class PipelineService {
     }
     const sessionDir = this.sessionDir(id);
     const prep = await this.prepareEnvironment(id, 'findings', session);
-    const brief = renderFindingsBrief({ sessionDir, ticket: session.lineage.ticket, intent: session.intent, env: prep.ctx });
+    const brief = renderFindingsBrief({
+      sessionDir,
+      ticket: session.lineage.ticket,
+      intent: session.intent,
+      env: prep.ctx,
+      ticketContext: await this.ticketContext(session.lineage.ticket),
+    });
     const prompt = STAGE_ENTRY_PROMPT(sessionDir);
     try {
       const result = await this.runStageLocked(id, 'findings', brief, prompt, async () => {
@@ -596,7 +631,13 @@ export class PipelineService {
     const sessionDir = this.sessionDir(id);
     const hasPlan = await this.deps.fs.exists(`${sessionDir}/PLAN.md`);
     const prep = await this.prepareEnvironment(id, 'develop', session);
-    const brief = renderDevelopBrief({ sessionDir, ticket: session.lineage.ticket, hasPlan, env: prep.ctx });
+    const brief = renderDevelopBrief({
+      sessionDir,
+      ticket: session.lineage.ticket,
+      hasPlan,
+      env: prep.ctx,
+      ticketContext: await this.ticketContext(session.lineage.ticket),
+    });
     const prompt = STAGE_ENTRY_PROMPT(sessionDir);
     try {
       // No transition on success: PR detection (which drives active -> pr_opened) is Phase 3b.
@@ -609,6 +650,72 @@ export class PipelineService {
         await this.assertNoHumanTurn(fresh);
         if (fresh.mode !== 'development' || fresh.stageStatus !== 'active') {
           throw new UnsupportedStageError(`Session '${id}' cannot run develop (mode=${fresh.mode}, stage=${fresh.stageStatus})`);
+        }
+      });
+      return result.session;
+    } finally {
+      await prep.teardown();
+    }
+  }
+
+  /**
+   * R56 — written in the shape of `runDevelop`, verbatim where it can be.
+   * The phase check is race-sensitive and runs on a FRESH load inside the
+   * lock, which is the race the comment above exists to close: checking it
+   * only on the pre-lock load lets a run start on a session a human just
+   * abandoned.
+   */
+  async runRespond(id: string): Promise<Session> {
+    // Declared beside REVIEW_RUNNABLE_FROM / REREVIEW_RUNNABLE_FROM and
+    // checked on the FRESH in-lock load, exactly as they are. `closed` and
+    // `abandoned` are not runnable.
+    const RESPOND_RUNNABLE_FROM: readonly RespondPhase[] = ['triaging', 'addressing', 'ready'];
+    const session = await this.deps.store.load(id);
+    if (session.mode !== 'respond') {
+      throw new UnsupportedStageError(`Session '${id}' cannot run respond (mode=${session.mode})`);
+    }
+    // R19, advisory and UNLOCKED — see runFindings for why both sites exist.
+    if (isClaimed(session, this.now())) {
+      throw new HumanTurnInProgressError(id);
+    }
+    const sessionDir = this.sessionDir(id);
+    const prep = await this.prepareEnvironment(id, 'respond', session);
+    const brief = renderRespondBrief({
+      sessionDir,
+      prRepo: session.pr?.repo ?? '',
+      prNumber: session.pr?.number ?? 0,
+      ticketContext: await this.ticketContext(session.lineage.ticket),
+      // R50's gate returns '' for a context with NOTHING in it. A real run
+      // still needs the reconcile-first instruction, the COMMENTS.md shape
+      // and the out-of-scope line, so the no-context case passes an empty
+      // `reviewDecision` rather than a null one: the brief renders its
+      // skeleton with no threads listed instead of coming out blank.
+      ...((await this.deps.respondContext?.(session)) ?? {
+        threads: [],
+        reviews: [],
+        reviewDecision: '',
+        failingChecks: [],
+        changedFiles: null,
+        additions: null,
+        deletions: null,
+      }),
+    });
+    const prompt = STAGE_ENTRY_PROMPT(sessionDir);
+    try {
+      const result = await this.runStageLocked(id, 'respond', brief, prompt, async () => {
+        const fresh = await this.deps.store.load(id);
+        // Authoritative (R9/R19) — see runFindings.
+        await this.assertNoHumanTurn(fresh);
+        if (fresh.mode !== 'respond' || !RESPOND_RUNNABLE_FROM.includes(fresh.stageStatus)) {
+          throw new UnsupportedStageError(
+            `Session '${id}' cannot run respond (mode=${fresh.mode}, stage=${fresh.stageStatus})`,
+          );
+        }
+        if (!fresh.workspace.worktreePath) {
+          throw new WorkspaceMissingError(id);
+        }
+        if (fresh.stageStatus === 'triaging') {
+          await this.transitionUnlocked(id, 'addressing');
         }
       });
       return result.session;
@@ -838,6 +945,8 @@ export class PipelineService {
         return this.runReview(id);
       case 'rereview':
         return this.runRereview(id);
+      case 'respond':
+        return this.runRespond(id);
     }
   }
 

@@ -16,6 +16,21 @@ export const DEFAULT_PERMISSIONS: Record<SessionMode, PermissionConfig> = {
       'Bash(gh pr close:*)',
     ],
   },
+  // R55: the respond agent never posts to GitHub — no reply, no resolve, no
+  // push of someone else's branch. It MAY commit locally and push its own
+  // branch, which is where v1 ends.
+  respond: {
+    deny: [
+      'Bash(gh pr review:*)',
+      'Bash(gh pr comment:*)',
+      'Bash(gh pr merge:*)',
+      'Bash(gh pr close:*)',
+      'Bash(gh pr edit:*)',
+      'Bash(gh pr ready:*)',
+      'Bash(gh api:*--method*)',
+      'Bash(gh api:*graphql*)',
+    ],
+  },
   review: {
     deny: [
       'Bash(gh pr review:*)',

@@ -31,6 +31,7 @@ export function mapErrorToHttp(err: unknown): HttpError {
     case 'ArtifactNotFoundError':
       return { status: 404, body: { error: message } };
     case 'OwnPrError':
+    case 'NotMyPrError': // R51's mirror: respond mode refuses somebody else's PR.
       return { status: 409, body: { error: message } };
     case 'NoScanYetError':
       return { status: 404, body: { error: message } };

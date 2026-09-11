@@ -1,0 +1,76 @@
+{
+  "data": {
+    "repository": {
+      "pullRequest": {
+        "reviewThreads": {
+          "pageInfo": {
+            "hasNextPage": false,
+            "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0wOS0wOVQxODo1NTozNVrOoMrntA=="
+          },
+          "nodes": [
+            {
+              "id": "PRRT_kwDOPYIaBc6gwpIP",
+              "isResolved": true,
+              "isOutdated": true,
+              "path": "apps/consumer/src/features/consumer/care-guide/publication-adapter/format-publication.ts",
+              "line": null,
+              "comments": {
+                "pageInfo": {
+                  "hasNextPage": false
+                },
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "gitstream-cm"
+                    },
+                    "body": "\ud83d\udc1e Bug - **Anchor De-dup Tracking**: Change `usedAnchors.add(anchorBase)` to `usedAnchors.add(id)` so that whatever string is actually used as the section anchor",
+                    "createdAt": "2026-09-09T17:14:54Z",
+                    "url": "https://github.com/aplaceformom/grace-frontend/pull/2037#discussion_r3971140206"
+                  },
+                  {
+                    "author": {
+                      "login": "guilleazoubel"
+                    },
+                    "body": "Good catch \u2014 fixed in 54e9e9e. Tracking `anchorBase` instead of the emitted `id` meant a later heading that slugifies to an already-de-duped id (e.g. a third \"C",
+                    "createdAt": "2026-09-09T17:24:23Z",
+                    "url": "https://github.com/aplaceformom/grace-frontend/pull/2037#discussion_r3971212203"
+                  }
+                ]
+              }
+            },
+            {
+              "id": "PRRT_kwDOPYIaBc6gyue0",
+              "isResolved": true,
+              "isOutdated": true,
+              "path": "apps/consumer/src/features/consumer/care-guide/publication-adapter/format-publication.ts",
+              "line": null,
+              "comments": {
+                "pageInfo": {
+                  "hasNextPage": false
+                },
+                "nodes": [
+                  {
+                    "author": {
+                      "login": "gitstream-cm"
+                    },
+                    "body": "\ud83d\udc1e Bug - **Suffix-anchor collision**: Replace the single-attempt resolution with a loop that keeps incrementing a counter until the candidate is not in `usedAnch",
+                    "createdAt": "2026-09-09T18:55:35Z",
+                    "url": "https://github.com/aplaceformom/grace-frontend/pull/2037#discussion_r3971963154"
+                  },
+                  {
+                    "author": {
+                      "login": "guilleazoubel"
+                    },
+                    "body": "Good catch, this was a real gap \u2014 my previous fix (tracking the emitted `id`) still let an explicit `htmlId` collide with an auto-suffixed id that happened to m",
+                    "createdAt": "2026-09-09T19:00:29Z",
+                    "url": "https://github.com/aplaceformom/grace-frontend/pull/2037#discussion_r3972002168"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      }
+    }
+  }
+}

@@ -1,5 +1,6 @@
 import { importLegacyConfig, resolveCoreConfig, writeCoreConfig } from '../../config/core-config';
 import { configPathFor, type CommandIO } from '../command-io';
+import { checkJiraCommand, type CheckJiraDeps } from './check-jira';
 
 /** The legacy tool's config file — the one path that deliberately still points at `~/.cgremlin`. */
 export function legacyConfigPath(home: string): string {
@@ -85,14 +86,21 @@ async function initCommand(args: readonly string[], io: CommandIO): Promise<numb
   return 0;
 }
 
-/** `cgremlin-core config <subcommand>` — `init [--me login] [--force]` and `import-legacy [--force]`. */
-export async function configCommand(args: readonly string[], io: CommandIO): Promise<number> {
+/** `cgremlin-core config <subcommand>` — `init`, `import-legacy` and `check-jira`. */
+export async function configCommand(
+  args: readonly string[],
+  io: CommandIO,
+  deps: CheckJiraDeps = {},
+): Promise<number> {
   const [sub, ...rest] = args;
   if (sub === 'init') {
     return initCommand(rest, io);
   }
   if (sub === 'import-legacy') {
     return importLegacyCommand(rest, io);
+  }
+  if (sub === 'check-jira') {
+    return checkJiraCommand(rest, io, deps);
   }
   io.stderr.write(`Unknown config subcommand: ${sub ?? '(none)'}\n`);
   return 2;

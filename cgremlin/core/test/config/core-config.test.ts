@@ -611,3 +611,127 @@ describe('the ~/.cgremlin-core default, the repos default, and the two engine pa
     expect(raw.engineLogPath).toBe(`${HOME}/elsewhere/e.log`);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase 9 / Task A3 — the `jira` block, its secret regime (R44) and the two
+// new derived paths (R52).
+// ---------------------------------------------------------------------------
+
+const BASE = { repos: ['acme/app'], me: 'me' };
+const JIRA_BASE = { siteUrl: 'https://aplaceformom.atlassian.net', email: 'guilherme.azoubel@aplaceformom.com' };
+
+describe('jira config (R7/R10/R37/R46, spec §4.2)', () => {
+  it('a config with no jira block still resolves, and jira is undefined', () => {
+    const cfg = resolveCoreConfig(BASE, HOME);
+    expect(cfg.jira).toBeUndefined();
+  });
+
+  it('applies every documented default', () => {
+    const cfg = resolveCoreConfig({ ...BASE, jira: JIRA_BASE }, HOME);
+    expect(cfg.jira?.jql).toBe('assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC');
+    expect(cfg.jira?.projectKeys).toEqual([]);
+    expect(cfg.jira?.maxResults).toBe(50);
+    expect(cfg.jira?.timeoutMs).toBe(15_000);
+    expect(cfg.jira?.scanBudgetMs).toBe(20_000);
+    expect(cfg.jira?.extraFields).toEqual([]);
+  });
+
+  it('R37: baseUrl defaults to siteUrl at resolve time while siteUrl stays separately readable', () => {
+    const derived = resolveCoreConfig({ ...BASE, jira: JIRA_BASE }, HOME);
+    expect(derived.jira?.baseUrl).toBe('https://aplaceformom.atlassian.net');
+    expect(derived.jira?.siteUrl).toBe('https://aplaceformom.atlassian.net');
+    const explicit = resolveCoreConfig({ ...BASE, jira: { ...JIRA_BASE, baseUrl: 'http://127.0.0.1:9911' } }, HOME);
+    expect(explicit.jira?.baseUrl).toBe('http://127.0.0.1:9911');
+    expect(explicit.jira?.siteUrl).toBe('https://aplaceformom.atlassian.net');
+  });
+
+  it('projectKeys rejects a lower-case prefix and accepts an upper-case one', () => {
+    expect(() => resolveCoreConfig({ ...BASE, jira: { ...JIRA_BASE, projectKeys: ['hb'] } }, HOME)).toThrow();
+    expect(resolveCoreConfig({ ...BASE, jira: { ...JIRA_BASE, projectKeys: ['HB'] } }, HOME).jira?.projectKeys).toEqual(['HB']);
+  });
+});
+
+describe('the jira token inherits the whole bypass-secret regime (R11/R44, MG-5 config half)', () => {
+  it('hasAnySecret stays false with no jira block, and with a jira block carrying no token', () => {
+    expect(hasAnySecret(resolveCoreConfig(BASE, HOME))).toBe(false);
+    expect(hasAnySecret(resolveCoreConfig({ ...BASE, jira: JIRA_BASE }, HOME))).toBe(false);
+  });
+
+  it('hasAnySecret becomes true for a non-empty jira.apiToken, with no vercel secret anywhere', () => {
+    const cfg = resolveCoreConfig({ ...BASE, jira: { ...JIRA_BASE, apiToken: 'atl-token' } }, HOME);
+    expect(cfg.environments).toEqual({});
+    expect(hasAnySecret(cfg)).toBe(true);
+  });
+
+  it('a mode-0644 config holding only a jira token is refused, naming the file', async () => {
+    const fs = new InMemoryFileSystem();
+    await fs.mkdir('/state', { recursive: true });
+    await fs.writeFile('/state/core.json', JSON.stringify({ ...BASE, jira: { ...JIRA_BASE, apiToken: 'atl-token' } }), {
+      mode: 0o644,
+    });
+    await expect(loadCoreConfig(fs, '/state/core.json', HOME)).rejects.toThrow(ConfigError);
+    await expect(loadCoreConfig(fs, '/state/core.json', HOME)).rejects.toThrow('/state/core.json');
+    await expect(loadCoreConfig(fs, '/state/core.json', HOME)).rejects.toThrow('chmod 600');
+  });
+
+  it('redactCoreConfig replaces jira.apiToken and leaves siteUrl, email and jql intact, idempotently', () => {
+    const cfg = resolveCoreConfig({ ...BASE, jira: { ...JIRA_BASE, apiToken: 'atl-token' } }, HOME);
+    const once = redactCoreConfig(cfg);
+    expect(once.jira?.apiToken).toBe('[redacted]');
+    expect(once.jira?.siteUrl).toBe(JIRA_BASE.siteUrl);
+    expect(once.jira?.email).toBe(JIRA_BASE.email);
+    expect(once.jira?.jql).toBe(cfg.jira?.jql);
+    expect(JSON.stringify(once)).not.toContain('atl-token');
+    expect(redactCoreConfig(once)).toEqual(once);
+    // the original is untouched — redaction clones
+    expect(cfg.jira?.apiToken).toBe('atl-token');
+  });
+});
+
+describe('the two new derived paths (R52, ARCHITECTURE.md:528-534)', () => {
+  it('jiraCachePath and reviewThreadsCachePath derive under stateDir', () => {
+    const cfg = resolveCoreConfig({ ...BASE, stateDir: '~/.cgremlin-core' }, HOME);
+    expect(cfg.jiraCachePath).toBe(`${HOME}/.cgremlin-core/jira.json`);
+    expect(cfg.reviewThreadsCachePath).toBe(`${HOME}/.cgremlin-core/review-threads.json`);
+  });
+
+  it('each is ~-expanded when given explicitly', () => {
+    const cfg = resolveCoreConfig(
+      { ...BASE, jiraCachePath: '~/elsewhere/jira.json', reviewThreadsCachePath: '~/elsewhere/threads.json' },
+      HOME,
+    );
+    expect(cfg.jiraCachePath).toBe(`${HOME}/elsewhere/jira.json`);
+    expect(cfg.reviewThreadsCachePath).toBe(`${HOME}/elsewhere/threads.json`);
+  });
+
+  it('writeCoreConfig omits each when it equals the derived default (the DERIVED_PATH_SUFFIXES half)', async () => {
+    const fs = new InMemoryFileSystem();
+    const cfg = resolveCoreConfig(BASE, HOME);
+    await writeCoreConfig(fs, '/state/core.json', cfg, { force: false });
+    const persisted = JSON.parse(await fs.readFile('/state/core.json')) as Record<string, unknown>;
+    expect(persisted).not.toHaveProperty('jiraCachePath');
+    expect(persisted).not.toHaveProperty('reviewThreadsCachePath');
+  });
+
+  it('writeCoreConfig keeps each when it is not the derived default', async () => {
+    const fs = new InMemoryFileSystem();
+    const cfg = resolveCoreConfig({ ...BASE, jiraCachePath: '/tmp/j.json', reviewThreadsCachePath: '/tmp/t.json' }, HOME);
+    await writeCoreConfig(fs, '/state/core.json', cfg, { force: false });
+    const persisted = JSON.parse(await fs.readFile('/state/core.json')) as Record<string, unknown>;
+    expect(persisted.jiraCachePath).toBe('/tmp/j.json');
+    expect(persisted.reviewThreadsCachePath).toBe('/tmp/t.json');
+  });
+
+  it('reviewThreads.scanBudgetMs defaults to 20000', () => {
+    expect(resolveCoreConfig(BASE, HOME).reviewThreads.scanBudgetMs).toBe(20_000);
+    expect(resolveCoreConfig({ ...BASE, reviewThreads: { scanBudgetMs: 5_000 } }, HOME).reviewThreads.scanBudgetMs).toBe(5_000);
+  });
+});
+
+describe('botLogins and showAllRepoPrs (R5, D2)', () => {
+  it('default to the bot list and false', () => {
+    const cfg = resolveCoreConfig(BASE, HOME);
+    expect(cfg.botLogins).toContain('github-actions');
+    expect(cfg.showAllRepoPrs).toBe(false);
+  });
+});

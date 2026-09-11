@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { InMemoryFileSystem } from '../support/in-memory-file-system';
 import { InventoryStore, InventoryCorruptError } from '../../src/inventory/inventory-store';
@@ -24,6 +26,17 @@ function sampleInventory(): Inventory {
         teamActivity: [{ login: 'carol', kind: 'comment', at: '2026-09-04T01:00:00.000Z' }],
         ours: { status: 'reviewing', sessionId: 's-1', reviewedSha: null, newCommits: false, phase: 'reviewing' },
         seenAt: '2026-09-04T12:00:00.000Z',
+        branch: 'feature/x',
+        ticketKeys: [],
+        reviewRequests: [],
+        humanActivity: { reviewedBy: [], commentedBy: ['carol'], lastAt: '2026-09-04T01:00:00.000Z' },
+        createdAt: '2026-09-01T00:00:00.000Z',
+        changedFiles: 2,
+        additions: 3,
+        deletions: 4,
+        ci: 'success',
+        labels: [],
+        reviewDecisionAt: null,
       },
     ],
     errors: [],
@@ -98,5 +111,30 @@ describe('InventoryStore', () => {
     await fs.writeFile('/state/inventory.json', JSON.stringify({ nope: true }));
     const store = new InventoryStore(fs, '/state/inventory.json');
     await expect(store.load()).rejects.toThrow(InventoryCorruptError);
+  });
+});
+
+describe('InventoryStore: the pre-Phase-9 document still loads (MG-7 / R45)', () => {
+  it('loads a fixture with none of the eleven Phase 9 fields, and every one takes its default', async () => {
+    const raw = readFileSync(path.join(__dirname, '../fixtures/inventory-pre-phase9.json'), 'utf8');
+    const fs = new InMemoryFileSystem();
+    await fs.mkdir('/state', { recursive: true });
+    await fs.writeFile('/state/inventory.json', raw);
+    const store = new InventoryStore(fs, '/state/inventory.json');
+    const loaded = await store.load();
+    expect(loaded).not.toBeNull();
+    const [entry] = loaded!.entries;
+    expect(entry.branch).toBeNull();
+    expect(entry.ticketKeys).toEqual([]);
+    expect(entry.reviewRequests).toEqual([]);
+    expect(entry.humanActivity).toEqual({ reviewedBy: [], commentedBy: [], lastAt: null });
+    // never 0 — an unknown age or size is null, so the panel can render '—'
+    expect(entry.createdAt).toBeNull();
+    expect(entry.changedFiles).toBeNull();
+    expect(entry.additions).toBeNull();
+    expect(entry.deletions).toBeNull();
+    expect(entry.ci).toBe('none');
+    expect(entry.labels).toEqual([]);
+    expect(entry.reviewDecisionAt).toBeNull();
   });
 });

@@ -1078,6 +1078,17 @@ describe('PR inventory routes (configured)', () => {
     expect((res.body as { inventory: { entries: unknown[] } }).inventory.entries.length).toBe(2);
   });
 
+  it('A5: POST /prs/scan carries the jira block, with no token in it', async () => {
+    ih.gh.queueResponse({ stdout: JSON.stringify([prsFixtureItem(10, 'bob')]) });
+    const res = await prsRequest('POST', '/prs/scan');
+    expect(res.status).toBe(200);
+    const body = res.body as { jira: { kind: string; issues: unknown[]; error: string | null } };
+    expect(body.jira.kind).toBe('notConfigured');
+    expect(body.jira.issues).toEqual([]);
+    expect(JSON.stringify(res.body).toLowerCase()).not.toContain('apitoken');
+    expect(JSON.stringify(res.body).toLowerCase()).not.toContain('authorization');
+  });
+
   it('GET /prs/status reports running/lastScanAt/lastError/skippedBeats', async () => {
     const res = await prsRequest('GET', '/prs/status');
     expect(res.status).toBe(200);

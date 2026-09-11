@@ -1,0 +1,23 @@
+{
+  "scannedAt": "2026-09-04T12:00:00.000Z",
+  "repos": ["acme/app"],
+  "entries": [
+    {
+      "repo": "acme/app",
+      "number": 5,
+      "url": "https://github.com/acme/app/pull/5",
+      "title": "a pre-Phase-9 row",
+      "author": "bob",
+      "isDraft": false,
+      "headSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "baseRef": "main",
+      "updatedAt": "2026-09-04T00:00:00.000Z",
+      "reviewDecision": "",
+      "isMine": false,
+      "teamActivity": [{ "login": "carol", "kind": "comment", "at": "2026-09-04T01:00:00.000Z" }],
+      "ours": { "status": "none" },
+      "seenAt": "2026-09-04T12:00:00.000Z"
+    }
+  ],
+  "errors": []
+}

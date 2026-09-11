@@ -360,3 +360,56 @@ which amend an earlier R.
 - **A start or stop is tagged `'auto'` or `'user'`.** The distinction is not cosmetic: it is what
   R26's backoff is measured against, and a person is entitled to retry a broken engine as often
   as they like.
+
+## 2026-09-10 — Phase 9 (Work items)
+
+Rulings live in `docs/superpowers/specs/2026-09-10-cgremlin-phase9-work-items-design.md`
+(D1–D8, R1–R67). Recorded here as the phase lands, task by task.
+
+- **R6 reverses the "no `is_bot` heuristic" line above** (the Phase 4 entry: *"bots are excluded
+  by construction — the watch list is an allowlist, not a denylist heuristic on `is_bot`"*).
+  Answering *"has any human reviewed this PR"* is a different question from *"has a teammate I
+  watch reviewed this PR"*, and it cannot be answered from an allow-list: a reviewer outside
+  `watchAuthors` is still a human. `humanActivity` is therefore computed from the raw, unfiltered
+  reviews and comments through one bot predicate (`src/work/bot-login.ts`), while `teamActivity`
+  keeps its allow-list semantics untouched. The reversal is deliberate and scoped to the new
+  field. *R6, R47.*
+- **U1 is CLOSED, in the negative.** A real `gh pr list --json reviews,comments` against
+  `aplaceformom/grace-frontend` (recorded as `test/fixtures/gh/pr-list-with-bot-reviews.json`,
+  2026-09-10) emits activity authors carrying **only** `login`. `is_bot` is present on the
+  PR-level `author` object and nowhere else. R5's clause (a) therefore never fires on inventory
+  data, and the `[bot]`-suffix plus `botLogins` list carries the whole load. It has to: the bots
+  active on that repo — `vercel`, `github-actions`, `gitstream-cm`, `apfm-sonar` — carry no
+  `[bot]` suffix at all, and the last two are not in `DEFAULT_BOT_LOGINS`, so a real deployment
+  must name them in `config.botLogins`. *A2, R5.*
+- **U6 is CLOSED, in two halves.** `statusCheckRollup` on `gh pr list` is the **same**
+  `CheckRun`/`StatusContext` union `gh pr view` emits (plus a `startedAt` the schema strips), so
+  R59's `.catch([])` was **not** load-bearing for the shape and stays as cheap insurance.
+  `reviewRequests`, by contrast, came back as **teams** (`{ __typename, name, slug }`) on every
+  single PR in the sample: **R60's union is load-bearing**, and the
+  `z.array(z.object({ login: z.string() }))` the ruling forbids would have thrown on the first
+  row. The 32-PR repo did not trip GitHub's node limit even at `--limit 100`, so R67's two-call
+  fallback remains covered by fixtures and by smoke step 1 only. *A2, R59, R60, R67.*
+- **R56's create-and-start click, recorded explicitly against Phase 7 R5 / MG-8.** "Nothing starts an
+  agent that was not explicitly asked for" still holds: the user's click on a lit `waitingForReview`
+  row **is** the explicit ask, and it is a `POST`, not a read. So
+  `POST /items/pr/:o/:r/:n/agents { mode: 'respond' }` creates the session AND starts the respond run
+  in the same request, answering `202` with `started: true`. MG-8 is amended to match — it still
+  asserts **zero** starts from every `GET`, and now asserts exactly one from that `POST`. The
+  alternative hands the user a session with an empty `BRIEF.md` and a second button to press.
+  *A9, R56.*
+- **`'respond'` is a `STAGE_NAME`, appended.** `STAGE_NAMES` is three contracts in one array — the
+  `POST /sessions/:id/run` validator, the persisted `lastRun.stage` type, and the
+  `run.started`/`run.finished` payload type — so a respond session running a stage named anything
+  else could not be started, recorded or reported. Appending keeps every persisted `lastRun.stage`
+  meaning what it did. *A9, R56.*
+- **The v1 session union is deliberately not extended.** There were no respond sessions before
+  Phase 9, so a v1 respond document cannot exist and `migrateV1ToV2` needs no case for it. Both
+  unions are discriminated on `mode`, so the fourth variant is additive and every document already
+  on disk keeps matching its own branch — MG-13 pins that against six committed pre-Phase-9
+  fixtures. *A9, R51.*
+- **Nothing in v1 posts to GitHub.** The respond agent's permission set denies every mutating
+  `gh pr` verb and `gh api --method`; `renderRespondBrief` carries the out-of-scope line in the
+  brief itself; and the respond-flow tests run against a `GhRunner` fake that throws on any
+  mutation. The legacy `--reply-comment` / `--resolve-comment` / `--push-fix` verbs are not ported.
+  v1 ends at "the fix is committed locally"; the drafted replies live in `COMMENTS.md`. *A9, R55.*

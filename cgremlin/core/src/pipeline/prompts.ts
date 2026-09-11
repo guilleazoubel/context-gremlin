@@ -21,7 +21,22 @@ export const EMPTY_ENVIRONMENT: EnvironmentBriefContext = {
   clerk: null,
 };
 
-export interface BriefCommon { sessionDir: string; ticket: string | null }
+/**
+ * R18 — the ticket content that reaches an agent, as TEXT. There is no HTML
+ * here and none anywhere below it: the adapter flattened `renderedFields` at
+ * the port (R33), so by the time a brief is composed there is nothing left
+ * to render. `null` means nothing was fetched, and the section renders ''.
+ */
+export interface TicketBriefContext {
+  key: string;
+  summary: string;
+  status: string;
+  url: string;
+  descriptionText: string | null;
+  comments: Array<{ author: string; at: string; bodyText: string | null }>;
+}
+
+export interface BriefCommon { sessionDir: string; ticket: string | null; ticketContext?: TicketBriefContext | null }
 export interface FindingsBriefParams extends BriefCommon { intent: 'investigate_only' | 'development'; env?: EnvironmentBriefContext }
 export interface PlanBriefParams extends BriefCommon { driveToCompletion: boolean }
 export interface DevelopBriefParams extends BriefCommon { hasPlan: boolean; env?: EnvironmentBriefContext }
@@ -76,6 +91,50 @@ export function renderEnvironmentSection(ctx: EnvironmentBriefContext): string {
   }
   if (lines.length === 0) return '';
   return `## Environment (started for you by the engine — do NOT start or stop anything yourself)\n${lines.join('\n')}`;
+}
+
+/** R18's caps. A brief is a prompt, and an unbounded comment thread is a prompt-injection and cost surface. */
+export const TICKET_MAX_COMMENTS = 5;
+export const TICKET_MAX_COMMENT_CHARS = 2000;
+export const TICKET_MAX_SECTION_CHARS = 12_000;
+
+const TRUNCATION_NOTE = '_(truncated by the engine)_';
+
+/**
+ * R18 — the gated `## Ticket` block, in the exact shape of
+ * `renderEnvironmentSection`: '' when nothing was fetched, and every caller
+ * writes `const block = section ? '\n\n' + section : ''`.
+ */
+export function renderTicketSection(ctx: TicketBriefContext | null | undefined): string {
+  if (ctx === null || ctx === undefined) return '';
+  let truncated = false;
+  const lines: string[] = [
+    `## Ticket ${ctx.key} — ${ctx.summary}`,
+    `Status: ${ctx.status}${ctx.url === '' ? '' : ` · ${ctx.url}`}`,
+  ];
+  if (ctx.descriptionText !== null && ctx.descriptionText.trim() !== '') {
+    lines.push('', ctx.descriptionText.trim());
+  }
+  const comments = ctx.comments.slice(0, TICKET_MAX_COMMENTS);
+  if (comments.length < ctx.comments.length) truncated = true;
+  if (comments.length > 0) {
+    lines.push('', '### Recent comments (newest first)');
+    for (const comment of comments) {
+      const body = comment.bodyText ?? '';
+      const capped = body.length > TICKET_MAX_COMMENT_CHARS ? body.slice(0, TICKET_MAX_COMMENT_CHARS) : body;
+      if (capped.length < body.length) truncated = true;
+      lines.push('', `**${comment.author}** (${comment.at}):`, capped);
+    }
+  }
+  let text = lines.join('\n');
+  // The whole-section cap has to leave room for the note it adds, or saying
+  // "truncated" would be what pushed it over the cap.
+  const budget = TICKET_MAX_SECTION_CHARS - TRUNCATION_NOTE.length - 2;
+  if (text.length > budget) {
+    text = text.slice(0, budget);
+    truncated = true;
+  }
+  return truncated ? `${text}\n\n${TRUNCATION_NOTE}` : text;
 }
 
 // Reproduces bin/cgremlin:1436-1483 verbatim except the "Reaching the target" bullets,
@@ -243,8 +302,14 @@ Rules for the file:
 export function renderFindingsBrief(p: FindingsBriefParams): string {
   const env = p.env ?? EMPTY_ENVIRONMENT;
   const key = p.ticket ?? '(no ticket)';
+  const ticketSection = renderTicketSection(p.ticketContext);
+  const ticketBlock = ticketSection ? `\n\n${ticketSection}` : '';
   const ticketLine = p.ticket
-    ? `The ticket is ${p.ticket}. Fetch it now via the Atlassian MCP (getJiraIssue) to read the summary, description, and acceptance criteria.`
+    ? ticketSection
+      // R18: reworded, not deleted — the engine already fetched the ticket,
+      // so the MCP call is the fallback for detail the brief does not carry.
+      ? `The ticket is ${p.ticket}. Its text is below; fetch it via the Atlassian MCP (getJiraIssue) only if you need more.`
+      : `The ticket is ${p.ticket}. Fetch it now via the Atlassian MCP (getJiraIssue) to read the summary, description, and acceptance criteria.`
     : '';
   const after =
     p.intent === 'development'
@@ -261,7 +326,7 @@ You are running in an isolated git worktree of the repository (the current worki
 ## Source of truth: the Jira ticket
 ${ticketLine} If the ticket is unavailable or absent, use whatever task description you were given. The ticket defines scope — investigate ONLY what it asks about.
 
-${notes(p.sessionDir)}${envBlock}
+${notes(p.sessionDir)}${envBlock}${ticketBlock}
 
 ## What to do (autonomously — do not ask for routine steps)
 1. Understand the request from the ticket. As your first action write \`${p.sessionDir}/AGENT_NOTE\` = "${key}: <one-line goal>".
@@ -340,11 +405,13 @@ export function renderDevelopBrief(p: DevelopBriefParams): string {
   const uiCheckBlock = uiCheck ? `\n\n${uiCheck}` : '';
   const envSection = renderEnvironmentSection(env);
   const envBlock = envSection ? `\n\n${envSection}` : '';
+  const ticketSection = renderTicketSection(p.ticketContext);
+  const ticketBlock = ticketSection ? `\n\n${ticketSection}` : '';
   return `# DEVELOP — ${key}
 
 You are running in an isolated git worktree on the session branch. Keep a running plan/progress log in \`${p.sessionDir}/DEVELOPMENT.md\`.
 
-${notes(p.sessionDir)}${envBlock}
+${notes(p.sessionDir)}${envBlock}${ticketBlock}
 
 ## What to do
 ${planStep}
@@ -405,4 +472,153 @@ export function renderReviewPrompt(p: ReviewPromptParams): string {
 export function renderRereviewPrompt(p: RereviewPromptParams): string {
   const skill = p.reviewSkillCommand ?? DEFAULT_REVIEW_SKILL;
   return `STEP 1: Check if ${skill} skill is available. If yes, run it for re-review and follow its output — skip everything else. STEP 2 (only if skill unavailable): RE-REVIEW MODE — PR updated with ${p.commitCount} new commit(s). Read ${p.sessionDir}/RE-REVIEW.md and follow it. Update ${p.sessionDir}/REVIEW.md in-place. FIRST verify each prior finding was properly addressed: re-check whether the problem it describes still happens in the new code and classify ✅ resolved / ⚠️ partial (keep open) / ❌ still open / 🔁 regressed, with evidence — 🔇 dismissed stay untouched. THEN add NEW findings only if they pass the evidence bar in ${p.sessionDir}/BRIEF.md, written in the file's plain format (What's wrong / Why it matters / Suggested fix), and re-check the PR still satisfies its Jira ticket. Severity is 🔴 Critical / 🟠 High / 🟡 Perf / 🔧 Maintainability. Scope: ONLY files in the PR diff. Add a new row to Review History. Self-check: verify every finding references a changed file. As the very last action, write a single line to the file ${p.sessionDir}/rereview_summary. Format: '✅ N/N resolved' if all prior findings are resolved, or '⚠️ K/N resolved, M new' otherwise. Write only that line — no other content.`;
+}
+
+// ---------------------------------------------------------------------------
+// R50 — the respond brief. Same file, same purity, same gate discipline as
+// `renderEnvironmentSection`, and it reuses `renderTicketSection` VERBATIM so
+// the ticket text is composed in exactly one place.
+// ---------------------------------------------------------------------------
+
+export interface RespondBriefThreadComment {
+  author: string;
+  body: string;
+  createdAt: string;
+  url: string;
+}
+
+export interface RespondBriefThread {
+  id: string;
+  isResolved: boolean;
+  isOutdated: boolean;
+  path: string | null;
+  line: number | null;
+  truncated: boolean;
+  comments: RespondBriefThreadComment[];
+}
+
+export interface RespondBriefContext {
+  sessionDir: string;
+  prRepo: string;
+  prNumber: number;
+  threads: RespondBriefThread[];
+  reviews: Array<{ author: string; state: string; body: string | null; submittedAt: string }>;
+  reviewDecision: string | null;
+  /** Failing checks only, by name, with their detailsUrl. */
+  failingChecks: Array<{ name: string; detailsUrl: string | null }>;
+  changedFiles: number | null;
+  additions: number | null;
+  deletions: number | null;
+  ticketContext?: TicketBriefContext | null;
+}
+
+/** R50's caps. A brief is a prompt; an unbounded thread is a prompt-injection and cost surface. */
+export const RESPOND_MAX_THREADS = 50;
+export const RESPOND_MAX_COMMENTS_PER_THREAD = 20;
+export const RESPOND_MAX_COMMENT_CHARS = 2000;
+export const RESPOND_MAX_BRIEF_CHARS = 40_000;
+
+const COMMENTS_MD_SHAPE = `### <thread id>
+- **Thread:** <thread id> (<resolved|open> · <outdated|current>)
+- **From:** @<login>
+- **Where:** <path>:<line>
+- **Comment:** <the reviewer's point, in your words>
+- **Verdict:** ✅ valid | 🟡 false-positive
+- **Reasoning:** <why>
+- **Proposed reply:** <the text a human can paste into GitHub>
+- **Proposed fix:** <the change, or "none">
+- **Status:** open`;
+
+function respondThreadBlock(thread: RespondBriefThread): { text: string; truncated: boolean } {
+  let truncated = thread.truncated;
+  const where = thread.path === null ? '(no file)' : `${thread.path}${thread.line === null ? '' : `:${thread.line}`}`;
+  const labels = [thread.isResolved ? 'resolved' : 'open', thread.isOutdated ? 'outdated' : 'current'];
+  const lines = [`#### ${thread.id} — ${where} (${labels.join(' · ')})`];
+  const comments = thread.comments.slice(0, RESPOND_MAX_COMMENTS_PER_THREAD);
+  if (comments.length < thread.comments.length) truncated = true;
+  for (const comment of comments) {
+    const body = comment.body.length > RESPOND_MAX_COMMENT_CHARS
+      ? comment.body.slice(0, RESPOND_MAX_COMMENT_CHARS)
+      : comment.body;
+    if (body.length < comment.body.length) truncated = true;
+    lines.push('', `**@${comment.author}** (${comment.createdAt}) ${comment.url}`, body);
+  }
+  if (thread.truncated) lines.push('', '_(this thread has more comments than the engine fetched)_');
+  return { text: lines.join('\n'), truncated };
+}
+
+export function renderRespondBrief(ctx: RespondBriefContext): string {
+  const hasAnything =
+    ctx.threads.length > 0 ||
+    ctx.reviews.length > 0 ||
+    ctx.failingChecks.length > 0 ||
+    ctx.reviewDecision !== null ||
+    ctx.changedFiles !== null ||
+    (ctx.ticketContext ?? null) !== null;
+  // The same gate as `renderEnvironmentSection`: nothing fetched, nothing
+  // rendered — the caller decides what to do with ''.
+  if (!hasAnything) return '';
+
+  let truncated = false;
+  const sections: string[] = [`# RESPOND — ${ctx.prRepo}#${ctx.prNumber}`];
+
+  sections.push(`You are running in an isolated git worktree checked out on this PR's OWN head branch. Your job is to work through every review thread on the pull request and record a verdict for each in \`${ctx.sessionDir}/COMMENTS.md\`.
+
+## Reconcile FIRST, and on every change
+Before acting, re-read the live threads the engine caches for you and reconcile them against \`${ctx.sessionDir}/COMMENTS.md\`: a thread that is already recorded keeps its entry, a thread that has a new reply is re-read, and a thread that has disappeared is marked so. Do this again after every change — a reviewer may reply while you work.`);
+
+  sections.push(`${notes(ctx.sessionDir)}`);
+
+  const threads = ctx.threads.slice(0, RESPOND_MAX_THREADS);
+  if (threads.length < ctx.threads.length) truncated = true;
+  if (threads.length > 0) {
+    const blocks = threads.map(respondThreadBlock);
+    if (blocks.some((b) => b.truncated)) truncated = true;
+    sections.push(`## Review threads (${threads.length})\n\n${blocks.map((b) => b.text).join('\n\n')}`);
+  }
+
+  if (ctx.reviews.length > 0 || ctx.reviewDecision !== null) {
+    const lines = ctx.reviews.map(
+      (r) => `- **@${r.author}** — ${r.state} (${r.submittedAt})${r.body ? `: ${r.body}` : ''}`,
+    );
+    if (ctx.reviewDecision !== null && ctx.reviewDecision !== '') {
+      lines.push(`- **Decision:** ${ctx.reviewDecision}`);
+    }
+    sections.push(`## Reviews\n${lines.join('\n')}`);
+  }
+
+  if (ctx.failingChecks.length > 0) {
+    sections.push(
+      `## Failing CI checks\n${ctx.failingChecks
+        .map((c) => `- ${c.name}${c.detailsUrl === null ? '' : ` — ${c.detailsUrl}`}`)
+        .join('\n')}`,
+    );
+  }
+
+  if (ctx.changedFiles !== null || ctx.additions !== null || ctx.deletions !== null) {
+    sections.push(
+      `## Diff summary\n- ${ctx.changedFiles ?? '—'} files changed, +${ctx.additions ?? '—'}/−${ctx.deletions ?? '—'}`,
+    );
+  }
+
+  const ticketSection = renderTicketSection(ctx.ticketContext);
+  if (ticketSection !== '') sections.push(ticketSection);
+
+  sections.push(`## What to write
+For every thread, append an entry to \`${ctx.sessionDir}/COMMENTS.md\` in exactly this shape:
+
+${COMMENTS_MD_SHAPE}
+
+When every thread has a verdict and the local fixes are committed, write \`${ctx.sessionDir}/AGENT_STATE\` = \`ready\` and \`${ctx.sessionDir}/AGENT_NOTE\` = "COMMENTS.md ready — replies drafted", and STOP.
+
+## Out of scope in v1 — do not do these
+Nothing here posts to GitHub. Do NOT reply to a comment, do NOT resolve a thread, do NOT push, and do NOT mark the PR ready. v1 ends at "the fix is committed locally"; the drafted replies live in \`${ctx.sessionDir}/COMMENTS.md\` for a human to paste.`);
+
+  let text = sections.join('\n\n');
+  const note = '\n\n_(truncated by the engine)_';
+  if (text.length > RESPOND_MAX_BRIEF_CHARS - note.length) {
+    text = text.slice(0, RESPOND_MAX_BRIEF_CHARS - note.length);
+    truncated = true;
+  }
+  return truncated ? `${text}${note}` : text;
 }

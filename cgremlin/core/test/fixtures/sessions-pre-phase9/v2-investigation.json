@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 2,
+  "id": "inv-2026-08-04-dddd",
+  "mode": "investigation",
+  "createdAt": "2026-08-04T10:00:00.000Z",
+  "workspace": { "repoUrl": "git@github.com:acme/app.git", "worktreePath": "/worktrees/inv-2026-08-04-dddd" },
+  "lineage": { "pipelineId": "inv-2026-08-04-dddd", "parentSessionId": null, "ticket": "HB-2" },
+  "agent": { "runner": "claude-code", "resumeId": "resume-1", "humanTurn": null },
+  "lastRun": {
+    "stage": "findings",
+    "startedAt": "2026-08-04T10:01:00.000Z",
+    "finishedAt": "2026-08-04T10:09:00.000Z",
+    "exitCode": 0,
+    "signal": null,
+    "outcome": "succeeded",
+    "error": null
+  },
+  "pr": null,
+  "stageStatus": "plan_ready",
+  "intent": "development",
+  "driveToCompletion": false
+}

@@ -24,9 +24,15 @@ import type { InventoryScanner, ScanReport } from '../inventory/inventory-scanne
 import type { InventoryStore } from '../inventory/inventory-store';
 import { groupInventory, type Inventory, type InventoryEntry } from '../inventory/inventory';
 import type { ReviewSessionFactory, CandidatePR } from '../pipeline/review-session-factory';
+import type { RespondSessionFactory } from '../pipeline/respond-session-factory';
+import { isClaimed } from '../pipeline/pipeline-service';
 import type { EnvironmentService, LocalAppStatus } from '../env/environment-service';
 import { redactBypassUrls, redactCoreConfig, type CoreConfig } from '../config/core-config';
 import { handleEventStream, type EventRing } from './event-stream';
+import type { WorkItemService } from '../work/work-item-service';
+import type { WorkItem, WorkListKind } from '../work/work-item';
+import { WORK_LIST_KINDS } from '../work/work-item';
+import { parseWorkItemPath, type ParsedWorkItemId } from '../work/work-item-id';
 import type { AttentionService } from '../attention/attention-service';
 import { ITEM_SOURCES, parseItemRef, prRef, sessionRef, type ItemRef, type ItemSource } from '../attention/item-ref';
 import { OwnPrError } from '../gh/own-pr-error';
@@ -76,6 +82,18 @@ export interface ApiServerDeps {
   environment?: EnvironmentService;
   /** Absent for a wiring with no attention model: every /attention route (and both ack aliases) then 404s. */
   attention?: AttentionService;
+  /** The work-item layer (Phase 9). Absent leaves every `/items` route a clean 404. */
+  workItems?: WorkItemService;
+  /** R36 — the 60 s / `updated`-keyed ticket detail cache. Absent means `ticket: null`, never a 5xx. */
+  ticketDetail?: { detail(key: string): Promise<{ ticket: unknown; ticketError: string | null }> };
+  /** R51 — the respond-mode factory. Absent makes `{ mode: 'respond' }` a clean 404. */
+  respondFactory?: RespondSessionFactory;
+  /**
+   * The clock the claim check reads. It MUST be the same one PipelineService
+   * uses, or the route and the run disagree about whether a claim is live —
+   * the route would try to restart and the run would answer 409.
+   */
+  now?: () => Date;
   /** Absent for a wiring with no event ring: GET /events then 404s. */
   eventRing?: EventRing;
   /** Absent for a wiring built without one (every test server that doesn't need it): `GET /config` then 404s. */
@@ -207,6 +225,138 @@ async function handleReviewStart(
   sendJson(res, 202, { session, created: true, started: true });
 }
 
+
+/**
+ * R15 — `POST /items/<path>/agents`, composing the EXISTING creation paths
+ * rather than inventing a second one, and under the SAME
+ * `pr:<slug>#<n>` lock key the review routes take, so it cannot race
+ * `POST /prs/…/review` or `POST /reviews`.
+ */
+async function handleItemAgents(
+  _req: IncomingMessage,
+  res: ServerResponse,
+  deps: ApiServerDeps,
+  lock: KeyedLock,
+  item: WorkItem,
+  request: AgentsRequest,
+): Promise<void> {
+  const pr = item.prs[0];
+
+  if (request.mode === 'review') {
+    if (pr === undefined) {
+      throw new ValidationError('Invalid agent request: mode review requires an item with a pull request');
+    }
+    if (!deps.inventory) {
+      sendJson(res, 404, { error: 'inventory not configured' });
+      return;
+    }
+    const inv = deps.inventory;
+    await lock.withLock(`pr:${pr.repo}#${pr.number}`, () => handleReviewStart(res, deps, inv, pr.repo, pr.number));
+    return;
+  }
+
+  if (request.mode === 'respond') {
+    // R51: only on a `pr/…` path, and only when the PR is mine. A 400 on an
+    // item with no PR; a 409 (NotMyPrError) on somebody else's.
+    if (pr === undefined) {
+      throw new ValidationError('Invalid agent request: mode respond requires an item with a pull request');
+    }
+    if (!deps.respondFactory) {
+      sendJson(res, 404, { error: 'respond mode not configured' });
+      return;
+    }
+    const factory = deps.respondFactory;
+    // The SAME lock key the review path takes (`server.ts`'s
+    // `pr:<slug>#<n>`), so a respond start cannot race a review start on the
+    // same PR and two concurrent posts yield one session.
+    await lock.withLock(`pr:${pr.repo}#${pr.number}`, async () => {
+      const existing = await factory.existingFor(pr.repo, pr.number);
+      if (existing !== null) {
+        // R51's parity rule, the same one POST /reviews has: never a second
+        // session, and a RESTART on a recomposed brief — unless a run is
+        // already in flight or the session is claimed, which is what stops
+        // two agents writing one COMMENTS.md.
+        if (deps.pipeline.activeSessionIds().includes(existing.id)) {
+          sendJson(res, 200, {
+            session: existing,
+            created: false,
+            started: false,
+            reason: 'a respond run is already in flight for this session',
+            item,
+          });
+          return;
+        }
+        if (isClaimed(existing, deps.now ? deps.now() : new Date())) {
+          sendJson(res, 200, {
+            session: existing,
+            created: false,
+            started: false,
+            reason: 'a human holds the conversation claim on this session',
+            item,
+          });
+          return;
+        }
+        await awaitRunStart(deps.events, existing.id, deps.pipeline.runRespond(existing.id));
+        sendJson(res, 202, {
+          session: await deps.sessionStore.load(existing.id),
+          created: false,
+          started: true,
+          item,
+        });
+        return;
+      }
+      const created = await factory.createFromPr(pr.repo, pr.number);
+      // R56: the click that creates the session STARTS the run. The user's
+      // click on a lit waitingForReview row IS the explicit ask (Phase 7 R5),
+      // and anything else hands them a session with an empty BRIEF.md and a
+      // second button to press.
+      await awaitRunStart(deps.events, created.id, deps.pipeline.runRespond(created.id));
+      sendJson(res, 202, {
+        session: await deps.sessionStore.load(created.id),
+        created: true,
+        started: true,
+        item,
+      });
+    });
+    return;
+  }
+
+  // investigation | development: a Jira ticket does not know which repo it
+  // belongs to, and guessing would create a worktree in the wrong place.
+  const repoUrl = request.repoUrl ?? (pr !== undefined ? `https://github.com/${pr.repo}.git` : undefined);
+  if (repoUrl === undefined) {
+    throw new ValidationError(
+      'Invalid agent request: repoUrl is required for a ticket-only item (the ticket does not name a repo)',
+    );
+  }
+  const ticket = item.ticket?.key ?? null;
+  if (request.mode === 'investigation') {
+    const session = await deps.pipeline.createInvestigationSession({
+      repoUrl,
+      ticket,
+      intent: request.intent ?? 'investigate_only',
+      driveToCompletion: request.driveToCompletion ?? false,
+    });
+    // Phase 7 R5: the run is EXPLICIT — this POST is the ask.
+    await awaitRunStart(deps.events, session.id, deps.pipeline.runFindings(session.id));
+    sendJson(res, 202, {
+      session: await deps.sessionStore.load(session.id),
+      created: true,
+      started: true,
+      item,
+    });
+    return;
+  }
+  const session = await deps.pipeline.createDevelopmentSession({ repoUrl, ticket });
+  await awaitRunStart(deps.events, session.id, deps.pipeline.runDevelop(session.id));
+  sendJson(res, 202, {
+    session: await deps.sessionStore.load(session.id),
+    created: true,
+    started: true,
+    item,
+  });
+}
+
 export function createApiServer(deps: ApiServerDeps): http.Server {
   const lock = deps.lock ?? new KeyedLock();
   return http.createServer((req, res) => {
@@ -319,6 +469,36 @@ async function handleArtifactList(res: ServerResponse, deps: ApiServerDeps, id: 
     artifacts.push({ name, mtime: new Date(mtimeMs).toISOString(), size: Buffer.byteLength(content, 'utf8') });
   }
   sendJson(res, 200, { artifacts, primary: pickPrimaryArtifact(session, artifacts) });
+}
+
+/** The same listing as the route above, as a VALUE — what `GET /items/<path>` returns per agent. */
+async function collectArtifacts(deps: ApiServerDeps, id: string): Promise<ArtifactListing[]> {
+  const sessionDir = `${deps.sessionsDir}/${id}`;
+  let names: string[];
+  try {
+    names = await deps.fs.readdir(sessionDir);
+  } catch {
+    return [];
+  }
+  const artifacts: ArtifactListing[] = [];
+  for (const name of [...names].sort()) {
+    try {
+      parseArtifactName(name);
+    } catch {
+      continue;
+    }
+    const filePath = `${sessionDir}/${name}`;
+    const mtimeMs = await deps.fs.statMtimeMs(filePath);
+    if (mtimeMs === null) continue;
+    let content: string;
+    try {
+      content = await deps.fs.readFile(filePath);
+    } catch {
+      continue;
+    }
+    artifacts.push({ name, mtime: new Date(mtimeMs).toISOString(), size: Buffer.byteLength(content, 'utf8') });
+  }
+  return artifacts;
 }
 
 /**
@@ -491,6 +671,78 @@ function conversationActionFor(
   return null;
 }
 
+
+// ---------------------------------------------------------------------------
+// The /items surface (R14, R15, R25, R31, R35, R47, R65).
+// ---------------------------------------------------------------------------
+
+/**
+ * R65 — a `pr/…` path resolves to the item whose `prs` CONTAINS that PR and a
+ * `session/:id` path to the item whose `agents` contains that session, never
+ * by matching the path against the item's own `id`: R28 fixes the id to the
+ * ticket the moment a link exists, so an id lookup would 404 on exactly the
+ * merged items this phase exists to create.
+ */
+function findAddressedItem(items: readonly WorkItem[], parsed: ParsedWorkItemId): WorkItem | undefined {
+  if (parsed.kind === 'ticket') return items.find((i) => i.ticket?.key === parsed.key);
+  if (parsed.kind === 'pr') {
+    return items.find((i) => i.prs.some((pr) => pr.repo === `${parsed.repo}` && pr.number === parsed.number));
+  }
+  return items.find((i) => i.agents.some((a) => a.sessionId === parsed.id));
+}
+
+const AGENT_MODES = ['review', 'investigation', 'development', 'respond'] as const;
+
+interface AgentsRequest {
+  mode: (typeof AGENT_MODES)[number];
+  repoUrl?: string;
+  intent?: 'investigate_only' | 'development';
+  driveToCompletion?: boolean;
+}
+
+function parseAgentsRequest(body: unknown): AgentsRequest {
+  const raw = (body ?? {}) as Record<string, unknown>;
+  const mode = raw.mode;
+  if (typeof mode !== 'string' || !(AGENT_MODES as readonly string[]).includes(mode)) {
+    throw new ValidationError(`Invalid agent request: mode must be one of ${AGENT_MODES.join(', ')}`);
+  }
+  const request: AgentsRequest = { mode: mode as AgentsRequest['mode'] };
+  if (raw.repoUrl !== undefined) {
+    if (typeof raw.repoUrl !== 'string' || raw.repoUrl === '') {
+      throw new ValidationError('Invalid agent request: repoUrl must be a non-empty string');
+    }
+    request.repoUrl = raw.repoUrl;
+  }
+  if (raw.intent === 'investigate_only' || raw.intent === 'development') request.intent = raw.intent;
+  if (typeof raw.driveToCompletion === 'boolean') request.driveToCompletion = raw.driveToCompletion;
+  return request;
+}
+
+/** R31 — the ack fans out SERVER-side over every contributing ref, so no client re-derives which refs an item owns. */
+async function handleItemAck(
+  res: ServerResponse,
+  attention: AttentionService,
+  workItems: WorkItemService,
+  item: WorkItem,
+): Promise<void> {
+  const acked: ItemRef[] = [];
+  const failed: Array<{ ref: ItemRef; error: string }> = [];
+  for (const ref of item.attention.refs) {
+    try {
+      await attention.ack(ref);
+      acked.push(ref);
+    } catch (err) {
+      // A ref can vanish between the read and the ack: skip it rather than
+      // failing the whole fan-out.
+      if (err instanceof Error && err.name === 'ItemNotFoundError') continue;
+      failed.push({ ref, error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  const refreshed = (await workItems.list()).items.find((i) => i.id === item.id) ?? item;
+  const status = acked.length === 0 && failed.length > 0 ? 502 : 200;
+  sendJson(res, status, { item: refreshed, acked, failed });
+}
+
 async function handleRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -552,6 +804,90 @@ async function handleRequest(
     if (method === 'GET' && parts.length === 4 && parts[0] === 'sessions' && parts[2] === 'artifacts') {
       const id = parts[1];
       await lock.withLock(id, () => handleArtifactRead(res, deps, id, parts[3]));
+      return;
+    }
+
+    // The /items surface (Phase 9). Ahead of /prs and /attention so an
+    // unwired work-item layer answers its own 404 rather than another
+    // gate's message (the `deps.attention` pattern).
+    if (parts[0] === 'items') {
+      if (!deps.workItems) {
+        sendJson(res, 404, { error: 'items not configured' });
+        return;
+      }
+      const workItems = deps.workItems;
+
+      if (method === 'GET' && parts.length === 1) {
+        const listParam = url.searchParams.get('list');
+        if (listParam !== null && !(WORK_LIST_KINDS as readonly string[]).includes(listParam)) {
+          // `reviewing` is a GROUP inside parkingLot, not a list (R47).
+          throw new ValidationError(
+            `Invalid list '${listParam}': expected one of ${WORK_LIST_KINDS.join(', ')}`,
+          );
+        }
+        const listing = await workItems.list();
+        if (listParam === null) {
+          sendJson(res, 200, listing);
+          return;
+        }
+        const wanted = listParam as WorkListKind;
+        const empty = {
+          parkingLot: { reviewing: [] as string[], untouched: [] as string[], someoneOnIt: [] as string[] },
+          myWork: [] as string[],
+          investigations: [] as string[],
+          waitingForReview: [] as string[],
+        };
+        sendJson(res, 200, {
+          ...listing,
+          lists: { ...empty, [wanted]: listing.lists[wanted] },
+          items: listing.items.filter((item) => item.lists.includes(wanted)),
+        });
+        return;
+      }
+
+      const addressed = parseWorkItemPath(parts.slice(1));
+      if (addressed !== null && (addressed.rest.length === 0 || addressed.rest.length === 1)) {
+        const { parsed, rest } = addressed;
+        const tail = rest[0];
+        const listing = await workItems.list();
+        const item = findAddressedItem(listing.items, parsed);
+        if (item === undefined) {
+          sendJson(res, 404, { error: `No work item found for /${parts.join('/')}` });
+          return;
+        }
+
+        if (method === 'GET' && tail === undefined) {
+          const { ticket, ticketError } =
+            item.ticket === null
+              ? { ticket: null, ticketError: null }
+              : ((await deps.ticketDetail?.detail(item.ticket.key)) ?? { ticket: null, ticketError: null });
+          const artifacts: Record<string, ArtifactListing[]> = {};
+          for (const agent of item.agents) {
+            artifacts[agent.sessionId] = await lock.withLock(agent.sessionId, () =>
+              collectArtifacts(deps, agent.sessionId),
+            );
+          }
+          sendJson(res, 200, { item, ticket, ticketError, artifacts });
+          return;
+        }
+
+        if (method === 'POST' && tail === 'ack') {
+          if (!deps.attention) {
+            sendJson(res, 404, { error: 'attention not configured' });
+            return;
+          }
+          await handleItemAck(res, deps.attention, workItems, item);
+          return;
+        }
+
+        if (method === 'POST' && tail === 'agents') {
+          const request = parseAgentsRequest(await readJsonBody(req));
+          await handleItemAgents(req, res, deps, lock, item, request);
+          return;
+        }
+      }
+
+      sendJson(res, 404, { error: 'not found' });
       return;
     }
 

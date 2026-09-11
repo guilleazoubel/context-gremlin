@@ -9,15 +9,24 @@ import type { InventoryEntry } from '../inventory/inventory';
  * signature and the acknowledgement comparison, and nothing else — so a
  * future Jira/Slack source adds a deriver and touches it not at all.
  */
+/**
+ * R63 pins this array VERBATIM, in this order. Its positions are part of the
+ * contract: the array is the ordering discipline for every reason list AND
+ * for the ack signature, so a reordering silently rewrites every stored
+ * acknowledgement. A test asserts it element-for-element.
+ */
 export const ATTENTION_REASONS = [
-  'plan_ready',            // investigation is at plan_ready — a human must approve
-  'needs_input',           // AGENT_STATE === 'needs-input'
-  'blocked',               // AGENT_STATE === 'blocked'
-  'run_failed',            // lastRun.outcome === 'failed', OR 'running' with nothing running (engine died, R22)
-  'review_ready',          // review session at 'ready' — REVIEW.md is waiting to be read
-  'rereview_ready',        // review session at 'ready' with a lastRereviewSummary
-  'local_prereq_failed',   // this session's local app degraded to 'unavailable'
-  'changes_requested',     // my own PR has CHANGES_REQUESTED or fresh team activity
+  'plan_ready',            // 0  investigation is at plan_ready — a human must approve
+  'needs_input',           // 1  AGENT_STATE === 'needs-input'
+  'blocked',               // 2  AGENT_STATE === 'blocked'
+  'run_failed',            // 3  lastRun.outcome === 'failed', OR 'running' with nothing running (engine died, R22)
+  'review_ready',          // 4  review session at 'ready' — REVIEW.md is waiting to be read
+  'rereview_ready',        // 5  review session at 'ready' with a lastRereviewSummary
+  'comments_ready',        // 6  R51 — a respond session at 'ready'
+  'local_prereq_failed',   // 7  this session's local app degraded to 'unavailable'
+  'changes_requested',     // 8  my own PR's reviewDecision is CHANGES_REQUESTED
+  'review_arrived',        // 9  R50 — a non-bot human touched my own PR
+  'approved',              // 10 R50 — my own PR's reviewDecision is APPROVED
 ] as const;
 export type AttentionReason = (typeof ATTENTION_REASONS)[number];
 
@@ -33,7 +42,10 @@ export const NEEDS_YOU_REASONS: readonly AttentionReason[] = [
   'run_failed',
   'review_ready',
   'rereview_ready',
+  'comments_ready',
   'changes_requested',
+  'review_arrived',
+  'approved',
 ];
 
 export interface AttentionState {
@@ -145,6 +157,12 @@ export function deriveSessionReasons(ev: SessionEvidence): DerivedReason[] {
       derived.push({ reason: 'rereview_ready', at: lastRun?.finishedAt ?? null });
     }
   }
+  // R51: the mirror of the review/ready -> review_ready clause above. A
+  // respond session at `ready` has every thread classified and the local
+  // fixes committed; the human is what it is waiting on.
+  if (s.mode === 'respond' && s.stageStatus === 'ready') {
+    derived.push({ reason: 'comments_ready', at: lastRun?.finishedAt ?? null });
+  }
   if (ev.localApp?.state === 'unavailable') {
     derived.push({ reason: 'local_prereq_failed', at: null });
   }
@@ -152,12 +170,29 @@ export function deriveSessionReasons(ev: SessionEvidence): DerivedReason[] {
 }
 
 /**
- * The one inventory-only reason: my own PR that people are waiting on me
- * about. No parking-lot entry ever needs attention — that would fight R5's
- * "nothing auto-reviews" (MG-A8).
+ * The inventory-only reasons (R50): MY OWN PR that people are waiting on me
+ * about. Still my-own-PR-only — no parking-lot entry ever needs attention,
+ * which would fight R5's "nothing auto-reviews" (MG-A8 unchanged).
+ *
+ * R58 pins each `at` to a timestamp only a HUMAN moves. `updatedAt` moves on
+ * every push, so using it would re-fire a notification the user already
+ * acknowledged every time they pushed a commit.
+ *
+ * R50 also widens the old `changes_requested` deriver away from the
+ * watch-filtered `teamActivity`: a reviewer outside `watchAuthors` is still a
+ * reviewer, and that case is now `review_arrived`.
  */
 export function derivePrReasons(entry: InventoryEntry): DerivedReason[] {
   if (!entry.isMine) return [];
-  if (entry.reviewDecision !== 'CHANGES_REQUESTED' && entry.teamActivity.length === 0) return [];
-  return [{ reason: 'changes_requested', at: entry.updatedAt }];
+  const derived: DerivedReason[] = [];
+  if (entry.humanActivity.lastAt !== null) {
+    derived.push({ reason: 'review_arrived', at: entry.humanActivity.lastAt });
+  }
+  if (entry.reviewDecision === 'APPROVED') {
+    derived.push({ reason: 'approved', at: entry.reviewDecisionAt });
+  }
+  if (entry.reviewDecision === 'CHANGES_REQUESTED') {
+    derived.push({ reason: 'changes_requested', at: entry.reviewDecisionAt });
+  }
+  return derived;
 }

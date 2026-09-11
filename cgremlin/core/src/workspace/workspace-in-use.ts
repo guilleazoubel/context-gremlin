@@ -5,6 +5,7 @@ export const TERMINAL_PHASES_BY_MODE: Record<Session['mode'], ReadonlySet<string
   investigation: new Set(['promoted_to_development', 'abandoned']),
   development: new Set(['merged', 'abandoned']),
   review: new Set(['approved', 'dismissed']),
+  respond: new Set(['closed', 'abandoned']),
 };
 
 function isTerminal(session: Session): boolean {
