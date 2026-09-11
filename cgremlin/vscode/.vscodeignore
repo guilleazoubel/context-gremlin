@@ -1,5 +1,7 @@
 # Exclude-only, .gitignore-style (R28). Everything not excluded here ships:
-# out/**/*.js, engine/** (the bundled engine and its bridge), README.md and package.json.
+# out/**/*.js, engine/** (the bundled engine and its bridge), media/** (the two webview bundles
+# `build:webview` generates and the two hand-written stylesheets — R40, R54, MG-B10), README.md
+# and package.json.
 src/**
 test/**
 node_modules/**

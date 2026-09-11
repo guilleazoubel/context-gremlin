@@ -6,6 +6,13 @@
  * no sources, no tests, no docs and no external sourcemap. The engine bundles carry their maps
  * inline (R28), so this says nothing about `engine/*.map` — by design none exist.
  *
+ * **MG-B10 (Phase 9)**: it must also carry `media/item-tab.js`, `media/item-tab.css`,
+ * `media/panel.js` and `media/panel.css`. The two `.js` files are **generated and gitignored**
+ * (R40, R54), so their presence in the archive is the assertion that `vscode:prepublish` ran
+ * `build:webview` over **both** entry points — wiring only `build`, or only one entry point,
+ * ships a webview with no script, which renders blank rather than throwing. Deleting either
+ * file before packaging must fail this test.
+ *
  * It reads the real archive rather than `vsce ls`, so it asserts what a user would actually
  * install. Skipped, with a message, when `pnpm package` has not been run in this tree: the `.vsix`
  * is a gitignored artifact and CI without a package step must not fail on its absence.
@@ -42,6 +49,14 @@ describe.skipIf(vsix === null)('MG-C8: the packaged vsix', () => {
     expect(names).toContain('engine/engine.js');
     expect(names).toContain('engine/bridge.js');
     expect(names).toContain('out/extension.js');
+  });
+
+  it('MG-B10: carries both webview bundles and both stylesheets', () => {
+    const names = entries(vsix as string);
+    expect(names).toContain('media/item-tab.js');
+    expect(names).toContain('media/item-tab.css');
+    expect(names).toContain('media/panel.js');
+    expect(names).toContain('media/panel.css');
   });
 
   it('carries no dependencies, no sources, no tests, no docs and no external sourcemap', () => {
