@@ -166,7 +166,11 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
       }
       const path = itemPathOf(item.id);
       if (path === null) return;
-      if (surface(await client.startAgent(path, { mode: 'review' }))) coordinator.schedule();
+      // The forward-only ladder's last stage is a review of MY OWN change; the core needs to be
+      // told, because a review of one's own PR is otherwise 409 `OwnPrError` (R42).
+      const selfReview = item.prs[0]?.isMine === true;
+      const body = selfReview ? { mode: 'review', selfReview: true } : { mode: 'review' };
+      if (surface(await client.startAgent(path, body))) coordinator.schedule();
     }),
 
     /**

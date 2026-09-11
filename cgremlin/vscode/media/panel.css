@@ -1,10 +1,15 @@
 /*
- * The side panel's stylesheet: card rows with a 1px divider, two lines each, "like the Codex chat
- * panel" (R54).
+ * The side panel's stylesheet (R54, §2.3).
  *
  * Every colour is a `var(--vscode-*)` token — no palette of our own, so light, dark and
  * high-contrast all work. No icon font is loaded at all: `font-src 'none'` (R38) would drop one
- * silently, so every glyph is unicode (R54).
+ * silently, so every glyph is unicode, sized and aligned here rather than left at whatever the
+ * platform emoji font does.
+ *
+ * Two rules run through the whole file:
+ *  - hover changes the BACKGROUND and nothing else. No `display` toggle on anything that occupies
+ *    flow, no padding or border that appears with the pointer (§2.2 rule 1).
+ *  - one accent in the entire panel, and it means "this needs you" (§2.2 rule 10).
  */
 
 body {
@@ -16,11 +21,17 @@ body {
   background: var(--vscode-sideBar-background);
 }
 
+/* The hairline that separates every row, at 40% so it reads as a rhythm rather than a grid. */
+:root {
+  --cg-divider: color-mix(in srgb, var(--vscode-panel-border) 40%, transparent);
+  --cg-accent: var(--vscode-notificationsWarningIcon-foreground);
+}
+
 .banner {
   padding: 6px 10px;
-  border-bottom: 1px solid var(--vscode-panel-border);
+  border-bottom: 1px solid var(--cg-divider);
   color: var(--vscode-descriptionForeground);
-  font-size: 0.9em;
+  font-size: 11px;
 }
 
 .banner.auth {
@@ -32,22 +43,23 @@ body {
   color: var(--vscode-errorForeground);
 }
 
+/* --- list header ------------------------------------------------------- */
+
 .list-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 8px 10px 4px;
+  padding: 10px 10px 4px;
   position: sticky;
   top: 0;
+  z-index: 1;
   background: var(--vscode-sideBar-background);
 }
 
 .list-title {
   font-weight: 600;
-  text-transform: uppercase;
-  font-size: 0.85em;
-  letter-spacing: 0.04em;
+  font-size: 11px;
   color: var(--vscode-descriptionForeground);
 }
 
@@ -57,47 +69,79 @@ body {
 }
 
 .sort {
-  padding: 1px 6px;
+  min-height: 24px;
+  padding: 4px 8px;
   border: 1px solid transparent;
-  border-radius: 2px;
+  border-radius: 3px;
   background: transparent;
   color: var(--vscode-descriptionForeground);
   font-family: inherit;
-  font-size: 0.85em;
+  font-size: 11px;
   cursor: pointer;
 }
 
 .sort.selected {
   color: var(--vscode-foreground);
-  border-color: var(--vscode-panel-border);
-  background: var(--vscode-toolbar-activeBackground, transparent);
+  border-color: var(--cg-divider);
 }
 
 .section-header {
-  padding: 4px 10px;
-  font-size: 0.85em;
-  color: var(--vscode-descriptionForeground);
-  cursor: default;
-}
-
-.row {
   padding: 6px 10px;
-  border-bottom: 1px solid var(--vscode-panel-border);
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
   cursor: pointer;
 }
 
+/* --- the row ----------------------------------------------------------- */
+
+.row {
+  display: grid;
+  grid-template-columns: 1fr 28px;
+  column-gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--cg-divider);
+  cursor: pointer;
+}
+
+/* The ONLY thing hover changes. */
 .row:hover {
   background: var(--vscode-list-hoverBackground);
+}
+
+.row.selected {
+  background: var(--vscode-list-inactiveSelectionBackground);
+}
+
+.row.demoted {
+  opacity: 0.65;
+}
+
+/* §2.2 rule 10: one accent, as a 2 px bar that takes no space. */
+.row.needs-you {
+  box-shadow: inset 2px 0 0 var(--cg-accent);
 }
 
 .row.needs-you .row-label {
   font-weight: 600;
 }
 
-.row-line1 {
+.row-main {
+  min-width: 0;
+}
+
+.row-title {
   display: flex;
   align-items: baseline;
   gap: 6px;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.twisty {
+  flex: 0 0 auto;
+  width: 1em;
+  color: var(--vscode-descriptionForeground);
+  font-size: 10px;
 }
 
 .row-label {
@@ -107,72 +151,280 @@ body {
   white-space: nowrap;
 }
 
-.row-line2 {
+.row-meta,
+.row-state {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin-top: 2px;
   color: var(--vscode-descriptionForeground);
-  font-size: 0.9em;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+/* §2.3: the separators are CSS, so no cell is ever joined into an ellipsised sentence. */
+.row-meta > .cell:not(:first-child)::before,
+.row-state > .cell:not(:first-child)::before {
+  content: '·';
+  margin-right: 6px;
+  opacity: 0.6;
+}
+
+.cell {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.badge,
-.ci {
+.cell-tier {
   flex: 0 0 auto;
-  font-size: 0.9em;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
 }
 
-.twisty {
+/* §2.2 rule 9: an 8px dot, never an emoji — emoji size inconsistently in a sidebar. */
+.cell-ci {
   flex: 0 0 auto;
-  width: 1em;
-  color: var(--vscode-descriptionForeground);
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--vscode-descriptionForeground);
 }
 
-.row-actions {
-  display: none;
-  gap: 4px;
-  margin-top: 4px;
-  flex-wrap: wrap;
+.cell-ci.tone-good {
+  background: var(--vscode-charts-green);
 }
 
-.row:hover .row-actions,
-.row:focus-within .row-actions,
-.row:focus-visible .row-actions {
+.cell-ci.tone-warn {
+  background: var(--vscode-charts-yellow);
+}
+
+.cell-ci.tone-bad {
+  background: var(--vscode-charts-red);
+}
+
+/* --- the gutter (§2.2 rules 1 and 2) ------------------------------------ */
+
+.row-gutter {
+  position: relative;
+  grid-row: 1;
+  grid-column: 2;
   display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 80ms ease;
 }
 
-.row-action,
-.child-goto {
-  padding: 1px 6px;
-  border: 1px solid var(--vscode-panel-border);
-  border-radius: 2px;
-  background: transparent;
+.row:hover .row-gutter,
+.row:focus-within .row-gutter,
+.row.selected .row-gutter {
+  opacity: 1;
+}
+
+.row-primary,
+.row-more,
+.slot-open,
+.slot-chat,
+.slot-start,
+.part-goto,
+.trouble-action {
+  min-height: 24px;
+  padding: 4px 8px;
+  border: 1px solid var(--cg-divider);
+  border-radius: 3px;
+  background: var(--vscode-button-secondaryBackground, transparent);
   color: var(--vscode-foreground);
   font-family: inherit;
-  font-size: 0.85em;
+  font-size: 11px;
+  white-space: nowrap;
   cursor: pointer;
 }
 
-.child {
+/* The primary verb sits left of the gutter, which is only 28px wide: it may overhang. */
+.row-primary {
+  position: absolute;
+  right: 24px;
+  top: 0;
+}
+
+.row-more {
+  min-width: 24px;
+  padding: 4px 2px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--vscode-descriptionForeground);
+}
+
+/* The popover: absolutely positioned, so opening it cannot change the row's height. */
+.row-overflow {
+  position: absolute;
+  top: 26px;
+  right: 0;
+  z-index: 2;
   display: flex;
-  align-items: baseline;
+  flex-direction: column;
+  min-width: 180px;
+  padding: 4px;
+  border: 1px solid var(--vscode-widget-border, var(--cg-divider));
+  border-radius: 4px;
+  background: var(--vscode-menu-background, var(--vscode-editorWidget-background));
+  box-shadow: 0 2px 8px var(--vscode-widget-shadow, transparent);
+}
+
+.row-overflow-item {
+  min-height: 24px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--vscode-menu-foreground, var(--vscode-foreground));
+  font-family: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.row-overflow-item:hover {
+  background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground));
+}
+
+/* --- what a row opens into --------------------------------------------- */
+
+.expanded {
+  padding: 4px 10px 10px 26px;
+  border-bottom: 1px solid var(--cg-divider);
+  background: var(--vscode-sideBar-background);
+}
+
+/*
+ * The one drawn structure in the panel, and it is earned: the three stages ARE a sequence, so a
+ * spine down their glyphs says so without a word of copy.
+ */
+.slots {
+  position: relative;
+  padding-left: 14px;
+}
+
+.slots::before {
+  content: '';
+  position: absolute;
+  left: 4px;
+  top: 10px;
+  bottom: 10px;
+  width: 1px;
+  background: var(--cg-divider);
+}
+
+.slot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+}
+
+.glyph {
+  flex: 0 0 auto;
+  width: 14px;
+  font-size: 11px;
+  line-height: 1;
+  text-align: center;
+}
+
+.slot-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.slot-title {
+  font-size: 12px;
+}
+
+.slot-state {
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+}
+
+.slot[data-state='needsYou'] .slot-state {
+  color: var(--cg-accent);
+}
+
+.slot-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 2px;
+}
+
+.part {
+  display: flex;
+  align-items: center;
   justify-content: space-between;
   gap: 6px;
-  padding: 4px 10px 4px 26px;
-  border-bottom: 1px solid var(--vscode-panel-border);
+  padding: 4px 0;
   color: var(--vscode-descriptionForeground);
-  font-size: 0.9em;
+  font-size: 12px;
   cursor: pointer;
 }
 
-.child:hover {
-  background: var(--vscode-list-hoverBackground);
+.part-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
+.changes {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--cg-divider);
+  font-size: 11px;
+}
+
+.changes-title {
+  margin-bottom: 2px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.change {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.change-label {
+  color: var(--vscode-descriptionForeground);
+}
+
+.change-value {
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- focus and motion --------------------------------------------------- */
+
 .row:focus-visible,
-.child:focus-visible,
+.part:focus-visible,
 .section-header:focus-visible,
 .sort:focus-visible,
-.row-action:focus-visible {
+.row-primary:focus-visible,
+.row-more:focus-visible,
+.row-overflow-item:focus-visible,
+.slot-open:focus-visible,
+.slot-chat:focus-visible,
+.slot-start:focus-visible,
+.part-goto:focus-visible {
   outline: 1px solid var(--vscode-focusBorder);
   outline-offset: -1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .row-gutter {
+    transition: none;
+  }
 }

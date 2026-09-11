@@ -124,8 +124,12 @@ export class RefreshCoordinator {
 
     const previous = this.snapshot;
     this.snapshot = response?.items ?? [];
-    this.deps.panel.setConnected(true);
-    this.deps.panel.setItems(response);
+    // §3.3: one refresh is ONE render. Three posts is three reconciles in the webview and three
+    // chances for the order to move under the pointer.
+    this.deps.panel.batch(() => {
+      this.deps.panel.setConnected(true);
+      this.deps.panel.setItems(response);
+    });
     this.renderStatus();
 
     // The first snapshot seeds the diff without popping: on activation every item is *already* in

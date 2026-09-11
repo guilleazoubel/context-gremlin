@@ -14,11 +14,12 @@
  * Takes its editor surface as a parameter (no editor import).
  */
 import crypto from 'node:crypto';
+import { changeSummary, type SessionChanges } from '../model/changes';
+import { detailSignatureOf, lifecycleSlots } from '../model/lifecycle';
+import { itemActionFacts, rowActions, type StageKind } from '../model/row-actions';
 import {
-  agentChildId,
   buildItemChildren,
   buildWorkLists,
-  chatTargetOf,
   readSort,
   readSorts,
   ticketBanner,
@@ -35,9 +36,11 @@ import {
   parsePanelMessage,
   type HostToPanel,
   type PanelActionView,
+  type PanelChangesView,
   type PanelChildView,
   type PanelListView,
   type PanelRowView,
+  type PanelSlotView,
   type PanelState,
 } from '../model/panel-protocol';
 import {
@@ -67,9 +70,36 @@ export interface PanelViewDeps {
   onOpenItem: (id: string) => void | Promise<void>;
   onOpenChild: (id: string, childId: string) => void | Promise<void>;
   onCommand: (command: string, id: string, childId?: string) => void | Promise<void>;
+  /**
+   * One click on a row is one decision (§4, amended): select, expand, and put the item's own
+   * worktree in the workspace. The first two are this module's own state; the swap is the host's,
+   * so it arrives as a callback rather than as a second editor surface here.
+   */
+  onSelect?: (id: string) => void | Promise<void>;
+  /**
+   * What an expanded row needs and a list response does not carry: the artifact times behind each
+   * slot's `done`, and "changes so far". Optional — a panel with no loader paints `—`.
+   */
+  loadExpanded?: (item: WorkItem) => Promise<ExpandedDetail | null>;
   nonce?: () => string;
   now?: () => number;
 }
+
+/** The extra the detail routes carry for the ONE expanded row (§4, amended). */
+export interface ExpandedDetail {
+  /** The latest artifact time per session id, for a slot's `done · 2h`. */
+  artifactAt: Record<string, string | null>;
+  changes: SessionChanges | null;
+}
+
+export const SELECTED_STATE_KEY = 'cgremlin.panel.selected';
+export const EXPANDED_STATE_KEY = 'cgremlin.panel.expanded';
+
+const START_COMMAND: Record<StageKind, string> = {
+  investigation: 'cgremlin.startInvestigation',
+  development: 'cgremlin.startDevelopment',
+  review: 'cgremlin.startReview',
+};
 
 export class PanelView implements WebviewViewProviderLike {
   private view: WebviewViewLike | null = null;
@@ -80,12 +110,43 @@ export class PanelView implements WebviewViewProviderLike {
   /** The engine answered, but not with work items (a 404 from an older engine, or worse). */
   private sourceTrouble: SourceTrouble | null = null;
   private connected = false;
-  private readonly expanded = new Set<string>();
+  /** Accordion: at most one row is open, and it survives a reload (§4, amended). */
+  private expandedId: string | null;
+  private selectedId: string | null;
+  private detail: { id: string; detail: ExpandedDetail } | null = null;
+  private loading: string | null = null;
+  /** What the open row looked like when its detail was last asked for (§3.3's storm guard). */
+  private detailSignature: string | null = null;
+  /** An engine frame named the open row, or one of its sessions, since the last read. */
+  private detailStale = false;
   private readonly collapsedGroups = new Map<string, boolean>();
   private sorts: Record<WorkListKind, WorkSortKind>;
+  /** §3.3: `setConnected` + `setItems` + `setSourceTrouble` in one refresh are ONE post. */
+  private batchDepth = 0;
+  private batched = false;
+  private lastPosted: string | null = null;
 
   constructor(private readonly deps: PanelViewDeps) {
     this.sorts = readSorts(deps.host);
+    this.selectedId = deps.host.getState<string>(SELECTED_STATE_KEY) ?? null;
+    this.expandedId = deps.host.getState<string>(EXPANDED_STATE_KEY) ?? null;
+  }
+
+  /**
+   * Everything one refresh changes, as one render. Three posts per refresh is three reconciles
+   * in the webview and three chances for the order to move under the pointer (§3.3).
+   */
+  batch(apply: () => void): void {
+    this.batchDepth += 1;
+    try {
+      apply();
+    } finally {
+      this.batchDepth -= 1;
+      if (this.batchDepth === 0 && this.batched) {
+        this.batched = false;
+        this.flush();
+      }
+    }
   }
 
   /** The editor creates the view; a re-created one re-posts `ready` and gets a fresh render. */
@@ -112,7 +173,43 @@ export class PanelView implements WebviewViewProviderLike {
 
   setItems(response: ItemsResponse | null): void {
     this.response = response;
+    this.refreshDetail();
     this.render();
+  }
+
+  /**
+   * An engine frame that names the open row, or one of its sessions. `artifact.changed` is the
+   * case a snapshot comparison cannot see — an artifact is rewritten with no field of the item
+   * moving, and that artifact's time is exactly what dates a slot's `done`.
+   */
+  noteFrame(itemId: string | null, sessionId: string | null): void {
+    const id = this.expandedId;
+    if (id === null) return;
+    if (itemId !== null && itemId === id) {
+      this.detailStale = true;
+      return;
+    }
+    if (sessionId === null) return;
+    if (this.itemOf(id)?.agents.some((agent) => agent.sessionId === sessionId) === true) {
+      this.detailStale = true;
+    }
+  }
+
+  /**
+   * Every SSE frame schedules a refresh, so a burst about somebody else's PR would otherwise cost
+   * two engine round trips per frame for a row that did not move. The open row is re-read only
+   * when what its detail is built from actually changed, or when a frame named it.
+   */
+  private refreshDetail(): void {
+    const id = this.expandedId;
+    if (id === null) return;
+    const item = this.itemOf(id);
+    if (item === undefined) return;
+    const signature = detailSignatureOf(item);
+    if (!this.detailStale && signature === this.detailSignature) return;
+    this.detailStale = false;
+    this.detailSignature = signature;
+    this.loadDetail();
   }
 
   setTrouble(trouble: EngineTrouble | null): void {
@@ -225,7 +322,8 @@ export class PanelView implements WebviewViewProviderLike {
   }
 
   private rowView(row: WorkRow): PanelRowView {
-    const expanded = this.expanded.has(row.id);
+    const expanded = this.expandedId === row.id;
+    const actions = actionsFor(row.item, row.list);
     return {
       id: row.id,
       list: row.list,
@@ -236,12 +334,85 @@ export class PanelView implements WebviewViewProviderLike {
       age: row.age,
       size: row.size,
       ci: row.ci,
+      meta: row.meta,
+      stateLine: row.stateLine,
+      tier: row.tier,
+      demoted: row.demoted,
       needsYou: row.needsYou,
-      hasChildren: row.hasChildren,
+      // Every row expands now: what it expands INTO is the three lifecycle slots, which exist
+      // whether or not the item has a second part to name (§4, amended).
+      hasChildren: true,
       expanded,
-      children: expanded ? buildItemChildren(row.item).map(childView) : [],
-      actions: actionsFor(row.item),
+      selected: this.selectedId === row.id,
+      // The PARTS. The agents are the lifecycle slots instead, so they are not listed twice.
+      children: expanded
+        ? buildItemChildren(row.item)
+            .filter((child) => child.kind !== 'agent')
+            .map(childView)
+        : [],
+      lifecycle: expanded ? this.slotsOf(row, actions) : [],
+      changes: expanded ? this.changesView(row.id) : null,
+      actions,
     };
+  }
+
+  /**
+   * The lifecycle slots, each carrying the Start the forward-only rule allows — taken from the
+   * row's OWN actions, so a slot can never offer a verb the row's button refuses (P0-2).
+   */
+  private slotsOf(row: WorkRow, actions: PanelActionView[]): PanelSlotView[] {
+    const detail = this.detail?.id === row.id ? this.detail.detail : null;
+    return lifecycleSlots({
+      agents: row.item.agents,
+      facts: itemActionFacts(row.item),
+      artifactAt: detail?.artifactAt,
+      now: this.deps.now?.(),
+    }).map((slot) => ({
+      stage: slot.stage,
+      title: slot.title,
+      glyph: slot.glyph,
+      state: slot.state,
+      stateText: slot.stateText,
+      sessionId: slot.sessionId,
+      start: slot.next
+        ? (actions.find((action) => action.command === START_COMMAND[slot.stage]) ?? null)
+        : null,
+    }));
+  }
+
+  /** `—` until the engine has answered, and `—` forever on an engine that has no such route. */
+  private changesView(id: string): PanelChangesView {
+    const changes = this.detail?.id === id ? this.detail.detail.changes : null;
+    return {
+      committed: changeSummary(changes?.committed),
+      workingTree: changeSummary(changes?.workingTree),
+    };
+  }
+
+  /**
+   * The one expanded row's detail. Re-read on every refresh — "changes so far" is the number that
+   * moves while an agent works — but never twice at once, and never applied to a row the user has
+   * meanwhile collapsed or moved off.
+   */
+  private loadDetail(): void {
+    const id = this.expandedId;
+    const load = this.deps.loadExpanded;
+    if (id === null || load === undefined || this.loading === id) return;
+    const item = this.itemOf(id);
+    if (item === undefined) return;
+    this.loading = id;
+    void load(item)
+      .then((detail) => {
+        if (this.expandedId !== id || detail === null) return;
+        this.detail = { id, detail };
+        this.render();
+      })
+      .catch((err: unknown) => {
+        this.deps.host.log(`cgremlin: could not read the expanded row's detail: ${String(err)}`);
+      })
+      .finally(() => {
+        if (this.loading === id) this.loading = null;
+      });
   }
 
   private html(): string {
@@ -273,7 +444,24 @@ export class PanelView implements WebviewViewProviderLike {
   }
 
   private render(): void {
-    this.post({ type: 'render', state: this.state() });
+    if (this.batchDepth > 0) {
+      this.batched = true;
+      return;
+    }
+    this.flush();
+  }
+
+  /**
+   * A render that would say exactly what the last one said is not sent at all. The webview would
+   * reconcile it to nothing anyway; not sending it is what makes "one render per refresh" true
+   * rather than merely harmless.
+   */
+  private flush(): void {
+    const state = this.state();
+    const encoded = JSON.stringify(state);
+    if (encoded === this.lastPosted) return;
+    this.lastPosted = encoded;
+    this.post({ type: 'render', state });
   }
 
   private async handle(raw: unknown): Promise<void> {
@@ -282,9 +470,14 @@ export class PanelView implements WebviewViewProviderLike {
     switch (message.type) {
       case 'ready':
         // R39's handshake: a render posted before the script was listening is dropped silently,
-        // and the panel stays blank.
+        // and the panel stays blank. A re-created view has seen nothing, so the de-duplication
+        // memory is cleared rather than swallowing the first render.
         this.ready = true;
+        this.lastPosted = null;
         this.render();
+        return;
+      case 'selectRow':
+        this.select(message.id);
         return;
       case 'openItem':
         await this.deps.onOpenItem(message.id);
@@ -302,14 +495,39 @@ export class PanelView implements WebviewViewProviderLike {
         this.render();
         return;
       case 'toggleRow':
-        if (message.expanded) this.expanded.add(message.id);
-        else this.expanded.delete(message.id);
+        // The keyboard's way of opening a row, and it reads the detail for the same reason a
+        // click does: an expand is the one moment the row is certainly worth a round trip.
+        this.setExpanded(message.expanded ? message.id : null);
         this.render();
+        this.refreshDetail();
         return;
       case 'command':
         await this.deps.onCommand(message.command, message.id, message.childId);
         return;
     }
+  }
+
+  /**
+   * One click, three consequences (§4, amended). The order matters: the panel repaints from its
+   * own state first, so the highlight and the expansion are on screen before the swap — which may
+   * put a modal in front of the user — is even asked for.
+   */
+  private select(id: string): void {
+    this.selectedId = id;
+    void this.deps.host.setState(SELECTED_STATE_KEY, id);
+    // Clicking the row that is already open closes it: the accordion has a shut position, and
+    // the selection stays where the user put it.
+    this.setExpanded(this.expandedId === id ? null : id);
+    this.render();
+    this.refreshDetail();
+    void this.deps.onSelect?.(id);
+  }
+
+  private setExpanded(id: string | null): void {
+    if (this.expandedId !== id) this.detailSignature = null;
+    this.expandedId = id;
+    if (this.detail !== null && this.detail.id !== id) this.detail = null;
+    void this.deps.host.setState(EXPANDED_STATE_KEY, id);
   }
 
   /** Re-reads the persisted sorts — used when the host state changed behind the panel's back. */
@@ -337,54 +555,11 @@ function childView(child: WorkChild): PanelChildView {
 }
 
 /**
- * The row's actions (R42, R50, R51, R26). Which ones apply is a rule about the work, so it is
- * decided here and the webview only renders what it is given:
- *  - **Start review** on a PR that is not mine and has no review agent — the core answers 409
- *    `OwnPrError` on my own, and a button whose only outcome is an error is what made the old
- *    panel untrustworthy;
- *  - **Address review comments** exactly on my own non-draft PR (R51), which is the click that
- *    creates AND starts the respond run (R56);
- *  - **Chat** only where `chatTargetOf` finds an agent to chat to — a respond agent counts only
- *    once its run has finished, `addressing` or `ready` (R50) — and the action carries that
- *    agent's id;
- *  - **Open PR** once per entry in `prs` (R26).
+ * The row's actions (R42, R50, R51, R26) — **which ones apply is a rule about the list**, so it
+ * is asked of the one shared module (`model/row-actions`) rather than decided twice. The Item
+ * tab's `buttonsFor` asks the same function, over the union of `item.lists`, so the panel and
+ * the tab cannot disagree about what a click would do.
  */
-export function actionsFor(item: WorkItem): PanelActionView[] {
-  const actions: PanelActionView[] = [];
-  const primary = item.prs[0];
-  // The action names the agent it would open, so the click has no second rule to get wrong.
-  const chatTarget = chatTargetOf(item);
-  if (chatTarget !== null) {
-    actions.push({
-      command: 'cgremlin.chat',
-      label: 'Chat',
-      childId: agentChildId(chatTarget),
-    });
-  }
-  if (primary !== undefined && primary.isMine !== true) {
-    if (!item.agents.some((agent) => agent.mode === 'review')) {
-      actions.push({ command: 'cgremlin.startReview', label: 'Start review' });
-    }
-  }
-  if (primary !== undefined && primary.isMine === true && primary.isDraft === false) {
-    actions.push({ command: 'cgremlin.addressReview', label: 'Address review comments' });
-  }
-  actions.push({ command: 'cgremlin.startInvestigation', label: 'Start investigation' });
-  actions.push({ command: 'cgremlin.startDevelopment', label: 'Start development' });
-  for (const pr of item.prs) {
-    actions.push({
-      command: 'cgremlin.openPr',
-      label: `Open ${pr.repo}#${pr.number}`,
-      childId: `pr:${pr.repo}#${pr.number}`,
-    });
-  }
-  if (item.ticket !== null) {
-    actions.push({
-      command: 'cgremlin.openTicket',
-      label: `Open ${item.ticket.key}`,
-      childId: `ticket:${item.ticket.key}`,
-    });
-  }
-  actions.push({ command: 'cgremlin.ack', label: 'Ack' });
-  return actions;
+export function actionsFor(item: WorkItem, list: WorkListKind): PanelActionView[] {
+  return rowActions(itemActionFacts(item), list);
 }

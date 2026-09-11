@@ -287,40 +287,80 @@ describe('R54 the messages the panel acts on', () => {
     expect(hb()?.hasChildren).toBe(true);
     h.view.webview.emit({ type: 'toggleRow', id: 'ticket:HB-627', expanded: true });
     expect(hb()?.expanded).toBe(true);
-    expect(hb()?.children.map((c) => c.kind)).toEqual(['agent', 'agent', 'ticket', 'pr', 'pr']);
+    // The PARTS only. The agents are the three lifecycle slots instead, so a session is never
+    // listed twice in one expanded row (§4, amended).
+    expect(hb()?.children.map((c) => c.kind)).toEqual(['ticket', 'pr', 'pr']);
+    expect(hb()?.lifecycle.map((slot) => slot.stage)).toEqual([
+      'investigation',
+      'development',
+      'review',
+    ]);
     h.panel.setItems(response());
     expect(hb()?.expanded).toBe(true);
   });
 });
 
-describe('R42/R51 the row actions', () => {
-  function actionsOf(h: Built, id: string): string[] {
-    const row = h
+describe('R42/R51/P0-2 the row actions are a rule about the LIST', () => {
+  function rowIn(h: Built, list: string, id: string) {
+    return h
       .state()
-      .lists.flatMap((l) => l.sections.flatMap((s) => s.rows))
+      .lists.find((l) => l.kind === list)
+      ?.sections.flatMap((s) => s.rows)
       .find((r) => r.id === id);
-    return (row?.actions ?? []).map((a) => a.command);
+  }
+
+  function actionsOf(h: Built, list: string, id: string): string[] {
+    return (rowIn(h, list, id)?.actions ?? []).map((a) => a.command);
   }
 
   it('offers Start review on a teammate PR with no review agent, and never on mine', () => {
     const h = build();
     h.ready();
-    expect(actionsOf(h, 'pr:acme/web#101')).toContain('cgremlin.startReview');
-    expect(actionsOf(h, 'pr:acme/web#102')).not.toContain('cgremlin.startReview');
-    expect(actionsOf(h, 'pr:acme/web#200')).not.toContain('cgremlin.startReview');
+    expect(actionsOf(h, 'parkingLot', 'pr:acme/web#101')).toContain('cgremlin.startReview');
+    expect(actionsOf(h, 'parkingLot', 'pr:acme/web#102')).not.toContain('cgremlin.startReview');
+    expect(actionsOf(h, 'waitingForReview', 'pr:acme/web#200')).not.toContain(
+      'cgremlin.startReview',
+    );
   });
 
-  it('offers "Address review comments" exactly on my own non-draft PR (R51)', () => {
+  it('P0-2 — a parking-lot row offers Start review, Open PR and nothing else', () => {
     const h = build();
     h.ready();
-    expect(actionsOf(h, 'pr:acme/web#200')).toContain('cgremlin.addressReview');
-    expect(actionsOf(h, 'pr:acme/web#101')).not.toContain('cgremlin.addressReview');
+    expect(actionsOf(h, 'parkingLot', 'pr:acme/web#101')).toEqual([
+      'cgremlin.startReview',
+      'cgremlin.openPr',
+    ]);
+  });
+
+  it('P0-2 — no list offers Start development or Start investigation on somebody else’s PR', () => {
+    const h = build();
+    h.ready();
+    const every = h.state().lists.flatMap((l) => l.sections.flatMap((s) => s.rows));
+    const parking = every.filter((r) => r.list === 'parkingLot');
+    expect(parking.length).toBeGreaterThan(0);
+    for (const row of parking) {
+      const commands = row.actions.map((a) => a.command);
+      expect(commands, row.id).not.toContain('cgremlin.startDevelopment');
+      expect(commands, row.id).not.toContain('cgremlin.startInvestigation');
+    }
+  });
+
+  it('offers "Address review comments" on my own non-draft PR with no respond agent (R51)', () => {
+    const h = build();
+    h.ready();
+    // HB-627 is mine, waiting for review, and has no respond agent yet.
+    expect(actionsOf(h, 'waitingForReview', 'ticket:HB-627')).toContain('cgremlin.addressReview');
+    // #200 already has one — a second respond run is exactly the nonsensical session P0-2 kills.
+    expect(actionsOf(h, 'waitingForReview', 'pr:acme/web#200')).not.toContain(
+      'cgremlin.addressReview',
+    );
+    expect(actionsOf(h, 'parkingLot', 'pr:acme/web#101')).not.toContain('cgremlin.addressReview');
   });
 
   it('R50 — Chat is offered on a respond agent only from addressing onwards', () => {
     const h = build();
     h.ready();
-    expect(actionsOf(h, 'pr:acme/web#200')).not.toContain('cgremlin.chat');
+    expect(actionsOf(h, 'waitingForReview', 'pr:acme/web#200')).not.toContain('cgremlin.chat');
 
     const payload = response();
     const item = payload.items.find((i) => i.id === 'pr:acme/web#200');
@@ -328,29 +368,26 @@ describe('R42/R51 the row actions', () => {
     item.agents[0].phase = 'addressing';
     const later = build({ response: payload });
     later.ready();
-    expect(actionsOf(later, 'pr:acme/web#200')).toContain('cgremlin.chat');
+    expect(actionsOf(later, 'waitingForReview', 'pr:acme/web#200')).toContain('cgremlin.chat');
   });
 
   it('R26 — one Open PR entry per PR, plus Open ticket when there is one', () => {
     const h = build();
     h.ready();
-    const row = h
-      .state()
-      .lists.flatMap((l) => l.sections.flatMap((s) => s.rows))
-      .find((r) => r.id === 'ticket:HB-627');
+    const row = rowIn(h, 'myWork', 'ticket:HB-627');
     const opens = (row?.actions ?? []).filter((a) => a.command === 'cgremlin.openPr');
     expect(opens.map((a) => a.label)).toEqual(['Open acme/web#310', 'Open acme/api#88']);
     expect((row?.actions ?? []).map((a) => a.command)).toContain('cgremlin.openTicket');
+    // The links are the overflow's job, never the one primary button (P1-5).
+    for (const action of opens) expect(action.placement).toBe('overflow');
   });
 
   it('finding 1 — the Chat action names the agent it would open', () => {
     const h = build();
     h.ready();
-    const row = h
-      .state()
-      .lists.flatMap((l) => l.sections.flatMap((s) => s.rows))
-      .find((r) => r.id === 'pr:acme/api#77');
-    const chat = (row?.actions ?? []).find((a) => a.command === 'cgremlin.chat');
+    const chat = (rowIn(h, 'myWork', 'pr:acme/api#77')?.actions ?? []).find(
+      (a) => a.command === 'cgremlin.chat',
+    );
     // The row carries a triaging respond agent AND a chat-eligible dev agent: the action must
     // name the dev agent, not "whatever the item's first agent happens to be".
     expect(chat?.childId).toBe('agent:dev-acme-api-77');
@@ -359,17 +396,24 @@ describe('R42/R51 the row actions', () => {
   it('finding 1 — a row whose only agent is triaging offers no Chat at all', () => {
     const h = build();
     h.ready();
-    const row = h
-      .state()
-      .lists.flatMap((l) => l.sections.flatMap((s) => s.rows))
-      .find((r) => r.id === 'pr:acme/web#200');
-    expect((row?.actions ?? []).map((a) => a.command)).not.toContain('cgremlin.chat');
+    expect(actionsOf(h, 'waitingForReview', 'pr:acme/web#200')).not.toContain('cgremlin.chat');
   });
 
-  it('always offers Ack', () => {
+  it('P0-2 — Ack only where the item needs you, never unconditionally', () => {
     const h = build();
     h.ready();
-    expect(actionsOf(h, 'pr:acme/api#55')).toContain('cgremlin.ack');
+    expect(actionsOf(h, 'parkingLot', 'pr:acme/api#55')).not.toContain('cgremlin.ack');
+    expect(actionsOf(h, 'parkingLot', 'pr:acme/web#102')).toContain('cgremlin.ack');
+  });
+
+  it('P1-5 — every row flags exactly one primary action', () => {
+    const h = build();
+    h.ready();
+    for (const row of h.state().lists.flatMap((l) => l.sections.flatMap((s) => s.rows))) {
+      const primaries = row.actions.filter((a) => a.placement === 'primary');
+      expect(primaries.length, `${row.list}/${row.id}`).toBeLessThanOrEqual(1);
+      if (row.actions.length > 0) expect(primaries.length, `${row.list}/${row.id}`).toBe(1);
+    }
   });
 });
 
@@ -421,10 +465,10 @@ describe('R66/R54 the panel is an accessible tree, and the keys are the tree mod
     const seen = nodes(h);
     expect(seen.filter((n) => n.kind === 'group').map((n) => n.level)).toEqual([1]);
     expect(seen.filter((n) => n.kind === 'row').every((n) => n.level === 1)).toBe(true);
-    // HB-627 is legitimately in two lists (`myWork` and `waitingForReview`), so its five
-    // children are rendered under each of them.
+    // HB-627 is legitimately in two lists (`myWork` and `waitingForReview`), so its three parts
+    // are rendered under each of them.
     const children = seen.filter((n) => n.kind === 'child');
-    expect(children.length).toBe(10);
+    expect(children.length).toBe(6);
     expect(children.every((n) => n.level === 2)).toBe(true);
   });
 
@@ -438,7 +482,12 @@ describe('R66/R54 the panel is an accessible tree, and the keys are the tree mod
       expandable: true,
       expanded: false,
     });
-    expect(seen.find((n) => n.id === 'pr:acme/web#101')?.expandable).toBe(false);
+    // Every row expands now, including a bare parking-lot PR: what it expands into is the three
+    // lifecycle slots and "changes so far", which exist whether or not it has a second part.
+    expect(seen.find((n) => n.id === 'pr:acme/web#101')).toMatchObject({
+      expandable: true,
+      expanded: false,
+    });
   });
 
   it('hides a collapsed group’s rows from the sequence but keeps its header focusable', () => {
@@ -541,13 +590,20 @@ describe('R66/R54 the panel is an accessible tree, and the keys are the tree mod
     }
   });
 
-  it('declares the roles in the rendered script, not only in the model', () => {
-    const source = fs.readFileSync(path.join(root, 'src/webview/panel.ts'), 'utf8');
+  it('declares the roles in the bundled script, not only in the model', () => {
+    // The panel is a directory of modules now, and the bundle is all of them: reading only the
+    // entry point would let a role quietly leave with the code that set it.
+    const dir = path.join(root, 'src/webview/panel');
+    const source = fs
+      .readdirSync(dir)
+      .filter((name) => name.endsWith('.ts'))
+      .map((name) => fs.readFileSync(path.join(dir, name), 'utf8'))
+      .join('\n');
     for (const attribute of ['role', 'tree', 'treeitem', 'aria-level', 'aria-expanded', 'aria-selected']) {
       expect(source).toContain(attribute);
     }
     // And the keys come from the same module the roles do (R66).
-    expect(source).toContain("from '../model/panel-tree'");
+    expect(source).toContain("from '../../model/panel-tree'");
     expect(source).toContain('handleKey');
   });
 });
@@ -568,10 +624,29 @@ describe('R54 the look', () => {
     expect(script).not.toContain('codicon');
   });
 
-  it('separates card rows with the panel border and dims the second line', () => {
-    expect(css).toMatch(/\.row\s*\{[^}]*border-bottom:\s*1px solid var\(--vscode-panel-border\)/);
-    expect(css).toMatch(/\.row-line2\s*\{[^}]*var\(--vscode-descriptionForeground\)/);
+  it('separates card rows with a hairline and dims the second line', () => {
+    // §2.3: the divider is the panel border at 40%, so it reads as a rhythm and not as a grid.
+    expect(css).toMatch(
+      /--cg-divider:\s*color-mix\(in srgb, var\(--vscode-panel-border\) 40%, transparent\)/,
+    );
+    expect(css).toMatch(/\.row\s*\{[^}]*border-bottom:\s*1px solid var\(--cg-divider\)/);
+    expect(css).toMatch(/\.row-meta,\n\.row-state\s*\{[^}]*var\(--vscode-descriptionForeground\)/);
     expect(css).toMatch(/:focus-visible[^}]*outline/);
+  });
+
+  it('changes nothing but the background on hover (§2.2 rule 1)', () => {
+    const hover = /\.row:hover\s*\{([^}]*)\}/.exec(css);
+    expect(hover?.[1].trim()).toBe('background: var(--vscode-list-hoverBackground);');
+    // The gutter fades; it never enters or leaves the flow, which is what used to grow the row.
+    expect(css).toMatch(/\.row-gutter\s*\{[^}]*opacity:\s*0;/);
+    expect(css).not.toMatch(/:hover[^{]*\{[^}]*display:/);
+  });
+
+  it('gives every hit target at least 24 px (§2.2 rule 2)', () => {
+    for (const selector of ['.row-primary', '.row-more', '.slot-start', '.row-overflow-item']) {
+      expect(css).toContain(selector);
+    }
+    expect(css.match(/min-height:\s*24px/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
   });
 });
 
@@ -601,8 +676,6 @@ describe('R48 the children are clickable, with two actions', () => {
       .lists.flatMap((l) => l.sections.flatMap((s) => s.rows))
       .find((r) => r.id === 'ticket:HB-627');
     expect(row?.children.map((c) => c.goToLabel)).toEqual([
-      'Resume',
-      'Resume',
       'Open in Jira',
       'Open on GitHub',
       'Open on GitHub',
