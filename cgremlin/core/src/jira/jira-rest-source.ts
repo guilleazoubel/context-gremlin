@@ -61,6 +61,19 @@ function isAbortError(err: unknown): boolean {
   return err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError');
 }
 
+/**
+ * The abort the caller's already-fired signal stands for. `addEventListener`
+ * on a signal that has ALREADY aborted never fires, so the retry after a
+ * raced-out backoff has to raise this itself — and raising an `AbortError`
+ * keeps it on `get`'s normal abort path (a `JiraUnavailableError` saying the
+ * request was aborted), rather than inventing a second error shape.
+ */
+function abortError(): Error {
+  const err = new Error('aborted');
+  err.name = 'AbortError';
+  return err;
+}
+
 export class JiraRestSource implements JiraSource {
   private readonly fetchImpl: typeof globalThis.fetch;
   private readonly timeoutMs: number;
@@ -101,6 +114,7 @@ export class JiraRestSource implements JiraSource {
     }
 
     const attempt = async (): Promise<Response> => {
+      if (opts?.signal?.aborted === true) throw abortError();
       const controller = new AbortController();
       const onAbort = (): void => controller.abort();
       opts?.signal?.addEventListener('abort', onAbort, { once: true });
@@ -125,7 +139,12 @@ export class JiraRestSource implements JiraSource {
         // Exactly ONE bounded retry, then give up as unavailable.
         const retryAfter = Number.parseInt(response.headers.get('retry-after') ?? '', 10);
         const waitMs = Number.isNaN(retryAfter) ? 1_000 : Math.min(retryAfter * 1_000, MAX_RETRY_AFTER_MS);
-        await this.sleep(waitMs);
+        // R34: the scan budget is ONE budget for the whole leg, and a
+        // `Retry-After` backoff is wall time like any other. The sleep
+        // therefore RACES the caller's signal; losing it falls straight
+        // through to `attempt()`, which sees the aborted signal and takes the
+        // normal abort path.
+        await this.sleepOrAbort(waitMs, opts?.signal);
         response = await attempt();
       }
     } catch (err) {
@@ -168,6 +187,20 @@ export class JiraRestSource implements JiraSource {
     throw new JiraUnavailableError(
       `Jira responded ${response.status} for ${pathname}${jiraSaid !== null ? `: ${jiraSaid}` : ''}`,
     );
+  }
+
+  /** `sleep(ms)`, except that an abort on `signal` ends the wait early. */
+  private async sleepOrAbort(ms: number, signal: AbortSignal | undefined): Promise<void> {
+    if (signal === undefined) return this.sleep(ms);
+    if (signal.aborted) return;
+    await new Promise<void>((resolve) => {
+      const onAbort = (): void => resolve();
+      signal.addEventListener('abort', onAbort, { once: true });
+      void this.sleep(ms).then(() => {
+        signal.removeEventListener('abort', onAbort);
+        resolve();
+      });
+    });
   }
 
   async search(jql: string, opts?: JiraRequestOptions & { maxResults?: number }): Promise<JiraIssueSummary[]> {
