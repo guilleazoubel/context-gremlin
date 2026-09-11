@@ -287,7 +287,14 @@ describe('R54 the messages the panel acts on', () => {
     expect(hb()?.hasChildren).toBe(true);
     h.view.webview.emit({ type: 'toggleRow', id: 'ticket:HB-627', expanded: true });
     expect(hb()?.expanded).toBe(true);
-    expect(hb()?.children.map((c) => c.kind)).toEqual(['agent', 'agent', 'ticket', 'pr', 'pr']);
+    // The PARTS only. The agents are the three lifecycle slots instead, so a session is never
+    // listed twice in one expanded row (§4, amended).
+    expect(hb()?.children.map((c) => c.kind)).toEqual(['ticket', 'pr', 'pr']);
+    expect(hb()?.lifecycle.map((slot) => slot.stage)).toEqual([
+      'investigation',
+      'development',
+      'review',
+    ]);
     h.panel.setItems(response());
     expect(hb()?.expanded).toBe(true);
   });
@@ -458,10 +465,10 @@ describe('R66/R54 the panel is an accessible tree, and the keys are the tree mod
     const seen = nodes(h);
     expect(seen.filter((n) => n.kind === 'group').map((n) => n.level)).toEqual([1]);
     expect(seen.filter((n) => n.kind === 'row').every((n) => n.level === 1)).toBe(true);
-    // HB-627 is legitimately in two lists (`myWork` and `waitingForReview`), so its five
-    // children are rendered under each of them.
+    // HB-627 is legitimately in two lists (`myWork` and `waitingForReview`), so its three parts
+    // are rendered under each of them.
     const children = seen.filter((n) => n.kind === 'child');
-    expect(children.length).toBe(10);
+    expect(children.length).toBe(6);
     expect(children.every((n) => n.level === 2)).toBe(true);
   });
 
@@ -475,7 +482,12 @@ describe('R66/R54 the panel is an accessible tree, and the keys are the tree mod
       expandable: true,
       expanded: false,
     });
-    expect(seen.find((n) => n.id === 'pr:acme/web#101')?.expandable).toBe(false);
+    // Every row expands now, including a bare parking-lot PR: what it expands into is the three
+    // lifecycle slots and "changes so far", which exist whether or not it has a second part.
+    expect(seen.find((n) => n.id === 'pr:acme/web#101')).toMatchObject({
+      expandable: true,
+      expanded: false,
+    });
   });
 
   it('hides a collapsed group’s rows from the sequence but keeps its header focusable', () => {
@@ -638,8 +650,6 @@ describe('R48 the children are clickable, with two actions', () => {
       .lists.flatMap((l) => l.sections.flatMap((s) => s.rows))
       .find((r) => r.id === 'ticket:HB-627');
     expect(row?.children.map((c) => c.goToLabel)).toEqual([
-      'Resume',
-      'Resume',
       'Open in Jira',
       'Open on GitHub',
       'Open on GitHub',

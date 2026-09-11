@@ -14,7 +14,9 @@
  * Takes its editor surface as a parameter (no editor import).
  */
 import crypto from 'node:crypto';
-import { itemActionFacts, rowActions } from '../model/row-actions';
+import { changeSummary, type SessionChanges } from '../model/changes';
+import { lifecycleSlots } from '../model/lifecycle';
+import { itemActionFacts, rowActions, type StageKind } from '../model/row-actions';
 import {
   buildItemChildren,
   buildWorkLists,
@@ -34,9 +36,11 @@ import {
   parsePanelMessage,
   type HostToPanel,
   type PanelActionView,
+  type PanelChangesView,
   type PanelChildView,
   type PanelListView,
   type PanelRowView,
+  type PanelSlotView,
   type PanelState,
 } from '../model/panel-protocol';
 import {
@@ -66,9 +70,36 @@ export interface PanelViewDeps {
   onOpenItem: (id: string) => void | Promise<void>;
   onOpenChild: (id: string, childId: string) => void | Promise<void>;
   onCommand: (command: string, id: string, childId?: string) => void | Promise<void>;
+  /**
+   * One click on a row is one decision (§4, amended): select, expand, and put the item's own
+   * worktree in the workspace. The first two are this module's own state; the swap is the host's,
+   * so it arrives as a callback rather than as a second editor surface here.
+   */
+  onSelect?: (id: string) => void | Promise<void>;
+  /**
+   * What an expanded row needs and a list response does not carry: the artifact times behind each
+   * slot's `done`, and "changes so far". Optional — a panel with no loader paints `—`.
+   */
+  loadExpanded?: (item: WorkItem) => Promise<ExpandedDetail | null>;
   nonce?: () => string;
   now?: () => number;
 }
+
+/** The extra the detail routes carry for the ONE expanded row (§4, amended). */
+export interface ExpandedDetail {
+  /** The latest artifact time per session id, for a slot's `done · 2h`. */
+  artifactAt: Record<string, string | null>;
+  changes: SessionChanges | null;
+}
+
+export const SELECTED_STATE_KEY = 'cgremlin.panel.selected';
+export const EXPANDED_STATE_KEY = 'cgremlin.panel.expanded';
+
+const START_COMMAND: Record<StageKind, string> = {
+  investigation: 'cgremlin.startInvestigation',
+  development: 'cgremlin.startDevelopment',
+  review: 'cgremlin.startReview',
+};
 
 export class PanelView implements WebviewViewProviderLike {
   private view: WebviewViewLike | null = null;
@@ -79,12 +110,39 @@ export class PanelView implements WebviewViewProviderLike {
   /** The engine answered, but not with work items (a 404 from an older engine, or worse). */
   private sourceTrouble: SourceTrouble | null = null;
   private connected = false;
-  private readonly expanded = new Set<string>();
+  /** Accordion: at most one row is open, and it survives a reload (§4, amended). */
+  private expandedId: string | null;
+  private selectedId: string | null;
+  private detail: { id: string; detail: ExpandedDetail } | null = null;
+  private loading: string | null = null;
   private readonly collapsedGroups = new Map<string, boolean>();
   private sorts: Record<WorkListKind, WorkSortKind>;
+  /** §3.3: `setConnected` + `setItems` + `setSourceTrouble` in one refresh are ONE post. */
+  private batchDepth = 0;
+  private batched = false;
+  private lastPosted: string | null = null;
 
   constructor(private readonly deps: PanelViewDeps) {
     this.sorts = readSorts(deps.host);
+    this.selectedId = deps.host.getState<string>(SELECTED_STATE_KEY) ?? null;
+    this.expandedId = deps.host.getState<string>(EXPANDED_STATE_KEY) ?? null;
+  }
+
+  /**
+   * Everything one refresh changes, as one render. Three posts per refresh is three reconciles
+   * in the webview and three chances for the order to move under the pointer (§3.3).
+   */
+  batch(apply: () => void): void {
+    this.batchDepth += 1;
+    try {
+      apply();
+    } finally {
+      this.batchDepth -= 1;
+      if (this.batchDepth === 0 && this.batched) {
+        this.batched = false;
+        this.flush();
+      }
+    }
   }
 
   /** The editor creates the view; a re-created one re-posts `ready` and gets a fresh render. */
@@ -111,6 +169,7 @@ export class PanelView implements WebviewViewProviderLike {
 
   setItems(response: ItemsResponse | null): void {
     this.response = response;
+    this.loadDetail();
     this.render();
   }
 
@@ -224,7 +283,8 @@ export class PanelView implements WebviewViewProviderLike {
   }
 
   private rowView(row: WorkRow): PanelRowView {
-    const expanded = this.expanded.has(row.id);
+    const expanded = this.expandedId === row.id;
+    const actions = actionsFor(row.item, row.list);
     return {
       id: row.id,
       list: row.list,
@@ -240,11 +300,80 @@ export class PanelView implements WebviewViewProviderLike {
       tier: row.tier,
       demoted: row.demoted,
       needsYou: row.needsYou,
-      hasChildren: row.hasChildren,
+      // Every row expands now: what it expands INTO is the three lifecycle slots, which exist
+      // whether or not the item has a second part to name (§4, amended).
+      hasChildren: true,
       expanded,
-      children: expanded ? buildItemChildren(row.item).map(childView) : [],
-      actions: actionsFor(row.item, row.list),
+      selected: this.selectedId === row.id,
+      // The PARTS. The agents are the lifecycle slots instead, so they are not listed twice.
+      children: expanded
+        ? buildItemChildren(row.item)
+            .filter((child) => child.kind !== 'agent')
+            .map(childView)
+        : [],
+      lifecycle: expanded ? this.slotsOf(row, actions) : [],
+      changes: expanded ? this.changesView(row.id) : null,
+      actions,
     };
+  }
+
+  /**
+   * The lifecycle slots, each carrying the Start the forward-only rule allows — taken from the
+   * row's OWN actions, so a slot can never offer a verb the row's button refuses (P0-2).
+   */
+  private slotsOf(row: WorkRow, actions: PanelActionView[]): PanelSlotView[] {
+    const detail = this.detail?.id === row.id ? this.detail.detail : null;
+    return lifecycleSlots({
+      agents: row.item.agents,
+      facts: itemActionFacts(row.item),
+      artifactAt: detail?.artifactAt,
+      now: this.deps.now?.(),
+    }).map((slot) => ({
+      stage: slot.stage,
+      title: slot.title,
+      glyph: slot.glyph,
+      state: slot.state,
+      stateText: slot.stateText,
+      sessionId: slot.sessionId,
+      start: slot.next
+        ? (actions.find((action) => action.command === START_COMMAND[slot.stage]) ?? null)
+        : null,
+    }));
+  }
+
+  /** `—` until the engine has answered, and `—` forever on an engine that has no such route. */
+  private changesView(id: string): PanelChangesView {
+    const changes = this.detail?.id === id ? this.detail.detail.changes : null;
+    return {
+      committed: changeSummary(changes?.committed),
+      workingTree: changeSummary(changes?.workingTree),
+    };
+  }
+
+  /**
+   * The one expanded row's detail. Re-read on every refresh — "changes so far" is the number that
+   * moves while an agent works — but never twice at once, and never applied to a row the user has
+   * meanwhile collapsed or moved off.
+   */
+  private loadDetail(): void {
+    const id = this.expandedId;
+    const load = this.deps.loadExpanded;
+    if (id === null || load === undefined || this.loading === id) return;
+    const item = this.itemOf(id);
+    if (item === undefined) return;
+    this.loading = id;
+    void load(item)
+      .then((detail) => {
+        if (this.expandedId !== id || detail === null) return;
+        this.detail = { id, detail };
+        this.render();
+      })
+      .catch((err: unknown) => {
+        this.deps.host.log(`cgremlin: could not read the expanded row's detail: ${String(err)}`);
+      })
+      .finally(() => {
+        if (this.loading === id) this.loading = null;
+      });
   }
 
   private html(): string {
@@ -276,7 +405,24 @@ export class PanelView implements WebviewViewProviderLike {
   }
 
   private render(): void {
-    this.post({ type: 'render', state: this.state() });
+    if (this.batchDepth > 0) {
+      this.batched = true;
+      return;
+    }
+    this.flush();
+  }
+
+  /**
+   * A render that would say exactly what the last one said is not sent at all. The webview would
+   * reconcile it to nothing anyway; not sending it is what makes "one render per refresh" true
+   * rather than merely harmless.
+   */
+  private flush(): void {
+    const state = this.state();
+    const encoded = JSON.stringify(state);
+    if (encoded === this.lastPosted) return;
+    this.lastPosted = encoded;
+    this.post({ type: 'render', state });
   }
 
   private async handle(raw: unknown): Promise<void> {
@@ -285,9 +431,14 @@ export class PanelView implements WebviewViewProviderLike {
     switch (message.type) {
       case 'ready':
         // R39's handshake: a render posted before the script was listening is dropped silently,
-        // and the panel stays blank.
+        // and the panel stays blank. A re-created view has seen nothing, so the de-duplication
+        // memory is cleared rather than swallowing the first render.
         this.ready = true;
+        this.lastPosted = null;
         this.render();
+        return;
+      case 'selectRow':
+        this.select(message.id);
         return;
       case 'openItem':
         await this.deps.onOpenItem(message.id);
@@ -305,14 +456,35 @@ export class PanelView implements WebviewViewProviderLike {
         this.render();
         return;
       case 'toggleRow':
-        if (message.expanded) this.expanded.add(message.id);
-        else this.expanded.delete(message.id);
+        this.setExpanded(message.expanded ? message.id : null);
         this.render();
         return;
       case 'command':
         await this.deps.onCommand(message.command, message.id, message.childId);
         return;
     }
+  }
+
+  /**
+   * One click, three consequences (§4, amended). The order matters: the panel repaints from its
+   * own state first, so the highlight and the expansion are on screen before the swap — which may
+   * put a modal in front of the user — is even asked for.
+   */
+  private select(id: string): void {
+    this.selectedId = id;
+    void this.deps.host.setState(SELECTED_STATE_KEY, id);
+    // Clicking the row that is already open closes it: the accordion has a shut position, and
+    // the selection stays where the user put it.
+    this.setExpanded(this.expandedId === id ? null : id);
+    this.render();
+    this.loadDetail();
+    void this.deps.onSelect?.(id);
+  }
+
+  private setExpanded(id: string | null): void {
+    this.expandedId = id;
+    if (this.detail !== null && this.detail.id !== id) this.detail = null;
+    void this.deps.host.setState(EXPANDED_STATE_KEY, id);
   }
 
   /** Re-reads the persisted sorts — used when the host state changed behind the panel's back. */

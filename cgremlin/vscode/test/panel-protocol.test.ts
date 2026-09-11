@@ -8,6 +8,7 @@ import { parsePanelMessage, type PanelToHost } from '../src/model/panel-protocol
 describe('R54 parsePanelMessage', () => {
   const accepted: PanelToHost[] = [
     { type: 'ready' },
+    { type: 'selectRow', id: 'pr:acme/web#101', list: 'parkingLot' },
     { type: 'openItem', id: 'pr:acme/web#101' },
     { type: 'openChild', id: 'ticket:HB-627', childId: 'pr:acme/web#310' },
     { type: 'setSort', list: 'parkingLot', sort: 'smallestChange' },
@@ -27,6 +28,9 @@ describe('R54 parsePanelMessage', () => {
     const rejected: unknown[] = [
       { type: 'render' },
       { type: 'openItem' },
+      { type: 'selectRow', id: 'pr:acme/web#101' },
+      { type: 'selectRow', id: 'pr:acme/web#101', list: 'reviewing' },
+      { type: 'selectRow', list: 'parkingLot' },
       { type: 'openItem', id: 42 },
       { type: 'openChild', id: 'x' },
       { type: 'setSort', list: 'reviewing', sort: 'oldest' },

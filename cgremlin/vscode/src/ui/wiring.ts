@@ -7,6 +7,8 @@
  */
 import { CoreHttpError, EngineNotRunningError, type CoreClient } from '../core-client';
 import { troubleOf } from '../model/engine-trouble';
+import { currentAgentOf } from '../model/lifecycle';
+import { itemPathOf, type ItemArtifactListing } from '../model/work-items';
 import type { NotificationLevel } from '../model/notify-policy';
 import { PanelView, PANEL_VIEW_ID } from './panel-view';
 import { NotificationSurface } from './notifications';
@@ -76,6 +78,29 @@ export function createUi(options: UiOptions): Ui {
     },
     onCommand: async (command, id, childId) => {
       await host.executeCommand(command, id, childId);
+    },
+    /**
+     * §4, amended: the click that selects a row also puts that item's own worktree in the
+     * workspace, through the same swap path (and the same dirty-editor confirm) the Item tab
+     * uses. An item with no session to open swaps nothing rather than guessing.
+     */
+    onSelect: async (id) => {
+      const agent = currentAgentOf(coordinator.itemOf(id)?.agents ?? []);
+      if (agent?.worktreePath == null) return;
+      coordinator.setCurrentSession(agent.sessionId, agent.worktreePath);
+      await swapper.swapTo(agent.sessionId, agent.worktreePath);
+    },
+    /** What the ONE expanded row needs and the list response does not carry (§4, amended). */
+    loadExpanded: async (item) => {
+      const path = itemPathOf(item.id);
+      const detail = path === null ? null : await client.item(path).catch(() => null);
+      const artifactAt: Record<string, string | null> = {};
+      for (const [sessionId, listing] of Object.entries(detail?.artifacts ?? {})) {
+        artifactAt[sessionId] = latestArtifactAt(listing);
+      }
+      const agent = currentAgentOf(item.agents);
+      const changes = agent === null ? null : await client.changes(agent.sessionId).catch(() => null);
+      return { artifactAt, changes };
     },
   });
   const coordinator = new RefreshCoordinator({
@@ -216,4 +241,16 @@ function artifactAddressOf(frame: unknown): { sessionId: string | null; name: st
     sessionId: typeof sessionId === 'string' ? sessionId : null,
     name: typeof name === 'string' ? name : null,
   };
+}
+
+/**
+ * The newest artifact a session has written — what dates a finished lifecycle slot. The engine
+ * sends the whole listing; the row only needs "when did this stage last produce something".
+ */
+function latestArtifactAt(listing: readonly ItemArtifactListing[]): string | null {
+  let latest: string | null = null;
+  for (const artifact of listing) {
+    if (latest === null || artifact.mtime > latest) latest = artifact.mtime;
+  }
+  return latest;
 }

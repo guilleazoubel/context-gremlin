@@ -3,7 +3,7 @@
  * button would refuse.
  */
 import { describe, expect, it } from 'vitest';
-import { lifecycleSlots, type LifecycleAgent } from '../../src/model/lifecycle';
+import { currentAgentOf, lifecycleSlots, type LifecycleAgent } from '../../src/model/lifecycle';
 import type { ActionFacts, ActionPr } from '../../src/model/row-actions';
 
 const NOW = Date.parse('2026-09-11T12:00:00.000Z');
@@ -114,3 +114,33 @@ describe('the slot that may be started is the one the forward-only rule names (Â
 function asActionAgents(agents: LifecycleAgent[]): ActionFacts['agents'] {
   return agents.map((a) => ({ ...a, claimed: false }));
 }
+
+describe('which session the row is, right now', () => {
+  const withTree = (over: Partial<LifecycleAgent> & { mode: string }): LifecycleAgent =>
+    agent({ worktreePath: `/wt/${over.sessionId ?? over.mode}`, ...over });
+
+  it('is nothing when no session has a worktree to open', () => {
+    expect(currentAgentOf([agent({ mode: 'development' })])).toBeNull();
+    expect(currentAgentOf([])).toBeNull();
+  });
+
+  it('is the running session, even when a later stage exists but is idle', () => {
+    const running = withTree({ mode: 'development', sessionId: 'dev', running: true });
+    const idle = withTree({ mode: 'review', sessionId: 'rev' });
+    expect(currentAgentOf([running, idle])?.sessionId).toBe('dev');
+  });
+
+  it('is the furthest stage when nothing is running, with respond ranking last', () => {
+    const dev = withTree({ mode: 'development', sessionId: 'dev' });
+    const review = withTree({ mode: 'review', sessionId: 'rev' });
+    const respond = withTree({ mode: 'respond', sessionId: 'res' });
+    expect(currentAgentOf([dev, review])?.sessionId).toBe('rev');
+    expect(currentAgentOf([respond, dev, review])?.sessionId).toBe('res');
+  });
+
+  it('ignores a session that has no worktree, whatever its stage', () => {
+    const dev = withTree({ mode: 'development', sessionId: 'dev' });
+    const review = agent({ mode: 'review', sessionId: 'rev' });
+    expect(currentAgentOf([dev, review])?.sessionId).toBe('dev');
+  });
+});

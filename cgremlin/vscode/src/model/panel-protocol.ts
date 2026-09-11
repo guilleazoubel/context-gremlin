@@ -7,7 +7,8 @@
  *
  * Pure module — no editor API (MG-B1).
  */
-import type { ActionPlacement } from './row-actions';
+import type { SlotState } from './lifecycle';
+import type { ActionPlacement, StageKind } from './row-actions';
 import {
   SORT_OPTIONS,
   WORK_LIST_KINDS,
@@ -41,9 +42,39 @@ export interface PanelRowView {
   needsYou: boolean;
   hasChildren: boolean;
   expanded: boolean;
+  /**
+   * The persistent highlight (§4, amended). Distinct from focus: the roving tab stop moves with
+   * the arrow keys, whereas the selection changes only on a click or an activation — and it is
+   * the selection that says which worktree the workspace currently holds.
+   */
+  selected: boolean;
+  /** The PARTS — the ticket and the PRs. The agents are the lifecycle slots instead. */
   children: PanelChildView[];
+  /** Investigation → Development → Review. Empty unless the row is expanded. */
+  lifecycle: PanelSlotView[];
+  /** "Changes so far", or `null` until the engine has answered — the row then paints `—`. */
+  changes: PanelChangesView | null;
   /** The row's own actions, already decided by the host (which ones apply is not the view's job). */
   actions: PanelActionView[];
+}
+
+/** One lifecycle slot of an expanded row (§4, amended). Built by `model/lifecycle`. */
+export interface PanelSlotView {
+  stage: StageKind;
+  title: string;
+  glyph: string;
+  state: SlotState;
+  stateText: string;
+  /** The stage's session — what Open and Chat address. `null` when the stage never ran. */
+  sessionId: string | null;
+  /** The forward-only Start for this stage, when the rule allows one here. */
+  start: PanelActionView | null;
+}
+
+export interface PanelChangesView {
+  /** Already rendered — `8 files +240/−31`, or `—` (MG-12). */
+  committed: string;
+  workingTree: string;
 }
 
 export interface PanelChildView {
@@ -99,6 +130,14 @@ export type HostToPanel =
 
 export type PanelToHost =
   | { type: 'ready' }
+  /**
+   * One click on a row, which is **one** decision with three consequences (§4, amended): the row
+   * becomes the selected one, it expands (accordion — the previously expanded row closes), and
+   * the workspace swaps to that item's current worktree. They are one message because they are
+   * one user act: three messages would let the panel end up selected on one row and swapped to
+   * another if any of them were dropped.
+   */
+  | { type: 'selectRow'; id: string; list: WorkListKind }
   | { type: 'openItem'; id: string }
   | { type: 'openChild'; id: string; childId: string }
   | { type: 'setSort'; list: WorkListKind; sort: WorkSortKind }
@@ -130,6 +169,11 @@ export function parsePanelMessage(raw: unknown): PanelToHost | null {
   switch (message.type) {
     case 'ready':
       return { type: 'ready' };
+    case 'selectRow': {
+      const id = text(message.id);
+      const list = listKind(message.list);
+      return id === null || list === null ? null : { type: 'selectRow', id, list };
+    }
     case 'openItem': {
       const id = text(message.id);
       return id === null ? null : { type: 'openItem', id };

@@ -25,6 +25,7 @@ export interface LifecycleAgent {
   running: boolean;
   needsYou: boolean;
   primaryArtifact: string | null;
+  worktreePath?: string | null;
 }
 
 export interface LifecycleSlot {
@@ -117,4 +118,30 @@ function stateTextOf(
   if (state === 'needsYou') return `needs you · ${agent.phase}`;
   const age = artifactAt === null ? '—' : compactAge(artifactAt, now);
   return age === '—' ? 'done' : `done · ${age}`;
+}
+
+/**
+ * Which of an item's sessions the row *is*, right now — the worktree a click swaps the workspace
+ * to, and the session "changes so far" is counted in.
+ *
+ * A session without a worktree is not a candidate at all (there is nothing to open); among the
+ * rest a running agent wins, because that is the one actually writing files. Otherwise the
+ * furthest stage wins, `respond` included: answering a review is the most recent thing to have
+ * happened on a PR even though it is not a stage of its own.
+ */
+export function currentAgentOf<T extends LifecycleAgent>(agents: readonly T[]): T | null {
+  const withWorktree = agents.filter(
+    (agent) => agent.worktreePath !== null && agent.worktreePath !== undefined && agent.worktreePath !== '',
+  );
+  if (withWorktree.length === 0) return null;
+  const running = withWorktree.filter((agent) => agent.running);
+  const pool = running.length > 0 ? running : withWorktree;
+  let best = pool[0];
+  for (const agent of pool) if (rankOf(agent.mode) >= rankOf(best.mode)) best = agent;
+  return best;
+}
+
+/** `respond` ranks after `review`: it is what happens once a review has already landed. */
+function rankOf(mode: string): number {
+  return mode === 'respond' ? STAGE_ORDER.length : STAGE_ORDER.indexOf(mode as StageKind);
 }
