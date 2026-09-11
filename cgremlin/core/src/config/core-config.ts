@@ -53,6 +53,40 @@ export const RepoEnvironmentSchema = z.object({
 });
 export type RepoEnvironment = z.infer<typeof RepoEnvironmentSchema>;
 
+/**
+ * R10/R32/R37/R46 — the read-only Jira source's config. `apiToken` is the ONE
+ * thing the user must supply, and it is a secret: 0600 load refusal via
+ * `hasAnySecret`, `redactCoreConfig`, and never in a brief, a log line, an
+ * event frame, an HTTP response or `jira.json` (R44, MG-5).
+ */
+export const JiraConfigSchema = z.object({
+  /** Documented example for this user: 'https://aplaceformom.atlassian.net'. */
+  siteUrl: z.string().url(),
+  /** Documented example for this user: 'guilherme.azoubel@aplaceformom.com'. */
+  email: z.string().min(1),
+  apiToken: z.string().min(1).optional(),
+  /** Extra issue fields to request; instance-specific ones go here, never in the default set. */
+  extraFields: z.array(z.string().min(1)).default([]),
+  /**
+   * R10/D7: injectable for tests and for a proxy; defaults to `siteUrl` at
+   * resolve time. R37: browse URLs come from `siteUrl`, NEVER from here.
+   */
+  baseUrl: z.string().url().optional(),
+  /**
+   * D3's default. A user who wants "the current sprint instead" edits this ONE
+   * string to `assignee = currentUser() AND sprint in openSprints()`.
+   */
+  jql: z.string().min(1).default('assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC'),
+  /** R7 as amended by R46 — EMPTY MEANS TICKET LINKING IS DISABLED, not unfiltered. */
+  projectKeys: z.array(z.string().regex(/^[A-Z][A-Z0-9]+$/)).default([]),
+  maxResults: z.number().int().positive().max(100).default(50),
+  /** Per HTTP request. */
+  timeoutMs: z.number().int().positive().default(15_000),
+  /** R34 — one budget for the WHOLE Jira leg of a tick (whoami + every page). */
+  scanBudgetMs: z.number().int().positive().default(20_000),
+});
+export type JiraConfig = z.infer<typeof JiraConfigSchema>;
+
 export const CoreConfigSchema = z.object({
   repos: z.array(z.string().regex(/^[^/\s]+\/[^/\s]+$/)).default([]),
   watchAuthors: z.array(z.string().min(1)).default([]),
@@ -91,6 +125,15 @@ export const CoreConfigSchema = z.object({
   // R5: logins added to (never replacing) DEFAULT_BOT_LOGINS when deciding
   // whether a reviewer or commenter is a human.
   botLogins: z.array(z.string().min(1)).default([...DEFAULT_BOT_LOGINS]),
+  jira: JiraConfigSchema.optional(),
+  /** Derived: <stateDir>/jira.json. */
+  jiraCachePath: z.string().optional(),
+  /** R52 — the review-thread leg's own budget. */
+  reviewThreads: z
+    .object({ scanBudgetMs: z.number().int().positive().default(20_000) })
+    .default({ scanBudgetMs: 20_000 }),
+  /** R52, derived: <stateDir>/review-threads.json. */
+  reviewThreadsCachePath: z.string().optional(),
   // D2: when true the parking lot drops the watchAuthors filter. The isMine
   // exclusion is never dropped.
   showAllRepoPrs: z.boolean().default(false),
@@ -122,21 +165,43 @@ export function resolveCoreConfig(raw: unknown, home: string): CoreConfig {
     attentionAcksPath: expandOrDerive(parsed.attentionAcksPath, 'attention-acks.json'),
     enginePidPath: expandOrDerive(parsed.enginePidPath, 'engine.json'),
     engineLogPath: expandOrDerive(parsed.engineLogPath, 'engine.log'),
+    // R52: two derived paths, and each one needs the matching entry in
+    // DERIVED_PATH_SUFFIXES below — registering only one here is the failure
+    // mode ARCHITECTURE.md:528-534 documents.
+    jiraCachePath: expandOrDerive(parsed.jiraCachePath, 'jira.json'),
+    reviewThreadsCachePath: expandOrDerive(parsed.reviewThreadsCachePath, 'review-threads.json'),
+    // R37: `baseUrl` is injectable and falls back to `siteUrl`; `siteUrl`
+    // stays separately readable, because every browse URL comes from it.
+    ...(parsed.jira !== undefined
+      ? { jira: { ...parsed.jira, baseUrl: parsed.jira.baseUrl ?? parsed.jira.siteUrl } }
+      : {}),
   };
 }
 
-/** True when any environment carries a Vercel bypass secret — the trigger for the 0600 mode assertion. */
+/**
+ * True when the config carries ANY secret — a Vercel bypass secret or (R11/R44)
+ * a non-empty `jira.apiToken`. This is the trigger for the 0600 mode
+ * assertion, so a config holding only a Jira token is refused world-readable
+ * exactly like one holding a bypass secret.
+ */
 export function hasAnySecret(cfg: CoreConfig): boolean {
+  if (cfg.jira?.apiToken !== undefined && cfg.jira.apiToken !== '') return true;
   return Object.values(cfg.environments).some((env) => env.vercel?.bypassSecret !== undefined);
 }
 
-/** Deep-clones `cfg` and replaces every `environments[*].vercel.bypassSecret` with `'[redacted]'`. */
+/**
+ * Deep-clones `cfg` and replaces every `environments[*].vercel.bypassSecret`
+ * and (R11/R44) `jira.apiToken` with `'[redacted]'`.
+ */
 export function redactCoreConfig(cfg: CoreConfig): CoreConfig {
   const clone = structuredClone(cfg);
   for (const env of Object.values(clone.environments)) {
     if (env.vercel?.bypassSecret !== undefined) {
       env.vercel.bypassSecret = '[redacted]';
     }
+  }
+  if (clone.jira?.apiToken !== undefined) {
+    clone.jira.apiToken = '[redacted]';
   }
   return clone;
 }
@@ -278,6 +343,8 @@ const DERIVED_PATH_SUFFIXES: Record<string, string> = {
   attentionAcksPath: 'attention-acks.json',
   enginePidPath: 'engine.json',
   engineLogPath: 'engine.log',
+  jiraCachePath: 'jira.json',
+  reviewThreadsCachePath: 'review-threads.json',
 };
 
 export async function writeCoreConfig(
