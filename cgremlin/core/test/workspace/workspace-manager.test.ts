@@ -40,6 +40,23 @@ describe('WorkspaceManager', () => {
     expect(JSON.parse(settings)).toEqual({ permissions: {} });
   });
 
+  it('createWorkspace passes resetBranch through as -B (R51, the respond mode)', async () => {
+    const git = new FakeGitRunner();
+    const manager = new WorkspaceManager(git, new InMemoryFileSystem(), '/mirrors');
+    await manager.createWorkspace({
+      repoUrl: 'git@github.com:org/repo.git',
+      worktreePath: '/work/respond-1',
+      branchName: 'me/fix',
+      baseRef: 'origin/me/fix',
+      mode: 'respond',
+      resetBranch: true,
+    });
+    expect(git.calls.at(-1)).toEqual({
+      args: ['worktree', 'add', '/work/respond-1', '-B', 'me/fix', 'origin/me/fix'],
+      cwd: '/mirrors/github.com-org-repo.git',
+    });
+  });
+
   it('removeWorkspace runs worktree remove/prune/branch-delete against the derived mirror path', async () => {
     const git = new FakeGitRunner();
     const fs = new InMemoryFileSystem();

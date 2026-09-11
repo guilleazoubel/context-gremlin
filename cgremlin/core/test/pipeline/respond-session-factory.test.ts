@@ -76,6 +76,9 @@ describe('RespondSessionFactory (R51)', () => {
       branchName: 'feature/HB-627-x',
       baseRef: 'origin/feature/HB-627-x',
       mode: 'respond',
+      // The PR's head branch is ALREADY in the bare mirror's refs/heads/*, so `-b` would fail
+      // on the first respond run ever made; `resetBranch` is what turns it into `-B`.
+      resetBranch: true,
     });
     expect(session.lineage.ticket).toBe('HB-627');
     expect(session.pr?.number).toBe(12);
