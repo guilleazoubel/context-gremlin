@@ -7,7 +7,8 @@ import { KeyedLock } from '../../src/api/keyed-lock';
 import { ReconciliationTick } from '../../src/discovery/reconciliation';
 import { InventoryScanner, type InventoryScannerDeps } from '../../src/inventory/inventory-scanner';
 import { InventoryStore } from '../../src/inventory/inventory-store';
-import { PR_INVENTORY_FIELDS } from '../../src/gh/pr-view';
+import { PR_INVENTORY_FIELDS, PR_INVENTORY_FIELDS_SCALARS, PR_INVENTORY_FIELDS_CONNECTIONS } from '../../src/gh/pr-view';
+import { GhCommandError } from '../../src/gh/gh-runner';
 import { SessionStore } from '../../src/engine/session-store';
 import { migrateV1ToV2, type ReviewSession, type Session } from '../../src/schema/session';
 import type { Inventory } from '../../src/inventory/inventory';
@@ -258,5 +259,118 @@ describe('InventoryScanner', () => {
     expect(report.inventory.errors.some((e) => e.repo === '*' && e.error.includes('disk full'))).toBe(true);
     expect(emitted.length).toBe(1);
     expect(scanner.lastReport).toEqual(report);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 9 / Task A1 — R67: gh pr list can trip GitHub's GraphQL node limit.
+// ---------------------------------------------------------------------------
+
+describe('InventoryScanner: the node-limit fallback (R67)', () => {
+  const scalarsJson = JSON.stringify([
+    {
+      number: 7,
+      url: 'https://github.com/acme/app/pull/7',
+      author: { login: 'bob' },
+      isDraft: false,
+      reviewDecision: '',
+      headRefOid: 'a'.repeat(40),
+      headRefName: 'feature/HB-7-x',
+      baseRefName: 'main',
+      title: 't',
+      updatedAt: '2026-09-04T00:00:00.000Z',
+      createdAt: '2026-08-01T00:00:00Z',
+      changedFiles: 3,
+      additions: 10,
+      deletions: 1,
+      labels: [{ name: 'bug' }],
+      reviewRequests: [{ login: 'jane' }],
+      body: 'nothing here',
+    },
+  ]);
+  const connectionsJson = JSON.stringify([
+    {
+      number: 7,
+      latestReviews: [],
+      reviews: [{ author: { login: 'carol' }, state: 'COMMENTED', submittedAt: '2026-09-02T00:00:00Z' }],
+      comments: [],
+      statusCheckRollup: [{ __typename: 'CheckRun', name: 'build', status: 'COMPLETED', conclusion: 'SUCCESS' }],
+    },
+  ]);
+
+  it('issues exactly one gh pr list call on the happy path', async () => {
+    const { gh, scanner } = buildScanner();
+    gh.queueResponse({ stdout: fullListJson });
+    await scanner.run();
+    expect(gh.calls.filter((c) => c[0] === 'pr' && c[1] === 'list').length).toBe(1);
+  });
+
+  it('a MAX_NODE_LIMIT_EXCEEDED stderr makes it issue exactly the two partitioned calls, joined on number', async () => {
+    const { gh, scanner } = buildScanner();
+    gh.queueResponse(new GhCommandError(['pr', 'list'], 1, 'GraphQL: MAX_NODE_LIMIT_EXCEEDED something'));
+    gh.queueResponse({ stdout: scalarsJson });
+    gh.queueResponse({ stdout: connectionsJson });
+    const report = await scanner.run();
+
+    const listCalls = gh.calls.filter((c) => c[0] === 'pr' && c[1] === 'list');
+    expect(listCalls.length).toBe(3);
+    expect(listCalls[1][listCalls[1].indexOf('--json') + 1]).toBe(PR_INVENTORY_FIELDS_SCALARS);
+    expect(listCalls[2][listCalls[2].indexOf('--json') + 1]).toBe(PR_INVENTORY_FIELDS_CONNECTIONS);
+
+    expect(report.inventory.errors).toEqual([]);
+    const [entry] = report.inventory.entries;
+    expect(entry.number).toBe(7);
+    expect(entry.changedFiles).toBe(3);
+    expect(entry.ci).toBe('success');
+    expect(entry.humanActivity.reviewedBy).toEqual(['carol']);
+    expect(entry.reviewRequests).toEqual(['jane']);
+    expect(entry.ticketKeys).toEqual([]);
+  });
+
+  it('a second limit error on the partitioned call falls back to the previous scan, and never issues a fourth call', async () => {
+    const { gh, scanner, inventoryStore } = buildScanner();
+    const previous: Inventory = {
+      scannedAt: '2026-09-03T00:00:00.000Z',
+      repos: [REPO],
+      entries: [
+        {
+          repo: REPO,
+          number: 99,
+          url: `https://github.com/${REPO}/pull/99`,
+          title: 'yesterday',
+          author: 'bob',
+          isDraft: false,
+          headSha: 'a'.repeat(40),
+          baseRef: 'main',
+          updatedAt: '2026-09-03T00:00:00.000Z',
+          reviewDecision: '',
+          isMine: false,
+          teamActivity: [],
+          ours: { status: 'none' },
+          seenAt: '2026-09-03T00:00:00.000Z',
+          branch: null,
+          ticketKeys: [],
+          reviewRequests: [],
+          humanActivity: { reviewedBy: [], commentedBy: [], lastAt: null },
+          createdAt: null,
+          changedFiles: null,
+          additions: null,
+          deletions: null,
+          ci: 'none',
+          labels: [],
+          reviewDecisionAt: null,
+        },
+      ],
+      errors: [],
+    };
+    await inventoryStore.save(previous);
+    gh.queueResponse(new GhCommandError(['pr', 'list'], 1, 'GraphQL: MAX_NODE_LIMIT_EXCEEDED'));
+    gh.queueResponse({ stdout: scalarsJson });
+    gh.queueResponse(new GhCommandError(['pr', 'list'], 1, 'exceeds the maximum node limit'));
+    const report = await scanner.run();
+
+    expect(gh.calls.filter((c) => c[0] === 'pr' && c[1] === 'list').length).toBe(3);
+    expect(report.inventory.entries.map((e) => e.number)).toEqual([99]);
+    expect(report.inventory.errors.length).toBe(1);
   });
 });

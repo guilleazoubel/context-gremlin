@@ -12,6 +12,7 @@ import {
 } from '../../src/attention/attention';
 import type { InventoryEntry } from '../../src/inventory/inventory';
 import type { InvestigationSession, ReviewSession, Session } from '../../src/schema/session';
+import { PHASE9_ENTRY_DEFAULTS } from '../support/inventory-entry';
 
 const CREATED = '2026-09-01T00:00:00.000Z';
 const ATTENTION_SOURCE = readFileSync(
@@ -81,6 +82,7 @@ function evidence(over: Partial<SessionEvidence> = {}): SessionEvidence {
 
 function entry(over: Partial<InventoryEntry> = {}): InventoryEntry {
   return {
+    ...PHASE9_ENTRY_DEFAULTS,
     repo: 'acme/app',
     number: 12,
     url: 'https://github.com/acme/app/pull/12',

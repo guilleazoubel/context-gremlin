@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { SessionFileSystem } from '../fs/session-file-system';
 import { ConfigError, parseLegacyWatchConfig } from '../discovery/discovery-config';
 import { StageNameSchema } from '../schema/stage';
+import { DEFAULT_BOT_LOGINS } from '../work/bot-login';
 
 export { ConfigError } from '../discovery/discovery-config';
 
@@ -87,6 +88,12 @@ export const CoreConfigSchema = z.object({
   // over it reaps it. Optional-with-a-default, so every core.json on disk
   // keeps loading.
   humanTurnTtlMs: z.number().int().positive().default(600_000),
+  // R5: logins added to (never replacing) DEFAULT_BOT_LOGINS when deciding
+  // whether a reviewer or commenter is a human.
+  botLogins: z.array(z.string().min(1)).default([...DEFAULT_BOT_LOGINS]),
+  // D2: when true the parking lot drops the watchAuthors filter. The isMine
+  // exclusion is never dropped.
+  showAllRepoPrs: z.boolean().default(false),
 });
 
 export type CoreConfig = z.infer<typeof CoreConfigSchema>;

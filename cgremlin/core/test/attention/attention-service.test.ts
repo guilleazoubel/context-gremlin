@@ -19,6 +19,7 @@ import type { HumanTurn } from '../../src/schema/stage';
 import { createHarness, SESSIONS_DIR, type PipelineHarness } from '../support/pipeline-harness';
 import { FakeSessionWatcher } from '../support/fake-session-watcher';
 import { InMemoryFileSystem } from '../support/in-memory-file-system';
+import { PHASE9_ENTRY_DEFAULTS } from '../support/inventory-entry';
 
 const ACKS_PATH = '/state/attention-acks.json';
 const NOW = new Date('2026-09-10T12:00:00.000Z');
@@ -76,6 +77,7 @@ function reviewSession(id: string, over: Record<string, unknown> = {}): Session 
 
 function entry(over: Partial<InventoryEntry> = {}): InventoryEntry {
   return {
+    ...PHASE9_ENTRY_DEFAULTS,
     repo: 'acme/app',
     number: 12,
     url: 'https://github.com/acme/app/pull/12',

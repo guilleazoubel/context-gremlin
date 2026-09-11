@@ -1,5 +1,15 @@
 import { z } from 'zod';
-import { ReviewDecisionSchema, type PrInventoryItem, type ReviewDecision } from '../gh/pr-view';
+import {
+  ReviewDecisionSchema,
+  ciStatus,
+  flattenLabels,
+  flattenReviewRequests,
+  type CiStatus,
+  type PrInventoryItem,
+  type ReviewDecision,
+} from '../gh/pr-view';
+import { isBotLogin } from '../work/bot-login';
+import { extractTicketKeys } from '../gh/ticket-keys';
 import type { Session, ReviewSession } from '../schema/session';
 import { REVIEW_PHASES, type ReviewPhase } from '../schema/pipeline';
 import { TERMINAL_PHASES_BY_MODE } from '../workspace/workspace-in-use';
@@ -21,6 +31,18 @@ export type OursStatus =
       phase: ReviewPhase;
     };
 
+/**
+ * R47 (superseding R6's `humanReviewed`/`reviewers` pair — neither name
+ * exists anywhere): who is already on this PR. Distinct non-bot, non-author
+ * logins; `lastAt` is the newest of their timestamps, or null when nobody is
+ * on it. `me` is NOT excluded — if I reviewed it, a human is on it.
+ */
+export interface HumanActivity {
+  reviewedBy: string[];
+  commentedBy: string[];
+  lastAt: string | null;
+}
+
 export interface InventoryEntry {
   repo: string;
   number: number;
@@ -36,6 +58,19 @@ export interface InventoryEntry {
   teamActivity: TeamActivity[];
   ours: OursStatus;
   seenAt: string;
+  // ---- Phase 9 (R45: every one optional-with-a-default on the schema) ----
+  branch: string | null;
+  ticketKeys: string[];
+  reviewRequests: string[];
+  humanActivity: HumanActivity;
+  createdAt: string | null;
+  changedFiles: number | null;
+  additions: number | null;
+  deletions: number | null;
+  ci: CiStatus;
+  labels: string[];
+  /** R58: the timestamp `approved`/`changes_requested` are pinned to. */
+  reviewDecisionAt: string | null;
 }
 
 export interface Inventory {
@@ -55,6 +90,10 @@ export interface InventoryGroups {
 export interface InventoryConfig {
   me: string;
   watchAuthors: readonly string[];
+  /** R5 — added to, never replacing, `DEFAULT_BOT_LOGINS`. */
+  botLogins?: readonly string[];
+  /** R46 — empty (or absent) disables ticket linking entirely. */
+  projectKeys?: readonly string[];
 }
 
 function buildTeamActivity(
@@ -99,6 +138,58 @@ function buildOursStatus(repo: string, number: number, headSha: string, sessions
   return { status, sessionId: session.id, reviewedSha, newCommits, phase };
 }
 
+/**
+ * R6 as amended by R47/R52 — computed at scan time from the RAW, unfiltered
+ * reviews and comments (never from `teamActivity`, which is watch-filtered
+ * and would call a non-watched human's review "no review"). A1 leaves the
+ * field additive so A8 only widens the inputs with review-thread replies.
+ */
+function buildHumanActivity(
+  item: PrInventoryItem,
+  authorLower: string,
+  botLogins: readonly string[],
+): HumanActivity {
+  const reviewedBy: string[] = [];
+  const commentedBy: string[] = [];
+  let lastAt: string | null = null;
+  const note = (login: string, isBot: boolean | undefined, at: string, into: string[]): void => {
+    if (login.toLowerCase() === authorLower) return;
+    if (isBotLogin(login, { isBot, extra: botLogins })) return;
+    if (!into.includes(login)) into.push(login);
+    if (lastAt === null || at > lastAt) lastAt = at;
+  };
+  for (const r of item.reviews) note(r.author.login, r.author.is_bot, r.submittedAt, reviewedBy);
+  for (const c of item.comments) note(c.author.login, c.author.is_bot, c.createdAt, commentedBy);
+  return { reviewedBy, commentedBy, lastAt };
+}
+
+/**
+ * R58 — the `submittedAt` of the NEWEST review whose `state` matches the
+ * entry's CURRENT `reviewDecision`, and null when none matches. Taking the
+ * latest APPROVED review regardless of the decision gets a mixed PR (an
+ * older APPROVED beside a newer CHANGES_REQUESTED) wrong.
+ */
+function reviewDecisionAtOf(item: PrInventoryItem): string | null {
+  if (item.reviewDecision !== 'APPROVED' && item.reviewDecision !== 'CHANGES_REQUESTED') return null;
+  let at: string | null = null;
+  for (const r of item.reviews) {
+    if (r.state !== item.reviewDecision) continue;
+    if (at === null || r.submittedAt > at) at = r.submittedAt;
+  }
+  return at;
+}
+
+/** R4: branch, then title, then body, keeping every distinct match in that order. */
+function ticketKeysOf(item: PrInventoryItem, projectKeys: readonly string[]): string[] {
+  const keys: string[] = [];
+  for (const text of [item.headRefName, item.title, item.body ?? '']) {
+    for (const key of extractTicketKeys(text, projectKeys)) {
+      if (!keys.includes(key)) keys.push(key);
+    }
+  }
+  return keys;
+}
+
 export function buildEntries(
   repo: string,
   items: readonly PrInventoryItem[],
@@ -123,6 +214,18 @@ export function buildEntries(
     teamActivity: buildTeamActivity(item, watchSet, meLower),
     ours: buildOursStatus(repo, item.number, item.headRefOid, sessions),
     seenAt: now,
+    branch: item.headRefName,
+    ticketKeys: ticketKeysOf(item, cfg.projectKeys ?? []),
+    reviewRequests: flattenReviewRequests(item.reviewRequests),
+    humanActivity: buildHumanActivity(item, item.author.login.toLowerCase(), cfg.botLogins ?? []),
+    createdAt: item.createdAt ?? null,
+    changedFiles: item.changedFiles ?? null,
+    additions: item.additions ?? null,
+    deletions: item.deletions ?? null,
+    // R53: no new CI logic — the EXISTING ciStatus() collapses the rollup.
+    ci: ciStatus(item.statusCheckRollup ?? []),
+    labels: flattenLabels(item.labels),
+    reviewDecisionAt: reviewDecisionAtOf(item),
   }));
 }
 
@@ -175,11 +278,45 @@ const InventoryEntrySchema = z.object({
   teamActivity: z.array(TeamActivitySchema),
   ours: OursStatusSchema,
   seenAt: z.string(),
+  // R9/R45: EVERY field Phase 9 adds is optional-with-a-default. A required
+  // one would 500 GET /prs on the first launch after an upgrade, because
+  // InventoryStore.load throws InventoryCorruptError and loadCurrentInventory
+  // has no catch. The numbers default to null, never 0 — an unknown size is
+  // rendered '—', not '0 files' (MG-12).
+  branch: z.string().nullable().default(null),
+  ticketKeys: z.array(z.string()).default([]),
+  reviewRequests: z.array(z.string()).default([]),
+  humanActivity: z
+    .object({
+      reviewedBy: z.array(z.string()).default([]),
+      commentedBy: z.array(z.string()).default([]),
+      lastAt: z.string().nullable().default(null),
+    })
+    .default({ reviewedBy: [], commentedBy: [], lastAt: null }),
+  createdAt: z.string().nullable().default(null),
+  changedFiles: z.number().int().nullable().default(null),
+  additions: z.number().int().nullable().default(null),
+  deletions: z.number().int().nullable().default(null),
+  ci: z.enum(['success', 'pending', 'failure', 'none']).default('none'),
+  labels: z.array(z.string()).default([]),
+  reviewDecisionAt: z.string().nullable().default(null),
 });
 
-export const InventorySchema: z.ZodType<Inventory> = z.object({
+export const InventorySchema = z.object({
   scannedAt: z.string(),
   repos: z.array(z.string()),
   entries: z.array(InventoryEntrySchema),
   errors: z.array(z.object({ repo: z.string(), error: z.string() })),
 });
+
+// The `z.ZodType<Inventory>` annotation this schema used to carry is gone:
+// the schema's INPUT type is now deliberately looser than `Inventory` (every
+// Phase 9 field is optional-with-a-default — R45), which that annotation
+// forbids. These two assertions keep the OUTPUT pinned to `Inventory` in
+// both directions, which is what the annotation was actually buying.
+type _InventoryOutIsInventory = z.infer<typeof InventorySchema> extends Inventory ? true : never;
+type _InventoryIsInventoryOut = Inventory extends z.infer<typeof InventorySchema> ? true : never;
+const _inventorySchemaOutMatches: _InventoryOutIsInventory = true;
+const _inventorySchemaInMatches: _InventoryIsInventoryOut = true;
+void _inventorySchemaOutMatches;
+void _inventorySchemaInMatches;

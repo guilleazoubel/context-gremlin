@@ -1,5 +1,12 @@
 import type { GhRunner } from '../gh/gh-runner';
-import { PR_INVENTORY_FIELDS, parsePrInventoryList } from '../gh/pr-view';
+import {
+  PR_INVENTORY_FIELDS,
+  PR_INVENTORY_FIELDS_CONNECTIONS,
+  PR_INVENTORY_FIELDS_SCALARS,
+  parsePrInventoryList,
+  type PrInventoryItem,
+} from '../gh/pr-view';
+import { GhCommandError } from '../gh/gh-runner';
 import type { SessionStore } from '../engine/session-store';
 import type { InventoryStore } from './inventory-store';
 import type { EngineEvents } from '../engine/events';
@@ -14,7 +21,14 @@ export interface InventoryScannerDeps {
   inventoryStore: InventoryStore;
   reconciler: { reconcile(): Promise<TickReport> };
   events: EngineEvents;
-  config: { repos: string[]; me: string; watchAuthors: string[]; prListLimit: number };
+  config: {
+    repos: string[];
+    me: string;
+    watchAuthors: string[];
+    prListLimit: number;
+    botLogins?: readonly string[];
+    projectKeys?: readonly string[];
+  };
   now?: () => Date;
 }
 
@@ -26,6 +40,17 @@ export interface ScanReport {
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * R67 — GitHub's GraphQL node limit is a HARD error, not a truncation: the
+ * whole `gh pr list` fails and the repo returns nothing. The exact wording is
+ * instance- and version-dependent (part of U6), so both forms are matched.
+ */
+function isNodeLimitError(err: unknown): boolean {
+  if (!(err instanceof GhCommandError)) return false;
+  const stderr = err.stderr.toLowerCase();
+  return stderr.includes('max_node_limit_exceeded') || stderr.includes('exceeds the maximum node limit');
 }
 
 export class InventoryScanner implements Tickable<ScanReport> {
@@ -57,17 +82,43 @@ export class InventoryScanner implements Tickable<ScanReport> {
     // 404 an in-flight POST .../review. Loaded at most once per run().
     let fallbackInventory: Inventory | null = this._lastReport?.inventory ?? null;
 
+    const listArgs = (repo: string, fields: string): string[] => [
+      'pr', 'list',
+      '--repo', repo,
+      '--state', 'open',
+      '--limit', String(this.deps.config.prListLimit),
+      '--json', fields,
+    ];
+
     const entries: InventoryEntry[] = [];
     for (const repo of this.deps.config.repos) {
       try {
-        const { stdout } = await this.deps.gh.run([
-          'pr', 'list',
-          '--repo', repo,
-          '--state', 'open',
-          '--limit', String(this.deps.config.prListLimit),
-          '--json', PR_INVENTORY_FIELDS,
-        ]);
-        const items = parsePrInventoryList(stdout);
+        let items: PrInventoryItem[];
+        try {
+          const { stdout } = await this.deps.gh.run(listArgs(repo, PR_INVENTORY_FIELDS));
+          items = parsePrInventoryList(stdout);
+        } catch (err) {
+          if (!isNodeLimitError(err)) throw err;
+          // R67: one retry, per repo and per scan, with the fields
+          // partitioned across two calls and joined on `number`. If call B
+          // also trips the limit the error propagates and the repo falls back
+          // to the previous scan's entries, below.
+          const [scalars, connections] = [
+            await this.deps.gh.run(listArgs(repo, PR_INVENTORY_FIELDS_SCALARS)),
+            await this.deps.gh.run(listArgs(repo, PR_INVENTORY_FIELDS_CONNECTIONS)),
+          ];
+          const byNumber = new Map<number, Record<string, unknown>>();
+          for (const raw of JSON.parse(connections.stdout.trim() === '' ? '[]' : connections.stdout) as Record<
+            string,
+            unknown
+          >[]) {
+            byNumber.set(raw.number as number, raw);
+          }
+          const merged = (
+            JSON.parse(scalars.stdout.trim() === '' ? '[]' : scalars.stdout) as Record<string, unknown>[]
+          ).map((raw) => ({ ...raw, ...(byNumber.get(raw.number as number) ?? {}) }));
+          items = parsePrInventoryList(JSON.stringify(merged));
+        }
         entries.push(...buildEntries(repo, items, sessions, this.deps.config, nowIso));
       } catch (err) {
         errors.push({ repo, error: errorMessage(err) });

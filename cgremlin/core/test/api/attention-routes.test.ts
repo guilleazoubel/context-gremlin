@@ -15,6 +15,7 @@ import type { ItemSource } from '../../src/attention/item-ref';
 import type { Inventory, InventoryEntry } from '../../src/inventory/inventory';
 import type { Session } from '../../src/schema/session';
 import { createHarness, SESSIONS_DIR, type PipelineHarness } from '../support/pipeline-harness';
+import { PHASE9_ENTRY_DEFAULTS } from '../support/inventory-entry';
 
 const NOW = new Date('2026-09-10T12:00:00.000Z');
 
@@ -84,6 +85,7 @@ function investigation(id: string, over: Partial<Session> = {}): Session {
 
 function entry(over: Partial<InventoryEntry> = {}): InventoryEntry {
   return {
+    ...PHASE9_ENTRY_DEFAULTS,
     repo: 'acme/app',
     number: 12,
     url: 'https://github.com/acme/app/pull/12',
