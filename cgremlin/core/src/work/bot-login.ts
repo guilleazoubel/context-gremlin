@@ -11,10 +11,16 @@ export const DEFAULT_BOT_LOGINS: readonly string[] = [
   'dependabot',
   'renovate',
   'codecov',
+  'codecov-commenter',
   'vercel',
   'sonarcloud',
-  'coderabbitai',
+  'apfm-sonar',
+  'gitstream-cm',
+  'copilot',
   'copilot-pull-request-reviewer',
+  'coderabbitai',
+  'netlify',
+  'snyk-bot',
 ];
 
 const DEFAULT_SET = new Set(DEFAULT_BOT_LOGINS);

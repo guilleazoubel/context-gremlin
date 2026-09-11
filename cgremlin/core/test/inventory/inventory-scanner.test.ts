@@ -429,26 +429,16 @@ describe('the recorded gh pr list sample (A2: U1, U6, R59, R60)', () => {
     const entries = buildEntries(REPO, items, [], { me: 'me-user', watchAuthors: [], projectKeys: [] }, FIXED_NOW().toISOString());
 
     // 2046: reviewed by its own author plus `gitstream-cm`, commented on by
-    // `vercel`, `github-actions` and `apfm-sonar`. The two default-list bots
-    // are excluded; the author is excluded; the two bots this repo runs that
-    // are NOT in the default list are (correctly, per the data) counted as
-    // humans until `config.botLogins` names them.
+    // `vercel`, `github-actions` and `apfm-sonar` — all bots, all now in
+    // DEFAULT_BOT_LOGINS (gh#2125: gitstream-cm/apfm-sonar were previously
+    // missed by the default list and counted as humans, producing a false
+    // "someone is on it"). The author is excluded too, so this PR has no
+    // human activity at all.
     const e2046 = entries[0];
     expect(e2046.author).toBe('dbeacham-afpm');
-    expect(e2046.humanActivity.reviewedBy).toEqual(['gitstream-cm']);
-    expect(e2046.humanActivity.commentedBy).toEqual(['apfm-sonar']);
-    expect(e2046.humanActivity.lastAt).not.toBeNull();
-
-    // With those two named in botLogins the PR has no human on it at all —
-    // which is what R5's config list exists for.
-    const [quiet] = buildEntries(
-      REPO,
-      [items[0]],
-      [],
-      { me: 'me-user', watchAuthors: [], projectKeys: [], botLogins: ['gitstream-cm', 'apfm-sonar'] },
-      FIXED_NOW().toISOString(),
-    );
-    expect(quiet.humanActivity).toEqual({ reviewedBy: [], commentedBy: [], lastAt: null });
+    expect(e2046.humanActivity.reviewedBy).toEqual([]);
+    expect(e2046.humanActivity.commentedBy).toEqual([]);
+    expect(e2046.humanActivity.lastAt).toBeNull();
   });
 
   it('U6/R59: the real statusCheckRollup parses into the union and collapses to the right ci', () => {

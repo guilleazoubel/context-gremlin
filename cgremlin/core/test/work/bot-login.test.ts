@@ -27,4 +27,15 @@ describe('isBotLogin (R5)', () => {
     expect(isBotLogin('renovate', { extra: ['acme-ci'] })).toBe(true);
     expect(isBotLogin('alice', { extra: ['acme-ci'] })).toBe(false);
   });
+
+  // gh#2125 false positive: gitstream-cm and apfm-sonar have no [bot] suffix
+  // and no is_bot flag on every gh response observed, and github-actions can
+  // show up without the suffix too — the default list has to carry them.
+  it.each(['gitstream-cm', 'apfm-sonar', 'codecov-commenter', 'copilot', 'netlify', 'snyk-bot'])(
+    '%s is a bot via the default list',
+    (login) => {
+      expect(isBotLogin(login)).toBe(true);
+      expect(DEFAULT_BOT_LOGINS).toContain(login);
+    },
+  );
 });
