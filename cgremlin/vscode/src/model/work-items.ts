@@ -396,13 +396,28 @@ export function buildWorkLists(input: WorkListsInput): WorkLists {
     lists[kind] = {
       kind,
       title: LIST_TITLES[kind],
-      count: sections.reduce((total, section) => total + section.rows.length, 0),
+      count: visibleRowCount(sections),
       sort,
       sorts: SORT_OPTIONS[kind],
       sections,
     };
   }
   return lists;
+}
+
+/**
+ * P1: what the list header may claim.
+ *
+ * The header used to sum every section, INCLUDING the one the panel collapses by default — so a
+ * parking lot that was entirely "someone is on it" read `Parking lot (11)` over an empty tree,
+ * and nothing on screen said where the eleven had gone. A header counts the rows the tree under
+ * it actually paints; a collapsed group carries its own count on its own header, which is the
+ * thing the user expands.
+ */
+export function visibleRowCount(
+  sections: readonly { collapsed: boolean; rows: readonly unknown[] }[],
+): number {
+  return sections.reduce((total, section) => total + (section.collapsed ? 0 : section.rows.length), 0);
 }
 
 function rowsOf(

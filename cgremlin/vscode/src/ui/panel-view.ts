@@ -23,6 +23,7 @@ import {
   readSort,
   readSorts,
   ticketBanner,
+  visibleRowCount,
   writeSort,
   type ItemsResponse,
   type ParkingLotGroup,
@@ -294,20 +295,22 @@ export class PanelView implements WebviewViewProviderLike {
     });
     return (Object.keys(built) as WorkListKind[]).map((kind) => {
       const list = built[kind];
+      const sections = list.sections.map((section) => ({
+        group: section.group,
+        title: section.title,
+        count: section.count,
+        collapsible: section.collapsible,
+        collapsed: this.collapsed(kind, section.group, section.collapsed),
+        rows: section.rows.map((row) => this.rowView(row)),
+      }));
       return {
         kind,
         title: list.title,
-        count: list.count,
+        // P1: the USER's collapse state, not the default one, decides what the header may claim.
+        count: visibleRowCount(sections),
         sort: list.sort,
         sorts: [...list.sorts],
-        sections: list.sections.map((section) => ({
-          group: section.group,
-          title: section.title,
-          count: section.count,
-          collapsible: section.collapsible,
-          collapsed: this.collapsed(kind, section.group, section.collapsed),
-          rows: section.rows.map((row) => this.rowView(row)),
-        })),
+        sections,
       };
     });
   }

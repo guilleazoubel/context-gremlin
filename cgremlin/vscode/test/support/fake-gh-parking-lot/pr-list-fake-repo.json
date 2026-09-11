@@ -1,0 +1,354 @@
+[
+  {
+    "number": 20,
+    "url": "https://github.com/fake/repo/pull/20",
+    "author": {
+      "login": "mate"
+    },
+    "isDraft": false,
+    "reviewDecision": "REVIEW_REQUIRED",
+    "headRefOid": "0000000000000000000000000000000000000020",
+    "headRefName": "mate/parking-20",
+    "baseRefName": "main",
+    "title": "Fixture parking-lot PR 20 (a teammate's, already looked at)",
+    "updatedAt": "2026-09-09T12:00:00Z",
+    "createdAt": "2026-09-01T12:00:00Z",
+    "changedFiles": 2,
+    "additions": 20,
+    "deletions": 2,
+    "labels": [],
+    "reviewRequests": [],
+    "statusCheckRollup": [],
+    "latestReviews": [],
+    "reviews": [
+      {
+        "author": {
+          "login": "dana"
+        },
+        "state": "COMMENTED",
+        "submittedAt": "2026-09-09T11:00:00Z"
+      }
+    ],
+    "comments": []
+  },
+  {
+    "number": 21,
+    "url": "https://github.com/fake/repo/pull/21",
+    "author": {
+      "login": "mate"
+    },
+    "isDraft": false,
+    "reviewDecision": "REVIEW_REQUIRED",
+    "headRefOid": "0000000000000000000000000000000000000021",
+    "headRefName": "mate/parking-21",
+    "baseRefName": "main",
+    "title": "Fixture parking-lot PR 21 (a teammate's, already looked at)",
+    "updatedAt": "2026-09-09T12:00:00Z",
+    "createdAt": "2026-09-01T12:00:00Z",
+    "changedFiles": 2,
+    "additions": 20,
+    "deletions": 2,
+    "labels": [],
+    "reviewRequests": [],
+    "statusCheckRollup": [],
+    "latestReviews": [],
+    "reviews": [
+      {
+        "author": {
+          "login": "dana"
+        },
+        "state": "COMMENTED",
+        "submittedAt": "2026-09-09T11:00:00Z"
+      }
+    ],
+    "comments": []
+  },
+  {
+    "number": 22,
+    "url": "https://github.com/fake/repo/pull/22",
+    "author": {
+      "login": "mate"
+    },
+    "isDraft": false,
+    "reviewDecision": "REVIEW_REQUIRED",
+    "headRefOid": "0000000000000000000000000000000000000022",
+    "headRefName": "mate/parking-22",
+    "baseRefName": "main",
+    "title": "Fixture parking-lot PR 22 (a teammate's, already looked at)",
+    "updatedAt": "2026-09-09T12:00:00Z",
+    "createdAt": "2026-09-01T12:00:00Z",
+    "changedFiles": 2,
+    "additions": 20,
+    "deletions": 2,
+    "labels": [],
+    "reviewRequests": [],
+    "statusCheckRollup": [],
+    "latestReviews": [],
+    "reviews": [
+      {
+        "author": {
+          "login": "dana"
+        },
+        "state": "COMMENTED",
+        "submittedAt": "2026-09-09T11:00:00Z"
+      }
+    ],
+    "comments": []
+  },
+  {
+    "number": 23,
+    "url": "https://github.com/fake/repo/pull/23",
+    "author": {
+      "login": "mate"
+    },
+    "isDraft": false,
+    "reviewDecision": "REVIEW_REQUIRED",
+    "headRefOid": "0000000000000000000000000000000000000023",
+    "headRefName": "mate/parking-23",
+    "baseRefName": "main",
+    "title": "Fixture parking-lot PR 23 (a teammate's, already looked at)",
+    "updatedAt": "2026-09-09T12:00:00Z",
+    "createdAt": "2026-09-01T12:00:00Z",
+    "changedFiles": 2,
+    "additions": 20,
+    "deletions": 2,
+    "labels": [],
+    "reviewRequests": [],
+    "statusCheckRollup": [],
+    "latestReviews": [],
+    "reviews": [
+      {
+        "author": {
+          "login": "dana"
+        },
+        "state": "COMMENTED",
+        "submittedAt": "2026-09-09T11:00:00Z"
+      }
+    ],
+    "comments": []
+  },
+  {
+    "number": 24,
+    "url": "https://github.com/fake/repo/pull/24",
+    "author": {
+      "login": "mate"
+    },
+    "isDraft": false,
+    "reviewDecision": "REVIEW_REQUIRED",
+    "headRefOid": "0000000000000000000000000000000000000024",
+    "headRefName": "mate/parking-24",
+    "baseRefName": "main",
+    "title": "Fixture parking-lot PR 24 (a teammate's, already looked at)",
+    "updatedAt": "2026-09-09T12:00:00Z",
+    "createdAt": "2026-09-01T12:00:00Z",
+    "changedFiles": 2,
+    "additions": 20,
+    "deletions": 2,
+    "labels": [],
+    "reviewRequests": [],
+    "statusCheckRollup": [],
+    "latestReviews": [],
+    "reviews": [
+      {
+        "author": {
+          "login": "dana"
+        },
+        "state": "COMMENTED",
+        "submittedAt": "2026-09-09T11:00:00Z"
+      }
+    ],
+    "comments": []
+  },
+  {
+    "number": 25,
+    "url": "https://github.com/fake/repo/pull/25",
+    "author": {
+      "login": "mate"
+    },
+    "isDraft": false,
+    "reviewDecision": "REVIEW_REQUIRED",
+    "headRefOid": "0000000000000000000000000000000000000025",
+    "headRefName": "mate/parking-25",
+    "baseRefName": "main",
+    "title": "Fixture parking-lot PR 25 (a teammate's, already looked at)",
+    "updatedAt": "2026-09-09T12:00:00Z",
+    "createdAt": "2026-09-01T12:00:00Z",
+    "changedFiles": 2,
+    "additions": 20,
+    "deletions": 2,
+    "labels": [],
+    "reviewRequests": [],
+    "statusCheckRollup": [],
+    "latestReviews": [],
+    "reviews": [
+      {
+        "author": {
+          "login": "dana"
+        },
+        "state": "COMMENTED",
+        "submittedAt": "2026-09-09T11:00:00Z"
+      }
+    ],
+    "comments": []
+  },
+  {
+    "number": 26,
+    "url": "https://github.com/fake/repo/pull/26",
+    "author": {
+      "login": "mate"
+    },
+    "isDraft": false,
+    "reviewDecision": "REVIEW_REQUIRED",
+    "headRefOid": "0000000000000000000000000000000000000026",
+    "headRefName": "mate/parking-26",
+    "baseRefName": "main",
+    "title": "Fixture parking-lot PR 26 (a teammate's, already looked at)",
+    "updatedAt": "2026-09-09T12:00:00Z",
+    "createdAt": "2026-09-01T12:00:00Z",
+    "changedFiles": 2,
+    "additions": 20,
+    "deletions": 2,
+    "labels": [],
+    "reviewRequests": [],
+    "statusCheckRollup": [],
+    "latestReviews": [],
+    "reviews": [
+      {
+        "author": {
+          "login": "dana"
+        },
+        "state": "COMMENTED",
+        "submittedAt": "2026-09-09T11:00:00Z"
+      }
+    ],
+    "comments": []
+  },
+  {
+    "number": 27,
+    "url": "https://github.com/fake/repo/pull/27",
+    "author": {
+      "login": "mate"
+    },
+    "isDraft": false,
+    "reviewDecision": "REVIEW_REQUIRED",
+    "headRefOid": "0000000000000000000000000000000000000027",
+    "headRefName": "mate/parking-27",
+    "baseRefName": "main",
+    "title": "Fixture parking-lot PR 27 (a teammate's, already looked at)",
+    "updatedAt": "2026-09-09T12:00:00Z",
+    "createdAt": "2026-09-01T12:00:00Z",
+    "changedFiles": 2,
+    "additions": 20,
+    "deletions": 2,
+    "labels": [],
+    "reviewRequests": [],
+    "statusCheckRollup": [],
+    "latestReviews": [],
+    "reviews": [
+      {
+        "author": {
+          "login": "dana"
+        },
+        "state": "COMMENTED",
+        "submittedAt": "2026-09-09T11:00:00Z"
+      }
+    ],
+    "comments": []
+  },
+  {
+    "number": 28,
+    "url": "https://github.com/fake/repo/pull/28",
+    "author": {
+      "login": "mate"
+    },
+    "isDraft": false,
+    "reviewDecision": "REVIEW_REQUIRED",
+    "headRefOid": "0000000000000000000000000000000000000028",
+    "headRefName": "mate/parking-28",
+    "baseRefName": "main",
+    "title": "Fixture parking-lot PR 28 (a teammate's, already looked at)",
+    "updatedAt": "2026-09-09T12:00:00Z",
+    "createdAt": "2026-09-01T12:00:00Z",
+    "changedFiles": 2,
+    "additions": 20,
+    "deletions": 2,
+    "labels": [],
+    "reviewRequests": [],
+    "statusCheckRollup": [],
+    "latestReviews": [],
+    "reviews": [
+      {
+        "author": {
+          "login": "dana"
+        },
+        "state": "COMMENTED",
+        "submittedAt": "2026-09-09T11:00:00Z"
+      }
+    ],
+    "comments": []
+  },
+  {
+    "number": 29,
+    "url": "https://github.com/fake/repo/pull/29",
+    "author": {
+      "login": "mate"
+    },
+    "isDraft": false,
+    "reviewDecision": "REVIEW_REQUIRED",
+    "headRefOid": "0000000000000000000000000000000000000029",
+    "headRefName": "mate/parking-29",
+    "baseRefName": "main",
+    "title": "Fixture parking-lot PR 29 (a teammate's, already looked at)",
+    "updatedAt": "2026-09-09T12:00:00Z",
+    "createdAt": "2026-09-01T12:00:00Z",
+    "changedFiles": 2,
+    "additions": 20,
+    "deletions": 2,
+    "labels": [],
+    "reviewRequests": [],
+    "statusCheckRollup": [],
+    "latestReviews": [],
+    "reviews": [
+      {
+        "author": {
+          "login": "dana"
+        },
+        "state": "COMMENTED",
+        "submittedAt": "2026-09-09T11:00:00Z"
+      }
+    ],
+    "comments": []
+  },
+  {
+    "number": 30,
+    "url": "https://github.com/fake/repo/pull/30",
+    "author": {
+      "login": "mate"
+    },
+    "isDraft": false,
+    "reviewDecision": "REVIEW_REQUIRED",
+    "headRefOid": "0000000000000000000000000000000000000030",
+    "headRefName": "mate/parking-30",
+    "baseRefName": "main",
+    "title": "Fixture parking-lot PR 30 (a teammate's, already looked at)",
+    "updatedAt": "2026-09-09T12:00:00Z",
+    "createdAt": "2026-09-01T12:00:00Z",
+    "changedFiles": 2,
+    "additions": 20,
+    "deletions": 2,
+    "labels": [],
+    "reviewRequests": [],
+    "statusCheckRollup": [],
+    "latestReviews": [],
+    "reviews": [
+      {
+        "author": {
+          "login": "dana"
+        },
+        "state": "COMMENTED",
+        "submittedAt": "2026-09-09T11:00:00Z"
+      }
+    ],
+    "comments": []
+  }
+]

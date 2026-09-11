@@ -259,8 +259,11 @@ describe('R24 one refresh, one request', () => {
 
   it('renders the four lists from that one response', async () => {
     const h = await connected();
+    // P1: a header counts what the tree paints. The fixture's parking lot holds five, one of
+    // which is in the "someone is on it" group the panel collapses by default — and that one is
+    // counted on that group's own header instead.
     expect(h.state().lists.map((l) => `${l.kind}:${l.count}`)).toEqual([
-      'parkingLot:5',
+      'parkingLot:4',
       'myWork:3',
       'investigations:1',
       'waitingForReview:3',

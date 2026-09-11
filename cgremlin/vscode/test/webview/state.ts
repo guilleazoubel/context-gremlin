@@ -10,6 +10,7 @@ import { lifecycleSlots } from '../../src/model/lifecycle';
 import {
   buildItemChildren,
   buildWorkLists,
+  visibleRowCount,
   type ItemsResponse,
   type WorkListKind,
 } from '../../src/model/work-items';
@@ -44,13 +45,7 @@ export function stateOf(over: StateOptions = {}): PanelState {
   const built = buildWorkLists({ response, now: NOW });
   const lists: PanelListView[] = (Object.keys(built) as WorkListKind[]).map((kind) => {
     const list = built[kind];
-    return {
-      kind,
-      title: list.title,
-      count: list.count,
-      sort: list.sort,
-      sorts: [...list.sorts],
-      sections: list.sections.map((section) => ({
+    const sections = list.sections.map((section) => ({
         group: section.group,
         title: section.title,
         count: section.count,
@@ -92,7 +87,14 @@ export function stateOf(over: StateOptions = {}): PanelState {
             actions,
           };
         }),
-      })),
+    }));
+    return {
+      kind,
+      title: list.title,
+      count: visibleRowCount(sections),
+      sort: list.sort,
+      sorts: [...list.sorts],
+      sections,
     };
   });
   return { lists, banner: null, trouble: null, connected: true };
