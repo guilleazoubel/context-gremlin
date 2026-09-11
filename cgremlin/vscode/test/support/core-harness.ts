@@ -134,6 +134,13 @@ export interface StartEngineOptions {
    * path (`InventoryStore.load` re-parses and `GET /prs` has no catch) is exercised for real.
    */
   inventory?: unknown;
+  /**
+   * `config.repos`, for a test whose subject is the CHOICE of repo (the ticket-only start's quick
+   * pick). `fake/repo` is always present — the seeded sessions and every PR fixture are its — and
+   * each extra slug gets its own local origin, so a session really can be created in it. The fake
+   * `gh` needs a `pr-list-<slug with / as ->.json` fixture for every slug the scan visits.
+   */
+  repos?: string[];
 }
 
 export async function seedStateDir(opts: StartEngineOptions = {}): Promise<SeededStateDir> {
@@ -169,7 +176,8 @@ export async function seedStateDir(opts: StartEngineOptions = {}): Promise<Seede
   // throwaway HOME rewrites that prefix onto a local origin. Everything else about git is left
   // alone: the clone, the fetch, the `worktree add -b <head branch> origin/<head branch>` all run.
   const originsDir = path.join(stateDir, 'origins');
-  await createOrigin(path.join(originsDir, `${REPO_SLUG}.git`));
+  const repos = opts.repos === undefined ? [REPO_SLUG] : [...new Set([REPO_SLUG, ...opts.repos])];
+  for (const slug of repos) await createOrigin(path.join(originsDir, `${slug}.git`));
   await writeFile(
     path.join(stateDir, '.gitconfig'),
     [
@@ -190,7 +198,7 @@ export async function seedStateDir(opts: StartEngineOptions = {}): Promise<Seede
     configPath,
     JSON.stringify(
       {
-        repos: [REPO_SLUG],
+        repos: opts.repos ?? [REPO_SLUG],
         watchAuthors: ['mate'],
         me: 'me',
         // R5, the user's own two: `apfm-sonar` also carries gh's `is_bot`, `gitstream-cm` does

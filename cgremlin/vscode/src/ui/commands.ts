@@ -334,23 +334,65 @@ async function startFromItem(
     return;
   }
   const path = itemPathOf(item.id);
-  if (path === null) return;
-  const repo = item.prs[0]?.repo;
-  let repoUrl: string;
-  if (repo !== undefined) {
-    repoUrl = repoUrlOf(repo);
-  } else {
-    const picked = await pickRepo(deps, `Which repo should the ${mode} run in?`);
-    if (picked === undefined) return;
-    repoUrl = repoUrlOf(picked);
+  if (path === null) {
+    // Never a silent return: the click has to end in a session or in a sentence.
+    void host.showWarningMessage(
+      `The engine cannot be addressed for '${item.title}' (unrecognised item id '${item.id}').`,
+      undefined,
+    );
+    return;
   }
-  const result = await client.startAgent(path, { mode, repoUrl });
+  const repoUrl = await repoUrlFor(deps, item, mode);
+  if (repoUrl === undefined) return;
+  let result: HttpResult;
+  try {
+    result = await client.startAgent(path, { mode, repoUrl });
+  } catch (err: unknown) {
+    // A dead socket rejects rather than answering, and a command that rejects fails where nobody
+    // is looking — which is the whole complaint this path exists to answer.
+    void host.showWarningMessage(
+      `Could not start the ${mode}: ${err instanceof Error ? err.message : String(err)}`,
+      undefined,
+    );
+    return;
+  }
   if (result.status < 200 || result.status >= 300) {
     void host.showWarningMessage(engineErrorText(result.body), undefined);
     return;
   }
+  // Only a start that WORKED settles the question of which repo this item lives in.
+  if (item.prs.length === 0) void host.setState(repoStateKey(item.id), repoUrl);
   coordinator.schedule();
+  // R56's answer to "nothing happened": the row this click was about is selected and open, so the
+  // slot that just went `running` is on screen, and the tab swaps the workspace to its worktree.
+  panel.reveal(item.id);
   await deps.itemTab.open(path);
+}
+
+/** Where an item's chosen repo is remembered — for a ticket row, one entry per ticket key. */
+function repoStateKey(itemId: string): string {
+  return `cgremlin.startRepo.${itemId}`;
+}
+
+/**
+ * The repo a ticket-only start runs in, asked for exactly once. A PR settles it; so does an
+ * earlier successful start on the same ticket; so does a config with a single repo. Only a real
+ * choice reaches the quick pick, and `undefined` means "the user did not choose" — nothing is
+ * sent, because a start in the wrong repo creates a worktree in the wrong place (R15).
+ */
+async function repoUrlFor(
+  deps: CommandDeps,
+  item: WorkItem,
+  mode: 'investigation' | 'development',
+): Promise<string | undefined> {
+  const repo = item.prs[0]?.repo;
+  if (repo !== undefined) return repoUrlOf(repo);
+  const remembered = deps.host.getState<string>(repoStateKey(item.id));
+  if (typeof remembered === 'string' && remembered !== '') return remembered;
+  const repos = deps.coordinator.config()?.repos ?? [];
+  if (repos.length === 1) return repoUrlOf(repos[0]);
+  const picked = await pickRepo(deps, `Which repo should the ${mode} run in?`);
+  return picked === undefined ? undefined : repoUrlOf(picked);
 }
 
 async function pickRepo(deps: CommandDeps, placeHolder: string): Promise<string | undefined> {
@@ -359,7 +401,10 @@ async function pickRepo(deps: CommandDeps, placeHolder: string): Promise<string 
     void deps.host.showWarningMessage('No repos are configured in core.json.', undefined);
     return undefined;
   }
-  return await deps.host.showQuickPick(repos, { placeHolder });
+  // `ignoreFocusOut`, because the panel is a webview: it restores its own focus on the next
+  // render, and a quick pick without this is dismissed by that repaint — the command then returns
+  // `undefined` and the click looks like it did nothing at all.
+  return await deps.host.showQuickPick(repos, { placeHolder, ignoreFocusOut: true });
 }
 
 /** `undefined` means the user cancelled; `null` means "no ticket". */

@@ -523,6 +523,20 @@ export class PanelView implements WebviewViewProviderLike {
     void this.deps.onSelect?.(id);
   }
 
+  /**
+   * The row a command acted on, brought into view: selected and OPEN. Deliberately not `select`
+   * — that toggles, and a Start clicked from an already-open row must never answer by shutting
+   * it. The workspace swap is the caller's (the Item tab follows the new agent's worktree, R22),
+   * so this stays what it says it is: the panel's own highlight and accordion.
+   */
+  reveal(id: string): void {
+    this.selectedId = id;
+    void this.deps.host.setState(SELECTED_STATE_KEY, id);
+    this.setExpanded(id);
+    this.render();
+    this.refreshDetail();
+  }
+
   private setExpanded(id: string | null): void {
     if (this.expandedId !== id) this.detailSignature = null;
     this.expandedId = id;
