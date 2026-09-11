@@ -86,6 +86,11 @@ function build(
   };
 }
 
+/** Let the detail promise and its `finally` run, so the next refresh is not merely in-flight. */
+const settle = async (): Promise<void> => {
+  for (let at = 0; at < 4; at += 1) await Promise.resolve();
+};
+
 const click = (h: Built, id: string): void =>
   h.view.webview.emit({ type: 'selectRow', id, list: 'myWork' });
 
@@ -162,10 +167,70 @@ describe('what an expanded row asks the engine for', () => {
     expect(h.loaded).toEqual(['ticket:HB-627']);
   });
 
+  it('reads the detail when the keyboard opens a row, not only when a click does', async () => {
+    const h = build();
+    h.view.webview.emit({ type: 'toggleRow', id: 'ticket:HB-627', expanded: true });
+    await settle();
+    expect(h.loaded).toEqual(['ticket:HB-627']);
+  });
+
   it('asks for nothing at all while every row is shut', () => {
     const h = build();
     h.panel.setItems(response());
     expect(h.loaded).toEqual([]);
+  });
+
+  it('asks once for an expansion, and not again for twenty unrelated refreshes', async () => {
+    const h = build();
+    click(h, 'ticket:HB-627');
+    await settle();
+    expect(h.loaded).toEqual(['ticket:HB-627']);
+    // Every SSE frame schedules a refresh. A burst about other work must not re-read this row's
+    // artifacts and its `/changes` twenty more times.
+    for (let at = 0; at < 20; at += 1) {
+      h.panel.setItems(response());
+      await settle();
+    }
+    expect(h.loaded).toEqual(['ticket:HB-627']);
+  });
+
+  it('asks again when the open row’s own state moves on', async () => {
+    const h = build();
+    click(h, 'ticket:HB-627');
+    await settle();
+    const changed = response();
+    const item = changed.items.find((candidate) => candidate.id === 'ticket:HB-627');
+    if (item === undefined) throw new Error('fixture');
+    item.agents[1].phase = 'reviewing';
+    h.panel.setItems(changed);
+    await settle();
+    expect(h.loaded).toEqual(['ticket:HB-627', 'ticket:HB-627']);
+  });
+
+  it('asks again for an artifact frame that names one of the open row’s sessions', async () => {
+    const h = build();
+    click(h, 'ticket:HB-627');
+    await settle();
+    const sessionId = response().items.find((i) => i.id === 'ticket:HB-627')?.agents[0].sessionId;
+    if (sessionId === undefined) throw new Error('fixture');
+
+    // An artifact was rewritten without any field of the item changing — the one case a snapshot
+    // comparison cannot see, and exactly what dates a slot's `done`.
+    h.panel.noteFrame(null, sessionId);
+    h.panel.setItems(response());
+    await settle();
+    expect(h.loaded).toEqual(['ticket:HB-627', 'ticket:HB-627']);
+  });
+
+  it('ignores a frame about work the open row has nothing to do with', async () => {
+    const h = build();
+    click(h, 'ticket:HB-627');
+    await settle();
+    h.panel.noteFrame('pr:acme/web#101', null);
+    h.panel.noteFrame(null, 'some-other-session');
+    h.panel.setItems(response());
+    await settle();
+    expect(h.loaded).toEqual(['ticket:HB-627']);
   });
 
   it('offers, in the slots, exactly the Start the row’s own rule allows (§4)', () => {

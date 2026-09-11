@@ -15,7 +15,7 @@
  */
 import crypto from 'node:crypto';
 import { changeSummary, type SessionChanges } from '../model/changes';
-import { lifecycleSlots } from '../model/lifecycle';
+import { detailSignatureOf, lifecycleSlots } from '../model/lifecycle';
 import { itemActionFacts, rowActions, type StageKind } from '../model/row-actions';
 import {
   buildItemChildren,
@@ -115,6 +115,10 @@ export class PanelView implements WebviewViewProviderLike {
   private selectedId: string | null;
   private detail: { id: string; detail: ExpandedDetail } | null = null;
   private loading: string | null = null;
+  /** What the open row looked like when its detail was last asked for (§3.3's storm guard). */
+  private detailSignature: string | null = null;
+  /** An engine frame named the open row, or one of its sessions, since the last read. */
+  private detailStale = false;
   private readonly collapsedGroups = new Map<string, boolean>();
   private sorts: Record<WorkListKind, WorkSortKind>;
   /** §3.3: `setConnected` + `setItems` + `setSourceTrouble` in one refresh are ONE post. */
@@ -169,8 +173,43 @@ export class PanelView implements WebviewViewProviderLike {
 
   setItems(response: ItemsResponse | null): void {
     this.response = response;
-    this.loadDetail();
+    this.refreshDetail();
     this.render();
+  }
+
+  /**
+   * An engine frame that names the open row, or one of its sessions. `artifact.changed` is the
+   * case a snapshot comparison cannot see — an artifact is rewritten with no field of the item
+   * moving, and that artifact's time is exactly what dates a slot's `done`.
+   */
+  noteFrame(itemId: string | null, sessionId: string | null): void {
+    const id = this.expandedId;
+    if (id === null) return;
+    if (itemId !== null && itemId === id) {
+      this.detailStale = true;
+      return;
+    }
+    if (sessionId === null) return;
+    if (this.itemOf(id)?.agents.some((agent) => agent.sessionId === sessionId) === true) {
+      this.detailStale = true;
+    }
+  }
+
+  /**
+   * Every SSE frame schedules a refresh, so a burst about somebody else's PR would otherwise cost
+   * two engine round trips per frame for a row that did not move. The open row is re-read only
+   * when what its detail is built from actually changed, or when a frame named it.
+   */
+  private refreshDetail(): void {
+    const id = this.expandedId;
+    if (id === null) return;
+    const item = this.itemOf(id);
+    if (item === undefined) return;
+    const signature = detailSignatureOf(item);
+    if (!this.detailStale && signature === this.detailSignature) return;
+    this.detailStale = false;
+    this.detailSignature = signature;
+    this.loadDetail();
   }
 
   setTrouble(trouble: EngineTrouble | null): void {
@@ -456,8 +495,11 @@ export class PanelView implements WebviewViewProviderLike {
         this.render();
         return;
       case 'toggleRow':
+        // The keyboard's way of opening a row, and it reads the detail for the same reason a
+        // click does: an expand is the one moment the row is certainly worth a round trip.
         this.setExpanded(message.expanded ? message.id : null);
         this.render();
+        this.refreshDetail();
         return;
       case 'command':
         await this.deps.onCommand(message.command, message.id, message.childId);
@@ -477,11 +519,12 @@ export class PanelView implements WebviewViewProviderLike {
     // the selection stays where the user put it.
     this.setExpanded(this.expandedId === id ? null : id);
     this.render();
-    this.loadDetail();
+    this.refreshDetail();
     void this.deps.onSelect?.(id);
   }
 
   private setExpanded(id: string | null): void {
+    if (this.expandedId !== id) this.detailSignature = null;
     this.expandedId = id;
     if (this.detail !== null && this.detail.id !== id) this.detail = null;
     void this.deps.host.setState(EXPANDED_STATE_KEY, id);

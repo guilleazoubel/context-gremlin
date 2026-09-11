@@ -192,11 +192,15 @@ export function createUi(options: UiOptions): Ui {
     offline,
     handleFrame(frame: unknown) {
       const { event, id } = addressOf(frame);
-      if (event === 'item.changed' && id !== null && id === itemTab.itemId()) {
-        void itemTab.itemChanged(id);
+      if (event === 'item.changed' && id !== null) {
+        // The panel's open row is re-read only when something it shows moved; a frame that names
+        // the item is the engine saying so directly.
+        panel.noteFrame(id, null);
+        if (id === itemTab.itemId()) void itemTab.itemChanged(id);
       }
       if (event === 'artifact.changed') {
         const { sessionId, name } = artifactAddressOf(frame);
+        if (sessionId !== null) panel.noteFrame(null, sessionId);
         if (sessionId !== null && name !== null) void itemTab.artifactChanged(sessionId, name);
       }
       coordinator.schedule();

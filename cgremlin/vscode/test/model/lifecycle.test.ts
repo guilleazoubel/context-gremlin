@@ -3,7 +3,12 @@
  * button would refuse.
  */
 import { describe, expect, it } from 'vitest';
-import { currentAgentOf, lifecycleSlots, type LifecycleAgent } from '../../src/model/lifecycle';
+import {
+  currentAgentOf,
+  detailSignatureOf,
+  lifecycleSlots,
+  type LifecycleAgent,
+} from '../../src/model/lifecycle';
 import type { ActionFacts, ActionPr } from '../../src/model/row-actions';
 
 const NOW = Date.parse('2026-09-11T12:00:00.000Z');
@@ -142,5 +147,48 @@ describe('which session the row is, right now', () => {
     const dev = withTree({ mode: 'development', sessionId: 'dev' });
     const review = agent({ mode: 'review', sessionId: 'rev' });
     expect(currentAgentOf([dev, review])?.sessionId).toBe('dev');
+  });
+});
+
+describe('what an open row’s detail depends on', () => {
+  const item = (over: Partial<Parameters<typeof detailSignatureOf>[0]> = {}) => ({
+    agents: [agent({ mode: 'development', phase: 'coding', running: true })],
+    prs: [{ repo: 'acme/web', number: 1, updatedAt: 'T1', reviewDecision: '', isDraft: false }],
+    ticket: { status: 'In Progress', updatedAt: 'T2' },
+    ...over,
+  });
+
+  it('is the same string for the same agents, PRs and ticket', () => {
+    expect(detailSignatureOf(item())).toBe(detailSignatureOf(item()));
+  });
+
+  it('changes when a phase, a run, a gate or a worktree does', () => {
+    for (const over of [
+      { phase: 'reviewing' },
+      { running: false },
+      { needsYou: true },
+      { worktreePath: '/elsewhere' },
+      { sessionId: 'other' },
+    ]) {
+      const moved = item({ agents: [agent({ mode: 'development', phase: 'coding', running: true, ...over })] });
+      expect(detailSignatureOf(moved), JSON.stringify(over)).not.toBe(detailSignatureOf(item()));
+    }
+  });
+
+  it('changes when a PR or the ticket moves on', () => {
+    expect(
+      detailSignatureOf(
+        item({ prs: [{ repo: 'acme/web', number: 1, updatedAt: 'T9', reviewDecision: '', isDraft: false }] }),
+      ),
+    ).not.toBe(detailSignatureOf(item()));
+    expect(detailSignatureOf(item({ ticket: { status: 'Done', updatedAt: 'T2' } }))).not.toBe(
+      detailSignatureOf(item()),
+    );
+  });
+
+  it('is blind to everything else on the item, which is the point', () => {
+    expect(detailSignatureOf({ ...item(), needsYou: true } as never)).toBe(
+      detailSignatureOf(item()),
+    );
   });
 });

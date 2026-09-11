@@ -14,7 +14,7 @@ import { CoreClient } from '../../src/core-client';
 import { createUi, type Ui } from '../../src/ui/wiring';
 import { validatePrUrl, validateTicket } from '../../src/ui/commands';
 import { heartbeatIntervalMs } from '../../src/ui/terminal';
-import { FakeHost } from '../support/fake-host';
+import { FakeHost, FakeWebviewView } from '../support/fake-host';
 import { FakeBridge, FakeEngineManager } from '../support/fake-engine-manager';
 import { EngineSurface } from '../../src/ui/engine';
 import { startStubServer, type StubHandler, type StubServerHandle } from '../support/stub-server';
@@ -122,6 +122,11 @@ async function connected(opts: { handler?: StubHandler } = {}): Promise<Harness>
   const h = await harness(opts);
   expect(await h.ui.connect()).toBe(true);
   return h;
+}
+
+/** The expanded row's two reads are real round trips over the socket, not microtasks. */
+async function settleDetail(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 25));
 }
 
 function paths(h: Harness, mark: number): string[] {
@@ -761,6 +766,39 @@ describe('R41 the SSE consumer reads the payload as an address', () => {
     h.host.flushTimeouts();
     await h.ui.settled();
     expect(paths(h, mark)).toContain('GET /items');
+  });
+
+  it('re-reads the panel’s open row only when a frame concerns it', async () => {
+    const h = await connected();
+    const view = new FakeWebviewView();
+    h.ui.panel.resolveWebviewView(view);
+    view.webview.emit({ type: 'ready' });
+    view.webview.emit({ type: 'toggleRow', id: HB_ITEM, expanded: true });
+    await h.ui.settled();
+    await settleDetail();
+
+    // A burst about other work. Every frame schedules a refresh; none of them may re-read this
+    // row's artifacts or its change counts.
+    const quiet = h.mark();
+    for (let at = 0; at < 20; at += 1) {
+      h.ui.handleFrame({ event: 'attention.changed', data: { id: 'pr:acme/web#101' } });
+      h.host.flushTimeouts();
+      await h.ui.settled();
+    }
+    await settleDetail();
+    expect(paths(h, quiet).filter((request) => request.includes('/changes'))).toEqual([]);
+    expect(paths(h, quiet).filter((request) => request.includes(`/items/ticket/HB-627`))).toEqual(
+      [],
+    );
+
+    // An artifact of one of this row's own sessions: exactly one re-read.
+    const named = h.mark();
+    const sessionId = (itemsFixture.items.find((i) => i.id === HB_ITEM)?.agents ?? [])[0].sessionId;
+    h.ui.handleFrame({ event: 'artifact.changed', data: { sessionId, name: 'PLAN.md' } });
+    h.host.flushTimeouts();
+    await h.ui.settled();
+    await settleDetail();
+    expect(paths(h, named).filter((request) => request.includes('/changes'))).toHaveLength(1);
   });
 
   it('patches one artifact when the frame names one of this item’s agents', async () => {

@@ -145,3 +145,30 @@ export function currentAgentOf<T extends LifecycleAgent>(agents: readonly T[]): 
 function rankOf(mode: string): number {
   return mode === 'respond' ? STAGE_ORDER.length : STAGE_ORDER.indexOf(mode as StageKind);
 }
+
+/**
+ * Everything an open row's detail actually depends on, as one comparable string.
+ *
+ * The panel re-reads the open row's artifacts and its change counts on a refresh, and every SSE
+ * frame schedules a refresh — so without this, a burst about somebody else's PR costs two engine
+ * round trips per frame for a row that did not move. What the detail is built from is the agents
+ * (which fill the slots), the PRs and the ticket (which fill the parts); a change anywhere else
+ * on the item cannot alter it.
+ *
+ * The one thing it cannot see is an artifact being rewritten with no field changing, which is
+ * why `artifact.changed` also invalidates by hand.
+ */
+export function detailSignatureOf(item: {
+  agents: readonly LifecycleAgent[];
+  prs: readonly { repo: string; number: number; updatedAt: string | null; reviewDecision: string | null; isDraft: boolean | null }[];
+  ticket: { status: string; updatedAt: string } | null;
+}): string {
+  const agents = item.agents
+    .map((a) => `${a.sessionId}|${a.mode}|${a.phase}|${a.running}|${a.needsYou}|${a.worktreePath ?? ''}`)
+    .join(';');
+  const prs = item.prs
+    .map((p) => `${p.repo}#${p.number}|${p.updatedAt ?? ''}|${p.reviewDecision ?? ''}|${p.isDraft ?? ''}`)
+    .join(';');
+  const ticket = item.ticket === null ? '' : `${item.ticket.status}|${item.ticket.updatedAt}`;
+  return `${agents}//${prs}//${ticket}`;
+}
