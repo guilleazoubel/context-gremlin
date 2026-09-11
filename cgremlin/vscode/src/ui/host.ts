@@ -172,6 +172,13 @@ export interface Host {
     options?: SpawnCaptureOptions,
   ): Promise<{ code: number; stdout: string; stderr: string }>;
 
+  /**
+   * The two `globalState` members the per-list sorts are persisted through (R64). Narrow on
+   * purpose: the panel stores one string per list and reads it back, nothing else.
+   */
+  getState<T>(key: string): T | undefined;
+  setState(key: string, value: unknown): Thenable<void>;
+
   /** The output channel, distinct from {@link Host.log} only in that the user is meant to read it. */
   appendOutput(line: string): void;
   showOutput(): void;

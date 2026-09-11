@@ -314,6 +314,18 @@ export class FakeHost implements Host {
     return this.spawnResults.get(command) ?? { code: 0, stdout: '', stderr: '' };
   }
 
+  /** The in-memory stand-in for `globalState` (R64). */
+  readonly state = new Map<string, unknown>();
+
+  getState<T>(key: string): T | undefined {
+    return this.state.get(key) as T | undefined;
+  }
+
+  async setState(key: string, value: unknown): Promise<void> {
+    this.record('setState', key, value);
+    this.state.set(key, value);
+  }
+
   appendOutput(line: string): void {
     this.record('appendOutput', line);
     this.output.push(line);

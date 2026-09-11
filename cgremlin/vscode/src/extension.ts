@@ -38,7 +38,7 @@ let engineSurface: EngineSurface | null = null;
 export function activate(context: vscode.ExtensionContext): void {
   const output = vscode.window.createOutputChannel('cgremlin');
   context.subscriptions.push(output);
-  const host = buildHost(output);
+  const host = buildHost(output, context.globalState);
   // The socket path is not a setting: it is derived from `core.json` by the engine's own loader
   // (MG-C6), and it reaches the client layer as a provider so a settings change can re-point it
   // without rebuilding the UI and releasing every chat claim (R7).
@@ -149,7 +149,7 @@ export async function deactivate(): Promise<void> {
   await current?.dispose();
 }
 
-function buildHost(output: vscode.OutputChannel): Host {
+function buildHost(output: vscode.OutputChannel, state: vscode.Memento): Host {
   const log = (line: string): void => output.appendLine(line);
   return {
     async showInformationMessage(message, options, ...items) {
@@ -306,6 +306,13 @@ function buildHost(output: vscode.OutputChannel): Host {
           },
         );
       });
+    },
+
+    getState<T>(key: string) {
+      return state.get<T>(key);
+    },
+    setState(key: string, value: unknown) {
+      return state.update(key, value);
     },
 
     appendOutput(line: string) {

@@ -37,6 +37,11 @@ describe('MG-B1 pure-modules-are-vscode-free', () => {
     expect(pureSourceFiles().length).toBeGreaterThanOrEqual(3);
   });
 
+  it('covers the work-item view model (B1)', () => {
+    const names = pureSourceFiles().map((file) => path.basename(file));
+    expect(names).toContain('work-items.ts');
+  });
+
   it('covers the engine modules', () => {
     const engine = pureSourceFiles()
       .filter((file) => path.dirname(file).endsWith(path.join('src', 'engine')))

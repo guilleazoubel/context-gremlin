@@ -20,8 +20,13 @@ export const ATTENTION_REASONS = [
   'run_failed',
   'review_ready',
   'rereview_ready',
+  // R51/R63: a respond session at 'ready'. The positions of this array ARE the contract — the
+  // core orders every reason list by it and the ack signature is built from that order.
+  'comments_ready',
   'local_prereq_failed',
   'changes_requested',
+  'review_arrived',
+  'approved',
 ] as const;
 export type AttentionReason = (typeof ATTENTION_REASONS)[number];
 
@@ -31,7 +36,8 @@ export type ItemSource = (typeof ITEM_SOURCES)[number];
 /** `'session:<id>'` | `'pr:<owner>/<repo>#<n>'` — parsed only by the core; opaque here. */
 export type ItemRef = string;
 
-export type SessionMode = 'investigation' | 'development' | 'review';
+/** R51: `respond` is the fourth mode — addressing the reviews on my own PR. */
+export type SessionMode = 'investigation' | 'development' | 'review' | 'respond';
 
 export interface AttentionState {
   needsAttention: boolean;

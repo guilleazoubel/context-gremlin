@@ -29,6 +29,7 @@ export const TERMINAL_PHASES_BY_MODE: Record<SessionMode, readonly string[]> = {
   investigation: ['promoted_to_development', 'abandoned'],
   development: ['merged', 'abandoned'],
   review: ['approved', 'dismissed'],
+  respond: ['closed', 'abandoned'],
 };
 
 export function isTerminalPhase(mode: SessionMode | null, stageStatus: string | null): boolean {
