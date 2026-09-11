@@ -5,6 +5,7 @@
  * which is why this file has no unit test of its own and `ui/wiring.ts` has one.
  */
 import { execFile } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import nodePath from 'node:path';
 import os from 'node:os';
@@ -383,6 +384,20 @@ function buildHost(output: vscode.OutputChannel, state: vscode.Memento): Host {
         return { text: slice.toString('utf8'), end: buffer.byteLength };
       } catch {
         return { text: '', end: from };
+      }
+    },
+    fileDigest(path: string) {
+      try {
+        return crypto.createHash('sha256').update(fs.readFileSync(path)).digest('hex');
+      } catch {
+        return null;
+      }
+    },
+    fileMode(path: string) {
+      try {
+        return fs.statSync(path).mode & 0o777;
+      } catch {
+        return null;
       }
     },
     watchFile(path: string, callback: () => void) {
