@@ -16,7 +16,7 @@ import { DiscoveryScheduler, type Clock, type Tickable } from '../discovery/sche
 import { InventoryScanner, type ScanReport } from '../inventory/inventory-scanner';
 import { JiraRestSource } from '../jira/jira-rest-source';
 import { JiraScanner } from '../jira/jira-scanner';
-import { JiraStore } from '../jira/jira-store';
+import { JiraStore, TicketDetailCache } from '../jira/jira-store';
 import type { JiraSource } from '../jira/jira-source';
 import { InventoryStore } from '../inventory/inventory-store';
 import { createApiServer, type EngineInfo } from '../api/server';
@@ -158,6 +158,22 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     now: adapters.now,
     lock,
     environment: environment ?? undefined,
+    // R18: the engine fetches the ticket text; the agent never sees a
+    // credential, and the `## Ticket` block is composed in exactly one place.
+    tickets: {
+      forBrief: async (key) => {
+        const { ticket } = await ticketDetail.detail(key);
+        if (ticket === null) return null;
+        return {
+          key: ticket.key,
+          summary: ticket.summary,
+          status: ticket.status,
+          url: ticket.url,
+          descriptionText: ticket.descriptionText,
+          comments: ticket.comments,
+        };
+      },
+    },
   });
   const factory = new ReviewSessionFactory({
     gh: adapters.gh,
@@ -187,6 +203,11 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
           extraFields: config.jira.extraFields,
         })
       : null);
+  const ticketDetail = new TicketDetailCache({
+    source: jiraSource,
+    snapshot: () => jiraScanner.lastReport(),
+    now: adapters.now,
+  });
   const jiraScanner = new JiraScanner({
     source: jiraSource,
     store: new JiraStore(adapters.fs, config.jiraCachePath!),
@@ -282,6 +303,7 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     inventory: { scanner, scheduler, factory, inventoryStore, config: { me: config.me } },
     attention,
     workItems,
+    ticketDetail,
     eventRing,
     lock,
     config,

@@ -21,7 +21,22 @@ export const EMPTY_ENVIRONMENT: EnvironmentBriefContext = {
   clerk: null,
 };
 
-export interface BriefCommon { sessionDir: string; ticket: string | null }
+/**
+ * R18 — the ticket content that reaches an agent, as TEXT. There is no HTML
+ * here and none anywhere below it: the adapter flattened `renderedFields` at
+ * the port (R33), so by the time a brief is composed there is nothing left
+ * to render. `null` means nothing was fetched, and the section renders ''.
+ */
+export interface TicketBriefContext {
+  key: string;
+  summary: string;
+  status: string;
+  url: string;
+  descriptionText: string | null;
+  comments: Array<{ author: string; at: string; bodyText: string | null }>;
+}
+
+export interface BriefCommon { sessionDir: string; ticket: string | null; ticketContext?: TicketBriefContext | null }
 export interface FindingsBriefParams extends BriefCommon { intent: 'investigate_only' | 'development'; env?: EnvironmentBriefContext }
 export interface PlanBriefParams extends BriefCommon { driveToCompletion: boolean }
 export interface DevelopBriefParams extends BriefCommon { hasPlan: boolean; env?: EnvironmentBriefContext }
@@ -76,6 +91,50 @@ export function renderEnvironmentSection(ctx: EnvironmentBriefContext): string {
   }
   if (lines.length === 0) return '';
   return `## Environment (started for you by the engine — do NOT start or stop anything yourself)\n${lines.join('\n')}`;
+}
+
+/** R18's caps. A brief is a prompt, and an unbounded comment thread is a prompt-injection and cost surface. */
+export const TICKET_MAX_COMMENTS = 5;
+export const TICKET_MAX_COMMENT_CHARS = 2000;
+export const TICKET_MAX_SECTION_CHARS = 12_000;
+
+const TRUNCATION_NOTE = '_(truncated by the engine)_';
+
+/**
+ * R18 — the gated `## Ticket` block, in the exact shape of
+ * `renderEnvironmentSection`: '' when nothing was fetched, and every caller
+ * writes `const block = section ? '\n\n' + section : ''`.
+ */
+export function renderTicketSection(ctx: TicketBriefContext | null | undefined): string {
+  if (ctx === null || ctx === undefined) return '';
+  let truncated = false;
+  const lines: string[] = [
+    `## Ticket ${ctx.key} — ${ctx.summary}`,
+    `Status: ${ctx.status}${ctx.url === '' ? '' : ` · ${ctx.url}`}`,
+  ];
+  if (ctx.descriptionText !== null && ctx.descriptionText.trim() !== '') {
+    lines.push('', ctx.descriptionText.trim());
+  }
+  const comments = ctx.comments.slice(0, TICKET_MAX_COMMENTS);
+  if (comments.length < ctx.comments.length) truncated = true;
+  if (comments.length > 0) {
+    lines.push('', '### Recent comments (newest first)');
+    for (const comment of comments) {
+      const body = comment.bodyText ?? '';
+      const capped = body.length > TICKET_MAX_COMMENT_CHARS ? body.slice(0, TICKET_MAX_COMMENT_CHARS) : body;
+      if (capped.length < body.length) truncated = true;
+      lines.push('', `**${comment.author}** (${comment.at}):`, capped);
+    }
+  }
+  let text = lines.join('\n');
+  // The whole-section cap has to leave room for the note it adds, or saying
+  // "truncated" would be what pushed it over the cap.
+  const budget = TICKET_MAX_SECTION_CHARS - TRUNCATION_NOTE.length - 2;
+  if (text.length > budget) {
+    text = text.slice(0, budget);
+    truncated = true;
+  }
+  return truncated ? `${text}\n\n${TRUNCATION_NOTE}` : text;
 }
 
 // Reproduces bin/cgremlin:1436-1483 verbatim except the "Reaching the target" bullets,
@@ -243,8 +302,14 @@ Rules for the file:
 export function renderFindingsBrief(p: FindingsBriefParams): string {
   const env = p.env ?? EMPTY_ENVIRONMENT;
   const key = p.ticket ?? '(no ticket)';
+  const ticketSection = renderTicketSection(p.ticketContext);
+  const ticketBlock = ticketSection ? `\n\n${ticketSection}` : '';
   const ticketLine = p.ticket
-    ? `The ticket is ${p.ticket}. Fetch it now via the Atlassian MCP (getJiraIssue) to read the summary, description, and acceptance criteria.`
+    ? ticketSection
+      // R18: reworded, not deleted — the engine already fetched the ticket,
+      // so the MCP call is the fallback for detail the brief does not carry.
+      ? `The ticket is ${p.ticket}. Its text is below; fetch it via the Atlassian MCP (getJiraIssue) only if you need more.`
+      : `The ticket is ${p.ticket}. Fetch it now via the Atlassian MCP (getJiraIssue) to read the summary, description, and acceptance criteria.`
     : '';
   const after =
     p.intent === 'development'
@@ -261,7 +326,7 @@ You are running in an isolated git worktree of the repository (the current worki
 ## Source of truth: the Jira ticket
 ${ticketLine} If the ticket is unavailable or absent, use whatever task description you were given. The ticket defines scope — investigate ONLY what it asks about.
 
-${notes(p.sessionDir)}${envBlock}
+${notes(p.sessionDir)}${envBlock}${ticketBlock}
 
 ## What to do (autonomously — do not ask for routine steps)
 1. Understand the request from the ticket. As your first action write \`${p.sessionDir}/AGENT_NOTE\` = "${key}: <one-line goal>".
@@ -340,11 +405,13 @@ export function renderDevelopBrief(p: DevelopBriefParams): string {
   const uiCheckBlock = uiCheck ? `\n\n${uiCheck}` : '';
   const envSection = renderEnvironmentSection(env);
   const envBlock = envSection ? `\n\n${envSection}` : '';
+  const ticketSection = renderTicketSection(p.ticketContext);
+  const ticketBlock = ticketSection ? `\n\n${ticketSection}` : '';
   return `# DEVELOP — ${key}
 
 You are running in an isolated git worktree on the session branch. Keep a running plan/progress log in \`${p.sessionDir}/DEVELOPMENT.md\`.
 
-${notes(p.sessionDir)}${envBlock}
+${notes(p.sessionDir)}${envBlock}${ticketBlock}
 
 ## What to do
 ${planStep}

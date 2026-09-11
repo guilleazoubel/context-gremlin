@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { SessionFileSystem } from '../fs/session-file-system';
-import type { JiraIssueSummary } from './jira-source';
+import type { JiraIssueDetail, JiraIssueSummary, JiraSource } from './jira-source';
 
 /** R35 — four kinds, not two booleans. `kind !== 'notConfigured'` is the same answer `configured` used to give. */
 export type TicketSourceKind = 'notConfigured' | 'auth' | 'unavailable' | 'ok';
@@ -71,6 +71,70 @@ export class JiraStore {
       return JiraScanReportSchema.parse(JSON.parse(await this.fs.readFile(this.path)));
     } catch {
       return null;
+    }
+  }
+}
+
+/**
+ * R36 — the ticket DETAIL cache, 60 s TTL keyed on the ticket's `updated` in
+ * the current scan snapshot. Opening the same tab twice in a minute is one
+ * network call; a ticket edited in Jira between two scans invalidates
+ * immediately rather than waiting out the TTL.
+ *
+ * `item.changed` deliberately does NOT refetch: a work item changes for many
+ * reasons (an agent's phase, a PR update) and refetching the ticket on each
+ * would turn one busy pipeline into a Jira rate-limit incident. The tab
+ * re-renders from the cached detail.
+ */
+export const TICKET_DETAIL_TTL_MS = 60_000;
+
+interface DetailEntry {
+  at: number;
+  /** The `updated` this detail was fetched at, or null when the snapshot did not carry the ticket. */
+  updatedAt: string | null;
+  detail: JiraIssueDetail;
+}
+
+export interface TicketDetailResult {
+  ticket: JiraIssueDetail | null;
+  ticketError: string | null;
+}
+
+export class TicketDetailCache {
+  private readonly entries = new Map<string, DetailEntry>();
+
+  constructor(
+    private readonly deps: {
+      source: JiraSource | null;
+      snapshot(): Promise<JiraScanReport>;
+      now?: () => Date;
+      ttlMs?: number;
+    },
+  ) {}
+
+  /** Test seam: how many times the underlying source was actually asked. */
+  fetches = 0;
+
+  async detail(key: string): Promise<TicketDetailResult> {
+    if (this.deps.source === null) return { ticket: null, ticketError: null };
+    const nowMs = (this.deps.now ?? (() => new Date()))().getTime();
+    const ttl = this.deps.ttlMs ?? TICKET_DETAIL_TTL_MS;
+    const snapshot = await this.deps.snapshot().catch(() => null);
+    const updatedAt = snapshot?.issues.find((i) => i.key === key)?.updated ?? null;
+
+    const cached = this.entries.get(key);
+    if (cached !== undefined && nowMs - cached.at < ttl && cached.updatedAt === updatedAt) {
+      return { ticket: cached.detail, ticketError: null };
+    }
+    try {
+      this.fetches += 1;
+      const detail = await this.deps.source.issue(key);
+      this.entries.set(key, { at: nowMs, updatedAt, detail });
+      return { ticket: detail, ticketError: null };
+    } catch (err) {
+      // The route never 5xxs because Jira is down: the tab renders the item
+      // with `ticket: null` and says why.
+      return { ticket: null, ticketError: err instanceof Error ? err.message : String(err) };
     }
   }
 }

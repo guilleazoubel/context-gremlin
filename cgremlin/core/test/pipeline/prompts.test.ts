@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   bareSkillName, EMPTY_ENVIRONMENT, renderDevelopBrief, renderFindingsBrief, renderPlanBrief,
   renderRereviewBrief, renderRereviewPrompt, renderReviewBrief, renderReviewContract,
-  renderReviewPrompt, renderUiCheckProtocol, renderEnvironmentSection, STAGE_ENTRY_PROMPT,
+  renderReviewPrompt, renderUiCheckProtocol, renderEnvironmentSection, renderTicketSection, STAGE_ENTRY_PROMPT,
   type EnvironmentBriefContext,
 } from '../../src/pipeline/prompts';
 
@@ -375,5 +375,109 @@ describe('F3: renderFindingsBrief gets the "## Environment" section (mirrors ren
     expect(t).toContain('## Environment');
     expect(t).toContain(`Local app: ${localCtx.localUrl}`);
     expect(t).toContain(localCtx.localLogPath as string);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 9 / Task A7 — the gated `## Ticket` brief section (R18).
+// ---------------------------------------------------------------------------
+
+describe('renderTicketSection (R18)', () => {
+  const base = {
+    key: 'HB-627',
+    summary: 'Parking lot should not show drafts',
+    status: 'In Progress',
+    url: 'https://aplaceformom.atlassian.net/browse/HB-627',
+    descriptionText: 'The parking lot must show open PRs only.',
+    comments: [
+      { author: 'Jane', at: '2026-09-09T09:00:00.000Z', bodyText: 'Newest comment.' },
+      { author: 'Bob', at: '2026-09-08T09:00:00.000Z', bodyText: 'Older comment.' },
+    ],
+  };
+
+  it('returns the empty string for an empty context', () => {
+    expect(renderTicketSection(null)).toBe('');
+  });
+
+  it('renders the key, summary, status, description and comments', () => {
+    const text = renderTicketSection(base);
+    expect(text.startsWith('## Ticket HB-627 — Parking lot should not show drafts')).toBe(true);
+    expect(text).toContain('In Progress');
+    expect(text).toContain('The parking lot must show open PRs only.');
+    expect(text).toContain('Jane');
+    expect(text).toContain('Newest comment.');
+    expect(text).toContain('Older comment.');
+  });
+
+  it('caps at 5 comments and SAYS SO', () => {
+    const many = {
+      ...base,
+      comments: Array.from({ length: 9 }, (_, i) => ({
+        author: `A${i}`,
+        at: `2026-09-0${i + 1}T00:00:00.000Z`,
+        bodyText: `body ${i}`,
+      })),
+    };
+    const text = renderTicketSection(many);
+    expect(text).toContain('body 0');
+    expect(text).toContain('body 4');
+    expect(text).not.toContain('body 5');
+    expect(text.toLowerCase()).toContain('truncated');
+  });
+
+  it('caps each comment at 2000 characters and says so', () => {
+    const long = { ...base, comments: [{ author: 'Jane', at: '2026-09-09T09:00:00.000Z', bodyText: 'x'.repeat(5000) }] };
+    const text = renderTicketSection(long);
+    expect(text).not.toContain('x'.repeat(2100));
+    expect(text.toLowerCase()).toContain('truncated');
+  });
+
+  it('caps the whole section at 12000 characters and says so', () => {
+    const huge = {
+      ...base,
+      descriptionText: 'y'.repeat(11_000),
+      comments: [
+        { author: 'Jane', at: '2026-09-09T09:00:00.000Z', bodyText: 'z'.repeat(2000) },
+        { author: 'Bob', at: '2026-09-08T09:00:00.000Z', bodyText: 'z'.repeat(2000) },
+      ],
+    };
+    const text = renderTicketSection(huge);
+    expect(text.length).toBeLessThanOrEqual(12_000);
+    expect(text.toLowerCase()).toContain('truncated');
+  });
+
+  it('never carries a credential (MG-5)', () => {
+    expect(renderTicketSection(base)).not.toContain('apiToken');
+    expect(renderTicketSection(base)).not.toContain('Authorization');
+  });
+});
+
+describe('the ## Ticket block in the findings and develop briefs (R18)', () => {
+  const ticket = {
+    key: 'HB-627',
+    summary: 'Do the thing',
+    status: 'In Progress',
+    url: 'https://aplaceformom.atlassian.net/browse/HB-627',
+    descriptionText: 'the description',
+    comments: [],
+  };
+
+  it('appears only when a ticket was fetched', () => {
+    const without = renderFindingsBrief({ sessionDir: '/s', ticket: 'HB-627', intent: 'investigate_only' });
+    expect(without).not.toContain('## Ticket HB-627');
+    const with_ = renderFindingsBrief({ sessionDir: '/s', ticket: 'HB-627', intent: 'investigate_only', ticketContext: ticket });
+    expect(with_).toContain('## Ticket HB-627 — Do the thing');
+    expect(with_).toContain('the description');
+  });
+
+  it('the develop brief carries it too', () => {
+    const brief = renderDevelopBrief({ sessionDir: '/s', ticket: 'HB-627', hasPlan: false, ticketContext: ticket });
+    expect(brief).toContain('## Ticket HB-627 — Do the thing');
+  });
+
+  it('the existing "fetch it via getJiraIssue" line is reworded rather than deleted', () => {
+    const brief = renderFindingsBrief({ sessionDir: '/s', ticket: 'HB-627', intent: 'investigate_only', ticketContext: ticket });
+    expect(brief).toContain('getJiraIssue');
+    expect(brief.toLowerCase()).toContain('only if you need more');
   });
 });

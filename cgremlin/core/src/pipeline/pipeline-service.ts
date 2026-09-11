@@ -27,6 +27,7 @@ import {
   EMPTY_ENVIRONMENT,
   renderDevelopBrief,
   renderFindingsBrief,
+  type TicketBriefContext,
   renderPlanBrief,
   renderRereviewBrief,
   renderRereviewPrompt,
@@ -68,6 +69,13 @@ export interface PipelineServiceDeps {
   lock: KeyedLock;
   /** Optional: a wiring with no local-app adapter has no environment at all, and every stage then behaves exactly as it did before Phase 5 (R14). */
   environment?: EnvironmentService;
+  /**
+   * R18 — the ticket text a brief carries, fetched by the ENGINE (never by
+   * the agent, and never a credential). Optional: with no Jira configured
+   * the `## Ticket` section renders '' and the briefs read exactly as they
+   * did before Phase 9.
+   */
+  tickets?: { forBrief(key: string): Promise<TicketBriefContext | null> };
 }
 
 /** What `prepareEnvironment` hands back: the brief context, whether THIS call started the app, and the teardown that undoes both. */
@@ -131,6 +139,16 @@ export class PipelineService {
     this.now = deps.now ?? (() => new Date());
     this.newId = deps.newId ?? ((prefix, slug, key) => `${prefix}-${slug.replace('/', '-')}-${key}-${stamp(this.now())}`);
     this.lock = deps.lock;
+  }
+
+  /**
+   * R18 — the gated ticket context. A fetch failure is not a run failure:
+   * the brief simply renders without the `## Ticket` block, exactly as it
+   * does with no Jira configured.
+   */
+  private async ticketContext(key: string | null): Promise<TicketBriefContext | null> {
+    if (key === null || this.deps.tickets === undefined) return null;
+    return this.deps.tickets.forBrief(key).catch(() => null);
   }
 
   private sessionDir(id: string): string {
@@ -418,7 +436,13 @@ export class PipelineService {
     }
     const sessionDir = this.sessionDir(id);
     const prep = await this.prepareEnvironment(id, 'findings', session);
-    const brief = renderFindingsBrief({ sessionDir, ticket: session.lineage.ticket, intent: session.intent, env: prep.ctx });
+    const brief = renderFindingsBrief({
+      sessionDir,
+      ticket: session.lineage.ticket,
+      intent: session.intent,
+      env: prep.ctx,
+      ticketContext: await this.ticketContext(session.lineage.ticket),
+    });
     const prompt = STAGE_ENTRY_PROMPT(sessionDir);
     try {
       const result = await this.runStageLocked(id, 'findings', brief, prompt, async () => {
@@ -596,7 +620,13 @@ export class PipelineService {
     const sessionDir = this.sessionDir(id);
     const hasPlan = await this.deps.fs.exists(`${sessionDir}/PLAN.md`);
     const prep = await this.prepareEnvironment(id, 'develop', session);
-    const brief = renderDevelopBrief({ sessionDir, ticket: session.lineage.ticket, hasPlan, env: prep.ctx });
+    const brief = renderDevelopBrief({
+      sessionDir,
+      ticket: session.lineage.ticket,
+      hasPlan,
+      env: prep.ctx,
+      ticketContext: await this.ticketContext(session.lineage.ticket),
+    });
     const prompt = STAGE_ENTRY_PROMPT(sessionDir);
     try {
       // No transition on success: PR detection (which drives active -> pr_opened) is Phase 3b.

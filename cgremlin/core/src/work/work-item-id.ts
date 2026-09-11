@@ -26,6 +26,8 @@ export function workItemIdOf(parsed: ParsedWorkItemId): WorkItemId {
 
 const PR_ID_BODY = /^([^/\s]+\/[^/\s#]+)#([1-9][0-9]*)$/;
 const TICKET_KEY = /^[A-Za-z][A-Za-z0-9]*-[0-9]+$/;
+/** The same single-path-segment rule `validation.ts` applies to a ticket key: no '/', no '..'. */
+const SAFE_PATH_COMPONENT = /^[A-Za-z0-9._-]+$/;
 
 export function parseWorkItemId(id: string): ParsedWorkItemId {
   const separator = id.indexOf(':');
@@ -56,4 +58,35 @@ export function parseWorkItemId(id: string): ParsedWorkItemId {
   throw new ValidationError(
     `Invalid work item id '${id}': unknown kind '${kind}' (expected one of ticket, pr, session)`,
   );
+}
+
+/**
+ * R14 — the SEGMENTED path form. `handleRequest` splits `url.pathname` and
+ * never decodes a segment, so an opaque `pr:owner/repo#12` in a path would
+ * need `%2F`/`%23` handling no other route performs. This is the one place
+ * a path is turned back into an addressed item, so the two representations
+ * cannot drift.
+ *
+ * `parts` is everything AFTER the `items` segment. Returns the address plus
+ * whatever trailing segments (`agents`, `ack`) the caller must route on.
+ */
+export function parseWorkItemPath(
+  parts: readonly string[],
+): { parsed: ParsedWorkItemId; rest: string[] } | null {
+  if (parts[0] === 'ticket' && parts.length >= 2) {
+    return { parsed: parseWorkItemId(`ticket:${parts[1]}`), rest: parts.slice(2) };
+  }
+  if (parts[0] === 'pr' && parts.length >= 4) {
+    return { parsed: parseWorkItemId(`pr:${parts[1]}/${parts[2]}#${parts[3]}`), rest: parts.slice(4) };
+  }
+  if (parts[0] === 'session' && parts.length >= 2) {
+    // R25: a session id reaching a path is validated by the SAME
+    // single-path-segment rule every other id component uses
+    // (`validation.ts:54`) before it is used.
+    if (!SAFE_PATH_COMPONENT.test(parts[1])) {
+      throw new ValidationError(`Invalid session id '${parts[1]}' in path: expected [A-Za-z0-9._-]+`);
+    }
+    return { parsed: parseWorkItemId(`session:${parts[1]}`), rest: parts.slice(2) };
+  }
+  return null;
 }
