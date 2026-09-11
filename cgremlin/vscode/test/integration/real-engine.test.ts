@@ -23,7 +23,6 @@ import { appendFile, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { CoreHttpError } from '../../src/core-client';
 import { SseClient, type SseFrame } from '../../src/sse';
-import { buildLists, LIST_ORDER } from '../../src/model/view-model';
 import type { AttentionItem, SessionView } from '../../src/model/items';
 import { createUi, type Ui } from '../../src/ui/wiring';
 import { FakeHost } from '../support/fake-host';
@@ -222,25 +221,14 @@ describe.skipIf(!coreIsBuilt())('integration: the extension against a real engin
       await expect(h.client.artifacts('../escape')).rejects.toThrow(/unsafe session id/);
     });
 
-    it('builds four populated lists from the live responses (MG-B6 shape)', async () => {
-      const [{ groups }, { sessions }, listing] = await Promise.all([
-        h.client.prs(),
-        h.client.sessions(),
-        h.client.attention(true),
-      ]);
-      const lists = buildLists({ items: listing.items, groups, sessions });
-      expect(Object.keys(lists).sort()).toEqual(LIST_ORDER.map((d) => d.kind).sort());
-      expect(lists.parking.map((row) => row.item.ref)).toEqual([`pr:${h.repoSlug}#4`]);
-      expect(lists.reviewing.map((row) => row.item.ref)).toEqual([`session:${h.seeded.review}`]);
-      expect(lists.investigations.map((row) => row.item.ref)).toContain(
-        `session:${h.seeded.investigation}`,
-      );
-      expect(lists.devwork.map((row) => row.item.ref)).toEqual([
-        `session:${h.seeded.development}`,
-        `pr:${h.repoSlug}#5`,
-      ]);
-      expect(lists.reviewing[0].indicator).toBe('✅');
-      expect(lists.reviewing[0].description).toContain('ready');
+    /**
+     * Phase 9 moves the panel onto `GET /items`, which this branch's engine does not serve yet
+     * (Stream A lands it; C1 re-points this suite at the real route). What is asserted here in
+     * the meantime is the degradation that matters: an engine with no `/items` leaves the panel
+     * empty instead of tearing the connection down.
+     */
+    it('degrades to an empty panel when the engine has no /items route yet', async () => {
+      await expect(h.client.items()).rejects.toThrow(CoreHttpError);
     });
   });
 
@@ -259,7 +247,7 @@ describe.skipIf(!coreIsBuilt())('integration: the extension against a real engin
         coalesceMs: 0,
       });
       sse = new SseClient({ socketPath: h.socketPath, backoffMs: [25] });
-      sse.on('frame', () => ui.coordinator.schedule());
+      sse.on('frame', (frame) => ui.handleFrame(frame));
       sse.on('open', () => ui.coordinator.schedule());
       expect(await ui.connect()).toBe(true);
       sse.start();
@@ -270,61 +258,20 @@ describe.skipIf(!coreIsBuilt())('integration: the extension against a real engin
       await ui.dispose();
     }, TIMEOUT);
 
-    it('populates the tree and the status bar from the engine', () => {
-      const roots = ui.tree.getChildren();
-      expect(roots.map((node) => (node.kind === 'root' ? node.list : 'row'))).toEqual([
-        'parking',
-        'reviewing',
-        'investigations',
-        'devwork',
-      ]);
-      for (const root of roots) {
-        if (root.kind !== 'root') continue;
-        expect(root.count, `${root.list} should not be empty`).toBeGreaterThan(0);
-      }
-      // Three needs-you items: the plan_ready investigation, the ready review, and my own PR.
-      expect(host.statusBarItems[0].text).toContain('3 need you');
-      expect(host.statusBarItems[0].text).toContain('no repo open');
+    it('connects and renders a panel even though this engine serves no /items yet', () => {
+      // The 404 is logged and the lists go empty; `connect()` still returned true above, which
+      // is the behaviour that keeps a pre-Phase-9 engine usable rather than "foreign".
+      expect(ui.coordinator.items()).toEqual([]);
+      expect(host.statusBarItems[0].text).toContain('0 need you');
+      expect(host.logs.some((line) => line.includes('GET /items failed'))).toBe(true);
     });
 
-    it(
-      'turns an AGENT_STATE write by the agent into a frame, a refetch and one popup (R7, MG-B2)',
-      async () => {
-        const before = host.callsOf('showInformationMessage').length;
-        await writeFile(
-          path.join(h.sessionsDir, h.seeded.development, 'AGENT_STATE'),
-          'needs-input',
-          'utf8',
-        );
-        // The engine's fs watch → AttentionService → the event ring → our SSE consumer →
-        // coordinator.schedule(); the fake host holds the coalescing timer until we release it.
-        await waitUntil(
-          async () => {
-            host.flushTimeouts();
-            await ui.settled();
-            return ui.coordinator.items();
-          },
-          (items) =>
-            items.find((i) => i.ref === `session:${h.seeded.development}`)?.attention.reasons.includes(
-              'needs_input',
-            ) === true,
-          { timeoutMs: 15_000, what: 'the development item to report needs_input' },
-        );
-
-        const devRow = ui.tree
-          .getChildren(ui.tree.getChildren().find((n) => n.kind === 'root' && n.list === 'devwork'))
-          .flatMap((node) => (node.kind === 'row' ? [node.row] : []))
-          .find((row) => row.item.ref === `session:${h.seeded.development}`);
-        expect(devRow?.indicator).toBe('⏸️');
-        expect(host.statusBarItems[0].text).toContain('4 need you');
-
-        const popups = host.callsOf('showInformationMessage').slice(before);
-        expect(popups.length).toBeGreaterThanOrEqual(1);
-        // The popup names the item by its display title (the ticket, here) and its reasons.
-        expect(popups.some((call) => String(call.args[0]) === 'APP-2 — needs_input')).toBe(true);
-        expect(popups[0].args[2]).toEqual(['Open', 'Ack']);
-      },
-      TIMEOUT,
+    // C1 re-points this at `GET /items`: the AGENT_STATE → frame → refetch → popup chain now
+    // runs over work items, which this branch's engine cannot produce. The chain itself is
+    // covered end to end in `test/ui/command-wiring.test.ts` against the stub server.
+    it.skip(
+      'turns an AGENT_STATE write by the agent into a frame, a refetch and one popup (R7, MG-B2) — C1',
+      () => undefined,
     );
   });
 
@@ -524,17 +471,11 @@ describe.skipIf(!coreIsBuilt())('integration: the extension against a real engin
       expect(session.workspace.branch).toBe('investigate/APP-77');
       expect(session.lastRun).toBeNull();
 
-      const [{ groups }, { sessions }, listing] = await Promise.all([
-        h.client.prs(),
-        h.client.sessions(),
-        h.client.attention(true),
-      ]);
+      const listing = await h.client.attention(true);
       const item = itemFor(listing.items, `session:${session.id}`);
       expect(item.mode).toBe('investigation');
       expect(item.links.worktreePath).toBe(session.workspace.worktreePath);
       expect(item.links.primaryArtifact).toBeNull(); // nothing has run, so there is no artifact
-      const lists = buildLists({ items: listing.items, groups, sessions });
-      expect(lists.investigations.map((row) => row.item.ref)).toContain(`session:${session.id}`);
     }, TIMEOUT);
 
     it('creates a development session with a feature branch and zero runs (MG-A11)', async () => {

@@ -27,11 +27,11 @@ import type {
   StatusBarItemLike,
   TerminalLike,
   TerminalOptionsLike,
-  TreeDataProviderLike,
-  TreeItemLike,
   UriLike,
+  WebviewOptionsLike,
   WebviewPanelLike,
   WebviewPanelOptionsLike,
+  WebviewViewProviderLike,
 } from './ui/host';
 
 let ui: Ui | null = null;
@@ -109,6 +109,7 @@ export function activate(context: vscode.ExtensionContext): void {
     // the bytes as text, so their tests never depend on the bundler having run.
     assets: {
       itemTab: readAssets(context.extensionPath, 'item-tab', output),
+      panel: readAssets(context.extensionPath, 'panel', output),
       mediaPath: nodePath.join(context.extensionPath, 'media'),
     },
     // Read live, so changing the level takes effect without a reload.
@@ -118,9 +119,10 @@ export function activate(context: vscode.ExtensionContext): void {
   ui = created;
 
   const ready = created;
-  // Every frame is a hint that something changed; the coordinator coalesces a burst into one
-  // refetch, so the extension never trusts a frame's payload to be the whole truth.
-  sse.on('frame', () => ready.coordinator.schedule());
+  // R41: a frame's payload is trusted as an ADDRESS and never as content. The consumer reads
+  // `id` only, to decide *what* to refetch — the open Item tab when the id is its own, and one
+  // coalesced `/items` refresh otherwise. Everything rendered still comes from a fresh read.
+  sse.on('frame', (frame) => ready.handleFrame(frame));
   sse.on('resync', () => ready.coordinator.schedule());
   sse.on('open', () => ready.coordinator.schedule());
   sse.on('offline', () => void ready.offline());
@@ -201,20 +203,63 @@ function buildHost(output: vscode.OutputChannel, state: vscode.Memento): Host {
     registerCommand(id, callback) {
       return vscode.commands.registerCommand(id, (...args: unknown[]) => callback(...args));
     },
-    registerTreeDataProvider<T>(viewId: string, provider: TreeDataProviderLike<T>): DisposableLike {
-      return vscode.window.registerTreeDataProvider<T>(viewId, {
-        onDidChangeTreeData: provider.onDidChangeTreeData as
-          | vscode.Event<T | undefined>
-          | undefined,
-        getTreeItem: (element: T) => toTreeItem(provider.getTreeItem(element)),
-        getChildren: (element?: T) => provider.getChildren(element),
-      });
+    registerWebviewViewProvider(
+      viewId: string,
+      provider: WebviewViewProviderLike,
+      options?: { webviewOptions?: { retainContextWhenHidden?: boolean } },
+    ): DisposableLike {
+      return vscode.window.registerWebviewViewProvider(
+        viewId,
+        {
+          resolveWebviewView: (view: vscode.WebviewView) => {
+            provider.resolveWebviewView({
+              get webview() {
+                return {
+                  get html() {
+                    return view.webview.html;
+                  },
+                  set html(value: string) {
+                    view.webview.html = value;
+                  },
+                  get options() {
+                    return {
+                      enableScripts: view.webview.options.enableScripts ?? false,
+                      retainContextWhenHidden: true,
+                      localResourceRoots: (view.webview.options.localResourceRoots ?? []).map(
+                        (uri) => uri.fsPath,
+                      ),
+                    };
+                  },
+                  set options(value: WebviewOptionsLike | undefined) {
+                    if (value === undefined) return;
+                    view.webview.options = {
+                      enableScripts: value.enableScripts,
+                      localResourceRoots: value.localResourceRoots.map((root) =>
+                        vscode.Uri.file(root),
+                      ),
+                    };
+                  },
+                  postMessage: (message: unknown) =>
+                    Promise.resolve(view.webview.postMessage(message)),
+                  onDidReceiveMessage: (listener: (message: unknown) => void) =>
+                    view.webview.onDidReceiveMessage((message: unknown) => listener(message)),
+                };
+              },
+              get title() {
+                return view.title;
+              },
+              set title(value: string | undefined) {
+                view.title = value;
+              },
+              onDidDispose: (listener: () => void) => view.onDidDispose(listener),
+            });
+          },
+        },
+        options,
+      );
     },
     createEventEmitter<T>(): EventEmitterLike<T> {
       return new vscode.EventEmitter<T>();
-    },
-    createTreeItem(label: string, collapsibleState: number): TreeItemLike {
-      return { label, collapsibleState };
     },
     createStatusBarItem(): StatusBarItemLike {
       const item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
@@ -400,12 +445,3 @@ function buildHost(output: vscode.OutputChannel, state: vscode.Memento): Host {
   };
 }
 
-function toTreeItem(like: TreeItemLike): vscode.TreeItem {
-  const item = new vscode.TreeItem(like.label ?? '', like.collapsibleState ?? 0);
-  item.id = like.id;
-  item.description = like.description;
-  item.tooltip = like.tooltip;
-  item.contextValue = like.contextValue;
-  item.command = like.command;
-  return item;
-}

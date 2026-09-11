@@ -2,41 +2,33 @@ import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { decideNotifications } from '../src/model/notify-policy';
-import type { AttentionItem, AttentionReason } from '../src/model/items';
+import type { WorkItem } from '../src/model/work-items';
 
+/**
+ * R24: the diff is over **work items**, keyed by `item.id`, on the **core's** `needsYou` flag.
+ */
 function make(
-  ref: string,
-  reasons: AttentionReason[],
-  overrides: { needsYou?: boolean; needsAttention?: boolean; source?: string } = {},
-): AttentionItem {
-  const needsAttention = overrides.needsAttention ?? reasons.length > 0;
+  id: string,
+  reasons: string[],
+  overrides: { needsYou?: boolean; title?: string } = {},
+): WorkItem {
   return {
-    source: (overrides.source ?? 'session') as AttentionItem['source'],
-    ref,
-    id: ref.slice(ref.indexOf(':') + 1),
-    title: `Item ${ref}`,
-    repoOrContext: 'acme/web',
+    id,
+    kind: 'session',
+    lists: ['myWork'],
+    demoted: false,
+    parkingLotGroup: null,
+    title: overrides.title ?? `Item ${id}`,
+    prs: [],
+    ticket: null,
+    agents: [],
+    needsYou: overrides.needsYou ?? reasons.length > 0,
     attention: {
-      needsAttention,
-      needsYou: overrides.needsYou ?? needsAttention,
       reasons,
       since: '2026-09-10T08:00:00.000Z',
-      signature: `${reasons.join(',')}|2026-09-10T08:00:00.000Z`,
       acked: false,
+      refs: [id],
     },
-    links: {
-      sessionId: null,
-      worktreePath: null,
-      prRepo: null,
-      prNumber: null,
-      prUrl: null,
-      ticket: null,
-      primaryArtifact: null,
-    },
-    mode: 'review',
-    stageStatus: 'ready',
-    running: false,
-    claimed: false,
   };
 }
 
@@ -44,7 +36,7 @@ describe('MG-B2 only-needs-you-pops', () => {
   it('pops for an item entering needsYou', () => {
     const popups = decideNotifications([], [make('session:a', ['review_ready'])], 'all');
     expect(popups).toHaveLength(1);
-    expect(popups[0]).toMatchObject({ ref: 'session:a', source: 'session', reasons: ['review_ready'] });
+    expect(popups[0]).toMatchObject({ id: 'session:a', reasons: ['review_ready'] });
     expect(popups[0]?.message).toContain('review_ready');
   });
 
@@ -66,16 +58,18 @@ describe('MG-B2 only-needs-you-pops', () => {
   });
 
   it('never pops a badge-only item — the core says so, not a local reason list', () => {
-    const badgeOnly = make('session:a', ['local_prereq_failed'], { needsAttention: true, needsYou: false });
+    const badgeOnly = make('session:a', ['local_prereq_failed'], { needsYou: false });
     expect(decideNotifications([], [badgeOnly], 'all')).toEqual([]);
   });
 
   it('treats needs-you-only exactly as all, because only needs-you items ever pop', () => {
     const next = [
       make('session:a', ['review_ready']),
-      make('session:b', ['local_prereq_failed'], { needsAttention: true, needsYou: false }),
+      make('session:b', ['local_prereq_failed'], { needsYou: false }),
     ];
-    expect(decideNotifications([], next, 'needs-you-only')).toEqual(decideNotifications([], next, 'all'));
+    expect(decideNotifications([], next, 'needs-you-only')).toEqual(
+      decideNotifications([], next, 'all'),
+    );
     expect(decideNotifications([], next, 'needs-you-only')).toHaveLength(1);
   });
 
@@ -85,16 +79,25 @@ describe('MG-B2 only-needs-you-pops', () => {
 
   it('pops two items in next order', () => {
     const next = [make('session:b', ['blocked']), make('session:a', ['plan_ready'])];
-    expect(decideNotifications([], next, 'all').map((p) => p.ref)).toEqual(['session:b', 'session:a']);
+    expect(decideNotifications([], next, 'all').map((p) => p.id)).toEqual([
+      'session:b',
+      'session:a',
+    ]);
   });
 
-  it('diffs an item of an unrecognized source by ref, like any other', () => {
-    const prev = [make('jira:ING-9', ['needs_input'], { source: 'jira' })];
-    const same = [make('jira:ING-9', ['needs_input'], { source: 'jira' })];
-    const grown = [make('jira:ING-9', ['blocked', 'needs_input'], { source: 'jira' })];
+  it('diffs a ticket item and a PR item by id, like any other', () => {
+    const prev = [make('ticket:ING-9', ['needs_input'])];
+    const same = [make('ticket:ING-9', ['needs_input'])];
+    const grown = [make('ticket:ING-9', ['blocked', 'needs_input'])];
     expect(decideNotifications([], prev, 'all')).toHaveLength(1);
     expect(decideNotifications(prev, same, 'all')).toEqual([]);
     expect(decideNotifications(prev, grown, 'all')).toHaveLength(1);
+  });
+
+  it('R51 — a respond session at ready pops like any other needs-you item', () => {
+    const popups = decideNotifications([], [make('pr:acme/web#200', ['comments_ready'])], 'all');
+    expect(popups).toHaveLength(1);
+    expect(popups[0].message).toContain('comments_ready');
   });
 
   it('keeps the needs-you rule in the core — the extension has no copy of it', () => {
@@ -117,10 +120,12 @@ describe('MG-B2 only-needs-you-pops', () => {
 });
 
 describe('popup text', () => {
-  it('falls back to the id when the source gave the item no title', () => {
-    const item = make('pr:acme/web#7', ['changes_requested']);
-    item.title = '';
-    const popups = decideNotifications([], [item], 'all');
-    expect(popups.map((p) => p.message)).toEqual(['acme/web#7 — changes_requested']);
+  it('names the item by the title the core computed (R13)', () => {
+    const item = make('pr:acme/web#7', ['changes_requested'], {
+      title: 'acme/web#7 — Tighten the socket timeout',
+    });
+    expect(decideNotifications([], [item], 'all').map((p) => p.message)).toEqual([
+      'acme/web#7 — Tighten the socket timeout — changes_requested',
+    ]);
   });
 });

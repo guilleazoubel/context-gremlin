@@ -9,8 +9,11 @@
 import type {
   DisposableLike,
   WebviewLike,
+  WebviewOptionsLike,
   WebviewPanelLike,
   WebviewPanelOptionsLike,
+  WebviewViewLike,
+  WebviewViewProviderLike,
   EventEmitterLike,
   Host,
   InputBoxOptionsLike,
@@ -20,8 +23,6 @@ import type {
   StatusBarItemLike,
   TerminalLike,
   TerminalOptionsLike,
-  TreeDataProviderLike,
-  TreeItemLike,
   UriLike,
 } from '../../src/ui/host';
 
@@ -63,6 +64,7 @@ export class FakeTerminal implements TerminalLike {
  */
 export class FakeWebview implements WebviewLike {
   html = '';
+  options: WebviewOptionsLike | undefined;
   readonly posted: unknown[] = [];
   private readonly listeners: ((message: unknown) => void)[] = [];
 
@@ -118,10 +120,27 @@ export class FakeWebviewPanel implements WebviewPanelLike {
   }
 }
 
+/** The side panel's view, as the editor would hand it to a provider (R54). */
+export class FakeWebviewView implements WebviewViewLike {
+  readonly webview = new FakeWebview();
+  title: string | undefined;
+  private readonly disposeListeners: (() => void)[] = [];
+
+  onDidDispose(listener: () => void): DisposableLike {
+    this.disposeListeners.push(listener);
+    return { dispose: () => undefined };
+  }
+
+  dispose(): void {
+    for (const listener of [...this.disposeListeners]) listener();
+  }
+}
+
 export class FakeHost implements Host {
   readonly calls: RecordedCall[] = [];
   readonly commands = new Map<string, (...args: unknown[]) => unknown>();
-  readonly providers = new Map<string, TreeDataProviderLike<unknown>>();
+  readonly providers = new Map<string, WebviewViewProviderLike>();
+  readonly views: FakeWebviewView[] = [];
   readonly terminals: FakeTerminal[] = [];
   readonly statusBarItems: FakeStatusBarItem[] = [];
   readonly panels: FakeWebviewPanel[] = [];
@@ -217,10 +236,24 @@ export class FakeHost implements Host {
     return await callback(...args);
   }
 
-  registerTreeDataProvider<T>(viewId: string, provider: TreeDataProviderLike<T>): DisposableLike {
-    this.record('registerTreeDataProvider', viewId);
-    this.providers.set(viewId, provider as TreeDataProviderLike<unknown>);
+  registerWebviewViewProvider(
+    viewId: string,
+    provider: WebviewViewProviderLike,
+    options?: { webviewOptions?: { retainContextWhenHidden?: boolean } },
+  ): DisposableLike {
+    this.record('registerWebviewViewProvider', viewId, options);
+    this.providers.set(viewId, provider);
     return { dispose: () => this.providers.delete(viewId) };
+  }
+
+  /** Simulates the editor creating the view for a registered provider. */
+  resolveView(viewId: string): FakeWebviewView {
+    const provider = this.providers.get(viewId);
+    if (provider === undefined) throw new Error(`no provider registered for '${viewId}'`);
+    const view = new FakeWebviewView();
+    provider.resolveWebviewView(view);
+    this.views.push(view);
+    return view;
   }
 
   createEventEmitter<T>(): EventEmitterLike<T> {
@@ -233,16 +266,12 @@ export class FakeHost implements Host {
       },
       fire: (data: T) => {
         emitter.fired += 1;
-        this.record('treeDataChanged', data);
+        this.record('eventFired', data);
         for (const listener of listeners) listener(data);
       },
       dispose: () => listeners.clear(),
     };
     return emitter;
-  }
-
-  createTreeItem(label: string, collapsibleState: number): TreeItemLike {
-    return { label, collapsibleState };
   }
 
   createWebviewPanel(options: WebviewPanelOptionsLike): WebviewPanelLike {

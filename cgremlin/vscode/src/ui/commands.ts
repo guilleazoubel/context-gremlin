@@ -1,20 +1,22 @@
 /**
  * Every contributed command, and the creation flows.
  *
- * Two rules shape this file:
+ * Three rules shape this file:
  *  - the engine's own wording for a refusal is shown verbatim (`engineErrorText`) — its 4xx
  *    messages are written for humans, and paraphrasing them loses the instruction they carry;
  *  - a request that the API would reject for a reason the widget could have caught is never sent:
- *    the ticket input and the PR-URL input validate with mirrors of the core's own rules.
+ *    the ticket input and the PR-URL input validate with mirrors of the core's own rules;
+ *  - **every item-addressed call goes through `/items/<path>`** (R14/R65): the path is built by
+ *    `itemPathOf` from the item's id, never interpolated by hand, and a *child* click uses that
+ *    child's own path — a PR child of a `ticket:` item opens `/items/pr/o/r/n`.
  */
 import { engineErrorText, type CoreClient, type HttpResult } from '../core-client';
 import { refreshBlockedMessage } from '../model/engine-trouble';
-import { displayTitle } from '../model/items';
+import { itemPathOf, type ItemFocus, type WorkItem } from '../model/work-items';
 import type { EngineHealthSource } from './engine';
-import type { AttentionItem, ListItem } from '../model/items';
 import type { DisposableLike, Host } from './host';
-import type { TreeNode } from './tree';
-import type { ItemOpener, OpenTarget } from './preview';
+import type { ItemTab } from './item-tab';
+import type { PanelView } from './panel-view';
 import type { ChatSessions } from './terminal';
 import type { RefreshCoordinator } from './refresh';
 
@@ -48,13 +50,13 @@ export function validatePrUrl(value: string): string | null {
 
 const INTENTS = ['Investigate only', 'Development-bound'] as const;
 const DRIVE = ['Stop at the plan', 'Drive to completion'] as const;
-const ROWS_THAT_CAN_START_A_REVIEW = new Set(['parking', 'reviewing']);
 
 export interface CommandDeps {
   host: Host;
   client: CoreClient;
   coordinator: RefreshCoordinator;
-  opener: ItemOpener;
+  panel: PanelView;
+  itemTab: ItemTab;
   chat: ChatSessions;
   /**
    * The engine's own surface, when there is one. Refresh consults it first: a scan sent to a
@@ -64,10 +66,23 @@ export interface CommandDeps {
 }
 
 export function registerCommands(deps: CommandDeps): DisposableLike[] {
-  const { host, client, coordinator, opener, chat } = deps;
+  const { host, client, coordinator, panel, itemTab, chat } = deps;
 
-  const target = (arg: unknown): OpenTarget | null => resolveTarget(arg, coordinator.items());
-  const sessionIdOf = (arg: unknown): string | null => target(arg)?.sessionId ?? null;
+  const idOf = (arg: unknown): string | null => (typeof arg === 'string' && arg !== '' ? arg : null);
+
+  const itemOf = (arg: unknown): WorkItem | null => {
+    const id = idOf(arg);
+    if (id === null) return null;
+    return panel.itemOf(id) ?? coordinator.itemOf(id) ?? null;
+  };
+
+  const needsItem = (arg: unknown): WorkItem | null => {
+    const item = itemOf(arg);
+    if (item === null) {
+      void host.showWarningMessage('Pick an item in the cgremlin panel first.', undefined);
+    }
+    return item;
+  };
 
   const surface = (result: HttpResult): boolean => {
     if (result.status >= 200 && result.status < 300) return true;
@@ -75,19 +90,20 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
     return false;
   };
 
-  const needsRow = (arg: unknown): ListItem | null => {
-    const row = rowOf(arg);
-    if (row === null) {
-      void host.showWarningMessage('Pick an item in the cgremlin panel first.', undefined);
-    }
-    return row;
+  /** The session a per-session command acts on: the selected agent, else the item's first. */
+  const sessionOf = (item: WorkItem): string | null => {
+    const current = coordinator.currentSession();
+    if (current !== null && item.agents.some((agent) => agent.sessionId === current)) return current;
+    return item.agents[0]?.sessionId ?? null;
   };
 
   const onSession = async (
     arg: unknown,
     call: (id: string) => Promise<HttpResult>,
   ): Promise<void> => {
-    const id = sessionIdOf(arg);
+    const item = needsItem(arg);
+    if (item === null) return;
+    const id = sessionOf(item);
     if (id === null) {
       void host.showWarningMessage('That item has no session to act on.', undefined);
       return;
@@ -95,20 +111,32 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
     if (surface(await call(id))) coordinator.schedule();
   };
 
-  const openTarget = async (arg: unknown): Promise<void> => {
-    const resolved = target(arg);
-    if (resolved === null) {
-      void host.showWarningMessage('Pick an item in the cgremlin panel first.', undefined);
-      return;
-    }
-    await opener.open(resolved);
+  const openItem = async (arg: unknown, focus?: ItemFocus): Promise<void> => {
+    const item = needsItem(arg);
+    if (item === null) return;
+    const path = itemPathOf(item.id);
+    if (path === null) return;
+    await itemTab.open(path, focus);
   };
 
   return [
-    host.registerCommand('cgremlin.openItem', (arg) => openTarget(arg)),
+    host.registerCommand('cgremlin.openItem', (arg) => openItem(arg)),
+
+    // R48/R65: a child opens the SAME tab, focused on that child, and is addressed by the
+    // child's own path rather than by the row's id.
+    host.registerCommand('cgremlin.openChild', async (arg, childArg) => {
+      const item = needsItem(arg);
+      const childId = idOf(childArg);
+      if (item === null || childId === null) return;
+      const child = panel.childOf(item.id, childId);
+      if (child === undefined || child.path === null) return;
+      await itemTab.open(child.path, child.focus);
+    }),
 
     host.registerCommand('cgremlin.chat', async (arg) => {
-      const id = sessionIdOf(arg);
+      // A popup and a row hand over an item id; the Item tab hands over a session id directly.
+      const item = itemOf(arg);
+      const id = item === null ? idOf(arg) : sessionOf(item);
       if (id === null) {
         void host.showWarningMessage('That item has no conversation to join.', undefined);
         return;
@@ -117,35 +145,79 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
     }),
 
     host.registerCommand('cgremlin.startReview', async (arg) => {
-      const row = needsRow(arg);
-      if (row === null) return;
-      if (!ROWS_THAT_CAN_START_A_REVIEW.has(row.kind)) {
+      const item = needsItem(arg);
+      if (item === null) return;
+      if (item.prs.length === 0) {
+        void host.showWarningMessage(`'${item.title}' has no pull request to review.`, undefined);
+        return;
+      }
+      const path = itemPathOf(item.id);
+      if (path === null) return;
+      if (surface(await client.startAgent(path, { mode: 'review' }))) coordinator.schedule();
+    }),
+
+    /**
+     * R50/R56: the click that creates the respond session **and starts its run**, then swaps to
+     * that PR's worktree and stops there. No claim, no terminal — chat comes second, once the
+     * phase is `addressing` or `ready`.
+     */
+    host.registerCommand('cgremlin.addressReview', async (arg) => {
+      const item = needsItem(arg);
+      if (item === null) return;
+      const pr = item.prs[0];
+      if (pr === undefined || pr.isMine !== true) {
         void host.showWarningMessage(
-          `'${row.label}' is a session, not a pull request in the inventory.`,
+          `'${item.title}' is not a pull request of yours to respond to.`,
           undefined,
         );
         return;
       }
-      const { prRepo, prNumber } = row.item.links;
-      if (prRepo === null || prNumber === null) {
-        void host.showWarningMessage(`'${row.label}' has no pull request to review.`, undefined);
-        return;
-      }
-      if (surface(await client.startReview(prRepo, prNumber))) coordinator.schedule();
+      const path = itemPathOf(`pr:${pr.repo}#${pr.number}`);
+      if (path === null) return;
+      if (!surface(await client.startAgent(path, { mode: 'respond' }))) return;
+      coordinator.schedule();
+      await itemTab.open(path);
     }),
 
-    host.registerCommand('cgremlin.approvePlan', (arg) => onSession(arg, (id) => client.approvePlan(id))),
+    host.registerCommand('cgremlin.startInvestigation', (arg) =>
+      startFromItem(deps, arg, 'investigation'),
+    ),
+    host.registerCommand('cgremlin.startDevelopment', (arg) =>
+      startFromItem(deps, arg, 'development'),
+    ),
+
+    host.registerCommand('cgremlin.openPr', async (arg, childArg) => {
+      const item = needsItem(arg);
+      if (item === null) return;
+      const childId = idOf(childArg);
+      const pr =
+        childId === null
+          ? item.prs[0]
+          : (item.prs.find((candidate) => `pr:${candidate.repo}#${candidate.number}` === childId) ??
+            item.prs[0]);
+      if (pr === undefined) return;
+      await host.openExternal(pr.url);
+    }),
+
+    host.registerCommand('cgremlin.openTicket', async (arg) => {
+      const item = needsItem(arg);
+      if (item === null || item.ticket === null) return;
+      await host.openExternal(item.ticket.url);
+    }),
+
+    host.registerCommand('cgremlin.approvePlan', (arg) =>
+      onSession(arg, (id) => client.approvePlan(id)),
+    ),
     host.registerCommand('cgremlin.stop', (arg) => onSession(arg, (id) => client.stop(id))),
     host.registerCommand('cgremlin.retry', (arg) => onSession(arg, (id) => client.retry(id))),
 
-    // Acknowledgement is keyed by the generic item ref, so a PR with no session acks the same way.
+    // R31: one request. The core fans the ack out over every ref the item contributes.
     host.registerCommand('cgremlin.ack', async (arg) => {
-      const ref = refOf(arg);
-      if (ref === null) {
-        void host.showWarningMessage('Pick an item in the cgremlin panel first.', undefined);
-        return;
-      }
-      if (surface(await client.ack(ref))) coordinator.schedule();
+      const item = needsItem(arg);
+      if (item === null) return;
+      const path = itemPathOf(item.id);
+      if (path === null) return;
+      if (surface(await client.ackItem(path))) coordinator.schedule();
     }),
 
     host.registerCommand('cgremlin.refreshInventory', async () => {
@@ -159,10 +231,6 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
         return;
       }
       if (surface(await client.scan())) coordinator.schedule();
-    }),
-
-    host.registerCommand('cgremlin.refreshPreview', async () => {
-      await host.executeCommand('markdown.preview.refresh');
     }),
 
     host.registerCommand('cgremlin.newInvestigation', async () => {
@@ -212,7 +280,7 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
         void host.showWarningMessage(`${engineErrorText(result.body)} (${url})`, undefined);
         return;
       }
-      const session = sessionOf(result.body);
+      const session = sessionIdOf(result.body);
       if (session === null) {
         void host.showWarningMessage('The engine created no session for that URL.', undefined);
         return;
@@ -221,14 +289,51 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
       // intent was satisfied, so this reveals the existing item instead of reporting an error.
       if (createdFlag(result.body) === false) {
         void host.showInformationMessage(
-          `${url} already has a review session ('${session.sessionId}').`,
+          `${url} already has a review session ('${session}').`,
           undefined,
         );
       }
       coordinator.schedule();
-      await opener.open(session);
+      await openSession(deps, session);
     }),
   ];
+}
+
+/**
+ * R15: a session needs a repo. When the item has a PR the repo is known; a ticket-only row must
+ * be asked, because a Jira ticket does not know which repo it belongs to and guessing would
+ * create a worktree in the wrong place.
+ */
+async function startFromItem(
+  deps: CommandDeps,
+  arg: unknown,
+  mode: 'investigation' | 'development',
+): Promise<void> {
+  const { host, client, coordinator, panel } = deps;
+  const id = typeof arg === 'string' ? arg : null;
+  const item = id === null ? null : (panel.itemOf(id) ?? coordinator.itemOf(id) ?? null);
+  if (item === null) {
+    void host.showWarningMessage('Pick an item in the cgremlin panel first.', undefined);
+    return;
+  }
+  const path = itemPathOf(item.id);
+  if (path === null) return;
+  const repo = item.prs[0]?.repo;
+  let repoUrl: string;
+  if (repo !== undefined) {
+    repoUrl = repoUrlOf(repo);
+  } else {
+    const picked = await pickRepo(deps, `Which repo should the ${mode} run in?`);
+    if (picked === undefined) return;
+    repoUrl = repoUrlOf(picked);
+  }
+  const result = await client.startAgent(path, { mode, repoUrl });
+  if (result.status < 200 || result.status >= 300) {
+    void host.showWarningMessage(engineErrorText(result.body), undefined);
+    return;
+  }
+  coordinator.schedule();
+  await deps.itemTab.open(path);
 }
 
 async function pickRepo(deps: CommandDeps, placeHolder: string): Promise<string | undefined> {
@@ -263,82 +368,37 @@ async function createdThenRun(
   result: HttpResult,
   stage: string,
 ): Promise<void> {
-  const { host, client, coordinator, opener } = deps;
+  const { host, client, coordinator } = deps;
   if (result.status < 200 || result.status >= 300) {
     void host.showWarningMessage(engineErrorText(result.body), undefined);
     return;
   }
-  const session = sessionOf(result.body);
+  const session = sessionIdOf(result.body);
   if (session === null) {
     void host.showWarningMessage('The engine created a session but did not describe it.', undefined);
     return;
   }
-  const run = await client.run(session.sessionId, stage);
+  const run = await client.run(session, stage);
   if (run.status < 200 || run.status >= 300) {
     void host.showWarningMessage(engineErrorText(run.body), undefined);
   }
   coordinator.schedule();
-  await opener.open(session);
+  await openSession(deps, session);
 }
 
-// --- argument plumbing -----------------------------------------------------
-
-function rowOf(arg: unknown): ListItem | null {
-  if (typeof arg !== 'object' || arg === null) return null;
-  const node = arg as TreeNode;
-  return node.kind === 'row' ? node.row : null;
+/** A just-created session has no `WorkItem` yet, so it is opened at its own `session/` path. */
+async function openSession(deps: CommandDeps, sessionId: string): Promise<void> {
+  const path = itemPathOf(`session:${sessionId}`);
+  if (path !== null) await deps.itemTab.open(path);
 }
 
-function refOf(arg: unknown): string | null {
-  const row = rowOf(arg);
-  if (row !== null) return row.item.ref;
-  return typeof arg === 'string' && arg !== '' ? arg : null;
-}
-
-function targetOfItem(item: AttentionItem): OpenTarget {
-  return {
-    sessionId: item.links.sessionId,
-    title: displayTitle(item),
-    worktreePath: item.links.worktreePath,
-    prUrl: item.links.prUrl,
-  };
-}
-
-/**
- * A command argument is a tree node (the usual case), an item ref or session id (a popup action,
- * a just-created session), or an already-built target (the creation flows).
- */
-export function resolveTarget(arg: unknown, items: readonly AttentionItem[]): OpenTarget | null {
-  const row = rowOf(arg);
-  if (row !== null) return targetOfItem(row.item);
-  if (typeof arg === 'string' && arg !== '') {
-    const found = items.find((i) => i.ref === arg || i.links.sessionId === arg);
-    return found === undefined
-      ? { sessionId: arg, title: arg, worktreePath: null, prUrl: null }
-      : targetOfItem(found);
-  }
-  if (typeof arg === 'object' && arg !== null && 'sessionId' in arg) {
-    const candidate = arg as OpenTarget;
-    if (typeof candidate.sessionId === 'string' || candidate.sessionId === null) return candidate;
-  }
-  return null;
-}
-
-/** `{ session: { id, workspace?, pr? } }` — every creation route answers this shape. */
-function sessionOf(body: unknown): (OpenTarget & { sessionId: string }) | null {
+/** `{ session: { id } }` — every creation route answers this shape. */
+function sessionIdOf(body: unknown): string | null {
   if (typeof body !== 'object' || body === null || !('session' in body)) return null;
   const session = (body as { session: unknown }).session;
   if (typeof session !== 'object' || session === null || !('id' in session)) return null;
   const id = (session as { id: unknown }).id;
-  if (typeof id !== 'string' || id === '') return null;
-  const workspace = (session as { workspace?: { worktreePath?: unknown } }).workspace;
-  const pr = (session as { pr?: { url?: unknown } | null }).pr;
-  return {
-    sessionId: id,
-    title: id,
-    worktreePath: typeof workspace?.worktreePath === 'string' ? workspace.worktreePath : null,
-    prUrl: typeof pr?.url === 'string' ? pr.url : null,
-  };
+  return typeof id === 'string' && id !== '' ? id : null;
 }
 
 function createdFlag(body: unknown): boolean | null {

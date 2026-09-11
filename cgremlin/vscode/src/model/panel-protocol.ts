@@ -42,6 +42,8 @@ export interface PanelChildView {
 export interface PanelActionView {
   command: string;
   label: string;
+  /** Which part of the row the action is about, when the row has more than one (R26). */
+  childId?: string;
 }
 
 export interface PanelSectionView {

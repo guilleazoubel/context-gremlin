@@ -107,7 +107,20 @@ export class ItemTab {
   }
 
   /** R41: the frame's `id` is an address. A different item is somebody else's business. */
-  async itemChanged(id: string): Promise<void> {
+  itemChanged(id: string): Promise<void> {
+    const work = this.reload(id);
+    this.track(work);
+    return work;
+  }
+
+  /** One artifact of one of this item's agents, refetched and patched in place. */
+  artifactChanged(sessionId: string, name: string): Promise<void> {
+    const work = this.reloadArtifact(sessionId, name);
+    this.track(work);
+    return work;
+  }
+
+  private async reload(id: string): Promise<void> {
     if (this.detail === null || this.path === null || this.detail.item.id !== id) return;
     try {
       this.detail = await this.deps.client.item(this.path);
@@ -117,8 +130,7 @@ export class ItemTab {
     this.render();
   }
 
-  /** One artifact of one of this item's agents, refetched and patched in place. */
-  async artifactChanged(sessionId: string, name: string): Promise<void> {
+  private async reloadArtifact(sessionId: string, name: string): Promise<void> {
     if (this.detail === null) return;
     if (!this.detail.item.agents.some((agent) => agent.sessionId === sessionId)) return;
     const listing = (this.detail.artifacts[sessionId] ?? []).find((a) => a.name === name);

@@ -136,11 +136,11 @@ describe('MG-B1 the editor API has exactly two entry points', () => {
       'host.ts',
       'item-tab.ts',
       'notifications.ts',
+      'panel-view.ts',
       'preview.ts',
       'refresh.ts',
       'status-bar.ts',
       'terminal.ts',
-      'tree.ts',
       'wiring.ts',
     ]);
   });

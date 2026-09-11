@@ -80,22 +80,6 @@ export interface EventEmitterLike<T> {
   dispose(): void;
 }
 
-export interface TreeItemLike {
-  label?: string;
-  id?: string;
-  description?: string;
-  tooltip?: string;
-  contextValue?: string;
-  collapsibleState?: number;
-  command?: { command: string; title: string; arguments?: unknown[] };
-}
-
-export interface TreeDataProviderLike<T> {
-  onDidChangeTreeData?: EventLike<T | undefined>;
-  getTreeItem(element: T): TreeItemLike;
-  getChildren(element?: T): T[];
-}
-
 /**
  * The webview surface, narrowed to what the Item tab and the side panel actually use (R19, R54).
  *
@@ -106,6 +90,8 @@ export interface TreeDataProviderLike<T> {
  */
 export interface WebviewLike {
   html: string;
+  /** Set by a view provider; a panel is given the same options at creation instead. */
+  options?: WebviewOptionsLike;
   postMessage(message: unknown): Promise<boolean>;
   onDidReceiveMessage(listener: (message: unknown) => void): DisposableLike;
 }
@@ -130,10 +116,19 @@ export interface WebviewPanelOptionsLike extends WebviewOptionsLike {
   title: string;
 }
 
-/** `vscode.TreeItemCollapsibleState`, mirrored (None/Collapsed/Expanded). */
-export const COLLAPSIBLE_NONE = 0;
-export const COLLAPSIBLE_COLLAPSED = 1;
-export const COLLAPSIBLE_EXPANDED = 2;
+/**
+ * The side panel's view. Unlike a panel it is created by the editor and handed to the provider,
+ * which is why its options are set on the webview rather than passed at construction (R54).
+ */
+export interface WebviewViewLike {
+  readonly webview: WebviewLike;
+  title?: string;
+  onDidDispose(listener: () => void): DisposableLike;
+}
+
+export interface WebviewViewProviderLike {
+  resolveWebviewView(view: WebviewViewLike): void;
+}
 
 /**
  * `env` overrides individual variables of the host's own environment — it does not replace it.
@@ -162,11 +157,15 @@ export interface Host {
 
   executeCommand(command: string, ...args: unknown[]): Promise<unknown>;
   registerCommand(id: string, callback: (...args: unknown[]) => unknown): DisposableLike;
-  registerTreeDataProvider<T>(viewId: string, provider: TreeDataProviderLike<T>): DisposableLike;
   createEventEmitter<T>(): EventEmitterLike<T>;
-  createTreeItem(label: string, collapsibleState: number): TreeItemLike;
   createStatusBarItem(): StatusBarItemLike;
   createWebviewPanel(options: WebviewPanelOptionsLike): WebviewPanelLike;
+  /** R54: the side panel. `webviewOptions` mirrors the editor's own registration argument. */
+  registerWebviewViewProvider(
+    viewId: string,
+    provider: WebviewViewProviderLike,
+    options?: { webviewOptions?: { retainContextWhenHidden?: boolean } },
+  ): DisposableLike;
 
   createTerminal(options: TerminalOptionsLike): TerminalLike;
   onDidCloseTerminal(listener: (terminal: TerminalLike) => void): DisposableLike;
