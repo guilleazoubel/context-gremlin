@@ -1,18 +1,67 @@
 #!/bin/bash
 #
-# A `gh` stand-in for the integration harness: it answers exactly the two
-# read-only invocations the engine makes (`pr list` and `pr view`) from
-# committed fixtures, and exits 1 for everything else.
+# A `gh` stand-in for the integration harness: it answers exactly the
+# read-only invocations the engine makes (`pr list`, `pr view` and, since
+# Phase 9, `api graphql` for review threads) from committed fixtures, and
+# exits 1 for everything else.
 #
 # The mutating-token guard is the same protection `FakeGhRunner` gives the
 # core's own tests (test/support/fake-gh-runner.ts): no integration run may
-# ever review, comment on, merge or close a real PR, even by accident.
+# ever review, comment on, merge or close a real PR, even by accident. R55
+# extends that to GraphQL — an argv carrying `mutation` is refused, which is
+# what makes "nothing in Phase 9 writes to GitHub" an executable claim.
 #
 # Fixtures are read from $FAKE_GH_FIXTURES so the harness can put this script
 # (or a symlink to it) on PATH from a temp directory.
 set -u
 
 FIXTURES="${FAKE_GH_FIXTURES:-$(cd "$(dirname "$0")" && pwd)}"
+
+# ---------------------------------------------------------------------------
+# `gh api graphql` (R52). Handled BEFORE the mutating-token scan below,
+# because the read-only GraphQL invocation legitimately carries `-f` and `-F`
+# — so it brings its own, stricter guard instead: no `mutation` anywhere in
+# the argv, and no method override.
+# ---------------------------------------------------------------------------
+if [ "${1:-}" = "api" ] && [ "${2:-}" = "graphql" ]; then
+  number=""
+  thread_id=""
+  for arg in "$@"; do
+    case "$arg" in
+      *mutation*)
+        echo "fake gh: refusing a GraphQL mutation" >&2
+        exit 1
+        ;;
+      --method|-X)
+        echo "fake gh: refusing a method override on gh api graphql" >&2
+        exit 1
+        ;;
+      number=*) number="${arg#number=}" ;;
+      id=*) thread_id="${arg#id=}" ;;
+    esac
+  done
+  if [ -n "$thread_id" ]; then
+    file="$FIXTURES/thread-comments-${thread_id}.json"
+    if [ ! -f "$file" ]; then
+      echo "fake gh: no fixture at $file" >&2
+      exit 1
+    fi
+    cat "$file"
+    exit 0
+  fi
+  if [ -z "$number" ]; then
+    echo "fake gh: api graphql without a number" >&2
+    exit 1
+  fi
+  file="$FIXTURES/review-threads-${number}.json"
+  if [ -f "$file" ]; then
+    cat "$file"
+  else
+    # A PR with no recorded threads still answers the shape the parser wants.
+    echo '{"data":{"repository":{"pullRequest":{"reviewThreads":{"pageInfo":{"hasNextPage":false,"endCursor":null},"nodes":[]}}}}}'
+  fi
+  exit 0
+fi
 
 for arg in "$@"; do
   case "$arg" in

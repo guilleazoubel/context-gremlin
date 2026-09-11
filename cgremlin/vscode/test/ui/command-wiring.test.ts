@@ -18,6 +18,7 @@ import { FakeHost } from '../support/fake-host';
 import { FakeBridge, FakeEngineManager } from '../support/fake-engine-manager';
 import { EngineSurface } from '../../src/ui/engine';
 import { startStubServer, type StubHandler, type StubServerHandle } from '../support/stub-server';
+import itemsFixture from '../support/fixtures/items.json';
 import type { NotificationLevel } from '../../src/model/notify-policy';
 import type { PanelRowView, PanelState } from '../../src/model/panel-protocol';
 
@@ -291,6 +292,32 @@ describe('an engine that is not one this extension can use', () => {
     expect(h.state().trouble?.message).toContain('the work model exploded');
     expect(h.state().trouble?.command).toBe('cgremlin.engine.showLog');
     expect(h.host.statusBarItems[0].warning).toBe(true);
+  });
+
+  /**
+   * R35's other half: a Jira that rejected the token is not "the engine cannot list the work" —
+   * the PR rows are all still good — so it keeps the lists and colours the bar instead.
+   */
+  it('a Jira 401 warns in the status bar AND keeps the four lists (R35)', async () => {
+    const h = await harness({
+      handler: (req) =>
+        req.path === '/items'
+          ? {
+              status: 200,
+              body: {
+                ...(itemsFixture as object),
+                ticketSource: { kind: 'auth', error: 'Basic auth is not allowed', scannedAt: null },
+              },
+            }
+          : undefined,
+    });
+    expect(await h.ui.connect()).toBe(true);
+    expect(h.state().lists).toHaveLength(4);
+    expect(h.state().trouble).toBeNull();
+    expect(h.state().banner).toMatchObject({ kind: 'auth' });
+    expect(h.host.statusBarItems[0].text).toBe('$(warning) cgremlin: jira rejected the token');
+    expect(h.host.statusBarItems[0].warning).toBe(true);
+    expect(h.host.statusBarItems[0].tooltip).toContain('check-jira');
   });
 
   it('finding 2 — the trouble clears the moment /items answers again', async () => {

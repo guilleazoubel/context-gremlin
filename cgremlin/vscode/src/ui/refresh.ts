@@ -15,10 +15,10 @@ import {
   engineErrorText,
   type CoreClient,
 } from '../core-client';
-import { itemsTroubleOf, type SourceTrouble } from '../model/engine-trouble';
+import { itemsTroubleOf, jiraAuthTroubleOf, type SourceTrouble } from '../model/engine-trouble';
 import type { NotificationLevel } from '../model/notify-policy';
 import type { CoreConfigView } from '../model/items';
-import type { ItemsResponse, WorkItem } from '../model/work-items';
+import { ticketTrouble, type ItemsResponse, type WorkItem } from '../model/work-items';
 import type { Host } from './host';
 import type { PanelView } from './panel-view';
 import type { NotificationSurface } from './notifications';
@@ -47,6 +47,12 @@ export class RefreshCoordinator {
   private inFlight: Promise<void> | null = null;
   private timerPending = false;
   private sourceTrouble: SourceTrouble | null = null;
+  /**
+   * R35's other half. Kept apart from `sourceTrouble` on purpose: an engine that cannot list the
+   * work replaces the lists, whereas a Jira that rejected the token leaves every PR row exactly
+   * where it was and only colours the bar (the panel says the rest, in its banner).
+   */
+  private jiraTrouble: SourceTrouble | null = null;
 
   constructor(private readonly deps: RefreshCoordinatorDeps) {}
 
@@ -128,6 +134,8 @@ export class RefreshCoordinator {
     try {
       const response = await this.deps.client.items();
       this.setSourceTrouble(null);
+      const jira = ticketTrouble(response.ticketSource);
+      this.jiraTrouble = jira === null ? null : jiraAuthTroubleOf(jira.message, jira.statusText);
       return response;
     } catch (err) {
       if (err instanceof CoreHttpError) {
@@ -175,7 +183,7 @@ export class RefreshCoordinator {
       currentSessionId: this.currentSessionId,
       currentPhase: current?.phase ?? null,
       currentWorktreePath: this.currentWorktreePath,
-      sourceTrouble: this.sourceTrouble,
+      sourceTrouble: this.sourceTrouble ?? this.jiraTrouble,
     });
   }
 

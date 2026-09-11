@@ -8,7 +8,21 @@ function listing(entries: Array<[name: string, mtime: string]>): ArtifactListing
   return entries.map(([name, mtime]) => ({ name, mtime, size: 10 }));
 }
 
-function sessionOf(mode: 'investigation' | 'development' | 'review'): Session {
+function sessionOf(mode: 'investigation' | 'development' | 'review' | 'respond'): Session {
+  if (mode === 'respond') {
+    return {
+      schemaVersion: 2,
+      id: 'respond-1',
+      mode,
+      createdAt: '2026-09-01T00:00:00.000Z',
+      workspace: { repoUrl: 'git@github.com:o/r.git', worktreePath: '/w/respond-1', branch: 'me/fix' },
+      lineage: { pipelineId: 'respond-1', parentSessionId: null, ticket: null },
+      agent: null,
+      lastRun: null,
+      pr: { repo: 'o/r', number: 12, url: 'https://github.com/o/r/pull/12', headSha: 'a'.repeat(40), title: 't', author: 'me' },
+      stageStatus: 'addressing',
+    } as Session;
+  }
   const stageStatus = mode === 'investigation' ? 'findings' : mode === 'development' ? 'active' : 'ready';
   return migrateV1ToV2({
     schemaVersion: 1,
@@ -33,6 +47,14 @@ describe('pickPrimaryArtifact (R11)', () => {
   it('a review session with only RE-REVIEW.md picks RE-REVIEW.md', () => {
     const l = listing([['BRIEF.md', T2], ['RE-REVIEW.md', T1]]);
     expect(pickPrimaryArtifact(sessionOf('review'), l)).toBe('RE-REVIEW.md');
+  });
+
+  /** R51: a respond session has one output and a fixed answer, exactly like a review session. */
+  it('a respond session opens on COMMENTS.md, and on BRIEF.md while it is still triaging', () => {
+    const withVerdicts = listing([['BRIEF.md', T2], ['COMMENTS.md', T1]]);
+    expect(pickPrimaryArtifact(sessionOf('respond'), withVerdicts)).toBe('COMMENTS.md');
+    expect(pickPrimaryArtifact(sessionOf('respond'), listing([['BRIEF.md', T1]]))).toBe('BRIEF.md');
+    expect(pickPrimaryArtifact(sessionOf('respond'), listing([]))).toBeNull();
   });
 
   it('a review session with neither review artifact falls back to BRIEF.md', () => {

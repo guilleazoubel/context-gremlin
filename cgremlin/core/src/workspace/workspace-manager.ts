@@ -11,6 +11,8 @@ export interface CreateWorkspaceParams {
   branchName: string;
   baseRef: string;
   mode: SessionMode;
+  /** R51: reset an EXISTING branch (the PR's own head) instead of inventing one — see worktree.ts. */
+  resetBranch?: boolean;
 }
 
 export class WorkspaceManager {
@@ -28,6 +30,7 @@ export class WorkspaceManager {
       params.worktreePath,
       params.branchName,
       params.baseRef,
+      { resetBranch: params.resetBranch === true },
     );
     try {
       await writePermissionSettings(this.fs, params.worktreePath, params.mode);

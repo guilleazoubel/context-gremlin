@@ -1,11 +1,14 @@
 # cgremlin — VS Code extension
 
-Mission control for the [cgremlin engine](../core): four attention lists, needs-you notifications,
-one managed worktree folder, and a chat hand-off into the agent's own transcript.
+Mission control for the [cgremlin engine](../core): four **work-item** lists, needs-you
+notifications, one managed worktree folder, an Item tab that renders a piece of work end to end,
+and a chat hand-off into the agent's own transcript.
 
 The extension is a **client**. It never scans GitHub, never spawns an agent and never derives state
-the engine already owns — it reads the engine's Unix socket (`GET /config`, `/prs`, `/sessions`,
-`/attention`, `GET /events`) and posts the actions the user asks for.
+the engine already owns — a refresh is **one** request, `GET /items`, plus the `GET /events` stream
+it reacts to, and it posts the actions the user asks for. Which list a row is in, whether somebody
+is already on a PR and which parking-lot group it belongs to are all the **engine's** answer; the
+panel re-sorts and renders them.
 
 ## Layout
 
@@ -15,7 +18,8 @@ the engine already owns — it reads the engine's Unix socket (`GET /config`, `/
 | `src/sse.ts` | pure | `GET /events`: frame parser plus a reconnecting consumer (`Last-Event-ID`, epoch, resync) |
 | `src/model/*` | pure | wire types and the panel's policies |
 | `src/ui/host.ts` | pure | the editor surface **as an interface** — every `ui/*` module takes one |
-| `src/ui/*` | pure | tree, status bar, notifications, open-item, chat, refresh, commands |
+| `src/webview/*` | browser | the two bundled webview scripts (panel, Item tab) — no editor API, bundled by esbuild into `media/*.js` |
+| `src/ui/*` | pure | the panel view, the Item tab, status bar, notifications, worktree swap, chat, refresh, commands |
 | `src/settings.ts`, `src/extension.ts` | editor API | the only two modules that import `vscode` |
 
 Pure modules must not import the editor API — that is what keeps the policy layer unit-testable
@@ -27,11 +31,69 @@ package.
 
 ## The panel
 
-One activity-bar container with a single view (`cgremlin.items`) whose four roots are
-`LIST_ORDER`: the parking lot, the PRs we are reviewing, investigations and dev work. One view (not
-four) keeps a single `onDidChangeTreeData`, so an applied refresh is exactly one fire however many
-lists changed. Row actions are bound by `contextValue` (`<list>:<source>:<mode>`), so a fifth
-source needs a `LIST_ORDER` entry and a `when` clause — not a restructuring.
+One activity-bar container with a single **webview** view (`cgremlin.items`, `"type": "webview"`)
+holding four lists. It is a webview rather than a `TreeView` because a tree cannot render two-line
+card rows, badges, a collapsible group or an inline sort control. Under `font-src 'none'` there are
+no codicons, so every glyph is a unicode character.
+
+| List | What is in it |
+|---|---|
+| **Parking lot** | My teammates' open, non-draft PRs, in three ordered groups: **Reviewing** (we already have a review agent on it) pinned on top, then **Untouched** — the ones the eye should land on — then a collapsed **Someone is on it**. Age and change size on every row, sortable by both |
+| **My dev work** | Jira tickets assigned to me ∪ my open PRs ∪ my investigation / development / respond sessions, merged into one row per piece of work. A row **expands** into its parts (each agent, the ticket, each PR), and every part is clickable on its own |
+| **Investigations** | The work whose only agent is an investigation, with no PR and no ticket. A ticket-linked investigation is a commitment to deliver, so it lives in My dev work instead |
+| **PRs waiting for review** | My own open PRs, lighting up when a review arrives |
+
+A **review agent never moves a teammate's PR into My dev work** — it is still their PR, and it
+belongs at the top of the parking lot. A **draft is in no list at all**, mine included. Each list
+remembers its own sort (persisted in `globalState`); the parking lot's default is untouched-first
+then oldest.
+
+Row content crosses the message channel as **data**, never as markup: the script sets every string
+with `textContent`, the one `innerHTML` assignment is markdown-it's output, and the CSP carries no
+`unsafe-inline`.
+
+## The Item tab
+
+Clicking a row (or one of its parts) opens **one** editor tab for that piece of work, moves the
+managed workspace to the selected agent's worktree, and lets you switch between the agents attached
+to the item. It has three focuses:
+
+- **an agent** — its artifacts, newest first, rendered as markdown, with the bodies arriving over
+  `postMessage` (never as a file URI);
+- **a PR** — state, review decision, CI, diff size, per-reviewer summaries;
+- **the ticket** — the Jira summary, description and latest comments, **as text**: no HTML ever
+  reaches the extension.
+
+Opening an item and switching agents is *browsing*: neither claims the agent conversation. Only
+the chat terminal does. A **window reload closes the tab** — by design; reopen it from the panel.
+
+## The respond flow
+
+Clicking a **PRs waiting for review** row (or "Address review comments") creates a `respond`
+session, **starts its run**, and swaps the workspace to that PR's worktree — no claim, no terminal
+yet. Once the run has written a brief carrying every review thread, the CI, the diff summary and
+the ticket, the phase moves to `addressing` and the row offers **Chat**, which opens Claude on that
+session.
+
+**Where v1 stops:** nothing posts to GitHub. The agent does not reply to a comment, resolve a
+thread, push, or mark the PR ready. It works the threads into `COMMENTS.md` — one verdict and one
+drafted reply per thread — and commits any fix locally, for a human to review and paste.
+
+## When a source is degraded
+
+The ticket source and the review threads are background legs of the engine's scan, and the panel
+says so rather than quietly showing stale rows:
+
+- **Jira rejected the token** (`401`/`403`) — a banner above the lists **and** a status-bar
+  warning, because it is the one state a restart will not fix. Run
+  `cgremlin-core config check-jira` for Jira's own wording.
+- **Jira (or the thread scan) is unavailable** — a banner saying the rows are the last ones that
+  were scanned. The PR half of the panel is unaffected.
+- **Jira is not configured** — nothing at all is said. A permanent red banner for somebody
+  mid-setup would be worse than the missing tickets.
+- **The engine cannot answer `GET /items`** (an engine older than this extension) — the lists are
+  replaced by one row that says so, with **Restart the engine** on it. Four empty lists that
+  silently mean "the engine cannot answer" is the failure this exists to end.
 
 ## Install / build / run
 
@@ -62,14 +124,19 @@ Then either:
   `code --install-extension cgremlin-vscode-<version>.vsix`. The `.vsix` carries the engine; there
   is nothing else to install and no `cgremlin-core` on `PATH` to arrange.
 
-There are **no runtime dependencies** (`package.json` has no `dependencies` key) and there is no
-bundler: `out/*.js` loads directly in the extension host, unmodified.
+There are **no runtime dependencies** (`package.json` has no `dependencies` key), and the `.vsix`
+carries no `node_modules/`. `out/*.js` loads directly in the extension host, unmodified; the two
+**webview** entry points are bundled separately by esbuild into `media/item-tab.js` and
+`media/panel.js` (with `markdown-it` inside them), which `build` and `vscode:prepublish` both run.
+`esbuild` and `markdown-it` are devDependencies and never ship as packages.
 
 **No `@vscode/test-electron`.** This package has no Electron-hosted test suite — the purity split
 above plus the integration suite cover the policy and client layers, but the actual VS Code surface
 (tree rendering, the workspace swap, the terminal) and the paths that need a real `gh` or a real
 agent still need a human pass: run the manual smoke checklist in [`docs/SMOKE.md`](docs/SMOKE.md)
-before calling a change to this package verified.
+before calling a change to this package verified. Three things in particular have **no** automated
+coverage anywhere and only that pass can answer: a live `claude --resume` (step 4), a live
+Atlassian instance (step 10), and what a real `gh api graphql` costs over two idle ticks (step 6a).
 
 ## Settings
 
@@ -80,21 +147,24 @@ before calling a change to this package verified.
 
 ## Commands
 
-All under the `cgremlin` category (command palette + the tree's row/title actions); most are bound
-to a tree row via `contextValue` rather than exposed in the command palette (`when: "false"` there).
+All under the `cgremlin` category. The row actions are decided by the **host** and sent to the
+webview as data — which ones apply is a rule about the work, not about a `contextValue` string —
+so most are hidden from the command palette (`when: "false"`) and appear only where they make
+sense. A button whose only outcome is a 409 is never offered.
 
 | Command | What |
 |---|---|
-| Open item | opens the item's primary artifact as a markdown preview, and swaps the managed workspace to its worktree |
+| Open item | opens the Item tab for that row, and swaps the managed workspace to the selected agent's worktree |
+| Open part of an item | the same tab, focused on one child — an agent, the ticket, or one PR |
+| Address review comments | on my own non-draft PR: creates a `respond` session **and starts its run** |
 | Chat with the agent | opens a terminal in the item's worktree running `claude --resume <id>` (or `codex resume <id>`), claiming the conversation and re-claiming it every `humanTurnTtlMs / 3` while the terminal stays open |
-| Start review | starts (or opens) a review for a parking-lot/reviewing row |
+| Start review | starts (or opens) a review for a parking-lot row that is not mine and has no review agent yet |
 | Approve plan | approves a ready investigation plan |
 | Stop run | stops the active run on a session |
 | Retry stage | re-runs the last stage |
-| Acknowledge | posts `{ ref }` to `/attention/ack` for any row |
+| Acknowledge | one `POST /items/<path>/ack`; the engine fans it out over every ref the row contributes |
 | Refresh inventory | triggers `POST /prs/scan` |
 | New investigation… / New development session… / New review from PR URL… | the three session-creation flows (quick-picks / an input box; repo choices come from `GET /config`'s `repos`) |
-| Refresh preview | re-runs the built-in `markdown.preview.refresh` |
 | Start the engine | starts the bundled engine, detached, if nothing answers on its socket — offered by the not-running UX below |
 | Stop the engine | asks first (the engine is shared by every window, and stopping it stops whatever is running), then sends one `SIGTERM` to a pid it has just proved is the engine's |
 | Restart the engine | stop, then start; it never spawns while the socket still answers |

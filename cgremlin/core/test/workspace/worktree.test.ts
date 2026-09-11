@@ -14,6 +14,25 @@ describe('createWorktree', () => {
     ]);
   });
 
+  /**
+   * R51 — the respond mode's branch is the PR's OWN head, which `clone --bare` has already put
+   * in the mirror's `refs/heads/*`. `-b` fails there ("a branch named X already exists") and the
+   * stale clone-time ref is not what should be checked out anyway, so `-B` resets it to the
+   * fetched `origin/<branch>`.
+   */
+  it('uses -B, not -b, when the caller says the branch already exists (resetBranch)', async () => {
+    const git = new FakeGitRunner();
+    await createWorktree(git, '/mirrors/repo.git', '/work/respond-1', 'me/fix', 'origin/me/fix', {
+      resetBranch: true,
+    });
+    expect(git.calls).toEqual([
+      {
+        args: ['worktree', 'add', '/work/respond-1', '-B', 'me/fix', 'origin/me/fix'],
+        cwd: '/mirrors/repo.git',
+      },
+    ]);
+  });
+
   it('propagates a worktree-add failure instead of swallowing it', async () => {
     const git = new FakeGitRunner();
     git.queueResponse(new Error('fatal: invalid reference: origin/main'));

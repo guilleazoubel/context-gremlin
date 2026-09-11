@@ -1,0 +1,12 @@
+{
+  "key": "APP-9",
+  "fields": {
+    "summary": "Ticket linked to my pull request",
+    "updated": "2026-09-09T09:00:00.000+0000",
+    "status": { "name": "In Review", "statusCategory": { "key": "indeterminate" } },
+    "assignee": { "accountId": "712020:integration-account" }
+  },
+  "renderedFields": {
+    "description": "<p>TICKET-BODY-APP-9: the caregiver inbox must keep its <b>unread</b> count.</p>"
+  }
+}

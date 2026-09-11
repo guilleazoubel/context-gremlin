@@ -18,7 +18,7 @@
  * is a gitignored artifact and CI without a package step must not fail on its absence.
  */
 import { execFileSync } from 'node:child_process';
-import { readdirSync } from 'node:fs';
+import { readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -57,6 +57,21 @@ describe.skipIf(vsix === null)('MG-C8: the packaged vsix', () => {
     expect(names).toContain('media/item-tab.css');
     expect(names).toContain('media/panel.js');
     expect(names).toContain('media/panel.css');
+  });
+
+  /**
+   * MG-B10 again, from the other side, so a THIRD entry point cannot be added to
+   * `build:webview` and then quietly left out of the archive: every `media/*.js` that exists on
+   * disk must be in the `.vsix`, and each must be a real bundle rather than an empty file.
+   */
+  it('MG-B10: every generated media bundle on disk made it into the archive', () => {
+    const names = new Set(entries(vsix as string));
+    const onDisk = readdirSync(path.join(PACKAGE_DIR, 'media')).filter((name) => name.endsWith('.js'));
+    expect(onDisk.length).toBeGreaterThanOrEqual(2);
+    for (const name of onDisk) {
+      expect(names.has(`media/${name}`), `media/${name} is missing from the .vsix`).toBe(true);
+      expect(statSync(path.join(PACKAGE_DIR, 'media', name)).size).toBeGreaterThan(1_000);
+    }
   });
 
   it('carries no dependencies, no sources, no tests, no docs and no external sourcemap', () => {

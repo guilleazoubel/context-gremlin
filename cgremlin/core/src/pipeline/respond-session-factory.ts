@@ -82,7 +82,17 @@ export class RespondSessionFactory {
     const branchName = mapped.headRefName;
     const baseRef = `origin/${mapped.headRefName}`;
 
-    await workspace.createWorkspace({ repoUrl, worktreePath, branchName, baseRef, mode: 'respond' });
+    // `resetBranch` (R51): the bare mirror already carries `refs/heads/<head branch>` from its
+    // `clone --bare`, so `-b` would fail on the very first respond run — and even if it did not,
+    // that ref is the clone-time snapshot, not the fetched head.
+    await workspace.createWorkspace({
+      repoUrl,
+      worktreePath,
+      branchName,
+      baseRef,
+      mode: 'respond',
+      resetBranch: true,
+    });
 
     const session: RespondSession = {
       schemaVersion: 2,

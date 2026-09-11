@@ -28,8 +28,8 @@ only a version string; the real composition root is `src/host/build-engine.ts`
 
 ## Session model
 
-`mode: 'investigation' | 'review' | 'development'` is the sole source of truth for a
-session's kind (`src/schema/session-mode.ts`). Each mode has its own phase enum and
+`mode: 'investigation' | 'review' | 'development' | 'respond'` is the sole source of truth
+for a session's kind (`src/schema/session-mode.ts`). Each mode has its own phase enum and
 transition table (`src/schema/pipeline.ts`):
 
 **investigation** — `findings → planning → plan_ready → approved →
@@ -50,8 +50,24 @@ where the local pipeline sits: `dismissed` is reachable from every non-terminal 
 mid-run is applied on the next tick once the run settles), and `ready → reviewing` lets a
 PR updated before a human acts get re-reviewed.
 
+**respond** (Phase 9, R51) — `triaging → addressing → ready → closed`, any non-terminal
+phase → `abandoned`. The mode addresses the reviews on **my own** PR: `triaging` is the agent
+classifying the live review threads into `COMMENTS.md`, `addressing` is working the entries
+(local fixes and drafted replies), `ready` means every thread has a verdict and the fixes are
+committed — so the thing it waits on is a **human**. `RESPOND_RUNNABLE_FROM` is
+`['triaging', 'addressing', 'ready']`, and `runRespond` transitions `triaging → addressing`
+inside the locked pre-run callback, so a brief is never written for a phase that has since
+moved. `respond` is also a `STAGE_NAMES` entry, which is what lets `POST /sessions/:id/run`
+validate it and `lastRun.stage` record it.
+
+Nothing in this mode writes to GitHub (R55): the drafted replies live in `COMMENTS.md` for a
+human to paste. See "Review threads" below for where the threads come from.
+
 `canTransition`/`transitionPhase` (`src/schema/pipeline.ts`) are the only place these
-tables are checked; `IllegalTransitionError` maps to HTTP 409.
+tables are checked; `IllegalTransitionError` maps to HTTP 409. `TERMINAL_PHASES_BY_MODE`
+(`src/workspace/workspace-in-use.ts`) is a `Record<Session['mode'], …>` read by eight
+modules, so **adding a mode without filling it in is a compile error** — which is the
+mechanism that made the fourth mode safe to add.
 
 ### Schema v2 fields (`src/schema/session.ts`)
 
@@ -247,6 +263,7 @@ engine may run, and the Vercel preview URL lookup, per session.
 | `inventory.updated` | `{ inventory }` |
 | `attention.changed` | `{ item: AttentionItem }` — emitted by `AttentionService` only on a real delta a client hasn't seen |
 | `artifact.changed` | `{ sessionId, name, mtime }` — emitted from the session-directory watch, for a non-`AGENT_STATE` artifact write |
+| `item.changed` | `{ id, kind, changedFields? }` — emitted by `WorkItemService` when a work item's rendered state moves. **An address, not a payload**: the ring buffers 256 frames and 256 whole `WorkItem`s would be resident memory paid for frames nobody reads, so a client re-reads `GET /items` (or `GET /items/<path>` for an open tab) and renders from that. `changedFields` is advisory — nothing may branch on its *absence* into a different correctness path (R41) |
 
 `serve()` logs one JSON line per event to stderr; `--verbose` also logs `run.output`
 (redacted). `awaitRunStart` (`src/pipeline/run-start.ts`) is the primitive every
@@ -285,6 +302,133 @@ client agree (R18: `cgremlin/core/docs/superpowers/specs/2026-09-10-cgremlin-pha
 - **Routes**: `GET /attention` (`?all=1` for every evaluated item, `?source=session|pr` to filter;
   default is only items with `needsAttention`), `POST /attention/ack { ref }` (the one ack path),
   and the two named aliases `POST /sessions/:id/ack` / `POST /prs/:owner/:repo/:number/ack`.
+
+## Work items
+
+`src/work/` answers the question the panel actually asks — *what am I working on?* — by
+**grouping** the attention items, never by deriving a second opinion about them (R1). Nothing
+in this directory reads a session document, an `AGENT_STATE` file or an artifact mtime, and
+nothing in it takes a session lock (MG-1): `deriveSessionReasons`/`evaluateAttention` is the
+one place the "does this want me" rule lives, and a second reader of session state would be a
+second copy of that rule *and* a second thing that could block a stage run.
+
+- **`groupWorkItems`** (`src/work/work-item.ts`) is **pure**: no clock, no I/O. It takes the
+  **pre-dedupe** attention list (`attention.list({ all: true, dedupe: false })`, R27 — so a work
+  item can still see the PR row's draft flag, review requests and human activity after
+  `AttentionService` has folded that row into its session), the inventory, the last Jira scan
+  and the config, and returns one `WorkItem` per piece of work. A `WorkItem` is
+  `kind: 'pr' | 'ticket' | 'pr+ticket' | 'session'` with `prs[]`, `ticket`, `agents[]` and one
+  merged `attention` block whose `refs[]` are every contributing `ItemRef` (which is what makes
+  the ack a server-side fan-out, R31).
+- **Ids** (`src/work/work-item-id.ts`): `ticket:<KEY>` | `pr:<owner>/<repo>#<n>` |
+  `session:<id>`. Ids are **stable under a link appearing**: once a PR names a ticket the item's
+  id is the ticket's, which is why every route addresses an item by a **path** (`ticket/:key`,
+  `pr/:owner/:repo/:n`, `session/:id`) that resolves to the item *containing* that part rather
+  than by matching the item's own id (R65).
+- **`isBotLogin`** (`src/work/bot-login.ts`) is the ONE bot predicate in the engine: the
+  parsed author's `is_bot` when gh emitted one, then a `[bot]` suffix, then the default list
+  widened (never replaced) by `config.botLogins`. MG-4 asserts no second `[bot]` literal exists.
+- **`WorkItemService`** (`src/work/work-item-service.ts`) composes the grouping with the
+  attention service, the inventory store, the Jira scanner and the review-thread scanner, and
+  emits `item.changed` deltas. `serve()` owns its `start()`/`stop()`, exactly as it does for
+  `AttentionService`.
+
+### The four lists (R47–R50)
+
+Membership is the **core's** answer (D2). A client re-sorts and renders; it never re-derives
+which list a row is in, whether somebody is already on a PR, or which parking-lot group a row
+belongs to. `lists` on the response carries per-list **order** as id arrays; `items` is a set
+keyed by id, sorted by `id`, because one array cannot carry four different orders at once.
+
+| List | Membership |
+|---|---|
+| `parkingLot` | A teammate's open PR (`isDraft !== true`, `isMine !== true`) that is either by a `watchAuthors` login, or has **my** review requested (R30 — a request to me outranks the watch list), or `showAllRepoPrs` is on. Split into three ordered groups: **`reviewing`** (we already have a review agent on it) on top, then **`untouched`**, then a collapsed **`someoneOnIt`**. R57's totality disjunct keeps a **merged or closed** teammate PR listed while a live review agent is still on it |
+| `myWork` | A Jira ticket assigned to me ∪ my own open PRs ∪ any item with a non-`review` agent. **A review agent never routes an item into `myWork`** (R48, the coordinator override): a teammate's PR we are reviewing is a teammate's PR, and it belongs at the top of the parking lot |
+| `investigations` | Literally "the sessions I only have an investigation for" — no PR, no ticket, investigation agents only. A **ticket-linked** investigation is a commitment to deliver, so it is `myWork` instead (R49) |
+| `waitingForReview` | My own open PRs. Clicking one creates a `respond` session and **starts its run** (R51/R56) |
+
+`demoted` is "somebody is already on this PR": any human review or comment (`humanActivity`,
+computed at scan time from the **unfiltered** reviews and comments, never from the
+watch-filtered `teamActivity`), **or** a pending review request to somebody other than me
+(R47.1 — GitHub has already assigned that PR to a named person). A **draft** is in no list at
+all, mine included.
+
+The ticket merge is deliberately one-sided (R61): a PR and a ticket become one row only when
+the **resulting item would be mine**, so two teammates' PRs naming one ticket key stay two
+items — in the parking lot the user is choosing between PRs to *read*, and merging them hides
+one behind the other.
+
+## Jira (the ticket source)
+
+`src/jira/` is **read-only, forever**. `JiraSource` (`src/jira/jira-source.ts`) has three
+methods — `whoami`, `search`, `issue` — and no fourth; the REST adapter issues only `GET`
+(a source grep for `method: 'POST'` under `src/jira` must be empty), and there is no Jira
+write path anywhere in the engine.
+
+- **Config** (`jira` in `core.json`): `siteUrl` and `email` are required, `apiToken` is the one
+  thing the user must supply. `baseUrl` defaults to `siteUrl` and exists so a test or a proxy
+  can point the adapter elsewhere; **browse URLs are always built from `siteUrl`** (R37).
+  `jql` is one string (`assignee = currentUser() AND statusCategory != Done ORDER BY updated
+  DESC` by default) — a user who wants the current sprint edits that one string.
+  **`projectKeys` is required for linking**: empty means ticket linking is *disabled*, not
+  unfiltered, because the bare key regex happily links `SHA-256` and `UTF-8` (R46). The engine
+  says so once per process, never once per PR. `extraFields` is where instance-specific field
+  names go — an unknown field name 400s the whole request, which is why
+  `acceptance_criteria`/`customfield_10016` are not in the default set.
+- **The secret regime** (R44, MG-5): `jira.apiToken` is treated exactly like
+  `vercel.bypassSecret` — it makes `hasAnySecret` true (so a world-readable `core.json` is
+  refused), it is `[redacted]` by `redactCoreConfig`, and it never appears in a brief, a log
+  line, an event frame, an HTTP response or `jira.json`. The only place it is read is the
+  adapter's `Authorization` header.
+- **Both pagination shapes** (R32): `/search/jql` first, paging by `nextPageToken`/`isLast`; a
+  404 or 410 means the instance has not migrated and the adapter falls back to `/search`
+  (`startAt`/`maxResults`/`total`, reading the **response's** page size, since Jira caps it
+  server-side). The fallback fires **once per scan**, never once per page.
+- **The scan leg** (`src/jira/jira-scanner.ts`, R12/R34/R35): folded into the discovery tick
+  rather than given a second scheduler, but it runs **after** `inventory.updated` is emitted,
+  is **not awaited** by the tick, is single-flight, is bounded by one `AbortController` at
+  `jira.scanBudgetMs` for the whole leg (whoami plus every page), and reports failures instead
+  of throwing them. `ScanReport.jira` carries the **last completed** report, which is what lets
+  `POST /prs/scan` answer at PR speed against a Jira that is timing out.
+- **Degrade, never empty** (MG-6): a failed scan keeps the previous tickets and says why.
+  `ticketSource.kind` is `ok` | `unavailable` | `auth` (a 401/403 — the one state a restart will
+  not fix) | `notConfigured` (no block, or no token: not an error, and **not** a reason to make
+  a request or clobber the cache). The previous `jira.json` is deliberately not rewritten on a
+  failure, so a restart still finds yesterday's answer.
+- **No HTML crosses the port** (R33, MG-10): `renderedFields` is flattened to text in
+  `src/jira/html-to-text.ts`, and no identifier ending in `Html` exists on the boundary.
+- **Caches**: `jiraCachePath` (`<stateDir>/jira.json`) for the scan, plus a short-lived
+  `TicketDetailCache` so repeat opens of one Item tab stay off the network (R36).
+
+## Review threads
+
+`src/gh/review-threads.ts` is the engine's **first and only** GraphQL call (R52). It goes
+through the existing `GhRunner` (`gh api graphql`), so there is no new port, no new process
+spawner and no new fake. Like `src/jira`, it is read-only forever: every document here is a
+`query`, and MG-14's greps are what keep it that way.
+
+- **The query** is the legacy tool's (`bin/cgremlin:14776-14787`) widened from
+  `comments(first:1)` to `comments(first:100)` on purpose — the truncation is exactly why the
+  old brief had to reconcile replies by hand. A thread with more comments than one page is
+  followed by a second query addressed at the thread's own node id
+  (`node(id:) { ... on PullRequestReviewThread { comments(after:) } }`), capped at
+  `MAX_COMMENT_PAGES`; past the cap the thread is marked `truncated` rather than coming back
+  silently short.
+- **The fetch policy** is the cost control, decided because "threads for all 58 PRs every tick"
+  is the risk: only **my** open non-draft PRs (they feed `waitingForReview` and the respond
+  brief) and a parking-lot candidate whose `humanActivity` is *empty* from reviews and comments
+  alone — the only case where a thread comment could change the answer. A PR that already has
+  human activity needs no thread call to stay demoted.
+- **The cache** (`reviewThreadsCachePath`, `<stateDir>/review-threads.json`) is keyed
+  `"<repo>#<n>"` with the PR's `updatedAt` recorded beside the threads: an unchanged
+  `updatedAt` is **never** refetched, so a steady-state tick makes **zero** GraphQL calls
+  (MG-16). The leg runs on R34's discipline exactly like the Jira one — after
+  `inventory.updated`, not awaited, single-flight, budgeted by
+  `reviewThreads.scanBudgetMs`, drained by `stop()`, and leaving the previous cache intact on
+  failure.
+- A thread reply counts towards `humanActivity` exactly like a conversation comment, and is the
+  only such signal the two `gh pr list` arrays cannot see. Because the leg publishes *after* the
+  scan, that half is deliberately **one tick behind**.
 
 ## Session-directory watcher
 
@@ -383,6 +527,10 @@ All routes are on the Unix socket at `config.socketPath`, JSON in/out.
 | GET | `/sessions/:id` | load one session | 404 unknown id |
 | GET | `/sessions/:id/artifacts` | list a session's artifacts, with mtimes and the core-chosen `primary` | 200, 404 unknown session |
 | GET | `/sessions/:id/artifacts/:name` | read an allow-listed file from the session dir | 400 bad name, 404 not found |
+| GET | `/items` | the four work-item lists: `{evaluatedAt, lists, items, ticketSource, threadSource}`. `?list=parkingLot\|myWork\|investigations\|waitingForReview` narrows it (`reviewing` is a **group**, not a list, and is rejected). A pure read — it starts nothing (MG-8) | 200, 400 unknown list, 404 no work-item layer wired |
+| GET | `/items/ticket/:key`, `/items/pr/:owner/:repo/:n`, `/items/session/:id` | `{item, ticket, ticketError, artifacts}` for the item **containing** that part (R65) — a `pr/` path on a ticket-linked PR answers with the `ticket:` item, and `artifacts` is keyed by session id. `ticket` is the full Jira detail as text, fetched on demand; a Jira that is down answers `ticket: null` with `ticketError` rather than failing the route | 200, 404 no item owns that path |
+| POST | `/items/<path>/ack` | acknowledge the item — the fan-out over **every** contributing `ItemRef` happens server-side, so no client re-derives which refs an item owns (R31) | 200 `{item, acked, failed}`, 502 when every ack failed |
+| POST | `/items/<path>/agents` `{mode, repoUrl?, intent?, driveToCompletion?}` | create (or report) an agent on this item, **composing the existing creation paths** rather than inventing a second one. `review` and `respond` take the same `pr:<slug>#<n>` lock key the review routes take, so they cannot race `POST /prs/…/review`. `respond` creates AND starts the run (R56) | 202 `{session, created, started, item}`, 200 `{…, reason}` when an existing session is left alone (a run in flight, or a human holds the claim), 400 no PR / no repoUrl for a ticket-only item, 409 own PR (`review`) or **not** my PR (`respond`) |
 | GET | `/attention` | `?all=1` for every evaluated item (default: only `needsAttention`); `?source=session\|pr` to filter | 200 |
 | POST | `/attention/ack` `{ref}` | acknowledge one item by `ItemRef` | 200, 400 unparseable ref, 404 |
 | POST | `/sessions/:id/ack` | alias for `{ref: sessionRef(id)}` | 200, 404 |
@@ -418,7 +566,7 @@ All routes are on the Unix socket at `config.socketPath`, JSON in/out.
 codes: `SessionNotFoundError`/`ArtifactNotFoundError`/`NoScanYetError`/`ItemNotFoundError` → 404;
 `InvalidSessionIdError`/`ValidationError`/`InvalidPrUrlError` → 400; `IllegalTransitionError`,
 `PlanGateError`, `RunInProgressError`, `WorkspaceInUseError`, `HumanTurnInProgressError`,
-`UnsupportedStageError`, `WorkspaceMissingError`, `TickInProgressError`, `OwnPrError`, and every
+`UnsupportedStageError`, `WorkspaceMissingError`, `TickInProgressError`, `OwnPrError`, `NotMyPrError`, and every
 `LocalAppPortBusyError`/`LocalAppPrereqError`/`LocalAppUnhealthyError`/`LocalAppSetupError`
 → 409; `SessionCorruptError` and anything unrecognized → 500.
 
@@ -432,6 +580,7 @@ codes: `SessionNotFoundError`/`ArtifactNotFoundError`/`NoScanYetError`/`ItemNotF
 | `sessions [--json]` | `GET /sessions` |
 | `scan [--json]` | `POST /prs/scan` |
 | `config init [--me <login>] [--force]` | write a first-run `core.json` (`{me, repos: [], runner}`) through `writeCoreConfig` — 0600, no derived paths persisted; exit 2 without `--me`, exit 1 over an existing file without `--force` |
+| `config check-jira` | `GET /rest/api/3/myself` with the configured credentials — the same check the legacy tool made. On failure it prints **Jira's own wording**, because that is the only thing that tells a wrong token from a revoked one from a captcha challenge. The token itself is never printed. Runs against the config, not the socket: it works with the engine stopped |
 | `config import-legacy [--force]` | read the legacy `~/.cgremlin/config`, write `~/.cgremlin-core/core.json`. That legacy path is the only `~/.cgremlin` reference left in the engine |
 | `local start <session-id> [--fresh]` / `local stop\|status [session-id]` [--json] | the `/local*` routes |
 | `release <session-id>` | `POST /sessions/:id/conversation/release` — the by-hand human-turn recovery path |
@@ -518,6 +667,26 @@ existing pattern of parsing `parts`/`method` first; if it mutates a session, eit
 it in `lock.withLock(id, …)` yourself (a pure read like artifacts) or call a
 `PipelineService` method that already locks internally — never both (KeyedLock is not
 re-entrant, and nesting deadlocks). Map any new error class in `mapErrorToHttp`.
+
+**Add an item source**: a source is an attention `SourceAdapter` plus its own pure
+`derive*Reasons` (see "Attention"), and nothing else — `evaluateAttention` is source-agnostic
+and never changes. `src/work/` then groups whatever the adapter produced: give the new source
+an id shape in `src/work/work-item-id.ts` if items of that kind can stand alone, teach
+`groupWorkItems` which candidate it joins, and add its membership clause to `membership()`.
+Do **not** add a reader of session or filesystem state to `src/work/` — MG-1's grep is what
+keeps the UI path lock-free.
+
+**Add a session mode**: add it to `SessionModeSchema` (`src/schema/session-mode.ts`) and a
+variant to the v2 session union (`src/schema/session.ts`; both unions are discriminated on
+`mode`, so a fourth variant is additive and the **v1** union is deliberately not extended).
+Add its phase enum and transition table to `src/schema/pipeline.ts`, then fill it in at
+`TERMINAL_PHASES_BY_MODE` (`src/workspace/workspace-in-use.ts`) — that map is a
+`Record<Session['mode'], …>` read by eight modules, so **the compiler is the gate**: a missed
+site is a build error, not a runtime surprise. If the mode can run, it also needs a
+`STAGE_NAMES` entry, a `render<Mode>Brief`, a `run<Mode>` on `PipelineService` with its own
+`*_RUNNABLE_FROM` list, and a `runStage` switch arm — `respond` (Phase 9) is the worked
+example, and `POST /sessions/:id/run` failing zod validation is what a missing stage name
+looks like.
 
 **Add a runner**: implement `AgentRunner` (`src/agent/agent-runner.ts`); wire it into
 `realAdapters()` (`src/host/serve.ts`) behind `config.runner`; add it to

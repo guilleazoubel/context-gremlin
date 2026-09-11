@@ -114,6 +114,15 @@ export const OUTDATED_ENGINE_MESSAGE =
   'The engine is older than this extension (no /items). Restart the engine to load the ' +
   'bundled version.';
 
+/**
+ * R35: a Jira that REJECTED the credentials earns the engine-trouble treatment in the status bar
+ * as well as the panel banner — it is the one ticket-source state a restart will not fix and the
+ * user has to go and do something about. The lists themselves stay: the PRs are still good.
+ */
+export function jiraAuthTroubleOf(message: string, statusText: string): SourceTrouble {
+  return { message, statusText, command: SHOW_LOG_ID, actionLabel: SHOW_LOG };
+}
+
 export function itemsTroubleOf(status: number, message: string): SourceTrouble {
   if (status === 404) {
     return {

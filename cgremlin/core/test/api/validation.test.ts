@@ -118,6 +118,8 @@ describe('parseArtifactName', () => {
     const names = [
       'FINDINGS.md', 'PLAN.md', 'DEVELOPMENT.md', 'REVIEW.md', 'RE-REVIEW.md', 'BRIEF.md',
       'REVIEW-v1.md', 'REVIEW-v23.md', 'AGENT_NOTE', 'AGENT_STATE', 'rereview_summary', 'PR_URL',
+      // R51: the respond mode's only output. Off this list, the whole mode is unreadable.
+      'COMMENTS.md',
     ];
     for (const name of names) {
       expect(parseArtifactName(name)).toBe(name);
