@@ -223,7 +223,7 @@ export async function serve(config: CoreConfig, adapters: EngineAdapters, opts: 
   await adapters.fs.mkdir(mirrorsDir, { recursive: true });
 
   const engine = buildEngine(config, adapters, { makeTickable: opts.makeTickable });
-  const { server, scheduler, pipeline, events, environment, attention, engineInfo } = engine;
+  const { server, scheduler, scanner, pipeline, events, environment, attention, engineInfo } = engine;
   const lockPath = config.enginePidPath!;
 
   const unsubscribers: Array<() => void> = [
@@ -356,6 +356,11 @@ export async function serve(config: CoreConfig, adapters: EngineAdapters, opts: 
       // rereview/agent after we've already begun tearing everything down,
       // leaving it running forever with nothing left to stop it.
       await scheduler.stop();
+      // R34: the Jira and review-thread legs are deliberately NOT awaited by
+      // a tick, so `scheduler.stop()` alone can return while one is still
+      // mid-write. Draining them here is what keeps a shutdown from leaving
+      // a half-written cache behind.
+      await scanner.stop();
       try {
         // StageRunner's in-memory active map is the only trustworthy source
         // of "what's actually running" — an on-disk lastRun.outcome==='running'

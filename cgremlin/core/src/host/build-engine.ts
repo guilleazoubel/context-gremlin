@@ -14,6 +14,10 @@ import { ReviewSessionFactory } from '../pipeline/review-session-factory';
 import { ReconciliationTick } from '../discovery/reconciliation';
 import { DiscoveryScheduler, type Clock, type Tickable } from '../discovery/scheduler';
 import { InventoryScanner, type ScanReport } from '../inventory/inventory-scanner';
+import { JiraRestSource } from '../jira/jira-rest-source';
+import { JiraScanner } from '../jira/jira-scanner';
+import { JiraStore } from '../jira/jira-store';
+import type { JiraSource } from '../jira/jira-source';
 import { InventoryStore } from '../inventory/inventory-store';
 import { createApiServer, type EngineInfo } from '../api/server';
 import { EventRing, attachEventRing } from '../api/event-stream';
@@ -80,6 +84,12 @@ export interface BuildEngineOptions {
    * `scheduler.runNow()`/the interval actually invoke.
    */
   makeTickable?: (parts: TickableParts) => Tickable<ScanReport>;
+  /**
+   * Overrides the Jira source — a test/harness seam (D7 also allows pointing
+   * `jira.baseUrl` at a stub server, which is what the integration harness
+   * does). `null` forces R35's `notConfigured`.
+   */
+  jiraSource?: JiraSource | null;
 }
 
 /**
@@ -158,6 +168,31 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
   });
 
   const inventoryStore = new InventoryStore(adapters.fs, inventoryPath);
+
+  // R35: no `jira` block, or one with no token, is `notConfigured` — the
+  // scanner is still wired, so the report shape is always the same, but it
+  // has no source and therefore makes no request.
+  const jiraSource: JiraSource | null =
+    opts.jiraSource ??
+    (config.jira !== undefined && config.jira.apiToken !== undefined && config.jira.apiToken !== ''
+      ? new JiraRestSource({
+          baseUrl: config.jira.baseUrl ?? config.jira.siteUrl,
+          siteUrl: config.jira.siteUrl,
+          email: config.jira.email,
+          apiToken: config.jira.apiToken,
+          timeoutMs: config.jira.timeoutMs,
+          maxResults: config.jira.maxResults,
+          extraFields: config.jira.extraFields,
+        })
+      : null);
+  const jiraScanner = new JiraScanner({
+    source: jiraSource,
+    store: new JiraStore(adapters.fs, config.jiraCachePath!),
+    jql: config.jira?.jql ?? '',
+    scanBudgetMs: config.jira?.scanBudgetMs ?? 20_000,
+    ...(config.jira?.maxResults !== undefined ? { maxResults: config.jira.maxResults } : {}),
+    now: adapters.now,
+  });
   const tick = new ReconciliationTick({ gh: adapters.gh, store, pipeline, events, lock, now: adapters.now });
   const scanner = new InventoryScanner({
     gh: adapters.gh,
@@ -170,8 +205,11 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
       me: config.me,
       watchAuthors: config.watchAuthors,
       prListLimit: config.prListLimit,
+      botLogins: config.botLogins,
+      projectKeys: config.jira?.projectKeys ?? [],
     },
     now: adapters.now,
+    jira: jiraScanner,
   });
 
   // The attention model: one adapter per source (R18), an ack store of its

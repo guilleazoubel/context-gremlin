@@ -14,6 +14,7 @@ import type { TickReport } from '../discovery/reconciliation';
 import type { Tickable } from '../discovery/scheduler';
 import { buildEntries, groupInventory, type Inventory, type InventoryEntry, type InventoryGroups } from './inventory';
 import type { Session } from '../schema/session';
+import type { JiraScanReport } from '../jira/jira-store';
 
 export interface InventoryScannerDeps {
   gh: GhRunner;
@@ -30,12 +31,24 @@ export interface InventoryScannerDeps {
     projectKeys?: readonly string[];
   };
   now?: () => Date;
+  /**
+   * R12/R34 — the Jira leg. Optional, because an engine with no `jira` block
+   * has no leg at all. It runs AFTER `inventory.updated` is emitted, is not
+   * awaited, and is single-flight; `lastReport()` is what `ScanReport.jira`
+   * carries, so `POST /prs/scan` answers at PR speed whatever Jira is doing.
+   */
+  jira?: {
+    run(): Promise<JiraScanReport>;
+    inFlight(): Promise<void> | null;
+    lastReport(): Promise<JiraScanReport>;
+  };
 }
 
 export interface ScanReport {
   inventory: Inventory;
   groups: InventoryGroups;
   reconciliation: TickReport;
+  jira: JiraScanReport;
 }
 
 function errorMessage(err: unknown): string {
@@ -143,9 +156,31 @@ export class InventoryScanner implements Tickable<ScanReport> {
       inventory.errors.push({ repo: '*', error: `inventoryStore.save failed: ${errorMessage(err)}` });
     }
 
-    const report: ScanReport = { inventory, groups, reconciliation };
+    const jira: JiraScanReport = (await this.deps.jira?.lastReport()) ?? {
+      scannedAt: nowIso,
+      me: null,
+      issues: [],
+      error: null,
+      kind: 'notConfigured',
+    };
+
+    const report: ScanReport = { inventory, groups, reconciliation, jira };
     this._lastReport = report;
     this.deps.events.emit('inventory.updated', { inventory });
+
+    // R34: the leg starts only AFTER the PR half is published, and `run()`
+    // does not await it — with it inline, a Jira that hangs for
+    // timeoutMs x pages also stalls the panel's only fresh data and a
+    // user-initiated rescan. Single-flight, and its failures are reported on
+    // the next tick's report rather than thrown into this one.
+    if (this.deps.jira !== undefined && this.deps.jira.inFlight() === null) {
+      void this.deps.jira.run().catch(() => undefined);
+    }
     return report;
+  }
+
+  /** Drains the in-flight Jira leg, so a shutdown never leaves a half-written cache. */
+  async stop(): Promise<void> {
+    await this.deps.jira?.inFlight()?.catch(() => undefined);
   }
 }

@@ -14,6 +14,7 @@ import { GhCommandError } from '../../src/gh/gh-runner';
 import { SessionStore } from '../../src/engine/session-store';
 import { migrateV1ToV2, type ReviewSession, type Session } from '../../src/schema/session';
 import type { Inventory } from '../../src/inventory/inventory';
+import type { JiraScanReport } from '../../src/jira/jira-store';
 
 const fixturesDir = path.join(__dirname, '../fixtures/gh');
 const fullListJson = readFileSync(path.join(fixturesDir, 'pr-list-full.json'), 'utf8');
@@ -486,5 +487,169 @@ describe('the recorded gh pr list sample (A2: U1, U6, R59, R60)', () => {
     expect(entries[0].changedFiles).toBe(26);
     expect(entries[0].labels).toEqual(['missing-tests', '20 min review']);
     expect(entries[2].isDraft).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 9 / Task A5 — the Jira leg is folded into the tick, AFTER the PR half
+// is published, on its own budget, and never blocks POST /prs/scan (R34).
+// ---------------------------------------------------------------------------
+
+describe('InventoryScanner: the Jira leg (R34, R12)', () => {
+  function fakeJiraLeg(behaviour: { hang?: boolean; report?: JiraScanReport } = {}) {
+    let flight: Promise<void> | null = null;
+    let release: (() => void) | null = null;
+    const runs: number[] = [];
+    const last: JiraScanReport = behaviour.report ?? {
+      scannedAt: '2026-09-09T00:00:00.000Z',
+      me: '712020:me',
+      issues: [],
+      error: null,
+      kind: 'ok',
+    };
+    return {
+      runs,
+      releaseLeg: () => release?.(),
+      leg: {
+        run: async (): Promise<JiraScanReport> => {
+          runs.push(Date.now());
+          if (behaviour.hang === true) {
+            if (flight === null) {
+              flight = new Promise<void>((resolve) => {
+                release = resolve;
+              });
+            }
+            await flight;
+          }
+          return last;
+        },
+        inFlight: () => flight,
+        lastReport: async () => last,
+      },
+    };
+  }
+
+  function buildWithJira(leg: ReturnType<typeof fakeJiraLeg>['leg'], events: string[]) {
+    const h = createHarness();
+    const gh = new FakeGhRunner();
+    const lock = new KeyedLock();
+    const reconciliationTick = new ReconciliationTick({ gh, store: h.store, pipeline: h.service, events: h.events, lock });
+    const inventoryStore = new InventoryStore(h.fs, '/state/inventory.json');
+    h.events.on('inventory.updated', () => events.push('inventory.updated'));
+    const scanner = new InventoryScanner({
+      gh,
+      store: h.store,
+      inventoryStore,
+      reconciler: { reconcile: () => reconciliationTick.run() },
+      events: h.events,
+      config: scannerConfig(),
+      now: FIXED_NOW,
+      jira: leg,
+    });
+    return { h, gh, scanner };
+  }
+
+  it('emits inventory.updated BEFORE the Jira leg starts', async () => {
+    const order: string[] = [];
+    const { leg } = fakeJiraLeg();
+    const wrapped = {
+      ...leg,
+      run: async () => {
+        order.push('jira.leg');
+        return leg.run();
+      },
+    };
+    const { gh, scanner } = buildWithJira(wrapped, order);
+    gh.queueResponse({ stdout: fullListJson });
+    await scanner.run();
+    await scanner.stop();
+    expect(order).toEqual(['inventory.updated', 'jira.leg']);
+  });
+
+  it('run() resolves without awaiting the leg, so a hung Jira cannot delay POST /prs/scan', async () => {
+    const fake = fakeJiraLeg({ hang: true });
+    const { gh, scanner } = buildWithJira(fake.leg, []);
+    gh.queueResponse({ stdout: fullListJson });
+    const report = await scanner.run();
+    expect(report.inventory.entries.length).toBeGreaterThan(0);
+    expect(fake.leg.inFlight()).not.toBeNull();
+    fake.releaseLeg();
+    await scanner.stop();
+  });
+
+  it('ScanReport.jira is the LAST COMPLETED report — the cache on a cold start', async () => {
+    const cached: JiraScanReport = {
+      scannedAt: '2026-09-09T00:00:00.000Z',
+      me: '712020:me',
+      issues: [
+        {
+          key: 'HB-627',
+          summary: 's',
+          status: 'In Progress',
+          statusCategory: 'indeterminate',
+          assignee: '712020:me',
+          updated: '2026-09-09T00:00:00.000Z',
+          url: 'https://example.atlassian.net/browse/HB-627',
+        },
+      ],
+      error: null,
+      kind: 'ok',
+    };
+    const fake = fakeJiraLeg({ hang: true, report: cached });
+    const { gh, scanner } = buildWithJira(fake.leg, []);
+    gh.queueResponse({ stdout: fullListJson });
+    const report = await scanner.run();
+    expect(report.jira.issues.map((i) => i.key)).toEqual(['HB-627']);
+    fake.releaseLeg();
+    await scanner.stop();
+  });
+
+  it('a tick starting during an in-flight leg starts NO second leg, and stop() awaits the one in flight', async () => {
+    const fake = fakeJiraLeg({ hang: true });
+    const { gh, scanner } = buildWithJira(fake.leg, []);
+    gh.queueResponse({ stdout: fullListJson });
+    gh.queueResponse({ stdout: fullListJson });
+    await scanner.run();
+    await scanner.run();
+    expect(fake.runs.length).toBe(1);
+
+    let drained = false;
+    const stopping = scanner.stop().then(() => {
+      drained = true;
+    });
+    expect(drained).toBe(false);
+    fake.releaseLeg();
+    await stopping;
+    expect(drained).toBe(true);
+  });
+
+  it('a jira failure never affects the PR entries', async () => {
+    const leg = {
+      run: async (): Promise<JiraScanReport> => {
+        throw new Error('jira exploded');
+      },
+      inFlight: () => null,
+      lastReport: async (): Promise<JiraScanReport> => ({
+        scannedAt: '2026-09-09T00:00:00.000Z',
+        me: null,
+        issues: [],
+        error: 'stale',
+        kind: 'unavailable',
+      }),
+    };
+    const { gh, scanner } = buildWithJira(leg, []);
+    gh.queueResponse({ stdout: fullListJson });
+    const report = await scanner.run();
+    expect(report.inventory.entries.length).toBeGreaterThan(0);
+    expect(report.jira.kind).toBe('unavailable');
+    await scanner.stop();
+  });
+
+  it('with no jira leg wired at all the report still carries a notConfigured jira block', async () => {
+    const { gh, scanner } = buildScanner();
+    gh.queueResponse({ stdout: fullListJson });
+    const report = await scanner.run();
+    expect(report.jira).toEqual({ scannedAt: expect.any(String), me: null, issues: [], error: null, kind: 'notConfigured' });
+    await scanner.stop();
   });
 });
