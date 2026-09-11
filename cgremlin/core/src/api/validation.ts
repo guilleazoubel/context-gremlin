@@ -98,8 +98,12 @@ export function parseRunStageRequest(body: unknown): { stage: StageName } {
 // single-line marker files. Anything else — including path-traversal
 // attempts — is rejected; this is the only thing standing between the
 // artifact-read route and the filesystem.
+//
+// R51: `COMMENTS.md` is the respond mode's ONLY output — "the drafted replies
+// live in COMMENTS.md for a human to paste" — so leaving it off this list
+// makes the whole mode unreadable from the Item tab.
 const ARTIFACT_NAME_PATTERN =
-  /^(?:FINDINGS|PLAN|DEVELOPMENT|REVIEW|RE-REVIEW|BRIEF|REVIEW-v\d+)\.md$|^AGENT_(?:NOTE|STATE)$|^rereview_summary$|^PR_URL$/;
+  /^(?:FINDINGS|PLAN|DEVELOPMENT|REVIEW|RE-REVIEW|BRIEF|COMMENTS|REVIEW-v\d+)\.md$|^AGENT_(?:NOTE|STATE)$|^rereview_summary$|^PR_URL$/;
 
 export function parseArtifactName(name: string): string {
   if (!ARTIFACT_NAME_PATTERN.test(name)) {

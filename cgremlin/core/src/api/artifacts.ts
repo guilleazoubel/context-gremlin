@@ -26,6 +26,10 @@ const REVIEW_PREFERENCE = ['REVIEW.md', 'RE-REVIEW.md', 'BRIEF.md'] as const;
 // with this order breaking a tie deterministically (R11).
 const WORK_PREFERENCE = ['PLAN.md', 'DEVELOPMENT.md', 'FINDINGS.md'] as const;
 const WORK_FALLBACK = 'BRIEF.md';
+// R51: a respond session has one output and a fixed answer, exactly like a
+// review session — open on the verdicts, fall back to the brief that listed
+// the threads while the agent is still triaging.
+const RESPOND_PREFERENCE = ['COMMENTS.md', 'BRIEF.md'] as const;
 
 /**
  * R11: the core, not the UI, chooses the artifact a row opens. Pure over the
@@ -41,6 +45,10 @@ export function pickPrimaryArtifact(
 
   if (session.mode === 'review') {
     return REVIEW_PREFERENCE.find((name) => byName.has(name)) ?? null;
+  }
+
+  if (session.mode === 'respond') {
+    return RESPOND_PREFERENCE.find((name) => byName.has(name)) ?? null;
   }
 
   let best: { name: string; at: number } | null = null;
