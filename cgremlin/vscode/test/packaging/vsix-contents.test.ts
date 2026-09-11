@@ -16,9 +16,16 @@
  * It reads the real archive rather than `vsce ls`, so it asserts what a user would actually
  * install. Skipped, with a message, when `pnpm package` has not been run in this tree: the `.vsix`
  * is a gitignored artifact and CI without a package step must not fail on its absence.
+ *
+ * It reads a COPY, snapshotted once at collection time, rather than the archive in `PACKAGE_DIR`
+ * directly: `pnpm package` can be re-running concurrently with `pnpm test` (nothing serializes
+ * them), and `vsce package` rewrites the same filename in place — a test that opened that path
+ * mid-rewrite could see a truncated or half-written zip. Copying it once, up front, into a temp
+ * file means every `entries()` call below reads a file nothing else can be writing to.
  */
 import { execFileSync } from 'node:child_process';
-import { readdirSync, statSync } from 'node:fs';
+import { copyFileSync, mkdtempSync, readdirSync, statSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
@@ -29,8 +36,22 @@ function vsixPath(): string | null {
   return found.length === 0 ? null : path.join(PACKAGE_DIR, found[found.length - 1]);
 }
 
-const vsix = vsixPath();
+const discovered = vsixPath();
 const SKIP_REASON = `no .vsix in ${PACKAGE_DIR} — run \`pnpm package\` to produce one`;
+
+/**
+ * `null` when nothing was found (the skip path). Otherwise a private, never-rewritten copy of
+ * whatever `.vsix` existed at collection time — snapshotted before any test body runs.
+ */
+const vsix: string | null =
+  discovered === null
+    ? null
+    : (() => {
+        const dir = mkdtempSync(path.join(tmpdir(), 'cgvsc-vsix-'));
+        const copy = path.join(dir, path.basename(discovered));
+        copyFileSync(discovered, copy);
+        return copy;
+      })();
 
 /** The archive's own entry names, with the `extension/` prefix vsce adds stripped off. */
 function entries(archive: string): string[] {

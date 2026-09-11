@@ -1400,6 +1400,24 @@ stays in the user's own config for the manual smoke pass (SMOKE.md step 9).
    Fixed in the extension, deliberately kept apart from the `/items` trouble: a rejected Jira
    token leaves every PR row where it is and only colours the bar.
 
+### Test infrastructure: `pnpm test` was quietly running the integration suite too (Phase 10)
+
+Not a defect in this plan's guards, but in the test wiring they all sit on top of: `vitest.config.ts`
+had one `include` (`test/**/*.test.ts`) with no `exclude`, so `pnpm test` ran
+`test/integration/**` — real engines over real Unix sockets — whenever `../core/dist` happened to
+already be built, which it usually was in a working tree. That made the "unit" run take minutes
+instead of seconds, and put two real-process cases (a real stop's `STOP_BUDGET_MS` poll and a real
+restart's SSE reconnect) at risk of tripping their test-level timeout under full-suite parallel
+load, despite always passing in isolation. Separately, `test/packaging/vsix-contents.test.ts` read
+the `.vsix` straight out of the package directory, racing any concurrently running `pnpm package`.
+
+Fixed by splitting `test/integration/**` into its own `vitest.integration.config.ts` /
+`pnpm test:integration` (`pool: 'forks'`, `fileParallelism: false`, plus a `globalSetup` guard that
+fails the run if any `engine.js serve` process with a harness temp `stateDir` outlives the suite),
+sizing the two load-sensitive cases' timeouts past the real 45 s stop budget with one documented
+retry, and having the packaging test snapshot the `.vsix` into a temp copy before reading it. See
+`cgremlin/vscode/README.md`'s "Unit vs. integration" section.
+
 ---
 
 ## Risks

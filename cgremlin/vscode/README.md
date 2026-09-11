@@ -99,8 +99,9 @@ says so rather than quietly showing stale rows:
 
 ```sh
 pnpm install
-pnpm test              # vitest, no editor harness
-pnpm test:integration  # builds ../core and its bundles, then drives a real engine on a temp socket
+pnpm test              # vitest, no editor harness — unit only, test/integration/** excluded
+pnpm test:integration  # builds ../core and its bundles, then drives real engines on temp sockets
+pnpm test:all          # both, in that order
 pnpm build             # ../core's engine bundles, then tsc -p tsconfig.json -> out/
 pnpm package           # build, then `vsce package --no-dependencies` -> cgremlin-vscode-<version>.vsix
 pnpm lint
@@ -109,6 +110,18 @@ pnpm lint
 `pnpm build` builds **the engine first** (`pnpm --dir ../core build:engine`, two esbuild bundles
 into `engine/`) and only then compiles the extension, so `out/` without `engine/` is not a state
 a build can leave behind. `engine/` and the `.vsix` are gitignored artifacts.
+
+**Unit vs. integration.** `test/integration/**` is split into its own `vitest.integration.config.ts`
+and its own `pnpm test:integration` script — `pnpm test` (`vitest.config.ts`) never touches it, so a
+plain unit run stays fast and has nothing real to leak, whether or not `../core` happens to be built.
+The integration config runs with `pool: 'forks'` and `fileParallelism: false`: each file gets its own
+process and files run one at a time, because two real engines racing for CPU and file descriptors is
+exactly what made a couple of the real-process cases flaky before this split (see the `STOP_TIMEOUT` /
+`RESTART_TIMEOUT` comments in `test/integration/engine-manager.test.ts` and `real-engine.test.ts`,
+sized past the manager's real 45 s `STOP_BUDGET_MS`, with one retry as a last-resort net). A
+`globalSetup` (`test/integration/global-teardown.ts`) backstops all of it: after every integration
+file has finished, it `pgrep`s for any `engine.js serve --config <cgvsc-* temp stateDir>` process still
+alive and fails the whole run loudly if it finds one — that means some test's cleanup didn't run.
 
 `test/integration/real-engine.test.ts` drives `CoreClient`, `SseClient` and the whole host wiring
 against a real engine — that is what proves the structural `*View` types here match what the engine
