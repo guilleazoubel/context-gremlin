@@ -1418,6 +1418,62 @@ sizing the two load-sensitive cases' timeouts past the real 45 s stop budget wit
 retry, and having the packaging test snapshot the `.vsix` into a temp copy before reading it. See
 `cgremlin/vscode/README.md`'s "Unit vs. integration" section.
 
+### Phase 10 errata — what the panel workshop changed against this spec
+
+Recorded here rather than by editing §5 in place, so the Phase 9 design still reads as what was
+actually built and shipped. The workshop's own rulings are in
+`docs/superpowers/specs/2026-09-11-cgremlin-phase10-panel-workshop.md` and are summarised in
+`cgremlin/core/docs/DECISIONS.md` under *2026-09-11 — Phase 10*. Six things this plan's spec says
+are no longer true.
+
+**1. §5's "card rows, two lines each" is now two lines *of cells*, plus a third on `myWork`.**
+Line 2 was specified as one dimmed sentence (`@author · opened 12d ago · 7 files +120/−30 · 👤
+@jane reviewed`). In a 300 px sidebar that sentence clipped, and what it clipped first was the
+activity — the part that decides whether to pick the PR up. It is now an array of typed cells
+(`RowMetaCell`) that the view lays out and is allowed to wrap or drop, and a `myWork` row carries a
+third "state" line. A new **size tier** cell (`S`/`M`/`L`/`XL`) sits between the age and the raw
+size, and the CI signal became a coloured dot with a tooltip rather than an emoji (emoji size
+inconsistently in the sidebar).
+
+**2. §5's "children indented under it when expanded (R48)" — the expansion is a different thing.**
+The spec expanded a `myWork` row into its parts: each agent, the ticket, each PR. Every row now
+expands, and it expands into **three lifecycle slots** (Investigation → Development → Review),
+which exist whether or not an agent fills each, plus **"changes so far"**, plus the parts *minus*
+the agents (they are the slots and are not listed twice). The reason is that the spec's version
+had a shape that changed per row — a list of whichever agents happened to exist — and so could not
+be read at a glance; three fixed slots make an absent stage *information*.
+
+**3. Clicking a row was "open the Item tab and swap the worktree". It is now select + expand +
+swap, as one message.** The Item tab is still there and still opens, but it is no longer what a
+click on the row body does. Expansion is an accordion (at most one row open) and the selection is a
+persistent highlight distinct from the keyboard focus ring, both persisted through `globalState`.
+
+**4. §5's button row is gone in favour of one primary button, a forward-only rule and an
+overflow.** The spec's row offered `Start review / investigation / development` together. Only the
+stage **after the furthest one reached** is now offered — a PR counts as the development stage's
+output — and on your own PR the review verb reads *Start self-review* and carries
+`selfReview: true`. Everything that is not the one primary verb (open the PR, open the ticket, Ack)
+moved behind `⋯`. The rule lives in `model/row-actions.ts` and the lifecycle slots take their Start
+button from the row's own actions rather than deriving it again.
+
+**5. R47.1's second demotion clause is reversed.** This plan's A6/A1 tasks implemented
+`demoted` as "any human review or comment **or** a pending review request to somebody other than
+me". The request half is removed: `someoneIsOnIt` is `humanActivity.lastAt !== null` and nothing
+else. Evidence: `gh#2125` sat in the collapsed group for days with a review requested from somebody
+who never opened it. The request is still carried and still rendered on the row.
+
+**6. The core grew two things §4 did not describe**, both of which the extension now depends on:
+`WorkItemPr.sizeTier` (per-dimension, worse wins) and `GET /sessions/:id/changes`. The spec had no
+route for "how big is this session's work right now" because the panel had nowhere to show it; the
+expanded row is that place, and the number moves while an agent works, so it could not be a field
+on a listing.
+
+Two more changes are outside this spec's scope but land in the same phase and are recorded for the
+reader who arrives here from it: the adoption handshake now compares a **build id** as well as a
+version, the `core.json` watcher is content-addressed and an automatic restart is spent once per
+engine identity (the restart-storm fix); and a dropped event stream must stay down for 8 s before
+the extension says "offline".
+
 ---
 
 ## Risks
