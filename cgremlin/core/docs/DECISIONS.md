@@ -360,3 +360,33 @@ which amend an earlier R.
 - **A start or stop is tagged `'auto'` or `'user'`.** The distinction is not cosmetic: it is what
   R26's backoff is measured against, and a person is entitled to retry a broken engine as often
   as they like.
+
+## 2026-09-10 — Phase 9 (Work items)
+
+Rulings live in `docs/superpowers/specs/2026-09-10-cgremlin-phase9-work-items-design.md`
+(D1–D8, R1–R67). Recorded here as the phase lands, task by task.
+
+- **R6 reverses the "no `is_bot` heuristic" line above** (the Phase 4 entry: *"bots are excluded
+  by construction — the watch list is an allowlist, not a denylist heuristic on `is_bot`"*).
+  Answering *"has any human reviewed this PR"* is a different question from *"has a teammate I
+  watch reviewed this PR"*, and it cannot be answered from an allow-list: a reviewer outside
+  `watchAuthors` is still a human. `humanActivity` is therefore computed from the raw, unfiltered
+  reviews and comments through one bot predicate (`src/work/bot-login.ts`), while `teamActivity`
+  keeps its allow-list semantics untouched. The reversal is deliberate and scoped to the new
+  field. *R6, R47.*
+- **U1 is CLOSED, in the negative.** A real `gh pr list --json reviews,comments` against
+  `aplaceformom/grace-frontend` (recorded as `test/fixtures/gh/pr-list-with-bot-reviews.json`,
+  2026-09-10) emits activity authors carrying **only** `login`. `is_bot` is present on the
+  PR-level `author` object and nowhere else. R5's clause (a) therefore never fires on inventory
+  data, and the `[bot]`-suffix plus `botLogins` list carries the whole load. It has to: the bots
+  active on that repo — `vercel`, `github-actions`, `gitstream-cm`, `apfm-sonar` — carry no
+  `[bot]` suffix at all, and the last two are not in `DEFAULT_BOT_LOGINS`, so a real deployment
+  must name them in `config.botLogins`. *A2, R5.*
+- **U6 is CLOSED, in two halves.** `statusCheckRollup` on `gh pr list` is the **same**
+  `CheckRun`/`StatusContext` union `gh pr view` emits (plus a `startedAt` the schema strips), so
+  R59's `.catch([])` was **not** load-bearing for the shape and stays as cheap insurance.
+  `reviewRequests`, by contrast, came back as **teams** (`{ __typename, name, slug }`) on every
+  single PR in the sample: **R60's union is load-bearing**, and the
+  `z.array(z.object({ login: z.string() }))` the ruling forbids would have thrown on the first
+  row. The 32-PR repo did not trip GitHub's node limit even at `--limit 100`, so R67's two-call
+  fallback remains covered by fixtures and by smoke step 1 only. *A2, R59, R60, R67.*

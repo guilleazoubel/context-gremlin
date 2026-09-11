@@ -7,6 +7,8 @@ import { KeyedLock } from '../../src/api/keyed-lock';
 import { ReconciliationTick } from '../../src/discovery/reconciliation';
 import { InventoryScanner, type InventoryScannerDeps } from '../../src/inventory/inventory-scanner';
 import { InventoryStore } from '../../src/inventory/inventory-store';
+import { buildEntries } from '../../src/inventory/inventory';
+import { parsePrInventoryList } from '../../src/gh/pr-view';
 import { PR_INVENTORY_FIELDS, PR_INVENTORY_FIELDS_SCALARS, PR_INVENTORY_FIELDS_CONNECTIONS } from '../../src/gh/pr-view';
 import { GhCommandError } from '../../src/gh/gh-runner';
 import { SessionStore } from '../../src/engine/session-store';
@@ -372,5 +374,117 @@ describe('InventoryScanner: the node-limit fallback (R67)', () => {
     expect(gh.calls.filter((c) => c[0] === 'pr' && c[1] === 'list').length).toBe(3);
     expect(report.inventory.entries.map((e) => e.number)).toEqual([99]);
     expect(report.inventory.errors.length).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 9 / Task A2 — the recorded `gh pr list` sample that closes U1 and U6.
+//
+// Recorded 2026-09-10 by hand:
+//   gh pr list --repo aplaceformom/grace-frontend --state open --limit 30 \
+//     --json <PR_INVENTORY_FIELDS>
+// Three PRs kept verbatim except that every `body` (the PR's and each
+// review's/comment's) is truncated — nothing structural is redacted.
+//
+// THE ANSWER TO U1: an activity author on `gh pr list --json reviews,comments`
+// carries ONLY `login`. `is_bot` appears on the PR-level `author` object and
+// NOWHERE else. So R5's clause (a) never fires on this data and the
+// `[bot]`-suffix + `botLogins` fallback is the only thing that works —
+// which matters, because the bots on these PRs (`vercel`, `github-actions`,
+// `gitstream-cm`, `apfm-sonar`) carry no `[bot]` suffix either.
+//
+// THE ANSWER TO U6: `statusCheckRollup` on `gh pr list` is the SAME
+// CheckRun/StatusContext union `gh pr view` emits (plus a `startedAt` the
+// schema strips), so R59's `.catch([])` was NOT load-bearing for the shape —
+// it stays as the cheap insurance it was meant to be. `reviewRequests`,
+// however, came back as TEAMS (`{ __typename, name, slug }`) on every single
+// PR: R60's union IS load-bearing, and `z.array(z.object({ login }))` would
+// have thrown on the first row. A 32-PR repo did not trip the node limit at
+// `--limit 100` (R67's fallback stays untested against real data — smoke).
+// ---------------------------------------------------------------------------
+
+describe('the recorded gh pr list sample (A2: U1, U6, R59, R60)', () => {
+  const sampleJson = readFileSync(path.join(fixturesDir, 'pr-list-with-bot-reviews.json'), 'utf8');
+
+  it('U1: no activity author in the real sample carries is_bot', () => {
+    const raw = JSON.parse(sampleJson) as Array<{
+      author: Record<string, unknown>;
+      reviews: Array<{ author: Record<string, unknown> }>;
+      comments: Array<{ author: Record<string, unknown> }>;
+    }>;
+    expect(raw.length).toBeGreaterThan(0);
+    // the PR-level author does carry it...
+    expect(raw.every((pr) => 'is_bot' in pr.author)).toBe(true);
+    // ...and no review or comment author does.
+    const activityAuthors = raw.flatMap((pr) => [...pr.reviews, ...pr.comments].map((a) => a.author));
+    expect(activityAuthors.length).toBeGreaterThan(0);
+    expect(activityAuthors.some((a) => 'is_bot' in a)).toBe(false);
+  });
+
+  it('the widened field set parses, and the suffix/list bot rule carries the whole load', () => {
+    const items = parsePrInventoryList(sampleJson);
+    expect(items.map((i) => i.number)).toEqual([2046, 2043, 1974]);
+    const entries = buildEntries(REPO, items, [], { me: 'me-user', watchAuthors: [], projectKeys: [] }, FIXED_NOW().toISOString());
+
+    // 2046: reviewed by its own author plus `gitstream-cm`, commented on by
+    // `vercel`, `github-actions` and `apfm-sonar`. The two default-list bots
+    // are excluded; the author is excluded; the two bots this repo runs that
+    // are NOT in the default list are (correctly, per the data) counted as
+    // humans until `config.botLogins` names them.
+    const e2046 = entries[0];
+    expect(e2046.author).toBe('dbeacham-afpm');
+    expect(e2046.humanActivity.reviewedBy).toEqual(['gitstream-cm']);
+    expect(e2046.humanActivity.commentedBy).toEqual(['apfm-sonar']);
+    expect(e2046.humanActivity.lastAt).not.toBeNull();
+
+    // With those two named in botLogins the PR has no human on it at all —
+    // which is what R5's config list exists for.
+    const [quiet] = buildEntries(
+      REPO,
+      [items[0]],
+      [],
+      { me: 'me-user', watchAuthors: [], projectKeys: [], botLogins: ['gitstream-cm', 'apfm-sonar'] },
+      FIXED_NOW().toISOString(),
+    );
+    expect(quiet.humanActivity).toEqual({ reviewedBy: [], commentedBy: [], lastAt: null });
+  });
+
+  it('U6/R59: the real statusCheckRollup parses into the union and collapses to the right ci', () => {
+    const items = parsePrInventoryList(sampleJson);
+    expect(items.every((i) => (i.statusCheckRollup ?? []).length > 0)).toBe(true);
+    const entries = buildEntries(REPO, items, [], { me: 'me-user', watchAuthors: [] }, FIXED_NOW().toISOString());
+    expect(entries.map((e) => e.ci)).toEqual(['success', 'success', 'success']);
+  });
+
+  it('R60: reviewRequests came back as TEAMS on every PR and flattens to slugs', () => {
+    const raw = JSON.parse(sampleJson) as Array<{ reviewRequests: Array<Record<string, unknown>> }>;
+    const shapes = new Set(raw.flatMap((pr) => pr.reviewRequests.map((r) => Object.keys(r).sort().join(','))));
+    expect([...shapes]).toEqual(['__typename,name,slug']);
+    const entries = buildEntries(
+      REPO,
+      parsePrInventoryList(sampleJson),
+      [],
+      { me: 'me-user', watchAuthors: [] },
+      FIXED_NOW().toISOString(),
+    );
+    expect(entries[0].reviewRequests).toEqual([
+      'aplaceformom/grace-b2b',
+      'aplaceformom/grace-b2c',
+      'aplaceformom/grace-data',
+    ]);
+  });
+
+  it('R53: age, size and labels come through verbatim', () => {
+    const entries = buildEntries(
+      REPO,
+      parsePrInventoryList(sampleJson),
+      [],
+      { me: 'me-user', watchAuthors: [] },
+      FIXED_NOW().toISOString(),
+    );
+    expect(entries[0].createdAt).toBe('2026-09-10T18:57:44Z');
+    expect(entries[0].changedFiles).toBe(26);
+    expect(entries[0].labels).toEqual(['missing-tests', '20 min review']);
+    expect(entries[2].isDraft).toBe(true);
   });
 });
