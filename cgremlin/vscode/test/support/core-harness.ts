@@ -28,7 +28,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { CoreClient } from '../../src/core-client';
 import { loadBridge, type EngineBridge } from '../../src/engine/bridge';
-import { EngineManager, type EngineState } from '../../src/engine/manager';
+import { EngineManager, type EngineProcessPort, type EngineState } from '../../src/engine/manager';
 import { NodeEngineProcess } from '../../src/engine/node-engine-process';
 import type { SessionView } from '../../src/model/items';
 
@@ -308,8 +308,15 @@ export async function stateDirFiles(stateDir: string): Promise<string[]> {
 }
 
 export interface ManagerOptions {
+  /**
+   * The port itself, for a test that has to *count* what reached the machine — how many SIGTERMs
+   * two windows sent between them. Defaults to a real {@link NodeEngineProcess}.
+   */
+  process?: EngineProcessPort;
   /** Override to drive the version handshake (R2/R21) against a real engine. */
   bundledVersion?: string;
+  /** MG-C5's content address; override it to make a same-version engine look stale. */
+  bundledBuildId?: string;
   /** R25 supplies the editor's own `Code Helper (Plugin)` here. */
   execPath?: string;
   env?: NodeJS.ProcessEnv;
@@ -319,8 +326,10 @@ export interface ManagerOptions {
 /** A manager wired the way the editor wires one, over a seeded state dir. */
 export function createManager(seed: SeededStateDir, opts: ManagerOptions = {}): EngineManager {
   return new EngineManager({
-    process: new NodeEngineProcess({ env: opts.env ?? seed.env, shell: seed.loginShell }),
+    process:
+      opts.process ?? new NodeEngineProcess({ env: opts.env ?? seed.env, shell: seed.loginShell }),
     bundledVersion: opts.bundledVersion ?? loadEngineBridge().ENGINE_VERSION,
+    bundledBuildId: opts.bundledBuildId ?? loadEngineBridge().ENGINE_BUILD_ID,
     paths: () => ({
       configPath: seed.configPath,
       socketPath: seed.socketPath,

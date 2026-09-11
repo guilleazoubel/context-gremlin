@@ -18,6 +18,12 @@
 /** What `GET /version` answers. `activeRuns` is the only input to a restart decision (R21). */
 export interface EngineIdentity {
   version: string;
+  /**
+   * A content address of the engine bundle, which an engine older than the route does not
+   * report at all. `undefined` is therefore a real answer — "this engine predates the id" — and
+   * never equal to the bundled one, which is exactly the verdict that case deserves.
+   */
+  buildId?: string;
   pid: number;
   startedAt: string;
   socketPath: string;
@@ -112,6 +118,8 @@ export type Trigger = 'auto' | 'user';
 export interface EngineManagerOptions {
   process: EngineProcessPort;
   bundledVersion: string;
+  /** MG-C5: `bridge.js`'s `ENGINE_BUILD_ID`, the other half of the handshake. */
+  bundledBuildId: string;
   paths: () => EnginePaths;
   launch: () => EngineLaunch;
   log: (line: string) => void;
@@ -159,6 +167,13 @@ export class EngineManager {
   private lastAttemptEndedAt: number | null = null;
   /** R20: the fallback is worth one line, not one per retry. */
   private pathFallbackLogged = false;
+  /**
+   * R26b: `<pid>@<startedAt>` of the engine the last *automatic* restart acted on. The backoff
+   * bounds spawns that fail; nothing bounded restarts that succeed — and a trigger that repeats
+   * itself (a config watcher firing on its own `chmod`, a settings event that arrives twice)
+   * would otherwise stop and start one perfectly healthy engine for as long as it kept firing.
+   */
+  private lastAutoRestartIdentity: string | null = null;
 
   constructor(private readonly opts: EngineManagerOptions) {}
 
@@ -234,8 +249,24 @@ export class EngineManager {
   private async runRestart(trigger: Trigger): Promise<EngineState> {
     const before = await this.probeOrRetry(this.opts.paths().socketPath);
     if (before === null) return await this.runEnsure(trigger);
+    // R26b. A person is never refused (and never latched: what they asked for is the point). An
+    // automatic trigger gets one restart per engine — the same pid at the same boot — because a
+    // second one is not a new decision, it is the same one arriving again.
+    let who: string | undefined;
+    if (trigger === 'auto' && before !== 'foreign') {
+      who = `${before.pid}@${before.startedAt}`;
+      if (who === this.lastAutoRestartIdentity) {
+        this.opts.log(
+          `engine.auto_restart_refused: pid ${before.pid} (booted ${before.startedAt}) has already been restarted automatically once; restart it yourself if it really needs another`,
+        );
+        return this.current;
+      }
+    }
     const stopped = await this.runStop();
     if (stopped.kind !== 'stopped') return stopped;
+    // Only a stop that actually proved ownership and succeeded spends the identity — a failed or
+    // timed-out stop leaves it untouched so the next legitimate auto trigger may try again (R26).
+    if (who !== undefined) this.lastAutoRestartIdentity = who;
     return await this.runEnsure(trigger);
   }
 
@@ -258,13 +289,26 @@ export class EngineManager {
     }
   }
 
+  /**
+   * MG-C5. Two things have to agree before an engine is adopted: the version string, and the
+   * build id — a content address of the bundle. The version alone was not enough and the flap
+   * proved it: `ENGINE_VERSION` is the package's, it stayed `0.0.1` across two phases of engine
+   * changes, and a Phase 8 engine therefore looked identical to a Phase 9 extension, which
+   * adopted it and then found no `/items` on it for as long as it kept running.
+   */
   private classify(probe: EngineIdentity | null, adopted: boolean): EngineState | null {
     if (probe === null) return null;
-    if (probe.version !== this.opts.bundledVersion) {
+    const sameVersion = probe.version === this.opts.bundledVersion;
+    const sameBuild = probe.buildId === this.opts.bundledBuildId;
+    if (!sameVersion || !sameBuild) {
       return this.setState({
         kind: 'mismatch',
-        running: probe.version,
-        bundled: this.opts.bundledVersion,
+        // When only the build differs the two version strings are the same word, and a sentence
+        // built from them would say nothing. The build ids are what the user needs to see.
+        running: sameVersion ? `${probe.version} (build ${probe.buildId ?? 'unknown'})` : probe.version,
+        bundled: sameVersion
+          ? `${this.opts.bundledVersion} (build ${this.opts.bundledBuildId})`
+          : this.opts.bundledVersion,
         pid: probe.pid,
       });
     }

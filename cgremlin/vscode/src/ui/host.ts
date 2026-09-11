@@ -189,6 +189,15 @@ export interface Host {
   /** Reads from a byte offset and reports where it stopped, so the tail never re-reads. */
   readFileSlice(path: string, from: number): { text: string; end: number };
   /**
+   * A content address for the file: the sha256 of its bytes, or `null` when it cannot be read.
+   * The config watcher is driven by *events*, not by changes — on macOS a `chmod` on the watched
+   * file is itself an event — so "did this file actually change?" is a question only a digest of
+   * the bytes can answer.
+   */
+  fileDigest(path: string): string | null;
+  /** The permission bits (`mode & 0o777`), or `null` when the file cannot be stat'ed. */
+  fileMode(path: string): number | null;
+  /**
    * Watches one file *through a rename*: the engine replaces `core.json` by renaming a temp file
    * over it, so a watch on the inode would be orphaned by the first save (spec 4.5). The adapter
    * watches the directory and filters by basename.

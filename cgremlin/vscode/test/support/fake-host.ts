@@ -26,6 +26,8 @@ import type {
   UriLike,
 } from '../../src/ui/host';
 
+import { createHash } from 'node:crypto';
+
 export interface RecordedCall {
   kind: string;
   args: unknown[];
@@ -155,6 +157,10 @@ export class FakeHost implements Host {
   spawnResults = new Map<string, { code: number; stdout: string; stderr: string }>();
   /** Set to make `chmod` reject. */
   chmodError: Error | null = null;
+  /** Permission bits per path; a file with no entry reads as 0600. */
+  readonly modes = new Map<string, number>();
+  /** Run inside `chmod`, after the mode is recorded — a test fires the watch from here. */
+  chmodHook: ((path: string, mode: number) => void) | null = null;
   /** Answers handed to the next `showQuickPick` / `showInputBox` / message, in order. */
   quickPickAnswers: (string | undefined)[] = [];
   inputBoxAnswers: (string | undefined)[] = [];
@@ -372,6 +378,18 @@ export class FakeHost implements Host {
     return { text: slice.toString('utf8'), end: buffer.byteLength };
   }
 
+  fileDigest(path: string): string | null {
+    const content = this.files.get(path);
+    if (content === undefined) return null;
+    return createHash('sha256').update(content, 'utf8').digest('hex');
+  }
+
+  /** A file with no recorded mode reads as 0600 — the mode the engine writes `core.json` with. */
+  fileMode(path: string): number | null {
+    if (!this.files.has(path)) return null;
+    return this.modes.get(path) ?? 0o600;
+  }
+
   watchFile(path: string, callback: () => void): DisposableLike {
     this.record('watchFile', path);
     const entry = { callback, disposed: 0 };
@@ -397,9 +415,16 @@ export class FakeHost implements Host {
     this.watches.get(path)?.callback();
   }
 
+  /**
+   * Records the new mode, then runs {@link chmodHook} — which is how a test reproduces the macOS
+   * fact this whole watcher is written against: a `chmod` on the watched file fires the watch,
+   * whether or not it changed anything.
+   */
   async chmod(path: string, mode: number): Promise<void> {
     this.record('chmod', path, mode);
     if (this.chmodError !== null) throw this.chmodError;
+    this.modes.set(path, mode);
+    this.chmodHook?.(path, mode);
   }
 
   async openTextDocument(path: string): Promise<void> {
@@ -467,6 +492,11 @@ export class FakeHost implements Host {
     return () => {
       timer.cancelled = true;
     };
+  }
+
+  /** The delays of every timeout still waiting, so a test can pin the window it was given. */
+  pendingTimeouts(): number[] {
+    return this.timers.filter((t) => t.kind === 'timeout' && !t.cancelled).map((t) => t.ms);
   }
 
   /** Runs every due timeout (and no interval) — the coalescing window. */

@@ -33,9 +33,18 @@ export interface RefreshCoordinatorDeps {
   notificationLevel: () => NotificationLevel;
   /** The coalescing window. 0 would still batch (one macrotask), but a few ms batches a burst. */
   coalesceMs?: number;
+  /** How long a dropped connection must stay down before it is said out loud (P0-1). */
+  offlineGraceMs?: number;
 }
 
 const DEFAULT_COALESCE_MS = 150;
+/**
+ * P0-1. The event stream drops on every engine restart and on every hiccup, and the consumer
+ * reconnects on a 1/2/5/10 s backoff — so a banner raised on the first drop flaps for reasons the
+ * user cannot act on. Eight seconds is past the third reconnect: long enough that a restart and a
+ * hiccup pass in silence, short enough that a genuinely absent engine is still reported promptly.
+ */
+export const OFFLINE_GRACE_MS = 8_000;
 
 export class RefreshCoordinator {
   private snapshot: WorkItem[] = [];
@@ -53,6 +62,10 @@ export class RefreshCoordinator {
    * where it was and only colours the bar (the panel says the rest, in its banner).
    */
   private jiraTrouble: SourceTrouble | null = null;
+  /** Cancels the pending "not reachable" verdict while it is waiting out its window (P0-1). */
+  private cancelOfflineGrace: (() => void) | null = null;
+  /** Whether the verdict has actually been said, which is what makes it once per outage. */
+  private offlineShown = false;
 
   constructor(private readonly deps: RefreshCoordinatorDeps) {}
 
@@ -92,8 +105,7 @@ export class RefreshCoordinator {
     const work = this.refreshNow()
       .catch((err: unknown) => {
         if (err instanceof EngineNotRunningError) {
-          this.markOffline();
-          this.deps.notifications.reportOffline();
+          this.connectionDropped();
           return;
         }
         this.deps.host.log(`cgremlin: refresh failed: ${String(err)}`);
@@ -107,6 +119,7 @@ export class RefreshCoordinator {
   async refreshNow(): Promise<void> {
     const response = await this.readItems();
     this.connected = true;
+    this.reportAlive();
     this.deps.notifications.reportOnline();
 
     const previous = this.snapshot;
@@ -156,6 +169,29 @@ export class RefreshCoordinator {
     this.currentSessionId = sessionId;
     this.currentWorktreePath = worktreePath;
     this.renderStatus();
+  }
+
+  /**
+   * The connection went away — one failed poll, one dropped stream. NOT a verdict: P0-1's window
+   * has to pass with nothing getting through before "the engine is not reachable" is said, and
+   * the last snapshot stays on screen throughout, because four empty lists claim something the
+   * extension does not know.
+   */
+  connectionDropped(): void {
+    if (this.offlineShown || this.cancelOfflineGrace !== null) return;
+    this.cancelOfflineGrace = this.deps.host.setTimeout(() => {
+      this.cancelOfflineGrace = null;
+      this.offlineShown = true;
+      this.markOffline();
+      this.deps.notifications.reportOffline();
+    }, this.deps.offlineGraceMs ?? OFFLINE_GRACE_MS);
+  }
+
+  /** Anything that got through — a request, a frame — clears the drop, pending or already said. */
+  reportAlive(): void {
+    this.cancelOfflineGrace?.();
+    this.cancelOfflineGrace = null;
+    this.offlineShown = false;
   }
 
   markOffline(): void {

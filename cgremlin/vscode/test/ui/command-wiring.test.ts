@@ -153,12 +153,72 @@ describe('activation and the not-running UX', () => {
     servers.splice(servers.indexOf(h.server), 1);
     expect(await h.ui.connect()).toBe(false);
     for (let i = 0; i < 4; i += 1) await h.ui.offline();
+    // The verdict waits out its window (P0-1); the warning is what happens at the end of it.
+    h.host.flushTimeouts();
     await h.ui.settled();
     const warnings = h.host.callsOf('showWarningMessage');
     expect(warnings).toHaveLength(1);
     expect(warnings[0].args[0]).toBe('cgremlin engine is not running');
     expect(warnings[0].args[2]).toEqual(['Start it', 'Settings']);
     expect(h.host.statusBarItems[0].text).toBe('$(circle-slash) cgremlin: offline');
+  });
+
+  /**
+   * P0-1. The SSE stream drops on every engine restart and on every hiccup, and the consumer
+   * reconnects on a 1/2/5/10 s backoff — so a banner raised on the first drop flaps for reasons
+   * the user cannot act on, and the flapping engine made it flap all day. A drop is only news
+   * once it has lasted, and the lists keep the snapshot they had throughout.
+   */
+  describe('a dropped connection waits out a window before it is news (P0-1)', () => {
+    it('says nothing, and blanks nothing, for a drop that has not lasted 8 s', async () => {
+      const h = await connected();
+      const before = h.rows().length;
+      expect(before).toBeGreaterThan(0);
+
+      await h.ui.offline();
+      await h.ui.settled();
+      expect(h.host.callsOf('showWarningMessage')).toHaveLength(0);
+      expect(h.host.statusBarItems[0].text).not.toContain('offline');
+      // The panel still shows the work it was showing: a transient drop is not a reason to
+      // replace four lists with nothing.
+      expect(h.rows()).toHaveLength(before);
+      expect(h.ui.coordinator.items().length).toBeGreaterThan(0);
+      // And the window it is waiting out is the specified one.
+      expect(h.host.pendingTimeouts()).toContain(8_000);
+    });
+
+    it('says it once the window passes with the connection still down', async () => {
+      const h = await connected();
+      await h.server.dispose();
+      servers.splice(servers.indexOf(h.server), 1);
+      await h.ui.offline();
+      h.host.flushTimeouts();
+      await h.ui.settled();
+      expect(h.host.statusBarItems[0].text).toBe('$(circle-slash) cgremlin: offline');
+      expect(h.host.callsOf('showWarningMessage')).toHaveLength(1);
+      // Even then, the last snapshot is what the panel has: blanking it says less than it shows.
+      expect(h.ui.coordinator.items().length).toBeGreaterThan(0);
+    });
+
+    it('forgets the whole thing the moment a request gets through', async () => {
+      const h = await connected();
+      await h.ui.offline();
+      await h.ui.coordinator.refreshNow();
+      h.host.flushTimeouts();
+      await h.ui.settled();
+      expect(h.host.callsOf('showWarningMessage')).toHaveLength(0);
+      expect(h.host.statusBarItems[0].text).not.toContain('offline');
+    });
+
+    it('forgets it for a frame that arrives, too', async () => {
+      const h = await connected();
+      await h.ui.offline();
+      h.ui.handleFrame({ event: 'attention.changed', data: { id: 'pr:fake/repo#3' } });
+      h.host.flushTimeouts();
+      await h.ui.settled();
+      expect(h.host.callsOf('showWarningMessage')).toHaveLength(0);
+      expect(h.host.statusBarItems[0].text).not.toContain('offline');
+    });
   });
 
   // MG-C7: the engine is started by the manager, never by typing a command into a terminal.
@@ -168,6 +228,8 @@ describe('activation and the not-running UX', () => {
     servers.splice(servers.indexOf(h.server), 1);
     h.host.messageAnswers = ['Start it'];
     expect(await h.ui.connect()).toBe(false);
+    // The offer comes at the end of P0-1's window, not on the first failed attempt.
+    h.host.flushTimeouts();
     await h.ui.settled();
     expect(h.engine.calls).toEqual(['ensureRunning:user']);
     expect(h.host.terminals).toHaveLength(0);

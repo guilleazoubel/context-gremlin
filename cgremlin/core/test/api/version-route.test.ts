@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createApiServer, type ApiServerDeps } from '../../src/api/server';
 import type { PipelineService } from '../../src/pipeline/pipeline-service';
 import type { EnvironmentService } from '../../src/env/environment-service';
-import { ENGINE_NAME, ENGINE_VERSION } from '../../src/version';
+import { ENGINE_BUILD_ID, ENGINE_NAME, ENGINE_VERSION } from '../../src/version';
 
 function requestOn(socketPath: string, method: string, urlPath: string): Promise<{ status: number; body: unknown }> {
   return new Promise((resolve, reject) => {
@@ -52,7 +52,14 @@ async function bareServer(counters: Counters = {}) {
   const deps = {
     pipeline,
     ...(environment ? { environment } : {}),
-    engineInfo: { name: ENGINE_NAME, version: ENGINE_VERSION, pid: process.pid, startedAt: STARTED_AT, socketPath: sock },
+    engineInfo: {
+      name: ENGINE_NAME,
+      version: ENGINE_VERSION,
+      buildId: ENGINE_BUILD_ID,
+      pid: process.pid,
+      startedAt: STARTED_AT,
+      socketPath: sock,
+    },
   } as unknown as ApiServerDeps;
   const server = createApiServer(deps);
   await new Promise<void>((resolve) => server.listen(sock, () => resolve()));
@@ -65,6 +72,19 @@ async function bareServer(counters: Counters = {}) {
       }),
   };
 }
+
+describe('ENGINE_BUILD_ID', () => {
+  /**
+   * MG-C5's other half. Two engines can carry the same version string and be different builds —
+   * they were, all through Phases 8 and 9, because the version is the package's and it did not
+   * move — so the handshake the extension makes needs a second, content-addressed half. Outside
+   * the bundle there is nothing to address, and `dev` is the honest answer for that.
+   */
+  it('is a non-empty identifier, and `dev` when the engine was not bundled', () => {
+    expect(ENGINE_BUILD_ID).not.toBe('');
+    expect(ENGINE_BUILD_ID).toBe('dev');
+  });
+});
 
 describe('ENGINE_VERSION', () => {
   it('equals the version in package.json', () => {
@@ -86,6 +106,7 @@ describe('GET /version', () => {
       expect(version.body).toEqual({
         name: 'cgremlin-core',
         version: ENGINE_VERSION,
+        buildId: ENGINE_BUILD_ID,
         pid: process.pid,
         startedAt: STARTED_AT,
         socketPath: srv.sock,

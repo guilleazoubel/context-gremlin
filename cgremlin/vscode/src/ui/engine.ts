@@ -95,6 +95,11 @@ export class EngineSurface {
   private configWatch: DisposableLike | null = null;
   private logWatch: DisposableLike | null = null;
   private cancelDebounce: (() => void) | null = null;
+  /**
+   * The content address of the `core.json` this surface has already acted on — seeded wherever
+   * the config is resolved, and the only thing that turns a watch *event* into a config *change*.
+   */
+  private lastConfigDigest: string | null = null;
   private tailOffset = 0;
   private tailedLogPath: string | null = null;
   private unsubscribe: (() => void) | null = null;
@@ -237,6 +242,7 @@ export class EngineSurface {
   private async resolveConfig(configPath: string): Promise<boolean> {
     try {
       this.resolved = await this.deps.bridge.loadResolvedConfig(configPath, this.deps.home);
+      this.lastConfigDigest = this.deps.host.fileDigest(configPath);
       return true;
     } catch (err) {
       this.reportConfigFailure(configPath, err);
@@ -334,9 +340,25 @@ export class EngineSurface {
     }, this.deps.debounceMs ?? DEBOUNCE_MS);
   }
 
-  /** R27: validate first, re-assert the mode, and only then consult R21's gate. */
+  /**
+   * R27: read the bytes first, validate, re-assert the mode only if it is wrong, and only then
+   * consult R21's gate.
+   *
+   * The first step is not optional politeness. `fs.watch` reports events, not changes, and on
+   * macOS a `chmod` on the watched file *is* an event — so a pass that chmods unconditionally
+   * feeds itself the next event and the watcher restarts the engine forever, at the period of one
+   * restart. An event whose digest matches the content already acted on therefore ends the pass
+   * here: before the chmod, and before any restart decision.
+   */
   private async onConfigSaved(configPath: string): Promise<void> {
     const { host, manager } = this.deps;
+    const digest = host.fileDigest(configPath);
+    // A digest we cannot take (the file is gone mid-save) is not proof of sameness, so it falls
+    // through to the validate below, which is where a missing file gets its message.
+    if (digest !== null && digest === this.lastConfigDigest) return;
+    // Latched before the validate, not after: a config that does not load is still a config we
+    // have seen, and re-running the same failure for every event the save produced adds nothing.
+    this.lastConfigDigest = digest;
     let resolved: ResolvedEnginePaths;
     try {
       resolved = await this.deps.bridge.loadResolvedConfig(configPath, this.deps.home);
@@ -347,10 +369,14 @@ export class EngineSurface {
       return;
     }
     this.resolved = resolved;
-    try {
-      await host.chmod(configPath, CONFIG_MODE);
-    } catch (err) {
-      host.log(`cgremlin: could not re-assert 0600 on ${configPath}: ${errorMessage(err)}`);
+    // R27's re-assertion, narrowed to the case that needs it: a `chmod` that changes nothing is
+    // still a filesystem event, and this watcher is the thing listening for it.
+    if (host.fileMode(configPath) !== CONFIG_MODE) {
+      try {
+        await host.chmod(configPath, CONFIG_MODE);
+      } catch (err) {
+        host.log(`cgremlin: could not re-assert 0600 on ${configPath}: ${errorMessage(err)}`);
+      }
     }
     const active = await manager.activeRuns();
     if (active === null) {

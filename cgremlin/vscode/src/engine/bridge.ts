@@ -29,6 +29,11 @@ export interface ResolvedEnginePaths {
 export interface EngineBridge {
   /** The version of the engine this build ships — one half of the handshake (MG-C5). */
   ENGINE_VERSION: string;
+  /**
+   * The other half: a content address of `engine.js`, stamped into both bundles by the core's
+   * `build:engine`. The version is the package's and does not move between phases; this does.
+   */
+  ENGINE_BUILD_ID: string;
   /** Rejects with the engine's own `ConfigError`, whose message is shown verbatim. */
   loadResolvedConfig(configPath: string, home: string): Promise<ResolvedEnginePaths>;
 }

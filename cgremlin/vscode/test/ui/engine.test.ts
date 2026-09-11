@@ -432,7 +432,8 @@ describe('the config watcher (R6, R21, R27)', () => {
 
   it('validates through the engine loader before anything is restarted, then re-asserts 0600', async () => {
     manager.runs = 0;
-    host.touch(CONFIG, '{}');
+    host.modes.set(CONFIG, 0o644);
+    host.touch(CONFIG, '{"me":"changed"}');
     host.flushTimeouts();
     await surface.settled();
     const chmod = host.callsOf('chmod');
@@ -446,7 +447,7 @@ describe('the config watcher (R6, R21, R27)', () => {
   it('asks before restarting when the engine has work in flight', async () => {
     manager.runs = 4;
     host.messageAnswers = [NOT_NOW];
-    host.touch(CONFIG, '{}');
+    host.touch(CONFIG, '{"me":"first"}');
     host.flushTimeouts();
     await surface.settled();
     const asked = host.callsOf('showInformationMessage');
@@ -456,7 +457,7 @@ describe('the config watcher (R6, R21, R27)', () => {
     expect(manager.countOf('restart:auto')).toBe(0);
 
     host.messageAnswers = [RESTART];
-    host.touch(CONFIG, '{}');
+    host.touch(CONFIG, '{"me":"second"}');
     host.flushTimeouts();
     await surface.settled();
     expect(manager.countOf('restart:auto')).toBe(1);
@@ -464,7 +465,7 @@ describe('the config watcher (R6, R21, R27)', () => {
 
   it('just starts the engine when nothing is answering', async () => {
     manager.runs = null;
-    host.touch(CONFIG, '{}');
+    host.touch(CONFIG, '{"me":"typed"}');
     host.flushTimeouts();
     await surface.settled();
     expect(manager.calls).toEqual(['activeRuns', 'ensureRunning:auto']);
@@ -473,7 +474,8 @@ describe('the config watcher (R6, R21, R27)', () => {
   it('logs a chmod that fails and restarts anyway', async () => {
     manager.runs = 0;
     host.chmodError = new Error('EPERM');
-    host.touch(CONFIG, '{}');
+    host.modes.set(CONFIG, 0o644);
+    host.touch(CONFIG, '{"me":"changed"}');
     host.flushTimeouts();
     await surface.settled();
     expect(host.logs.filter((l) => l.includes('0600'))).toHaveLength(1);
@@ -496,6 +498,77 @@ describe('the config watcher (R6, R21, R27)', () => {
     host.flushTimeouts();
     await surface.settled();
     expect(manager.countOf('restart:auto')).toBe(1);
+  });
+});
+
+/**
+ * The flap this watcher was rewritten for.
+ *
+ * `fs.watch` reports *events*, not changes, and on macOS a `chmod` on the watched file is itself
+ * an event — so a watcher that chmods unconditionally feeds itself: chmod → event → validate →
+ * chmod → restart, forever, at the period of one engine restart. The fix is to address the file
+ * by its content: an event whose digest matches the one already acted on ends the pass before
+ * the chmod and before any restart decision, and the chmod itself only happens when the mode is
+ * genuinely not 0600.
+ */
+describe('the config watcher is content-addressed (the chmod flap)', () => {
+  beforeEach(async () => {
+    host.files.set(CONFIG, '{"me":"seed"}');
+    await surface.bootstrap();
+    manager.calls.length = 0;
+    bridge.loads.length = 0;
+    manager.runs = 0;
+  });
+
+  /** Runs whatever the debounce queued, repeatedly, so a self-feeding loop shows up as a count. */
+  async function drain(rounds = 6): Promise<void> {
+    for (let round = 0; round < rounds; round += 1) {
+      host.flushTimeouts();
+      await surface.settled();
+    }
+  }
+
+  it('does nothing at all for an event that left the bytes alone, whatever the mode', async () => {
+    host.modes.set(CONFIG, 0o644);
+    host.touch(CONFIG);
+    await drain();
+    expect(host.callsOf('chmod')).toHaveLength(0);
+    expect(bridge.loads).toEqual([]);
+    expect(manager.calls).toEqual([]);
+  });
+
+  it('chmods once and restarts once when a chmod fires the watch again (no loop)', async () => {
+    host.modes.set(CONFIG, 0o644);
+    // The macOS fact, in the fake: the chmod itself fires the watcher.
+    host.chmodHook = () => host.touch(CONFIG);
+    host.touch(CONFIG, '{"me":"changed"}');
+    await drain();
+    expect(host.callsOf('chmod')).toHaveLength(1);
+    expect(manager.countOf('restart:auto')).toBe(1);
+  });
+
+  it('never even chmods when a chmod-only storm follows a settled config', async () => {
+    host.modes.set(CONFIG, 0o644);
+    host.chmodHook = () => host.touch(CONFIG);
+    for (let i = 0; i < 20; i += 1) host.touch(CONFIG);
+    await drain(20);
+    expect(host.callsOf('chmod')).toHaveLength(0);
+    expect(manager.countOf('restart:auto')).toBe(0);
+  });
+
+  it('restarts on changed content, and leaves a mode that is already 0600 alone', async () => {
+    host.touch(CONFIG, '{"me":"changed"}');
+    await drain();
+    expect(host.callsOf('chmod')).toHaveLength(0);
+    expect(manager.countOf('restart:auto')).toBe(1);
+  });
+
+  it('re-seeds its digest from the config it resolved, so the first save after one is seen', async () => {
+    host.touch(CONFIG, '{"me":"one"}');
+    await drain();
+    host.touch(CONFIG, '{"me":"two"}');
+    await drain();
+    expect(manager.countOf('restart:auto')).toBe(2);
   });
 });
 

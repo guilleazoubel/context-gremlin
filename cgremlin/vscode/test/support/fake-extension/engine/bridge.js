@@ -2,6 +2,7 @@
 // Stream A ships the real artifact. Its shape is the contract in the design's section 4.1.
 module.exports = {
   ENGINE_VERSION: '0.0.1-fake',
+  ENGINE_BUILD_ID: 'fakebuildid00000',
   loadResolvedConfig: async (configPath, home) => ({
     configPath,
     stateDir: `${home}/.cgremlin-core`,

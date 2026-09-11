@@ -35,7 +35,7 @@ import {
   SessionSourceAdapter,
 } from '../attention/attention-service';
 import type { LocalAppRunner } from '../env/local-app-runner';
-import { ENGINE_NAME, ENGINE_VERSION } from '../version';
+import { ENGINE_BUILD_ID, ENGINE_NAME, ENGINE_VERSION } from '../version';
 
 export interface EngineAdapters {
   fs: SessionFileSystem;
@@ -357,6 +357,7 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
   const engineInfo: EngineInfo = {
     name: ENGINE_NAME,
     version: ENGINE_VERSION,
+    buildId: ENGINE_BUILD_ID,
     pid: process.pid,
     startedAt: (adapters.now?.() ?? new Date()).toISOString(),
     socketPath: config.socketPath!,

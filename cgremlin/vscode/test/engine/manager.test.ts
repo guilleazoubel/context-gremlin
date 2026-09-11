@@ -29,6 +29,9 @@ const LAUNCH = {
   cwd: '/home/me',
 };
 
+/** What the bundled `bridge.js` would export beside the version — a content address (MG-C5). */
+const BUNDLED_BUILD_ID = 'aaaaaaaaaaaaaaaa';
+
 const flush = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
 
 let fake: FakeEngineProcess;
@@ -43,6 +46,7 @@ beforeEach(() => {
   manager = new EngineManager({
     process: fake,
     bundledVersion: '0.0.1',
+    bundledBuildId: BUNDLED_BUILD_ID,
     paths: () => PATHS,
     launch: () => LAUNCH,
     log: (line) => logs.push(line),
@@ -396,6 +400,7 @@ describe('MG-C2 never-kill-what-we-cannot-prove', () => {
     const other = new EngineManager({
       process: fake,
       bundledVersion: '0.0.1',
+      bundledBuildId: BUNDLED_BUILD_ID,
       paths: () => PATHS,
       launch: () => LAUNCH,
       log: (line) => logs.push(line),
@@ -511,6 +516,131 @@ describe('the serial operation queue', () => {
     expect(await ensure).toEqual({ kind: 'running', version: '0.0.1', pid: 99, adopted: false });
     expect(fake.spawns).toHaveLength(1);
     expect(states.map((s) => s.kind)).toEqual(['stopped', 'starting', 'running']);
+  });
+});
+
+/**
+ * R26's second belt, and the other half of the config-watcher flap.
+ *
+ * The backoff bounds spawns that *fail*. Nothing bounded restarts that *succeed* — and a trigger
+ * that repeats (a watcher firing on its own chmod, a settings event that arrives twice) would
+ * therefore stop and start one perfectly healthy engine over and over. An automatic restart is
+ * now spent once per engine identity: the same pid and the same boot is refused with one line,
+ * a person asking is never refused, and a genuinely different engine is restartable again.
+ */
+/**
+ * MG-C5's second half: the same version can be two different engines.
+ *
+ * `ENGINE_VERSION` is the package's version, and it stayed `0.0.1` across Phases 8 and 9 while
+ * the engine itself changed underneath it — so an upgrade was invisible to a handshake that
+ * compared version strings, and the extension adopted a stale engine (no `/items`, four empty
+ * lists) for as long as that engine kept running. The build id is a content address of the
+ * bundle, and the handshake now compares both.
+ */
+describe('MG-C5: the handshake compares the build id as well as the version', () => {
+  it('calls the same version with a different build a mismatch', async () => {
+    fake.probes = [identity({ buildId: 'bbbbbbbbbbbbbbbb', pid: 77 })];
+    const state = await manager.ensureRunning();
+    expect(state).toMatchObject({ kind: 'mismatch', pid: 77 });
+    expect(fake.spawns).toHaveLength(0);
+  });
+
+  it('treats an engine that reports no build id at all as a mismatch', async () => {
+    fake.probes = [identity({ buildId: undefined, pid: 78 })];
+    expect((await manager.ensureRunning()).kind).toBe('mismatch');
+  });
+
+  it('adopts an engine whose version and build id both match', async () => {
+    fake.probes = [identity({ pid: 79 })];
+    expect(await manager.ensureRunning()).toEqual({
+      kind: 'running',
+      version: '0.0.1',
+      pid: 79,
+      adopted: true,
+    });
+  });
+
+  it('restarts a same-version different-build engine exactly once when nothing is running', async () => {
+    const stale = identity({ buildId: 'bbbbbbbbbbbbbbbb' });
+    // The stale engine answers the restart probe and both halves of the ownership proof, and the
+    // socket is silent once it is gone.
+    fake.probes = [stale, stale, stale, null];
+    fake.pidFiles = [pidFile()];
+    fake.signalOutcome = 'gone';
+    fake.spawnedAnswer = identity();
+    const state = await withClock(manager.restart('auto'), 2_000);
+    expect(fake.signals).toHaveLength(1);
+    expect(fake.spawns).toHaveLength(1);
+    expect(state).toMatchObject({ kind: 'running' });
+  });
+});
+
+describe('an automatic restart is spent once per engine identity', () => {
+  /** A restart whose stop is over immediately, so the engine that answers afterwards is the same. */
+  function sameEngineThroughout(who = identity()): void {
+    fake.probes = [who];
+    fake.pidFiles = [pidFile({ pid: who.pid, startedAt: who.startedAt })];
+    fake.signalOutcome = 'gone';
+  }
+
+  it('refuses a second automatic restart against the same pid and boot, and says so once', async () => {
+    sameEngineThroughout();
+    expect((await withClock(manager.restart('auto'), 1_000)).kind).toBe('running');
+    expect(fake.signals).toHaveLength(1);
+
+    expect((await withClock(manager.restart('auto'), 1_000)).kind).toBe('running');
+    expect(fake.signals).toHaveLength(1);
+    expect(logs.filter((l) => l.startsWith('engine.auto_restart_refused'))).toHaveLength(1);
+  });
+
+  it('never refuses a person', async () => {
+    sameEngineThroughout();
+    await withClock(manager.restart('auto'), 1_000);
+    await withClock(manager.restart('auto'), 1_000);
+    expect(fake.signals).toHaveLength(1);
+
+    await withClock(manager.restart('user'), 1_000);
+    await withClock(manager.restart('user'), 1_000);
+    expect(fake.signals).toHaveLength(3);
+  });
+
+  it('restarts again automatically once the engine is a different one', async () => {
+    sameEngineThroughout();
+    await withClock(manager.restart('auto'), 1_000);
+    await withClock(manager.restart('auto'), 1_000);
+    expect(fake.signals).toHaveLength(1);
+
+    sameEngineThroughout(identity({ pid: 5_150, startedAt: '2026-09-10T11:00:00.000Z' }));
+    await withClock(manager.restart('auto'), 1_000);
+    expect(fake.signals).toHaveLength(2);
+    expect(fake.signals.at(-1)?.pid).toBe(5_150);
+  });
+
+  it('restarts again automatically when only the boot time is new (a reused pid)', async () => {
+    sameEngineThroughout();
+    await withClock(manager.restart('auto'), 1_000);
+    sameEngineThroughout(identity({ startedAt: '2026-09-10T12:00:00.000Z' }));
+    await withClock(manager.restart('auto'), 1_000);
+    expect(fake.signals).toHaveLength(2);
+  });
+
+  it('does not spend the identity on a stop that never proved ownership, so the next auto trigger tries again', async () => {
+    // The engine answers the restart probe, but its identity file is gone by the time the stop
+    // tries to prove ownership — the stop fails and nothing is ever signalled.
+    const who = identity();
+    fake.probes = [who];
+    fake.pidFiles = [null];
+    const first = await withClock(manager.restart('auto'), 1_000);
+    expect(first.kind).toBe('failed');
+    expect(fake.signals).toHaveLength(0);
+
+    // Nothing was latched: the same identity gets a second attempt, not a refusal.
+    fake.probes = [who];
+    fake.pidFiles = [null];
+    const second = await withClock(manager.restart('auto'), 1_000);
+    expect(second.kind).toBe('failed');
+    expect(fake.calls.filter((c) => c.kind === 'readPidFile')).toHaveLength(2);
+    expect(logs.filter((l) => l.startsWith('engine.auto_restart_refused'))).toHaveLength(0);
   });
 });
 

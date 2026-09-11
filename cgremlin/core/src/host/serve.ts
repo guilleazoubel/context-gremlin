@@ -21,6 +21,8 @@ const ENGINE_LOCK_MODE = 0o600;
 interface EngineLockRecord {
   pid: number;
   version: string;
+  /** The engine bundle's content address, or `dev`; the same value `GET /version` reports. */
+  buildId: string;
   socketPath: string;
   startedAt: string;
 }
@@ -274,6 +276,7 @@ export async function serve(config: CoreConfig, adapters: EngineAdapters, opts: 
     {
       pid: engineInfo.pid,
       version: engineInfo.version,
+      buildId: engineInfo.buildId,
       socketPath: engineInfo.socketPath,
       startedAt: engineInfo.startedAt,
     },
