@@ -204,6 +204,20 @@ export const LIST_TITLES: Record<WorkListKind, string> = {
 };
 
 /**
+ * P2: one mark per list, in the fixed-width column the row's twisty sits in, so the four headers
+ * read as one vertical rhythm. A diamond is a PR: hollow means nobody has it, solid means it is
+ * mine, and nested means it is mine with somebody else inside it. An investigation is not a PR at
+ * all, so it gets the mark a conclusion gets. Unicode, never an icon font — `font-src 'none'`
+ * (R38) would drop one silently.
+ */
+export const LIST_GLYPHS: Record<WorkListKind, string> = {
+  parkingLot: '◇',
+  myWork: '◆',
+  investigations: '∴',
+  waitingForReview: '◈',
+};
+
+/**
  * The narrow slice of the editor's `globalState` this module needs (R64). The real `Host`
  * satisfies it structurally, which is what keeps this module free of the editor API.
  */
@@ -233,6 +247,43 @@ export function readSorts(store: SortStore): Record<WorkListKind, WorkSortKind> 
 
 export function writeSort(store: SortStore, list: WorkListKind, sort: WorkSortKind): void {
   store.setState(sortStateKey(list), sort);
+}
+
+// ---------------------------------------------------------------------------
+// P2: which headers the user has closed
+// ---------------------------------------------------------------------------
+
+/** `parkingLot` for a whole list, `parkingLot:someoneOnIt` for one of its groups. */
+export type CollapseKey = string;
+export type CollapseState = Record<CollapseKey, boolean>;
+
+export const COLLAPSE_STATE_KEY = 'cgremlin.panel.collapsed';
+
+export function listCollapseKey(list: WorkListKind): CollapseKey {
+  return list;
+}
+
+export function groupCollapseKey(list: WorkListKind, group: ParkingLotGroup): CollapseKey {
+  return `${list}:${group}`;
+}
+
+/**
+ * A persisted value the panel did not write — a hand-edited `globalState`, or a shape from an
+ * older build — is not half-read: every key that is not a boolean is dropped, and a value that is
+ * not an object at all reads as "nothing was closed".
+ */
+export function readCollapsed(store: SortStore): CollapseState {
+  const stored = store.getState<unknown>(COLLAPSE_STATE_KEY);
+  if (typeof stored !== 'object' || stored === null || Array.isArray(stored)) return {};
+  const out: CollapseState = {};
+  for (const [key, value] of Object.entries(stored as Record<string, unknown>)) {
+    if (key !== '__proto__' && typeof value === 'boolean') out[key] = value;
+  }
+  return out;
+}
+
+export function writeCollapsed(store: SortStore, state: CollapseState): void {
+  store.setState(COLLAPSE_STATE_KEY, { ...state });
 }
 
 // ---------------------------------------------------------------------------
@@ -396,13 +447,28 @@ export function buildWorkLists(input: WorkListsInput): WorkLists {
     lists[kind] = {
       kind,
       title: LIST_TITLES[kind],
-      count: sections.reduce((total, section) => total + section.rows.length, 0),
+      count: visibleRowCount(sections),
       sort,
       sorts: SORT_OPTIONS[kind],
       sections,
     };
   }
   return lists;
+}
+
+/**
+ * P1: what the list header may claim.
+ *
+ * The header used to sum every section, INCLUDING the one the panel collapses by default — so a
+ * parking lot that was entirely "someone is on it" read `Parking lot (11)` over an empty tree,
+ * and nothing on screen said where the eleven had gone. A header counts the rows the tree under
+ * it actually paints; a collapsed group carries its own count on its own header, which is the
+ * thing the user expands.
+ */
+export function visibleRowCount(
+  sections: readonly { collapsed: boolean; rows: readonly unknown[] }[],
+): number {
+  return sections.reduce((total, section) => total + (section.collapsed ? 0 : section.rows.length), 0);
 }
 
 function rowsOf(

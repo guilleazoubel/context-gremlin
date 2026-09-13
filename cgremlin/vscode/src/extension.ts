@@ -254,6 +254,14 @@ function buildHost(output: vscode.OutputChannel, state: vscode.Memento): Host {
               set title(value: string | undefined) {
                 view.title = value;
               },
+              // P3: the needs-you count on the view container. `WebviewView.badge` has existed
+              // since VS Code 1.72 and this package's engine floor is 1.85.
+              get badge() {
+                return view.badge;
+              },
+              set badge(value: { value: number; tooltip: string } | undefined) {
+                view.badge = value;
+              },
               onDidDispose: (listener: () => void) => view.onDidDispose(listener),
             });
           },

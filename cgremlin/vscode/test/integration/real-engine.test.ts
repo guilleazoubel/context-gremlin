@@ -616,8 +616,10 @@ describe.skipIf(!coreIsBuilt())('integration: the extension against a real engin
       expect(state.connected).toBe(true);
       expect(state.trouble).toBeNull();
       expect(state.banner).toBeNull();
+      // P1: the header counts the rows the tree paints. Five are in the parking lot, one of them
+      // inside the "someone is on it" group that starts collapsed — counted on its own header.
       expect(state.lists.map((list) => [list.kind, list.count])).toEqual([
-        ['parkingLot', 5],
+        ['parkingLot', 4],
         ['myWork', 5],
         ['investigations', 1],
         ['waitingForReview', 2],

@@ -20,10 +20,18 @@ import { itemActionFacts, rowActions, type StageKind } from '../model/row-action
 import {
   buildItemChildren,
   buildWorkLists,
+  groupCollapseKey,
+  listCollapseKey,
+  readCollapsed,
   readSort,
   readSorts,
   ticketBanner,
+  visibleRowCount,
+  writeCollapsed,
   writeSort,
+  COLLAPSE_STATE_KEY,
+  LIST_GLYPHS,
+  type CollapseState,
   type ItemsResponse,
   type ParkingLotGroup,
   type WorkChild,
@@ -50,6 +58,7 @@ import {
   type EngineTrouble,
   type SourceTrouble,
 } from '../model/engine-trouble';
+import { badgeTooltip, needsYouEntries } from '../model/needs-you';
 import { cspFor } from './item-tab';
 import type {
   DisposableLike,
@@ -93,6 +102,8 @@ export interface ExpandedDetail {
 }
 
 export const SELECTED_STATE_KEY = 'cgremlin.panel.selected';
+/** P2: which headers the user has closed, lists and parking-lot groups alike (R64). */
+export const COLLAPSED_STATE_KEY = COLLAPSE_STATE_KEY;
 export const EXPANDED_STATE_KEY = 'cgremlin.panel.expanded';
 
 const START_COMMAND: Record<StageKind, string> = {
@@ -119,7 +130,8 @@ export class PanelView implements WebviewViewProviderLike {
   private detailSignature: string | null = null;
   /** An engine frame named the open row, or one of its sessions, since the last read. */
   private detailStale = false;
-  private readonly collapsedGroups = new Map<string, boolean>();
+  /** P2: `parkingLot` for a whole list, `parkingLot:someoneOnIt` for one of its groups. */
+  private collapsed: CollapseState;
   private sorts: Record<WorkListKind, WorkSortKind>;
   /** §3.3: `setConnected` + `setItems` + `setSourceTrouble` in one refresh are ONE post. */
   private batchDepth = 0;
@@ -128,6 +140,7 @@ export class PanelView implements WebviewViewProviderLike {
 
   constructor(private readonly deps: PanelViewDeps) {
     this.sorts = readSorts(deps.host);
+    this.collapsed = readCollapsed(deps.host);
     this.selectedId = deps.host.getState<string>(SELECTED_STATE_KEY) ?? null;
     this.expandedId = deps.host.getState<string>(EXPANDED_STATE_KEY) ?? null;
   }
@@ -250,6 +263,9 @@ export class PanelView implements WebviewViewProviderLike {
     const trouble = this.troubleView();
     return {
       lists: trouble === null ? this.lists() : [],
+      // P3: the strip survives a trouble state — what wants the user is still true while the
+      // engine is explaining itself, and it is the one thing worth carrying across.
+      needsYou: needsYouEntries(this.items()),
       banner:
         this.response === null
           ? null
@@ -294,31 +310,46 @@ export class PanelView implements WebviewViewProviderLike {
     });
     return (Object.keys(built) as WorkListKind[]).map((kind) => {
       const list = built[kind];
+      const sections = list.sections.map((section) => ({
+        group: section.group,
+        title: section.title,
+        count: section.count,
+        collapsible: section.collapsible,
+        collapsed: this.groupCollapsed(kind, section.group, section.collapsed),
+        rows: section.rows.map((row) => this.rowView(row)),
+      }));
+      const shut = this.collapsed[listCollapseKey(kind)] ?? false;
       return {
         kind,
         title: list.title,
-        count: list.count,
+        glyph: LIST_GLYPHS[kind],
+        // P1: the USER's collapse state, not the default one, decides what the header may claim.
+        // A CLOSED list still says how much is behind it — that is why it was worth closing.
+        count: shut
+          ? sections.reduce((total, section) => total + section.rows.length, 0)
+          : visibleRowCount(sections),
+        collapsed: shut,
         sort: list.sort,
         sorts: [...list.sorts],
-        sections: list.sections.map((section) => ({
-          group: section.group,
-          title: section.title,
-          count: section.count,
-          collapsible: section.collapsible,
-          collapsed: this.collapsed(kind, section.group, section.collapsed),
-          rows: section.rows.map((row) => this.rowView(row)),
-        })),
+        sections,
       };
     });
   }
 
-  private collapsed(
+  private groupCollapsed(
     list: WorkListKind,
     group: ParkingLotGroup | null,
     fallback: boolean,
   ): boolean {
     if (group === null) return false;
-    return this.collapsedGroups.get(`${list}:${group}`) ?? fallback;
+    return this.collapsed[groupCollapseKey(list, group)] ?? fallback;
+  }
+
+  /** One write per toggle, so the next window opens on the panel the user left behind (R64). */
+  private setCollapsed(key: string, collapsed: boolean): void {
+    this.collapsed = { ...this.collapsed, [key]: collapsed };
+    writeCollapsed(this.deps.host, this.collapsed);
+    this.render();
   }
 
   private rowView(row: WorkRow): PanelRowView {
@@ -458,10 +489,21 @@ export class PanelView implements WebviewViewProviderLike {
    */
   private flush(): void {
     const state = this.state();
+    this.paintBadge(state.needsYou.length);
     const encoded = JSON.stringify(state);
     if (encoded === this.lastPosted) return;
     this.lastPosted = encoded;
     this.post({ type: 'render', state });
+  }
+
+  /**
+   * P3: the count on the view container — `WebviewView.badge` (VS Code 1.72; this package's
+   * engine floor is 1.85). Zero REMOVES the badge rather than painting a `0`: a badge that says
+   * nothing is due is still a mark on the activity bar, which is the interruption this replaces.
+   */
+  private paintBadge(count: number): void {
+    if (this.view === null) return;
+    this.view.badge = count === 0 ? undefined : { value: count, tooltip: badgeTooltip(count) };
   }
 
   private async handle(raw: unknown): Promise<void> {
@@ -491,8 +533,10 @@ export class PanelView implements WebviewViewProviderLike {
         this.render();
         return;
       case 'toggleGroup':
-        this.collapsedGroups.set(`${message.list}:${message.group}`, message.collapsed);
-        this.render();
+        this.setCollapsed(groupCollapseKey(message.list, message.group), message.collapsed);
+        return;
+      case 'toggleList':
+        this.setCollapsed(listCollapseKey(message.list), message.collapsed);
         return;
       case 'toggleRow':
         // The keyboard's way of opening a row, and it reads the detail for the same reason a

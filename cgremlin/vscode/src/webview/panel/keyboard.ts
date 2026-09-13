@@ -64,6 +64,11 @@ function activate(node: PanelTreeNode): boolean {
 
 export function installKeyboard(ports: KeyboardPorts): void {
   document.addEventListener('keydown', (event: KeyboardEvent) => {
+    // A button owns its own <kbd>Enter</kbd> and <kbd>Space</kbd> — the list header's disclosure,
+    // a sort, a row's primary verb. Letting the tree act on them too would fire two things at
+    // once, so the tree's keys apply only when the caret is not on a control (P2).
+    const target = event.target as { tagName?: string } | null;
+    if (target?.tagName === 'BUTTON') return;
     if (onKeyDown(event.key, ports)) event.preventDefault();
   });
 }

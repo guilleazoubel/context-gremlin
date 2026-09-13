@@ -22,6 +22,7 @@ import { installKeyboard } from './keyboard';
 import { createList, patchList, type ListContext } from './list';
 import { installOverflowDismissal } from './overflow';
 import { reconcile, setClass, setHidden, setText } from './reconcile';
+import { createStrip, patchStrip } from './strip';
 import type { HostToPanel, PanelState } from '../../model/panel-protocol';
 
 declare function acquireVsCodeApi(): { postMessage(message: unknown): void };
@@ -105,12 +106,21 @@ function collectKeys(node: HTMLElement): void {
 
 type Entry =
   | { kind: 'trouble'; state: PanelState }
+  | { kind: 'strip'; state: PanelState }
   | { kind: 'banner'; text: string; tone: string }
   | { kind: 'list'; index: number; state: PanelState };
 
 function entriesOf(next: PanelState): { key: string; data: Entry }[] {
-  if (next.trouble !== null) return [{ key: 'trouble', data: { kind: 'trouble', state: next } }];
   const entries: { key: string; data: Entry }[] = [];
+  // P3: the strip leads the panel and outlives a trouble state — what wants the user is still
+  // true while the engine is explaining itself.
+  if (next.needsYou.length > 0) {
+    entries.push({ key: 'needsYou', data: { kind: 'strip', state: next } });
+  }
+  if (next.trouble !== null) {
+    entries.push({ key: 'trouble', data: { kind: 'trouble', state: next } });
+    return entries;
+  }
   if (next.banner !== null) {
     entries.push({
       key: 'banner',
@@ -131,6 +141,7 @@ function entriesOf(next: PanelState): { key: string; data: Entry }[] {
 
 function create(entry: Entry, context: ListContext): HTMLElement {
   if (entry.kind === 'list') return createList(entry.state.lists[entry.index], context);
+  if (entry.kind === 'strip') return createStrip();
   if (entry.kind === 'banner') return el('div', 'banner');
   const node = el('div', 'trouble');
   node.appendChild(el('p', 'trouble-message'));
@@ -151,6 +162,10 @@ function create(entry: Entry, context: ListContext): HTMLElement {
 function patch(node: HTMLElement, entry: Entry, context: ListContext): void {
   if (entry.kind === 'list') {
     patchList(node, entry.state.lists[entry.index], context);
+    return;
+  }
+  if (entry.kind === 'strip') {
+    patchStrip(node, entry.state.needsYou);
     return;
   }
   if (entry.kind === 'banner') {

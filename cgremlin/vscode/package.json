@@ -169,8 +169,8 @@
             "needs-you-only",
             "off"
           ],
-          "default": "all",
-          "description": "Which attention changes raise a popup."
+          "default": "needs-you-only",
+          "description": "How the panel tells you something needs you. \"needs-you-only\" (the default) uses the panel's needs-you strip, the view badge and the status bar. \"all\" adds a popup per item. \"off\" is silent."
         }
       }
     },

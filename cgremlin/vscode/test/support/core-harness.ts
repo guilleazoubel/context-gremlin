@@ -141,6 +141,13 @@ export interface StartEngineOptions {
    * `gh` needs a `pr-list-<slug with / as ->.json` fixture for every slug the scan visits.
    */
   repos?: string[];
+  /**
+   * The directory the fake `gh` reads its fixtures from. Defaults to the committed one; a test
+   * that needs a differently SHAPED inventory (P1: a parking lot that is entirely "someone is on
+   * it") points this at its own dir rather than rewriting the shared fixture out from under
+   * every other integration test.
+   */
+  ghFixtures?: string;
 }
 
 export async function seedStateDir(opts: StartEngineOptions = {}): Promise<SeededStateDir> {
@@ -264,7 +271,7 @@ export async function seedStateDir(opts: StartEngineOptions = {}): Promise<Seede
       ...process.env,
       // The legacy state dir must be unreachable even by accident.
       HOME: stateDir,
-      FAKE_GH_FIXTURES: FAKE_GH_DIR,
+      FAKE_GH_FIXTURES: opts.ghFixtures ?? FAKE_GH_DIR,
     },
     repoSlug: REPO_SLUG,
     bypassSecret,

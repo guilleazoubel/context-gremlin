@@ -10,6 +10,8 @@ import { lifecycleSlots } from '../../src/model/lifecycle';
 import {
   buildItemChildren,
   buildWorkLists,
+  visibleRowCount,
+  LIST_GLYPHS,
   type ItemsResponse,
   type WorkListKind,
 } from '../../src/model/work-items';
@@ -44,13 +46,7 @@ export function stateOf(over: StateOptions = {}): PanelState {
   const built = buildWorkLists({ response, now: NOW });
   const lists: PanelListView[] = (Object.keys(built) as WorkListKind[]).map((kind) => {
     const list = built[kind];
-    return {
-      kind,
-      title: list.title,
-      count: list.count,
-      sort: list.sort,
-      sorts: [...list.sorts],
-      sections: list.sections.map((section) => ({
+    const sections = list.sections.map((section) => ({
         group: section.group,
         title: section.title,
         count: section.count,
@@ -92,10 +88,19 @@ export function stateOf(over: StateOptions = {}): PanelState {
             actions,
           };
         }),
-      })),
+    }));
+    return {
+      kind,
+      title: list.title,
+      glyph: LIST_GLYPHS[kind],
+      collapsed: false,
+      count: visibleRowCount(sections),
+      sort: list.sort,
+      sorts: [...list.sorts],
+      sections,
     };
   });
-  return { lists, banner: null, trouble: null, connected: true };
+  return { lists, needsYou: [], banner: null, trouble: null, connected: true };
 }
 
 function slotsOf(

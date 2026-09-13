@@ -62,15 +62,15 @@ describe('MG-B2 only-needs-you-pops', () => {
     expect(decideNotifications([], [badgeOnly], 'all')).toEqual([]);
   });
 
-  it('treats needs-you-only exactly as all, because only needs-you items ever pop', () => {
+  it('pops nothing at the default level — P3 moved that news into the panel', () => {
     const next = [
       make('session:a', ['review_ready']),
       make('session:b', ['local_prereq_failed'], { needsYou: false }),
     ];
-    expect(decideNotifications([], next, 'needs-you-only')).toEqual(
-      decideNotifications([], next, 'all'),
-    );
-    expect(decideNotifications([], next, 'needs-you-only')).toHaveLength(1);
+    // `needs-you-only` is the strip, the view badge and the status bar; a popup is what `all`
+    // means, and it is now the only level that raises one.
+    expect(decideNotifications([], next, 'needs-you-only')).toEqual([]);
+    expect(decideNotifications([], next, 'all')).toHaveLength(1);
   });
 
   it('returns nothing at all when notifications are off', () => {
