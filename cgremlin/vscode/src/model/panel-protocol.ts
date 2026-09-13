@@ -106,7 +106,12 @@ export interface PanelSectionView {
 export interface PanelListView {
   kind: WorkListKind;
   title: string;
+  /** P2: the list's own mark, in the fixed-width column the row's twisty sits in. */
+  glyph: string;
+  /** P2: the rows the tree paints right now — never the ones a closed group holds (P1). */
   count: number;
+  /** P2: whether the user has closed the whole list. Persisted in the host's state (R64). */
+  collapsed: boolean;
   sort: WorkSortKind;
   sorts: WorkSortKind[];
   sections: PanelSectionView[];
@@ -142,6 +147,7 @@ export type PanelToHost =
   | { type: 'openChild'; id: string; childId: string }
   | { type: 'setSort'; list: WorkListKind; sort: WorkSortKind }
   | { type: 'toggleGroup'; list: WorkListKind; group: ParkingLotGroup; collapsed: boolean }
+  | { type: 'toggleList'; list: WorkListKind; collapsed: boolean }
   | { type: 'toggleRow'; id: string; expanded: boolean }
   | { type: 'command'; command: string; id: string; childId?: string };
 
@@ -201,6 +207,13 @@ export function parsePanelMessage(raw: unknown): PanelToHost | null {
       if (list === null || typeof group !== 'string' || typeof collapsed !== 'boolean') return null;
       if (!(GROUPS as readonly string[]).includes(group)) return null;
       return { type: 'toggleGroup', list, group: group as ParkingLotGroup, collapsed };
+    }
+    case 'toggleList': {
+      const list = listKind(message.list);
+      const collapsed = message.collapsed;
+      return list === null || typeof collapsed !== 'boolean'
+        ? null
+        : { type: 'toggleList', list, collapsed };
     }
     case 'toggleRow': {
       const id = text(message.id);

@@ -11,7 +11,12 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import path from 'node:path';
-import { buildWorkLists, visibleRowCount, type ItemsResponse } from '../../src/model/work-items';
+import {
+  buildWorkLists,
+  visibleRowCount,
+  LIST_GLYPHS,
+  type ItemsResponse,
+} from '../../src/model/work-items';
 import { panelTreeNodes } from '../../src/model/panel-tree';
 import type { PanelListView, PanelState } from '../../src/model/panel-protocol';
 import { coreIsBuilt, startEngineViaManager, waitUntil, type CoreHarness } from '../support/core-harness';
@@ -25,6 +30,8 @@ function listsOf(response: ItemsResponse): PanelListView[] {
   return Object.values(built).map((list) => ({
     kind: list.kind,
     title: list.title,
+    glyph: LIST_GLYPHS[list.kind],
+    collapsed: false,
     count: list.count,
     sort: list.sort,
     sorts: [...list.sorts],

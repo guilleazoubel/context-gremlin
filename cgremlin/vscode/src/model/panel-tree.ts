@@ -38,7 +38,13 @@ export interface PanelTreeNode {
 export function panelTreeNodes(state: PanelState): PanelTreeNode[] {
   const nodes: PanelTreeNode[] = [];
   for (const list of state.lists) {
+    // P2: a closed list contributes nothing. Its header is a disclosure button of its own rather
+    // than a tree item, so the tree it owns is simply not there while it is shut.
+    if (list.collapsed) continue;
     for (const section of list.sections) {
+      // P2: a group with nothing in it is not a thing to expand, and a header that expands into
+      // nothing is worse than no header — so it is not rendered and not walked.
+      if (section.group !== null && section.count === 0) continue;
       if (section.group !== null && section.collapsible) {
         nodes.push({
           key: `group:${list.kind}:${section.group}`,

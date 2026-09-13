@@ -11,6 +11,7 @@ import {
   buildItemChildren,
   buildWorkLists,
   visibleRowCount,
+  LIST_GLYPHS,
   type ItemsResponse,
   type WorkListKind,
 } from '../../src/model/work-items';
@@ -91,6 +92,8 @@ export function stateOf(over: StateOptions = {}): PanelState {
     return {
       kind,
       title: list.title,
+      glyph: LIST_GLYPHS[kind],
+      collapsed: false,
       count: visibleRowCount(sections),
       sort: list.sort,
       sorts: [...list.sorts],

@@ -204,6 +204,20 @@ export const LIST_TITLES: Record<WorkListKind, string> = {
 };
 
 /**
+ * P2: one mark per list, in the fixed-width column the row's twisty sits in, so the four headers
+ * read as one vertical rhythm. A diamond is a PR: hollow means nobody has it, solid means it is
+ * mine, and nested means it is mine with somebody else inside it. An investigation is not a PR at
+ * all, so it gets the mark a conclusion gets. Unicode, never an icon font — `font-src 'none'`
+ * (R38) would drop one silently.
+ */
+export const LIST_GLYPHS: Record<WorkListKind, string> = {
+  parkingLot: '◇',
+  myWork: '◆',
+  investigations: '∴',
+  waitingForReview: '◈',
+};
+
+/**
  * The narrow slice of the editor's `globalState` this module needs (R64). The real `Host`
  * satisfies it structurally, which is what keeps this module free of the editor API.
  */
@@ -233,6 +247,43 @@ export function readSorts(store: SortStore): Record<WorkListKind, WorkSortKind> 
 
 export function writeSort(store: SortStore, list: WorkListKind, sort: WorkSortKind): void {
   store.setState(sortStateKey(list), sort);
+}
+
+// ---------------------------------------------------------------------------
+// P2: which headers the user has closed
+// ---------------------------------------------------------------------------
+
+/** `parkingLot` for a whole list, `parkingLot:someoneOnIt` for one of its groups. */
+export type CollapseKey = string;
+export type CollapseState = Record<CollapseKey, boolean>;
+
+export const COLLAPSE_STATE_KEY = 'cgremlin.panel.collapsed';
+
+export function listCollapseKey(list: WorkListKind): CollapseKey {
+  return list;
+}
+
+export function groupCollapseKey(list: WorkListKind, group: ParkingLotGroup): CollapseKey {
+  return `${list}:${group}`;
+}
+
+/**
+ * A persisted value the panel did not write — a hand-edited `globalState`, or a shape from an
+ * older build — is not half-read: every key that is not a boolean is dropped, and a value that is
+ * not an object at all reads as "nothing was closed".
+ */
+export function readCollapsed(store: SortStore): CollapseState {
+  const stored = store.getState<unknown>(COLLAPSE_STATE_KEY);
+  if (typeof stored !== 'object' || stored === null || Array.isArray(stored)) return {};
+  const out: CollapseState = {};
+  for (const [key, value] of Object.entries(stored as Record<string, unknown>)) {
+    if (key !== '__proto__' && typeof value === 'boolean') out[key] = value;
+  }
+  return out;
+}
+
+export function writeCollapsed(store: SortStore, state: CollapseState): void {
+  store.setState(COLLAPSE_STATE_KEY, { ...state });
 }
 
 // ---------------------------------------------------------------------------

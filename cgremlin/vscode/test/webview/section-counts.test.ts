@@ -61,9 +61,23 @@ function onlyGroup(group: ParkingLotGroup, n: number): ItemsResponse {
 }
 
 const rows = (): FakeElement[] => dom.root.byClass('row');
+/** `Title (count)` per VISIBLE group header — the parking lot's three. */
 const headerTexts = (): string[] =>
-  dom.root.byClass('section-header').map((node) => node.textContent);
-const listTexts = (): string[] => dom.root.byClass('list-title').map((node) => node.textContent);
+  dom.root
+    .byClass('section-header')
+    .filter((node) => !node.hidden)
+    .map(
+      (node) =>
+        `${node.byClass('section-title')[0]?.textContent ?? ''} (${node.byClass('section-count')[0]?.textContent ?? ''})`,
+    );
+/** `[title, count]` per list header, which P2 splits into a title and a count badge. */
+const listHeaders = (): string[] =>
+  dom.root
+    .byClass('list-toggle')
+    .map(
+      (node) =>
+        `${node.byClass('list-title')[0]?.textContent ?? ''} (${node.byClass('list-count')[0]?.textContent ?? ''})`,
+    );
 
 /** Opens every group, exactly as the user clicking each chevron would. */
 function expandAll(state: PanelState): PanelState {
@@ -79,7 +93,7 @@ describe('P1 header counts', () => {
     const state = stateOf({ response: onlyGroup('someoneOnIt', 11) });
     panel.render(state);
     expect(rows().length).toBe(0);
-    expect(listTexts()).toContain('Parking lot (0)');
+    expect(listHeaders()).toContain('Parking lot (0)');
     // The eleven are not lost — the group that holds them says so on its own header.
     expect(headerTexts()).toContain('Someone is on it (11)');
   });
@@ -87,14 +101,14 @@ describe('P1 header counts', () => {
   it('counts every row once the groups are expanded', () => {
     panel.render(expandAll(stateOf({ response: onlyGroup('someoneOnIt', 11) })));
     expect(rows().length).toBe(11);
-    expect(listTexts()).toContain('Parking lot (11)');
+    expect(listHeaders()).toContain('Parking lot (11)');
   });
 
   it('holds for an untouched-only parking lot, which is never collapsed', () => {
     const state = stateOf({ response: onlyGroup('untouched', 11) });
     panel.render(state);
     expect(rows().length).toBe(11);
-    expect(listTexts()).toContain('Parking lot (11)');
+    expect(listHeaders()).toContain('Parking lot (11)');
     expect(headerTexts()).toContain('Untouched (11)');
   });
 

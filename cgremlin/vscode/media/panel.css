@@ -43,28 +43,95 @@ body {
   color: var(--vscode-errorForeground);
 }
 
-/* --- list header ------------------------------------------------------- */
+/* --- the two header levels (P2) ---------------------------------------- */
+
+/*
+ * Four lists in a 300 px sidebar need a rhythm, not a ruler. Both header levels are disclosures,
+ * and they are told apart by WEIGHT and GROUND rather than by size: the list header sits on the
+ * editor's own section-header ground at 600, the group header is bare at 400. Both stick, the
+ * list above the group, so scrolling the parking lot never loses which list you are in.
+ *
+ * The chevron and the list glyph share the 14 px column the row's twisty occupies, so every line
+ * in the panel — header, group, row — starts on the same vertical.
+ */
+
+.list + .list {
+  margin-top: 12px;
+}
 
 .list-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: 10px 10px 4px;
   position: sticky;
   top: 0;
-  z-index: 1;
-  background: var(--vscode-sideBar-background);
+  z-index: 3;
+  padding: 0 6px 0 0;
+  background: var(--vscode-sideBarSectionHeader-background, var(--vscode-sideBar-background));
+  border-top: 1px solid var(--vscode-sideBarSectionHeader-border, var(--cg-divider));
+  border-bottom: 1px solid var(--vscode-sideBarSectionHeader-border, var(--cg-divider));
+}
+
+.list-toggle {
+  display: flex;
+  flex: 1 1 auto;
+  align-items: center;
+  gap: 6px;
+  min-height: 24px;
+  min-width: 0;
+  padding: 5px 4px 5px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--vscode-sideBarSectionHeader-foreground, var(--vscode-foreground));
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+
+.list-chevron,
+.section-chevron {
+  flex: 0 0 auto;
+  width: 1em;
+  color: var(--vscode-descriptionForeground);
+  font-size: 10px;
+  font-weight: 400;
+}
+
+.list-glyph {
+  flex: 0 0 auto;
+  width: 1em;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  text-align: center;
 }
 
 .list-title {
-  font-weight: 600;
-  font-size: 11px;
-  color: var(--vscode-descriptionForeground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The count is the answer to "is there anything for me here", so it reads as a value. */
+.list-count,
+.section-count {
+  flex: 0 0 auto;
+  min-width: 16px;
+  padding: 0 5px;
+  border-radius: 8px;
+  background: var(--vscode-badge-background);
+  color: var(--vscode-badge-foreground);
+  font-size: 10px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
 }
 
 .sorts {
   display: flex;
+  flex: 0 0 auto;
   gap: 2px;
 }
 
@@ -85,11 +152,43 @@ body {
   border-color: var(--cg-divider);
 }
 
+.section + .section {
+  margin-top: 2px;
+}
+
 .section-header {
-  padding: 6px 10px;
-  font-size: 11px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  position: sticky;
+  top: 27px;
+  z-index: 2;
+  padding: 5px 10px;
+  background: var(--vscode-sideBar-background);
   color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+}
+
+.section-header.collapsible {
   cursor: pointer;
+}
+
+.section-header.collapsible:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
+.section-title {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* An empty list is an answer, so it is written down rather than left as a gap. */
+.list-empty {
+  padding: 8px 10px 8px 26px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
 }
 
 /* --- the row ----------------------------------------------------------- */
@@ -410,6 +509,7 @@ body {
 
 .row:focus-visible,
 .part:focus-visible,
+.list-toggle:focus-visible,
 .section-header:focus-visible,
 .sort:focus-visible,
 .row-primary:focus-visible,
