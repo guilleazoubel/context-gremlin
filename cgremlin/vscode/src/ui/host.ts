@@ -120,9 +120,17 @@ export interface WebviewPanelOptionsLike extends WebviewOptionsLike {
  * The side panel's view. Unlike a panel it is created by the editor and handed to the provider,
  * which is why its options are set on the webview rather than passed at construction (R54).
  */
+/** `vscode.ViewBadge` — a numeric badge on the view container, since VS Code 1.72. */
+export interface ViewBadgeLike {
+  value: number;
+  tooltip: string;
+}
+
 export interface WebviewViewLike {
   readonly webview: WebviewLike;
   title?: string;
+  /** P3: the needs-you count, where a toast used to be. `undefined` removes it. */
+  badge?: ViewBadgeLike | undefined;
   onDidDispose(listener: () => void): DisposableLike;
 }
 

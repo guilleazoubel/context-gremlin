@@ -8,6 +8,7 @@
  * Pure module — no editor API (MG-B1).
  */
 import type { SlotState } from './lifecycle';
+import type { NeedsYouEntry } from './needs-you';
 import type { ActionPlacement, StageKind } from './row-actions';
 import {
   SORT_OPTIONS,
@@ -19,6 +20,7 @@ import {
 } from './work-items';
 
 export type { RowMetaCell } from './work-items';
+export type { NeedsYouEntry } from './needs-you';
 
 export interface PanelRowView {
   id: string;
@@ -119,6 +121,8 @@ export interface PanelListView {
 
 export interface PanelState {
   lists: PanelListView[];
+  /** P3: what wants the user, as a strip at the top of the panel instead of a toast. */
+  needsYou: NeedsYouEntry[];
   /** A stale ticket or thread source, or the Jira auth failure (R35). */
   banner: { kind: 'stale' | 'auth'; message: string } | null;
   /**

@@ -24,7 +24,7 @@ function stateOf(
     kind,
     sections: sections.map((section) => ({ ...section, count: section.rows.length })),
   } as unknown as PanelListView;
-  return { lists: [list], banner: null, trouble: null, connected: true };
+  return { lists: [list], needsYou: [], banner: null, trouble: null, connected: true };
 }
 
 describe('freezing the painted order (§2.2 rule 4)', () => {

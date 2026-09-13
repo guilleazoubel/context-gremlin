@@ -58,6 +58,7 @@ import {
   type EngineTrouble,
   type SourceTrouble,
 } from '../model/engine-trouble';
+import { badgeTooltip, needsYouEntries } from '../model/needs-you';
 import { cspFor } from './item-tab';
 import type {
   DisposableLike,
@@ -262,6 +263,9 @@ export class PanelView implements WebviewViewProviderLike {
     const trouble = this.troubleView();
     return {
       lists: trouble === null ? this.lists() : [],
+      // P3: the strip survives a trouble state — what wants the user is still true while the
+      // engine is explaining itself, and it is the one thing worth carrying across.
+      needsYou: needsYouEntries(this.items()),
       banner:
         this.response === null
           ? null
@@ -485,10 +489,21 @@ export class PanelView implements WebviewViewProviderLike {
    */
   private flush(): void {
     const state = this.state();
+    this.paintBadge(state.needsYou.length);
     const encoded = JSON.stringify(state);
     if (encoded === this.lastPosted) return;
     this.lastPosted = encoded;
     this.post({ type: 'render', state });
+  }
+
+  /**
+   * P3: the count on the view container — `WebviewView.badge` (VS Code 1.72; this package's
+   * engine floor is 1.85). Zero REMOVES the badge rather than painting a `0`: a badge that says
+   * nothing is due is still a mark on the activity bar, which is the interruption this replaces.
+   */
+  private paintBadge(count: number): void {
+    if (this.view === null) return;
+    this.view.badge = count === 0 ? undefined : { value: count, tooltip: badgeTooltip(count) };
   }
 
   private async handle(raw: unknown): Promise<void> {

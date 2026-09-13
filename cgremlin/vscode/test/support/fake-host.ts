@@ -12,6 +12,7 @@ import type {
   WebviewOptionsLike,
   WebviewPanelLike,
   WebviewPanelOptionsLike,
+  ViewBadgeLike,
   WebviewViewLike,
   WebviewViewProviderLike,
   EventEmitterLike,
@@ -126,6 +127,8 @@ export class FakeWebviewPanel implements WebviewPanelLike {
 export class FakeWebviewView implements WebviewViewLike {
   readonly webview = new FakeWebview();
   title: string | undefined;
+  /** P3: what the activity-bar badge currently says, or `undefined` when it is removed. */
+  badge: ViewBadgeLike | undefined;
   private readonly disposeListeners: (() => void)[] = [];
 
   onDidDispose(listener: () => void): DisposableLike {

@@ -100,7 +100,7 @@ export function stateOf(over: StateOptions = {}): PanelState {
       sections,
     };
   });
-  return { lists, banner: null, trouble: null, connected: true };
+  return { lists, needsYou: [], banner: null, trouble: null, connected: true };
 }
 
 function slotsOf(
