@@ -5,6 +5,9 @@
  * `attention.needsYou` and on the user's level — nothing else. There is deliberately no copy of
  * the core's needs-you reason list here; `reasons` is used only to compose the text.
  *
+ * P3: the popup is the narrow case. `needs-you-only` — the default — raises none at all; the
+ * news reaches the user through the panel's strip, the view badge and the status bar instead.
+ *
  * Pure module — no editor API (MG-B1).
  */
 import type { WorkItem } from './work-items';
@@ -29,9 +32,10 @@ export function decideNotifications(
   next: WorkItem[],
   level: NotificationLevel,
 ): Popup[] {
-  if (level === 'off') return [];
-  // `all` and `needs-you-only` coincide in v1: only needs-you items ever pop, so there is nothing
-  // for the narrower level to suppress. The distinction is kept for the settings contract.
+  // P3: a toast is an OPT-IN now. `needs-you-only` — the default — is the strip, the badge and
+  // the status bar, which is the same news without the interruption over whatever the user was
+  // typing into. Only `all` still pops, because that is what asking for `all` means.
+  if (level !== 'all') return [];
   const before = new Map(prev.map((item) => [item.id, item]));
   const popups: Popup[] = [];
   for (const item of next) {

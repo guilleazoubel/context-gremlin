@@ -3,6 +3,10 @@
  *
  * The policy itself is pure (`model/notify-policy.ts`) and filters on the core's own
  * `attention.needsYou` (R22); this file only shows what it returns and dispatches the two actions.
+ *
+ * P3: at every level but `all` this surface shows nothing at all. The news lives in the panel's
+ * needs-you strip, the view-container badge and the status bar; `warn` stays, because a command
+ * the user just clicked failing is an answer to THAT click and belongs where the click was.
  */
 import { decideNotifications, type NotificationLevel, type Popup } from '../model/notify-policy';
 import type { WorkItem } from '../model/work-items';
@@ -42,9 +46,13 @@ export class NotificationSurface {
    * One warning per outage, not one per retry: the SSE client keeps reconnecting with backoff and
    * a dialog per attempt would be unusable.
    */
-  reportOffline(): void {
+  reportOffline(level: NotificationLevel): void {
     if (this.offlineWarned) return;
     this.offlineWarned = true;
+    // P3: engine trouble is explained in the panel, which already paints it and offers the same
+    // two actions. A popup on top of that is the same sentence twice, over whatever the user was
+    // doing — so it happens only when the level explicitly asks for every popup.
+    if (level !== 'all') return;
     this.pending.track(this.showOffline());
   }
 

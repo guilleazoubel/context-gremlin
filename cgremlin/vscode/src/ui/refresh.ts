@@ -187,7 +187,7 @@ export class RefreshCoordinator {
       this.cancelOfflineGrace = null;
       this.offlineShown = true;
       this.markOffline();
-      this.deps.notifications.reportOffline();
+      this.deps.notifications.reportOffline(this.deps.notificationLevel());
     }, this.deps.offlineGraceMs ?? OFFLINE_GRACE_MS);
   }
 
