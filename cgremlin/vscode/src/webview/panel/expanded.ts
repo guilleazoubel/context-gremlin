@@ -5,6 +5,11 @@
  * changes only on that click, never on a refresh" can be true of the node the pointer is over: a
  * refresh may add or remove this block, and the row itself never changes shape.
  *
+ * Since the row's gutter and its `⋯` popover are gone, this block is also the ONLY place a verb
+ * lives — so it has to carry every one. The slots already own the ladder's Start and each stage's
+ * Chat; what is left over is the rare stuff with nowhere else to go (Ack, Open on GitHub, Open in
+ * Jira), and that goes on one line at the bottom rather than into a menu that pops up unasked.
+ *
  * The three slots are a real sequence — investigation, then development, then review — so the
  * stylesheet draws them on a spine. That is structure carrying information, not decoration: the
  * one place in the panel where the shape of the content is worth drawing.
@@ -14,8 +19,10 @@
 import { post } from './channel';
 import { button, el, glyph } from './dom';
 import { reconcile, setHidden, setTabStop, setText } from './reconcile';
-import { child } from './row';
+import { child, commandOf } from './row';
+import type { HumanInteraction } from '../../model/work-items';
 import type {
+  PanelActionView,
   PanelChildView,
   PanelRowView,
   PanelSlotView,
@@ -40,11 +47,22 @@ export function createExpanded(): HTMLElement {
   node.appendChild(slots);
   node.appendChild(el('div', 'parts'));
 
+  // "Someone is on it" without a name and a date is the state the user said tells him nothing.
+  const people = el('div', 'people');
+  people.setAttribute('role', 'group');
+  people.setAttribute('aria-label', 'Who has been on it');
+  node.appendChild(people);
+
   const changes = el('div', 'changes');
   changes.appendChild(el('div', 'changes-title', 'Changes so far'));
   changes.appendChild(changeLine('committed', 'Committed'));
   changes.appendChild(changeLine('working', 'Working tree'));
   node.appendChild(changes);
+
+  const actions = el('div', 'actions');
+  actions.setAttribute('role', 'group');
+  actions.setAttribute('aria-label', 'Actions');
+  node.appendChild(actions);
   return node;
 }
 
@@ -59,9 +77,60 @@ export function patchExpanded(node: HTMLElement, row: PanelRowView, focusedKey: 
   node.dataset.id = row.id;
   patchSlots(child(node, '.slots'), node, row.lifecycle);
   patchParts(child(node, '.parts'), node, row, focusedKey);
+  patchPeople(child(node, '.people'), row.people);
   // `—` whenever the engine has not answered — the row never shows a fabricated zero (MG-12).
   setText(child(node, '.committed-value'), row.changes?.committed ?? '—');
   setText(child(node, '.working-value'), row.changes?.workingTree ?? '—');
+  patchActions(child(node, '.actions'), node, row);
+}
+
+/**
+ * Everything the slots above do not already offer. A verb said twice in one open row is the same
+ * clutter the popover was, so the slots' own Start and Chat are subtracted rather than repeated.
+ */
+function leftoverActions(row: PanelRowView): PanelActionView[] {
+  const taken = new Set<string>();
+  for (const slot of row.lifecycle) {
+    if (slot.start !== null) taken.add(keyOf(slot.start.command, slot.start.childId));
+    if (slot.sessionId !== null) taken.add(keyOf('cgremlin.chat', `agent:${slot.sessionId}`));
+  }
+  return row.actions.filter((action) => !taken.has(keyOf(action.command, action.childId)));
+}
+
+/** `@jane · reviewed (approved) · 2d ago` — one line per interaction, built as text (MG-B7). */
+function personLine(person: HumanInteraction): string {
+  const kind = person.verdict === null ? person.kind : `${person.kind} (${person.verdict})`;
+  return `@${person.login} · ${kind} · ${person.age}`;
+}
+
+function patchPeople(parent: HTMLElement, people: readonly HumanInteraction[]): void {
+  setHidden(parent, people.length === 0);
+  reconcile(
+    parent,
+    people.map((person) => ({ key: `${person.kind}:${person.login}`, data: person })),
+    () => el('div', 'person'),
+    (node, person) => setText(node, personLine(person)),
+  );
+}
+
+function keyOf(command: string, childId?: string): string {
+  return `${command}:${childId ?? ''}`;
+}
+
+function patchActions(parent: HTMLElement, root: HTMLElement, row: PanelRowView): void {
+  const left = leftoverActions(row);
+  setHidden(parent, left.length === 0);
+  reconcile(
+    parent,
+    left.map((action) => ({ key: keyOf(action.command, action.childId), data: action })),
+    (action) =>
+      button({
+        className: 'row-action',
+        label: action.label,
+        message: () => commandOf(root, action.command, action.childId),
+      }),
+    (node, action) => setText(node, action.label),
+  );
 }
 
 function patchSlots(parent: HTMLElement, root: HTMLElement, slots: readonly PanelSlotView[]): void {

@@ -25,6 +25,54 @@ body {
 :root {
   --cg-divider: color-mix(in srgb, var(--vscode-panel-border) 40%, transparent);
   --cg-accent: var(--vscode-notificationsWarningIcon-foreground);
+
+  /*
+   * One colour per list. They are the editor's own chart tokens, so every theme — light, dark,
+   * high contrast — supplies its own four, and nothing here is a hex code. They say WHICH list a
+   * row belongs to and nothing else; the panel still has exactly one accent that means "this
+   * needs you", and it is `--cg-accent` on a different surface (see `.row.needs-you`).
+   */
+  --cg-section-parkingLot: var(--vscode-charts-purple);
+  --cg-section-myWork: var(--vscode-charts-blue);
+  --cg-section-investigations: var(--vscode-charts-orange);
+  --cg-section-waitingForReview: var(--vscode-charts-green);
+}
+
+.list-header[data-section='parkingLot'] .list-glyph,
+.list-header[data-section='parkingLot'] .list-title {
+  color: var(--cg-section-parkingLot);
+}
+
+.list-header[data-section='myWork'] .list-glyph,
+.list-header[data-section='myWork'] .list-title {
+  color: var(--cg-section-myWork);
+}
+
+.list-header[data-section='investigations'] .list-glyph,
+.list-header[data-section='investigations'] .list-title {
+  color: var(--cg-section-investigations);
+}
+
+.list-header[data-section='waitingForReview'] .list-glyph,
+.list-header[data-section='waitingForReview'] .list-title {
+  color: var(--cg-section-waitingForReview);
+}
+
+/* The same colour as a hairline down the rows, so a row read alone still says which list it is. */
+.row.section-parkingLot {
+  border-left-color: var(--cg-section-parkingLot);
+}
+
+.row.section-myWork {
+  border-left-color: var(--cg-section-myWork);
+}
+
+.row.section-investigations {
+  border-left-color: var(--cg-section-investigations);
+}
+
+.row.section-waitingForReview {
+  border-left-color: var(--cg-section-waitingForReview);
 }
 
 /* --- the needs-you strip (P3) ------------------------------------------ */
@@ -253,10 +301,11 @@ body {
 /* --- the row ----------------------------------------------------------- */
 
 .row {
-  display: grid;
-  grid-template-columns: 1fr 28px;
-  column-gap: 8px;
+  display: block;
   padding: 8px 10px;
+  /* Reserved on every row, coloured per list: a border that appeared with the accent would move
+   * the text sideways between one list and the next. */
+  border-left: 2px solid transparent;
   border-bottom: 1px solid var(--cg-divider);
   cursor: pointer;
 }
@@ -274,24 +323,42 @@ body {
   opacity: 0.65;
 }
 
-/* §2.2 rule 10: one accent, as a 2 px bar that takes no space. */
+/*
+ * §2.2 rule 10: one accent, as a 2 px bar that takes no space. It is drawn INSIDE the border box,
+ * so it sits beside the section's hairline rather than replacing it — a needs-you row in the
+ * parking lot says both things at once, and neither is mistaken for the other.
+ */
 .row.needs-you {
   box-shadow: inset 2px 0 0 var(--cg-accent);
 }
 
+/* Every title is already 600 (see `.row-label`), so needs-you goes one step further. */
 .row.needs-you .row-label {
-  font-weight: 600;
+  font-weight: 700;
 }
 
 .row-main {
   min-width: 0;
 }
 
+/* The rare verbs, on one line at the foot of the open block — never a popover. */
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+/*
+ * The title is the line being scanned, so it is set a notch above the editor's own size and at
+ * 600 — and the signals under it stay at 11 px and muted. That gap is the hierarchy; without it
+ * three lines of the same weight make the user read all three to find the one he wanted.
+ */
 .row-title {
   display: flex;
   align-items: baseline;
   gap: 6px;
-  font-size: 13px;
+  font-size: calc(var(--vscode-font-size, 13px) * 1.08);
   line-height: 1.35;
 }
 
@@ -304,6 +371,7 @@ body {
 
 .row-label {
   flex: 1 1 auto;
+  font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -368,32 +436,13 @@ body {
   background: var(--vscode-charts-red);
 }
 
-/* --- the gutter (§2.2 rules 1 and 2) ------------------------------------ */
+/* --- the buttons, which now live only in the block a row opens into ------ */
 
-.row-gutter {
-  position: relative;
-  grid-row: 1;
-  grid-column: 2;
-  display: flex;
-  align-items: flex-start;
-  justify-content: flex-end;
-  gap: 2px;
-  opacity: 0;
-  transition: opacity 80ms ease;
-}
-
-.row:hover .row-gutter,
-.row:focus-within .row-gutter,
-.row.selected .row-gutter {
-  opacity: 1;
-}
-
-.row-primary,
-.row-more,
 .slot-open,
 .slot-chat,
 .slot-start,
 .part-goto,
+.row-action,
 .trouble-action {
   min-height: 24px;
   padding: 4px 8px;
@@ -405,54 +454,6 @@ body {
   font-size: 11px;
   white-space: nowrap;
   cursor: pointer;
-}
-
-/* The primary verb sits left of the gutter, which is only 28px wide: it may overhang. */
-.row-primary {
-  position: absolute;
-  right: 24px;
-  top: 0;
-}
-
-.row-more {
-  min-width: 24px;
-  padding: 4px 2px;
-  border-color: transparent;
-  background: transparent;
-  color: var(--vscode-descriptionForeground);
-}
-
-/* The popover: absolutely positioned, so opening it cannot change the row's height. */
-.row-overflow {
-  position: absolute;
-  top: 26px;
-  right: 0;
-  z-index: 2;
-  display: flex;
-  flex-direction: column;
-  min-width: 180px;
-  padding: 4px;
-  border: 1px solid var(--vscode-widget-border, var(--cg-divider));
-  border-radius: 4px;
-  background: var(--vscode-menu-background, var(--vscode-editorWidget-background));
-  box-shadow: 0 2px 8px var(--vscode-widget-shadow, transparent);
-}
-
-.row-overflow-item {
-  min-height: 24px;
-  padding: 4px 8px;
-  border: 0;
-  border-radius: 3px;
-  background: transparent;
-  color: var(--vscode-menu-foreground, var(--vscode-foreground));
-  font-family: inherit;
-  font-size: 12px;
-  text-align: left;
-  cursor: pointer;
-}
-
-.row-overflow-item:hover {
-  background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground));
 }
 
 /* --- what a row opens into --------------------------------------------- */
@@ -564,6 +565,23 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/*
+ * Who has already been on the PR. Muted and small: it is evidence for a decision, not the
+ * decision — the row's own line already carries the strongest one.
+ */
+.people {
+  margin-top: 6px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.person {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* --- focus and motion --------------------------------------------------- */
 
 .row:focus-visible,
@@ -572,19 +590,11 @@ body {
 .attention-item:focus-visible,
 .section-header:focus-visible,
 .sort:focus-visible,
-.row-primary:focus-visible,
-.row-more:focus-visible,
-.row-overflow-item:focus-visible,
+.row-action:focus-visible,
 .slot-open:focus-visible,
 .slot-chat:focus-visible,
 .slot-start:focus-visible,
 .part-goto:focus-visible {
   outline: 1px solid var(--vscode-focusBorder);
   outline-offset: -1px;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .row-gutter {
-    transition: none;
-  }
 }

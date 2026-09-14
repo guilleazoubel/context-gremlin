@@ -157,7 +157,8 @@ describe('MG-B8 the row description', () => {
     expect(hb.age).toBe('6d');
     expect(hb.size).toBe('12 files +300/−80');
     expect(hb.ci).toBe('🟢');
-    expect(hb.activity).toBe('👤 @dana reviewed');
+    // P10: the date is the point of the line — "reviewed" with no date cannot be acted on.
+    expect(hb.activity).toBe('👤 @dana reviewed (approved) 5h ago');
     expect(hb.description).toContain('6d');
     expect(hb.description).toContain('12 files +300/−80');
   });
@@ -174,7 +175,9 @@ describe('MG-B8 the row description', () => {
   it('summarises human activity as reviewed, commented or requested', () => {
     const built = lists();
     const someoneOnIt = built.parkingLot.sections.find((s) => s.group === 'someoneOnIt');
-    expect(someoneOnIt?.rows.map((r) => r.activity)).toEqual(['👤 @dana reviewed']);
+    expect(someoneOnIt?.rows.map((r) => r.activity)).toEqual([
+      '👤 @dana reviewed (changes requested) 43h ago',
+    ]);
     const untouched = built.parkingLot.sections.find((s) => s.group === 'untouched');
     expect(untouched?.rows[0].activity).toBe('');
     // R47.1, reversed in Phase 10: a review request is still SAID on the row, and it no longer

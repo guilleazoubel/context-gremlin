@@ -49,6 +49,7 @@ function rowView(over: Partial<PanelRowView> = {}): PanelRowView {
     children: [],
     lifecycle: [],
     changes: null,
+    people: [],
     actions: [
       { command: 'cgremlin.startReview', label: 'Start review', placement: 'primary' },
       { command: 'cgremlin.openPr', label: 'Open acme/web#101', placement: 'overflow' },
@@ -68,6 +69,17 @@ function build(over: Partial<PanelRowView> = {}): FakeElement {
 
 const textOf = (node: FakeElement, cls: string): string => node.byClass(cls)[0]?.textContent ?? '';
 
+/** Every `<button>` anywhere under the row — a walk, because the fake DOM has no selectors. */
+function buttonsIn(node: FakeElement): FakeElement[] {
+  const found: FakeElement[] = [];
+  const walk = (at: FakeElement): void => {
+    if (at.tagName === 'BUTTON') found.push(at);
+    for (const child of at.children) walk(child);
+  };
+  walk(node);
+  return found;
+}
+
 describe('what the row says without being hovered', () => {
   it('carries its title and every signal as its own cell', () => {
     const node = build();
@@ -86,12 +98,16 @@ describe('what the row says without being hovered', () => {
     expect(cells[1].title).toBe('2026-08-30T09:00:00.000Z');
   });
 
-  it('reserves the action gutter whether or not the pointer is there (§2.2 rule 1)', () => {
+  it('renders no buttons at all — a collapsed row is purely informational', () => {
+    // The user said the per-row popup "shows all the time and it is really annoying". So the
+    // gutter, its one primary verb and the `⋯` popover are gone: every verb lives in the block
+    // the row opens into, and the collapsed row is title, signals and state.
     const node = build();
-    const gutter = node.byClass('row-gutter')[0];
-    expect(gutter).toBeDefined();
-    expect(gutter.hidden).toBe(false);
-    expect(textOf(node, 'row-primary')).toBe('Start review');
+    expect(buttonsIn(node)).toEqual([]);
+    expect(node.byClass('row-gutter')).toEqual([]);
+    expect(node.byClass('row-primary')).toEqual([]);
+    expect(node.byClass('row-more')).toEqual([]);
+    expect(node.byClass('row-overflow')).toEqual([]);
   });
 
   it('keeps the third line as a slot, so a row that grows one does not change shape', () => {
@@ -100,7 +116,7 @@ describe('what the row says without being hovered', () => {
 
   it('marks needs-you, demoted and selected as classes, not as extra content', () => {
     const node = build({ needsYou: true, demoted: true, selected: true });
-    expect(node.className).toBe('row needs-you demoted selected');
+    expect(node.className).toBe('row section-parkingLot needs-you demoted selected');
     expect(node.getAttribute('aria-selected')).toBe('true');
   });
 });
@@ -119,20 +135,6 @@ describe('what a patch does to a row that is already on screen', () => {
     meta[1] = { kind: 'age', text: '13d', title: '2026-08-30T09:00:00.000Z' };
     patchRow(node as unknown as HTMLElement, rowView({ meta }), { focusedKey: null });
     expect(doc.log).toEqual([{ kind: 'text', tag: 'SPAN', key: 'cell cell-age', detail: '13d' }]);
-  });
-
-  it('keeps the primary button’s node while its verb changes', () => {
-    const node = build();
-    const primary = node.byClass('row-primary')[0];
-    patchRow(
-      node as unknown as HTMLElement,
-      rowView({
-        actions: [{ command: 'cgremlin.chat', label: 'Chat', placement: 'primary' }],
-      }),
-      { focusedKey: null },
-    );
-    expect(node.byClass('row-primary')[0]).toBe(primary);
-    expect(primary.textContent).toBe('Chat');
   });
 
   it('turns the twisty and aria-expanded when the row opens, and nothing else', () => {
@@ -158,33 +160,5 @@ describe('what the row posts', () => {
     expect(posted).toEqual([
       { type: 'selectRow', id: 'pr:acme/web#101', list: 'parkingLot' },
     ]);
-  });
-
-  it('posts the primary verb, and does not also select the row', () => {
-    const node = build();
-    node.byClass('row-primary')[0].emit('click');
-    expect(posted).toEqual([
-      { type: 'command', command: 'cgremlin.startReview', id: 'pr:acme/web#101' },
-    ]);
-  });
-
-  it('keeps Ack and the browser links behind the overflow, closed until asked', () => {
-    const node = build();
-    const menu = node.byClass('row-overflow')[0];
-    expect(menu.hidden).toBe(true);
-    expect(menu.children.map((item) => item.textContent)).toEqual(['Open acme/web#101', 'Ack']);
-
-    node.byClass('row-more')[0].emit('click');
-    expect(menu.hidden).toBe(false);
-    menu.children[1].emit('click');
-    expect(posted).toEqual([{ type: 'command', command: 'cgremlin.ack', id: 'pr:acme/web#101' }]);
-    expect(menu.hidden).toBe(true);
-  });
-
-  it('hides the overflow trigger on a row with nothing behind it', () => {
-    const node = build({
-      actions: [{ command: 'cgremlin.chat', label: 'Chat', placement: 'primary' }],
-    });
-    expect(node.byClass('row-more')[0].hidden).toBe(true);
   });
 });

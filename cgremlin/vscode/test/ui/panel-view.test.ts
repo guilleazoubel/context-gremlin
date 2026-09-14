@@ -382,7 +382,8 @@ describe('R42/R51/P0-2 the row actions are a rule about the LIST', () => {
     const opens = (row?.actions ?? []).filter((a) => a.command === 'cgremlin.openPr');
     expect(opens.map((a) => a.label)).toEqual(['Open acme/web#310', 'Open acme/api#88']);
     expect((row?.actions ?? []).map((a) => a.command)).toContain('cgremlin.openTicket');
-    // The links are the overflow's job, never the one primary button (P1-5).
+    // The links stay `overflow`-placed: the Item tab still reads the placement, and the panel
+    // now renders every placement alike on the open row's action line.
     for (const action of opens) expect(action.placement).toBe('overflow');
   });
 
@@ -641,13 +642,14 @@ describe('R54 the look', () => {
   it('changes nothing but the background on hover (§2.2 rule 1)', () => {
     const hover = /\.row:hover\s*\{([^}]*)\}/.exec(css);
     expect(hover?.[1].trim()).toBe('background: var(--vscode-list-hoverBackground);');
-    // The gutter fades; it never enters or leaves the flow, which is what used to grow the row.
-    expect(css).toMatch(/\.row-gutter\s*\{[^}]*opacity:\s*0;/);
+    // There is no hover-revealed gutter left to fade: a collapsed row carries no control at all.
+    expect(css).not.toContain('.row-gutter');
+    expect(css).not.toContain('.row-overflow');
     expect(css).not.toMatch(/:hover[^{]*\{[^}]*display:/);
   });
 
   it('gives every hit target at least 24 px (§2.2 rule 2)', () => {
-    for (const selector of ['.row-primary', '.row-more', '.slot-start', '.row-overflow-item']) {
+    for (const selector of ['.row-action', '.slot-start', '.slot-open', '.part-goto']) {
       expect(css).toContain(selector);
     }
     expect(css.match(/min-height:\s*24px/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
@@ -686,5 +688,54 @@ describe('R48 the children are clickable, with two actions', () => {
     ]);
     h.view.webview.emit({ type: 'openChild', id: 'ticket:HB-627', childId: 'pr:acme/web#310' });
     expect(h.children).toEqual([['ticket:HB-627', 'pr:acme/web#310']]);
+  });
+});
+
+/**
+ * The accents, as a golden list of the theme tokens they are built from.
+ *
+ * The point is the TOKEN NAMES: a typo in `--vscode-charts-purpel` is a colour that silently
+ * resolves to nothing, which is exactly the bug a stylesheet cannot report. So they are written
+ * down once here, and the four `--cg-section-*` properties are read back out of the file.
+ */
+describe('the per-section accents', () => {
+  const css = fs.readFileSync(path.join(root, 'media/panel.css'), 'utf8');
+
+  const ACCENTS: Record<string, string> = {
+    parkingLot: '--vscode-charts-purple',
+    myWork: '--vscode-charts-blue',
+    investigations: '--vscode-charts-orange',
+    waitingForReview: '--vscode-charts-green',
+  };
+
+  it('defines one custom property per list, from the token it is meant to be', () => {
+    const found: Record<string, string> = {};
+    for (const [, list, token] of css.matchAll(
+      /--cg-section-(\w+):\s*var\((--vscode-[\w-]+)\)/g,
+    )) {
+      found[list] = token;
+    }
+    expect(found).toEqual(ACCENTS);
+  });
+
+  it('spends each one on that list’s header and on its rows’ left edge', () => {
+    for (const list of Object.keys(ACCENTS)) {
+      expect(css).toContain(`.list-header[data-section='${list}']`);
+      expect(css).toContain(`.row.section-${list}`);
+      expect(css).toContain(`var(--cg-section-${list})`);
+    }
+  });
+
+  it('keeps needs-you on a surface of its own, so the two accents never read as one', () => {
+    // The section line is the row's BORDER; needs-you is an inset bar drawn inside it, in the one
+    // accent the panel has. Different boxes, so a needs-you row in the parking lot says both.
+    expect(css).toMatch(/\.row\s*\{[^}]*border-left:\s*2px solid transparent/);
+    expect(css).toMatch(/\.row\.needs-you\s*\{[^}]*box-shadow:\s*inset 2px 0 0 var\(--cg-accent\)/);
+  });
+
+  it('sets the title a notch above the editor size and the signals below it', () => {
+    expect(css).toMatch(/\.row-title\s*\{[^}]*font-size:\s*calc\(var\(--vscode-font-size[^)]*\)[^}]*\}/);
+    expect(css).toMatch(/\.row-label\s*\{[^}]*font-weight:\s*600/);
+    expect(css).toMatch(/\.row-meta,\n\.row-state\s*\{[^}]*font-size:\s*11px/);
   });
 });

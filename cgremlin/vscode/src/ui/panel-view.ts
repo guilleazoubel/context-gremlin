@@ -21,6 +21,7 @@ import {
   buildItemChildren,
   buildWorkLists,
   groupCollapseKey,
+  humanInteractions,
   listCollapseKey,
   readCollapsed,
   readSort,
@@ -383,6 +384,7 @@ export class PanelView implements WebviewViewProviderLike {
         : [],
       lifecycle: expanded ? this.slotsOf(row, actions) : [],
       changes: expanded ? this.changesView(row.id) : null,
+      people: expanded ? humanInteractions(row.item.prs[0], this.deps.now?.() ?? Date.now()) : [],
       actions,
     };
   }
