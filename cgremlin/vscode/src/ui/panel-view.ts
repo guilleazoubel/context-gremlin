@@ -30,6 +30,7 @@ import {
   readSorts,
   ticketBanner,
   toRow,
+  withPendingStart,
   writeCollapsed,
   writeFocus,
   writeShowDismissed,
@@ -42,6 +43,7 @@ import {
   PANEL_SECTIONS,
   type CollapseState,
   type ItemsResponse,
+  type WorkAgentMode,
   type WorkChild,
   type WorkItem,
   type WorkListKind,
@@ -119,6 +121,13 @@ export interface ExpandedDetail {
 }
 
 export const SELECTED_STATE_KEY = 'cgremlin.panel.selected';
+
+/**
+ * How many `/items` frames an unconfirmed start survives. Two: one frame can
+ * legitimately predate the session the engine has just created, and by the
+ * third the panel would be asserting something nobody has corroborated.
+ */
+const PENDING_START_FRAMES = 2;
 /** P2: which headers the user has closed, lists and parking-lot groups alike (R64). */
 export const COLLAPSED_STATE_KEY = COLLAPSE_STATE_KEY;
 export const EXPANDED_STATE_KEY = 'cgremlin.panel.expanded';
@@ -169,6 +178,17 @@ export class PanelView implements WebviewViewProviderLike {
    * a round trip away — and a request that fails has to move it back, which is what this remembers.
    */
   private readonly pendingDismissal = new Map<string, boolean>();
+  /**
+   * The same optimism for a START. The user clicked `Start review`, the engine
+   * accepted it, and the row silently moved to another section with nothing
+   * saying the work had begun — "nothing happened". Until `/items` carries the
+   * real agent, the row wears a pending one of that mode.
+   *
+   * `frames` is the safety catch: an engine that accepted a start and then
+   * never reported the session (it failed instantly, or the item changed
+   * shape) must not leave the panel claiming something is running forever.
+   */
+  private readonly pendingStart = new Map<string, { mode: WorkAgentMode; frames: number }>();
   private sorts: Record<WorkListKind, WorkSortKind>;
   /** §3.3: `setConnected` + `setItems` + `setSourceTrouble` in one refresh are ONE post. */
   private batchDepth = 0;
@@ -192,6 +212,22 @@ export class PanelView implements WebviewViewProviderLike {
    */
   setPendingDismissal(id: string, dismissed: boolean): void {
     this.pendingDismissal.set(id, dismissed);
+    this.render();
+  }
+
+  /**
+   * A start this window has just had accepted. The row shows the stage
+   * `running` at once, and `setItems` hands it back to the wire the moment the
+   * engine names the real session.
+   */
+  setPendingStart(id: string, mode: WorkAgentMode): void {
+    this.pendingStart.set(id, { mode, frames: 0 });
+    this.render();
+  }
+
+  /** The start was refused (or never left): the panel stops claiming it began. */
+  clearPendingStart(id: string): void {
+    if (!this.pendingStart.delete(id)) return;
     this.render();
   }
 
@@ -278,6 +314,18 @@ export class PanelView implements WebviewViewProviderLike {
       const item = response?.items.find((candidate) => candidate.id === id);
       if (item === undefined || isDismissed(item) === dismissed) this.pendingDismissal.delete(id);
     }
+    // The same rule for a start: the engine's own agent supersedes the
+    // optimistic one, and a start the engine never reports is given a few
+    // frames and then dropped rather than left claiming forever.
+    for (const [id, pending] of [...this.pendingStart]) {
+      const item = response?.items.find((candidate) => candidate.id === id);
+      const real = item?.agents.some((agent) => agent.mode === pending.mode) === true;
+      if (item === undefined || real || pending.frames >= PENDING_START_FRAMES) {
+        this.pendingStart.delete(id);
+      } else {
+        this.pendingStart.set(id, { ...pending, frames: pending.frames + 1 });
+      }
+    }
     this.refreshDetail();
     this.render();
   }
@@ -337,11 +385,18 @@ export class PanelView implements WebviewViewProviderLike {
   }
 
   items(): WorkItem[] {
-    return this.response?.items ?? [];
+    return (this.response?.items ?? []).map((item) => this.withOptimism(item));
   }
 
   itemOf(id: string): WorkItem | undefined {
-    return this.response?.items.find((item) => item.id === id);
+    const found = this.response?.items.find((item) => item.id === id);
+    return found === undefined ? undefined : this.withOptimism(found);
+  }
+
+  /** The one place this window's in-flight start is folded onto an item. */
+  private withOptimism(item: WorkItem): WorkItem {
+    const pending = this.pendingStart.get(item.id);
+    return pending === undefined ? item : withPendingStart(item, pending.mode);
   }
 
   childOf(id: string, childId: string): WorkChild | undefined {
@@ -422,7 +477,7 @@ export class PanelView implements WebviewViewProviderLike {
   private sections(): PanelSectionView[] {
     if (this.response === null) return [];
     const built = buildWorkLists({
-      response: this.response,
+      response: { ...this.response, items: this.items() },
       sorts: this.sorts,
       now: this.deps.now?.(),
     });
@@ -758,11 +813,25 @@ export class PanelView implements WebviewViewProviderLike {
    */
   reveal(id: string): void {
     this.widenTo(id);
+    this.uncollapseFor(id);
     this.selectedId = id;
     void this.deps.host.setState(SELECTED_STATE_KEY, id);
     this.setExpanded(id);
     this.render();
     this.refreshDetail();
+  }
+
+  /**
+   * A started row usually CHANGES SECTION — a parking-lot PR becomes a
+   * `Reviewing` row — and the section it lands in may be one the user has
+   * closed. Revealing into a collapsed section is the same dead end as
+   * revealing into a filtered-out one, so it opens.
+   */
+  private uncollapseFor(id: string): void {
+    const holder = this.sections().find((section) => section.rows.some((row) => row.id === id));
+    if (holder === undefined || !holder.collapsed) return;
+    this.collapsed = { ...this.collapsed, [holder.key]: false };
+    writeCollapsed(this.deps.host, this.collapsed);
   }
 
   /** Widens the panel back to all areas when `id` is not a row of the focused one (§6). */

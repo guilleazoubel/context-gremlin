@@ -34,6 +34,8 @@ let focusedKey: string | null = null;
 let painted: PaintedOrder = new Map();
 let pointerInside = false;
 let pending: PanelState | null = null;
+/** The row the panel last scrolled to, so a background refresh never re-scrolls. */
+let scrolledTo: string | null = null;
 /** Every `[data-key]` node currently rendered, so focus never needs a selector. */
 const keyed = new Map<string, HTMLElement>();
 
@@ -80,6 +82,41 @@ function paint(next: PanelState): void {
   keyed.clear();
   collectKeys(container);
   if (held) restoreFocus();
+  revealSelected(next);
+}
+
+/**
+ * A row the HOST sent the user to — a command's reveal — must end up on
+ * screen. The complaint this answers is "nothing happened": the started row
+ * moved to a section the user could not see, and the panel never brought it
+ * into view.
+ *
+ * Only when the selection CHANGED, so a background refresh never yanks the
+ * scroll position out from under a reader, and `scrollIntoView` is probed
+ * because the panel is also driven against a stand-in DOM.
+ */
+function revealSelected(next: PanelState): void {
+  const selected = selectedRow(next);
+  if (selected === null) {
+    scrolledTo = null;
+    return;
+  }
+  if (selected === scrolledTo) return;
+  scrolledTo = selected;
+  const node = keyed.get(selected);
+  const scroll = (node as { scrollIntoView?: (opts?: unknown) => void } | undefined)?.scrollIntoView;
+  if (typeof scroll === 'function') scroll.call(node, { block: 'nearest' });
+}
+
+/** The `data-key` of the one selected row, or null when nothing is selected. */
+function selectedRow(next: PanelState): string | null {
+  for (const section of next.sections) {
+    if (section.collapsed) continue;
+    for (const row of section.rows) {
+      if (row.selected) return `row:${row.list}:${row.id}`;
+    }
+  }
+  return null;
 }
 
 function heldFocus(): boolean {
