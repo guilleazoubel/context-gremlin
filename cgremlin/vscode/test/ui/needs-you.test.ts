@@ -4,14 +4,15 @@
  * Needs-you used to arrive as a VS Code toast, over whatever the user was typing into, once per
  * item per change. The news is worth having; the modal-ish interruption is not. So by default it
  * arrives where the user can look at it when they choose: a strip at the top of the panel, a
- * badge on the view container, and the count the status bar already carried. A toast is now an
- * opt-in — `cgremlin.notificationLevel: "all"` — and so is the engine-not-running warning.
+ * badge on the view container, and the count the status bar already carried. P10 finished the
+ * job: there is no level that raises one any more, and `all` is read as the default.
  */
 import { describe, expect, it } from 'vitest';
 import { PanelView } from '../../src/ui/panel-view';
 import { NotificationSurface } from '../../src/ui/notifications';
 import { FakeHost, FakeWebviewView } from '../support/fake-host';
 import itemsFixture from '../support/fixtures/items.json';
+import { normalizeLevel } from '../../src/model/notify-policy';
 import type { ItemsResponse, WorkItem } from '../../src/model/work-items';
 import type { PanelState } from '../../src/model/panel-protocol';
 
@@ -128,50 +129,48 @@ describe('P3 the view-container badge', () => {
   });
 });
 
-describe('P3 the toast is an opt-in', () => {
+describe('P10 needs-you never toasts', () => {
   const entering = (): [WorkItem[], WorkItem[]] => {
     const before = response().items.map((item) => ({ ...item, needsYou: false }));
     return [before, response().items];
   };
 
-  it('pops nothing at the default level', async () => {
+  for (const level of ['needs-you-only', 'off'] as const) {
+    it(`raises nothing at ${level} for items entering needs-you`, async () => {
+      const host = new FakeHost();
+      const surface = new NotificationSurface(host);
+      const [before, after] = entering();
+      surface.apply(before, after, level);
+      await surface.settled();
+      expect(host.kinds().filter((kind) => kind.startsWith('show'))).toEqual([]);
+    });
+  }
+
+  it('raises nothing for the legacy `all`, which now reads as the default', async () => {
     const host = new FakeHost();
     const surface = new NotificationSurface(host);
     const [before, after] = entering();
-    surface.apply(before, after, 'needs-you-only');
+    surface.apply(before, after, normalizeLevel('all'));
     await surface.settled();
+    expect(normalizeLevel('all')).toBe('needs-you-only');
     expect(host.kinds().filter((kind) => kind.startsWith('show'))).toEqual([]);
   });
 
-  it('pops nothing at off', async () => {
-    const host = new FakeHost();
-    const surface = new NotificationSurface(host);
-    const [before, after] = entering();
-    surface.apply(before, after, 'off');
-    await surface.settled();
-    expect(host.kinds().filter((kind) => kind.startsWith('show'))).toEqual([]);
+  it('leaves the engine-not-running warning to the panel and the status bar at every level', async () => {
+    for (const level of ['needs-you-only', 'off', normalizeLevel('all')] as const) {
+      const host = new FakeHost();
+      const surface = new NotificationSurface(host);
+      surface.reportOffline(level);
+      await surface.settled();
+      expect(host.kinds().filter((kind) => kind.startsWith('show'))).toEqual([]);
+    }
   });
 
-  it('pops one per item at all, which is what that level is for', async () => {
+  it('still says a failed command out loud, because that answers a click the user just made', async () => {
     const host = new FakeHost();
     const surface = new NotificationSurface(host);
-    const [before, after] = entering();
-    surface.apply(before, after, 'all');
+    surface.warn('the engine refused that');
     await surface.settled();
-    expect(host.kinds().filter((kind) => kind === 'showInformationMessage').length).toBe(3);
-  });
-
-  it('keeps the engine-not-running warning in the panel unless the level asks for toasts', async () => {
-    const quiet = new FakeHost();
-    const surface = new NotificationSurface(quiet);
-    surface.reportOffline('needs-you-only');
-    await surface.settled();
-    expect(quiet.kinds().filter((kind) => kind.startsWith('show'))).toEqual([]);
-
-    const loud = new FakeHost();
-    const second = new NotificationSurface(loud);
-    second.reportOffline('all');
-    await second.settled();
-    expect(loud.kinds().filter((kind) => kind === 'showWarningMessage').length).toBe(1);
+    expect(host.callsOf('showWarningMessage')[0].args[0]).toBe('the engine refused that');
   });
 });

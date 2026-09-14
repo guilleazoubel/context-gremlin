@@ -116,7 +116,7 @@ export function activate(context: vscode.ExtensionContext): void {
       mediaPath: nodePath.join(context.extensionPath, 'media'),
     },
     // Read live, so changing the level takes effect without a reload.
-    notificationLevel: () => readSettings().notificationLevel,
+    notificationLevel: () => readSettings((line) => output.appendLine(line)).notificationLevel,
     engine: surface,
   });
   ui = created;

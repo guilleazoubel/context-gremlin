@@ -46,7 +46,8 @@ throwaway state dir rather than your real one:
 }
 ```
 
-`cgremlin.notificationLevel` (default `all`) is the only other setting there is. **There is no
+`cgremlin.notificationLevel` (`needs-you-only` \| `off`, default `needs-you-only`) is the only
+other setting there is, and neither value raises a popup — leave it alone. **There is no
 socket setting** — the socket, the log, the pid file, `sessions/` and `worktrees/` are all derived
 from `core.json`'s `stateDir` by the engine's own loader.
 
@@ -208,11 +209,11 @@ PR is already past it.
 
 | # | Do this | Expect |
 |---|---|---|
-| 7.1 | `printf needs-input > $S/sessions/<id>/AGENT_STATE` | A popup within ~2 s, titled `<title> — needs_input`, with `Open` and `Ack` |
-| 7.2 | Press `Open` | That row is revealed, selected and expanded, and its slot says `needs you` |
-| 7.3 | Watch a row that is **not** needs-you appear (a parking-lot PR, say) | **No** popup |
+| 7.1 | `printf needs-input > $S/sessions/<id>/AGENT_STATE` | Within ~2 s that row joins the panel's needs-you strip, the view-container badge counts it and the status bar agrees. **No popup, ever** |
+| 7.2 | Click that entry in the needs-you strip | That row is revealed, selected and expanded, and its slot says `needs you` |
+| 7.3 | Watch a row that is **not** needs-you appear (a parking-lot PR, say) | It does **not** join the strip and the badge does not move |
 | 7.4 | **`cgremlin: Restart the engine`**, and watch the panel closely | The lists **stay on screen** throughout. The stream drops and reconnects, and nothing says "offline" — the hysteresis window (8 s, past the third reconnect backoff) swallows it |
-| 7.5 | `kill -9` the engine | Within ~15 s the status bar reads `engine failed — see log` or `offline`, **one** warning and no dialog storm. The lists are still the last ones known, never four empty ones |
+| 7.5 | `kill -9` the engine | Within ~15 s the status bar reads `engine failed — see log` or `offline` and the panel explains it in one row. **No dialog at all.** The lists are still the last ones known, never four empty ones |
 | 7.6 | **`cgremlin: Start the engine`** | The client resyncs on a fresh epoch, the lists are correct and there are **no duplicate rows** |
 | 7.7 | Start something else on the socket (`nc -lU $S/engine.sock` with the engine stopped), reload | The lists are replaced by **one explanatory row** naming the socket and telling you to run `cgremlin: Start the engine` — never four silent empty lists |
 | 7.8 | Fix it and press the row's action | The panel goes back to being a panel, having refetched |

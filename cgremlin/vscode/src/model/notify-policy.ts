@@ -1,55 +1,43 @@
 /**
- * Which attention change raises a popup.
+ * The notification level — which is now only about how loudly the panel is allowed to be quiet.
  *
- * The core already answered "does this want ME" on every item (R22), so this policy filters on
- * `attention.needsYou` and on the user's level — nothing else. There is deliberately no copy of
- * the core's needs-you reason list here; `reasons` is used only to compose the text.
+ * There is no popup policy left to express. Needs-you reaches the user through the panel's
+ * needs-you strip, the view-container badge and the status-bar count, and that is the whole of
+ * it: the user said the popups "show all the time and it is really annoying", and a toast raised
+ * over whatever he was typing into is not a surface he ever asked for.
  *
- * P3: the popup is the narrow case. `needs-you-only` — the default — raises none at all; the
- * news reaches the user through the panel's strip, the view badge and the status bar instead.
+ * So `all` — the value that used to mean "one popup per item" — is no longer a level. It is
+ * still ACCEPTED, because a setting already in somebody's `settings.json` must not turn into an
+ * error or a silent fallback he cannot see: it reads as the default, and says so once in the
+ * log. Once, not once per refresh — the level is read live on every poll, and a line per poll is
+ * its own kind of noise. And in the log rather than in a toast, because announcing the end of
+ * popups with a popup would be the joke it sounds like.
  *
  * Pure module — no editor API (MG-B1).
  */
-import type { WorkItem } from './work-items';
 
-export type NotificationLevel = 'all' | 'needs-you-only' | 'off';
+export const NOTIFICATION_LEVELS = ['needs-you-only', 'off'] as const;
 
-export interface Popup {
-  /** The work item's own id (R24) — `Open` and `Ack` both address it by that. */
-  id: string;
-  message: string;
-  reasons: string[];
-}
+export type NotificationLevel = (typeof NOTIFICATION_LEVELS)[number];
 
-/**
- * Diffs two snapshots of **work items, keyed by `item.id`** (R24), and returns one popup per item
- * that entered `needsYou` — or that gained a reason while already needing you. Losing a reason is
- * badge-only, and so is every item the core did not flag. `needsYou` is the **core's** flag: there
- * is deliberately no copy of its reason list here (MG-B2).
- */
-export function decideNotifications(
-  prev: WorkItem[],
-  next: WorkItem[],
-  level: NotificationLevel,
-): Popup[] {
-  // P3: a toast is an OPT-IN now. `needs-you-only` — the default — is the strip, the badge and
-  // the status bar, which is the same news without the interruption over whatever the user was
-  // typing into. Only `all` still pops, because that is what asking for `all` means.
-  if (level !== 'all') return [];
-  const before = new Map(prev.map((item) => [item.id, item]));
-  const popups: Popup[] = [];
-  for (const item of next) {
-    if (!item.needsYou) continue;
-    const was = before.get(item.id);
-    const entered = was === undefined || !was.needsYou;
-    const gained =
-      was !== undefined && item.attention.reasons.some((r) => !was.attention.reasons.includes(r));
-    if (!entered && !gained) continue;
-    popups.push({
-      id: item.id,
-      message: `${item.title} — ${item.attention.reasons.join(', ')}`,
-      reasons: [...item.attention.reasons],
-    });
+export const DEFAULT_NOTIFICATION_LEVEL: NotificationLevel = 'needs-you-only';
+
+/** The value that used to raise a popup per item. Kept readable, never advertised. */
+const LEGACY_LOUD = 'all';
+
+const LEGACY_NOTICE =
+  `cgremlin: "${LEGACY_LOUD}" is no longer a notificationLevel — reading it as ` +
+  `"${DEFAULT_NOTIFICATION_LEVEL}". Needs-you is in the panel's strip, the view badge and the ` +
+  'status bar; there are no popups for it any more.';
+
+/** Module state on purpose: "once" is a fact about this window, not about any one caller. */
+let announced = false;
+
+export function normalizeLevel(value: string, log?: (line: string) => void): NotificationLevel {
+  if ((NOTIFICATION_LEVELS as readonly string[]).includes(value)) return value as NotificationLevel;
+  if (value === LEGACY_LOUD && !announced) {
+    announced = true;
+    log?.(LEGACY_NOTICE);
   }
-  return popups;
+  return DEFAULT_NOTIFICATION_LEVEL;
 }

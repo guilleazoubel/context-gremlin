@@ -212,7 +212,7 @@ live `claude --resume` (step 9.2), a live Atlassian instance (section 14), and w
 | Setting | Default | Meaning |
 |---|---|---|
 | `cgremlin.configPath` | `~/.cgremlin-core/core.json` | the engine's `core.json`; every other path (socket, log, sessions, worktrees) is derived from it by the engine's own config loader |
-| `cgremlin.notificationLevel` | `needs-you-only` | `all` \| `needs-you-only` \| `off` — `needs-you-only` is the panel's needs-you strip, the view badge and the status-bar count, with no popups; `all` adds one popup per item |
+| `cgremlin.notificationLevel` | `needs-you-only` | `needs-you-only` \| `off` — `needs-you-only` is the panel's needs-you strip, the view badge and the status-bar count. `off` is silent. Neither raises a popup: a stored `all` from an older version is read as `needs-you-only` and said once in the output channel |
 
 ## Commands
 

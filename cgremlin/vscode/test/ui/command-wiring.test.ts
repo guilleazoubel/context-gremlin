@@ -58,7 +58,7 @@ async function harness(opts: { handler?: StubHandler; socketPath?: string } = {}
   const server = await startStubServer({ handler: opts.handler });
   servers.push(server);
   const host = new FakeHost();
-  const level = { value: 'all' as NotificationLevel };
+  const level = { value: 'needs-you-only' as NotificationLevel };
   const engine = new FakeEngineManager();
   engine.current = { kind: 'running', version: '0.0.1', pid: 10, adopted: false };
   const surface = new EngineSurface({
@@ -152,20 +152,20 @@ describe('activation and the not-running UX', () => {
     expect(call.args[1]).toEqual({ webviewOptions: { retainContextWhenHidden: true } });
   });
 
-  it('shows exactly one warning across five failed connection attempts', async () => {
+  it('says "offline" in the status bar, and raises no popup, across five failed attempts', async () => {
     const h = await harness();
     await h.server.dispose();
     servers.splice(servers.indexOf(h.server), 1);
     expect(await h.ui.connect()).toBe(false);
     for (let i = 0; i < 4; i += 1) await h.ui.offline();
-    // The verdict waits out its window (P0-1); the warning is what happens at the end of it.
+    // The verdict waits out its window (P0-1); the status bar is where it lands.
     h.host.flushTimeouts();
     await h.ui.settled();
-    const warnings = h.host.callsOf('showWarningMessage');
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0].args[0]).toBe('cgremlin engine is not running');
-    expect(warnings[0].args[2]).toEqual(['Start it', 'Settings']);
     expect(h.host.statusBarItems[0].text).toBe('$(circle-slash) cgremlin: offline');
+    // P10: the panel's trouble row already explains this and offers the same two actions. A
+    // popup on top of it is the same sentence twice, over whatever the user was doing.
+    expect(h.host.callsOf('showWarningMessage')).toEqual([]);
+    expect(h.host.callsOf('showInformationMessage')).toEqual([]);
   });
 
   /**
@@ -200,7 +200,7 @@ describe('activation and the not-running UX', () => {
       h.host.flushTimeouts();
       await h.ui.settled();
       expect(h.host.statusBarItems[0].text).toBe('$(circle-slash) cgremlin: offline');
-      expect(h.host.callsOf('showWarningMessage')).toHaveLength(1);
+      expect(h.host.callsOf('showWarningMessage')).toEqual([]);
       // Even then, the last snapshot is what the panel has: blanking it says less than it shows.
       expect(h.ui.coordinator.items().length).toBeGreaterThan(0);
     });
@@ -224,20 +224,6 @@ describe('activation and the not-running UX', () => {
       expect(h.host.callsOf('showWarningMessage')).toHaveLength(0);
       expect(h.host.statusBarItems[0].text).not.toContain('offline');
     });
-  });
-
-  // MG-C7: the engine is started by the manager, never by typing a command into a terminal.
-  it('starts the engine through the manager when Start it is picked', async () => {
-    const h = await harness();
-    await h.server.dispose();
-    servers.splice(servers.indexOf(h.server), 1);
-    h.host.messageAnswers = ['Start it'];
-    expect(await h.ui.connect()).toBe(false);
-    // The offer comes at the end of P0-1's window, not on the first failed attempt.
-    h.host.flushTimeouts();
-    await h.ui.settled();
-    expect(h.engine.calls).toEqual(['ensureRunning:user']);
-    expect(h.host.terminals).toHaveLength(0);
   });
 });
 
@@ -1089,36 +1075,17 @@ describe('R23 cgremlin.newReviewFromUrl', () => {
   });
 });
 
-describe('MG-B2 only-needs-you-pops (host half)', () => {
+describe('MG-B2 needs-you never pops (host half)', () => {
   let h: Harness;
   beforeEach(async () => {
     h = await connected();
   });
 
-  it('pops once per item entering needsYou, offering Open and Ack', async () => {
-    h.ui.notifications.apply([], h.ui.coordinator.items(), 'all');
-    const popups = h.host.callsOf('showInformationMessage');
-    expect(popups).toHaveLength(3);
-    expect(popups[0].args[2]).toEqual(['Open', 'Ack']);
-    expect(popups.map((p) => String(p.args[0])).join('\n')).toContain('review_ready');
-  });
-
-  it('pops nothing at level off, and nothing for an unchanged snapshot', async () => {
-    const items = h.ui.coordinator.items();
-    h.ui.notifications.apply([], items, 'off');
-    h.ui.notifications.apply(items, items, 'all');
+  it('raises no popup for a whole snapshot entering needs-you, at either level', async () => {
+    h.ui.notifications.apply([], h.ui.coordinator.items(), 'needs-you-only');
+    h.ui.notifications.apply([], h.ui.coordinator.items(), 'off');
     await h.ui.settled();
     expect(h.host.callsOf('showInformationMessage')).toEqual([]);
-  });
-
-  it('Open opens the Item tab for that id and Ack posts the one item ack', async () => {
-    h.host.messageAnswers = ['Open', 'Ack', undefined, undefined];
-    const mark = h.mark();
-    h.ui.notifications.apply([], h.ui.coordinator.items(), 'all');
-    await h.ui.settled();
-    const seen = paths(h, mark);
-    expect(seen.some((p) => p.startsWith('GET /items/'))).toBe(true);
-    expect(seen.some((p) => p.endsWith('/ack'))).toBe(true);
-    expect(seen.every((p) => p !== 'POST /attention/ack')).toBe(true);
+    expect(h.host.callsOf('showWarningMessage')).toEqual([]);
   });
 });

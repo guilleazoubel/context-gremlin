@@ -9,8 +9,13 @@
  */
 import os from 'node:os';
 import * as vscode from 'vscode';
+import {
+  DEFAULT_NOTIFICATION_LEVEL,
+  normalizeLevel,
+  type NotificationLevel,
+} from './model/notify-policy';
 
-export type NotificationLevel = 'all' | 'needs-you-only' | 'off';
+export { DEFAULT_NOTIFICATION_LEVEL, type NotificationLevel };
 
 export interface Settings {
   configPath: string;
@@ -18,13 +23,6 @@ export interface Settings {
 }
 
 export const DEFAULT_CONFIG_PATH = '~/.cgremlin-core/core.json';
-
-/**
- * P3: the default is the quiet one. `needs-you-only` means the panel's needs-you strip, the
- * view-container badge and the status-bar count — the same news, none of the popups. `all` is the
- * opt-in that still raises them.
- */
-export const DEFAULT_NOTIFICATION_LEVEL: NotificationLevel = 'needs-you-only';
 
 /**
  * Expands a leading `~`, exactly as the core's own config loader does. It survives here for the
@@ -36,15 +34,17 @@ export function expandHome(value: string, home: string = os.homedir()): string {
   return value;
 }
 
-export function readSettings(): Settings {
+/**
+ * Read live, on every poll — so `log` is handed to a mapping that announces itself at most once
+ * for the life of the window rather than once per read (see `normalizeLevel`).
+ */
+export function readSettings(log?: (line: string) => void): Settings {
   const cfg = vscode.workspace.getConfiguration('cgremlin');
-  const level = cfg.get<string>('notificationLevel', DEFAULT_NOTIFICATION_LEVEL);
   return {
     configPath: expandHome(cfg.get<string>('configPath', DEFAULT_CONFIG_PATH)),
-    notificationLevel: isLevel(level) ? level : DEFAULT_NOTIFICATION_LEVEL,
+    notificationLevel: normalizeLevel(
+      cfg.get<string>('notificationLevel', DEFAULT_NOTIFICATION_LEVEL),
+      log,
+    ),
   };
-}
-
-function isLevel(value: string): value is NotificationLevel {
-  return value === 'all' || value === 'needs-you-only' || value === 'off';
 }

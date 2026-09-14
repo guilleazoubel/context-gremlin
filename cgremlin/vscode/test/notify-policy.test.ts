@@ -1,106 +1,62 @@
-import { describe, expect, it } from 'vitest';
+/**
+ * There is no notification policy left to have: needs-you never raises a popup.
+ *
+ * What survives is the level itself, because a stored `all` — the value that used to mean "one
+ * popup per item" — must not become an error or a silent fallback the user cannot see. It reads
+ * as the default, said ONCE in the log, never as a toast: announcing the end of popups with a
+ * popup would be the joke it sounds like.
+ */
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { decideNotifications } from '../src/model/notify-policy';
-import type { WorkItem } from '../src/model/work-items';
 
-/**
- * R24: the diff is over **work items**, keyed by `item.id`, on the **core's** `needsYou` flag.
- */
-function make(
-  id: string,
-  reasons: string[],
-  overrides: { needsYou?: boolean; title?: string } = {},
-): WorkItem {
-  return {
-    id,
-    kind: 'session',
-    lists: ['myWork'],
-    demoted: false,
-    parkingLotGroup: null,
-    title: overrides.title ?? `Item ${id}`,
-    prs: [],
-    ticket: null,
-    agents: [],
-    needsYou: overrides.needsYou ?? reasons.length > 0,
-    attention: {
-      reasons,
-      since: '2026-09-10T08:00:00.000Z',
-      acked: false,
-      refs: [id],
-    },
-  };
-}
+type Policy = typeof import('../src/model/notify-policy');
 
-describe('MG-B2 only-needs-you-pops', () => {
-  it('pops for an item entering needsYou', () => {
-    const popups = decideNotifications([], [make('session:a', ['review_ready'])], 'all');
-    expect(popups).toHaveLength(1);
-    expect(popups[0]).toMatchObject({ id: 'session:a', reasons: ['review_ready'] });
-    expect(popups[0]?.message).toContain('review_ready');
+let policy: Policy;
+
+beforeEach(async () => {
+  vi.resetModules();
+  policy = await import('../src/model/notify-policy');
+});
+
+describe('the notification level', () => {
+  it('has exactly two values, and keeps the quiet one as the default', () => {
+    expect(policy.NOTIFICATION_LEVELS).toEqual(['needs-you-only', 'off']);
+    expect(policy.DEFAULT_NOTIFICATION_LEVEL).toBe('needs-you-only');
   });
 
-  it('stays quiet when the reason set did not change', () => {
-    const prev = [make('session:a', ['review_ready'])];
-    expect(decideNotifications(prev, [make('session:a', ['review_ready'])], 'all')).toEqual([]);
+  it('reads each of them back unchanged', () => {
+    expect(policy.normalizeLevel('needs-you-only')).toBe('needs-you-only');
+    expect(policy.normalizeLevel('off')).toBe('off');
   });
 
-  it('pops again when an item gains a reason', () => {
-    const prev = [make('session:a', ['review_ready'])];
-    const next = [make('session:a', ['needs_input', 'review_ready'])];
-    expect(decideNotifications(prev, next, 'all')).toHaveLength(1);
+  it('reads the legacy `all` as `needs-you-only`', () => {
+    expect(policy.normalizeLevel('all')).toBe('needs-you-only');
   });
 
-  it('stays quiet when an item only lost a reason', () => {
-    const prev = [make('session:a', ['needs_input', 'review_ready'])];
-    const next = [make('session:a', ['review_ready'])];
-    expect(decideNotifications(prev, next, 'all')).toEqual([]);
+  it('says so in the log exactly once, however often the level is read', () => {
+    const lines: string[] = [];
+    for (let at = 0; at < 5; at += 1) policy.normalizeLevel('all', (line) => lines.push(line));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('all');
+    expect(lines[0]).toContain('needs-you-only');
   });
 
-  it('never pops a badge-only item — the core says so, not a local reason list', () => {
-    const badgeOnly = make('session:a', ['local_prereq_failed'], { needsYou: false });
-    expect(decideNotifications([], [badgeOnly], 'all')).toEqual([]);
+  it('never logs for a level that is still a level', () => {
+    const lines: string[] = [];
+    policy.normalizeLevel('needs-you-only', (line) => lines.push(line));
+    policy.normalizeLevel('off', (line) => lines.push(line));
+    expect(lines).toEqual([]);
   });
 
-  it('pops nothing at the default level — P3 moved that news into the panel', () => {
-    const next = [
-      make('session:a', ['review_ready']),
-      make('session:b', ['local_prereq_failed'], { needsYou: false }),
-    ];
-    // `needs-you-only` is the strip, the view badge and the status bar; a popup is what `all`
-    // means, and it is now the only level that raises one.
-    expect(decideNotifications([], next, 'needs-you-only')).toEqual([]);
-    expect(decideNotifications([], next, 'all')).toHaveLength(1);
+  it('falls back to the default for anything it does not recognise', () => {
+    expect(policy.normalizeLevel('shout')).toBe('needs-you-only');
+    expect(policy.normalizeLevel('')).toBe('needs-you-only');
   });
+});
 
-  it('returns nothing at all when notifications are off', () => {
-    expect(decideNotifications([], [make('session:a', ['review_ready'])], 'off')).toEqual([]);
-  });
-
-  it('pops two items in next order', () => {
-    const next = [make('session:b', ['blocked']), make('session:a', ['plan_ready'])];
-    expect(decideNotifications([], next, 'all').map((p) => p.id)).toEqual([
-      'session:b',
-      'session:a',
-    ]);
-  });
-
-  it('diffs a ticket item and a PR item by id, like any other', () => {
-    const prev = [make('ticket:ING-9', ['needs_input'])];
-    const same = [make('ticket:ING-9', ['needs_input'])];
-    const grown = [make('ticket:ING-9', ['blocked', 'needs_input'])];
-    expect(decideNotifications([], prev, 'all')).toHaveLength(1);
-    expect(decideNotifications(prev, same, 'all')).toEqual([]);
-    expect(decideNotifications(prev, grown, 'all')).toHaveLength(1);
-  });
-
-  it('R51 — a respond session at ready pops like any other needs-you item', () => {
-    const popups = decideNotifications([], [make('pr:acme/web#200', ['comments_ready'])], 'all');
-    expect(popups).toHaveLength(1);
-    expect(popups[0].message).toContain('comments_ready');
-  });
-
-  it('keeps the needs-you rule in the core — the extension has no copy of it', () => {
+describe('MG-B2 the needs-you rule stays in the core', () => {
+  it('keeps no copy of it in the extension', () => {
     // Assembled rather than written out, so the phase-7 DoD grep over the whole package stays empty.
     const forbidden = ['NEEDS', 'YOU', 'REASONS'].join('_');
     const dir = path.resolve(__dirname, '../src');
@@ -116,16 +72,5 @@ describe('MG-B2 only-needs-you-pops', () => {
     };
     walk(dir);
     expect(offenders).toEqual([]);
-  });
-});
-
-describe('popup text', () => {
-  it('names the item by the title the core computed (R13)', () => {
-    const item = make('pr:acme/web#7', ['changes_requested'], {
-      title: 'acme/web#7 — Tighten the socket timeout',
-    });
-    expect(decideNotifications([], [item], 'all').map((p) => p.message)).toEqual([
-      'acme/web#7 — Tighten the socket timeout — changes_requested',
-    ]);
   });
 });

@@ -165,12 +165,11 @@
         "cgremlin.notificationLevel": {
           "type": "string",
           "enum": [
-            "all",
             "needs-you-only",
             "off"
           ],
           "default": "needs-you-only",
-          "description": "How the panel tells you something needs you. \"needs-you-only\" (the default) uses the panel's needs-you strip, the view badge and the status bar. \"all\" adds a popup per item. \"off\" is silent."
+          "description": "How the panel tells you something needs you. \"needs-you-only\" (the default) uses the panel's needs-you strip, the view badge and the status bar. \"off\" is silent. There are no popups at either level; a stored \"all\" from an older version reads as \"needs-you-only\"."
         }
       }
     },

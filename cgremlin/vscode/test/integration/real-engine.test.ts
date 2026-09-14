@@ -593,7 +593,7 @@ describe.skipIf(!coreIsBuilt())('integration: the extension against a real engin
       ui = createUi({
         host,
         client: h.client,
-        notificationLevel: () => 'all',
+        notificationLevel: () => 'needs-you-only',
         coalesceMs: 0,
       });
       sse = new SseClient({ socketPath: h.socketPath, backoffMs: [25] });
@@ -737,8 +737,7 @@ describe.skipIf(!coreIsBuilt())('integration: the extension against a real engin
       expect(JSON.stringify(refused.body)).toContain('respond mode only addresses reviews on your own');
     }, TIMEOUT);
 
-    it('turns an AGENT_STATE write by the agent into a frame, a refetch and one popup (R7, MG-B2)', async () => {
-      const popupsBefore = host.callsOf('showInformationMessage').length;
+    it('turns an AGENT_STATE write by the agent into a frame and a refetch, and no popup (R7)', async () => {
       await writeFile(
         path.join(h.sessionsDir, h.seeded.development, 'AGENT_STATE'),
         'needs-input',
@@ -753,7 +752,8 @@ describe.skipIf(!coreIsBuilt())('integration: the extension against a real engin
         (needsYou) => needsYou,
         { timeoutMs: 20_000, what: 'the AGENT_STATE write to reach the panel' },
       );
-      expect(host.callsOf('showInformationMessage').length).toBeGreaterThan(popupsBefore);
+      // P10: the news is the panel's needs-you strip, the view badge and the status bar. No toast.
+      expect(host.callsOf('showInformationMessage')).toEqual([]);
     }, TIMEOUT);
   });
 
