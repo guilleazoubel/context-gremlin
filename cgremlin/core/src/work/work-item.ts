@@ -101,6 +101,15 @@ export interface WorkItem {
   ticket: WorkItemTicket | null;
   agents: WorkItemAgent[];
   needsYou: boolean;
+  /**
+   * "I don't care about this one right now" — persisted per item in the
+   * state dir by `DismissStore` and applied by `WorkItemService`, never
+   * derived here (`groupWorkItems` stays pure). A dismissed item is in NO
+   * list, but it is still in `items`, so a client can render "show
+   * dismissed" without a refetch.
+   */
+  dismissed: boolean;
+  dismissedAt: string | null;
   attention: { reasons: AttentionReason[]; since: string; acked: boolean; refs: ItemRef[] };
 }
 
@@ -403,6 +412,10 @@ function finish(cand: Candidate, ctx: FinishContext): WorkItem {
       cand.contributors.some(
         (c) => c.mode === null && c.attention.needsAttention && c.attention.reasons.some((r) => NEEDS_YOU_REASONS.includes(r)),
       ),
+    // Overlaid by WorkItemService from the dismissal store; the grouping
+    // itself has no I/O and therefore no opinion about it.
+    dismissed: false,
+    dismissedAt: null,
     attention: { reasons, since: sinceCandidates[0] ?? '', acked, refs },
   };
 }

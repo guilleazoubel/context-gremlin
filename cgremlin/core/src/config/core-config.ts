@@ -113,6 +113,8 @@ export const CoreConfigSchema = z.object({
   environments: z.record(z.string().regex(/^[^/\s]+\/[^/\s]+$/), RepoEnvironmentSchema).default({}),
   localAppStatePath: z.string().optional(),
   attentionAcksPath: z.string().optional(),
+  /** Derived: <stateDir>/dismissals.json — per-item "not interesting now", shared by every window. */
+  dismissalsPath: z.string().optional(),
   // R13: the engine's identity/lock file and its log, derived like every
   // other per-state-dir path so the extension asks the core where they are
   // instead of joining paths itself.
@@ -163,6 +165,7 @@ export function resolveCoreConfig(raw: unknown, home: string): CoreConfig {
     inventoryPath: expandOrDerive(parsed.inventoryPath, 'inventory.json'),
     localAppStatePath: expandOrDerive(parsed.localAppStatePath, 'local-app.json'),
     attentionAcksPath: expandOrDerive(parsed.attentionAcksPath, 'attention-acks.json'),
+    dismissalsPath: expandOrDerive(parsed.dismissalsPath, 'dismissals.json'),
     enginePidPath: expandOrDerive(parsed.enginePidPath, 'engine.json'),
     engineLogPath: expandOrDerive(parsed.engineLogPath, 'engine.log'),
     // R52: two derived paths, and each one needs the matching entry in
@@ -341,6 +344,7 @@ const DERIVED_PATH_SUFFIXES: Record<string, string> = {
   inventoryPath: 'inventory.json',
   localAppStatePath: 'local-app.json',
   attentionAcksPath: 'attention-acks.json',
+  dismissalsPath: 'dismissals.json',
   enginePidPath: 'engine.json',
   engineLogPath: 'engine.log',
   jiraCachePath: 'jira.json',

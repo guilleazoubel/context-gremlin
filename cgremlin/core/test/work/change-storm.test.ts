@@ -23,6 +23,7 @@ import { InventoryScanner } from '../../src/inventory/inventory-scanner';
 import { InventoryStore } from '../../src/inventory/inventory-store';
 import { AttentionService, PrSourceAdapter, SessionSourceAdapter } from '../../src/attention/attention-service';
 import { AckStore } from '../../src/attention/ack-store';
+import { DismissStore } from '../../src/attention/dismiss-store';
 import { WorkItemService } from '../../src/work/work-item-service';
 import type { JiraScanReport } from '../../src/jira/jira-store';
 
@@ -91,6 +92,7 @@ function buildStack() {
     attention,
     inventory: inventoryStore,
     jira: { lastReport: async () => EMPTY_JIRA },
+    dismissals: new DismissStore(h.fs, '/state/dismissals.json'),
     events: h.events,
     config: { me: 'me-user', watchAuthors: [], showAllRepoPrs: false, projectKeys: [] },
   });

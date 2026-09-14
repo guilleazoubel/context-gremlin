@@ -993,6 +993,20 @@ async function handleRequest(
           return;
         }
 
+        // "I don't care about this one right now." Both are idempotent and
+        // answer with the refreshed item, so a client never re-derives the
+        // flag it just set.
+        if (method === 'POST' && (tail === 'dismiss' || tail === 'undismiss')) {
+          const updated =
+            tail === 'dismiss' ? await workItems.dismiss(item.id) : await workItems.undismiss(item.id);
+          if (updated === null) {
+            sendJson(res, 404, { error: `No work item found for /${parts.join('/')}` });
+            return;
+          }
+          sendJson(res, 200, { item: updated });
+          return;
+        }
+
         if (method === 'POST' && tail === 'agents') {
           const request = parseAgentsRequest(await readJsonBody(req));
           await handleItemAgents(req, res, deps, lock, item, request);

@@ -29,6 +29,7 @@ import { NodeSessionWatcher } from '../fs/node-session-watcher';
 import type { SessionWatcher } from '../fs/session-watcher';
 import { EnvironmentService } from '../env/environment-service';
 import { AckStore } from '../attention/ack-store';
+import { DismissStore } from '../attention/dismiss-store';
 import { WorkItemService } from '../work/work-item-service';
 import {
   AttentionService,
@@ -345,7 +346,9 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     inventory: inventoryStore,
     jira: jiraScanner,
     threads: threadScanner,
+    dismissals: new DismissStore(adapters.fs, config.dismissalsPath!),
     events,
+    now: adapters.now,
     config: {
       me: config.me,
       watchAuthors: config.watchAuthors,
