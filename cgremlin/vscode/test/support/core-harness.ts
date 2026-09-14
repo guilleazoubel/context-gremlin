@@ -339,6 +339,12 @@ export interface ManagerOptions {
   bundledBuildTime?: string | null;
   /** R25 supplies the editor's own `Code Helper (Plugin)` here. */
   execPath?: string;
+  /**
+   * The bundle this manager would SPAWN. Defaults to the shipping `engine/engine.js`; a test
+   * about two windows on two builds points one manager at a copy stamped with a different build
+   * id and time, so the engine it starts really is a different build rather than a pretend one.
+   */
+  enginePath?: string;
   env?: NodeJS.ProcessEnv;
   log?: (line: string) => void;
 }
@@ -362,7 +368,7 @@ export function createManager(seed: SeededStateDir, opts: ManagerOptions = {}): 
     }),
     launch: () => ({
       execPath: opts.execPath ?? process.execPath,
-      enginePath: ENGINE_BUNDLE,
+      enginePath: opts.enginePath ?? ENGINE_BUNDLE,
       cwd: seed.stateDir,
     }),
     log: opts.log ?? (() => {}),
