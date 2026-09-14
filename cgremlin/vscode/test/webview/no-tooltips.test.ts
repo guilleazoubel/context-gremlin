@@ -12,7 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { ciCell } from '../../src/model/work-items';
 
-const panelDir = path.resolve(__dirname, '../../src/webview/panel');
+const webviewDir = path.resolve(__dirname, '../../src/webview');
 
 function everyFileUnder(dir: string): string[] {
   return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -25,17 +25,24 @@ function everyFileUnder(dir: string): string[] {
 /** `node.title = x`, `setTitle(...)`, `title:` on a cell — every way the popup could come back. */
 const TITLE_WRITE = /\.title\s*=|setTitle|['"]title['"]\s*,/;
 
-describe('task 1 — no tooltip anywhere in the panel bundle', () => {
-  it('assigns no DOM title under src/webview/panel', () => {
+describe('tasks 1 and 8 — no tooltip anywhere in either bundle', () => {
+  it('assigns no DOM title under src/webview, at any depth', () => {
     const offenders: string[] = [];
-    for (const file of everyFileUnder(panelDir)) {
+    for (const file of everyFileUnder(webviewDir)) {
       fs.readFileSync(file, 'utf8')
         .split('\n')
         .forEach((line, at) => {
-          if (TITLE_WRITE.test(line)) offenders.push(`${path.basename(file)}:${at + 1}`);
+          // `document.title` is the WINDOW title, not a tooltip, and stays (§3).
+          if (line.includes('document.title')) return;
+          if (TITLE_WRITE.test(line)) offenders.push(`${path.relative(webviewDir, file)}:${at + 1}`);
         });
     }
     expect(offenders).toEqual([]);
+  });
+
+  it('still sets the window title, which is not a tooltip', () => {
+    const source = fs.readFileSync(path.join(webviewDir, 'item-tab.ts'), 'utf8');
+    expect(source).toContain('document.title =');
   });
 });
 

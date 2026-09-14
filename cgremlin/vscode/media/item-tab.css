@@ -55,7 +55,28 @@ body {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin: 12px 0;
+  margin: 12px 0 0;
+}
+
+.button-group {
+  margin-bottom: 12px;
+}
+
+/*
+ * §3 — why a button is disabled, in ink. It was the button's `title`, which several engines do
+ * not show on a disabled control at all, so the reason was effectively unreadable.
+ */
+.button-reason {
+  margin: 4px 0 0;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+}
+
+/* The session id, said once on the pane it identifies rather than hidden in a tab's tooltip. */
+.agent-session {
+  margin: 0 0 8px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
 }
 
 .buttons button {
