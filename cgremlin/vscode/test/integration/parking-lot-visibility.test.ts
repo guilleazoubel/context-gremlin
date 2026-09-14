@@ -87,14 +87,16 @@ describe.skipIf(!coreIsBuilt())('integration: P1 — the parking lot renders wha
     // The section the panel collapses by default carries its OWN count, on its own header — and
     // nothing above it claims those eleven any more, because nothing is above it (§5).
     expect([someone?.collapsed, someone?.count]).toEqual([true, 11]);
-    expect(paintedRows(state)).toBe(0);
-    const untouched = sections.find((section) => section.key === 'parkingLot:untouched');
-    expect(untouched?.count).toBe(0);
+    // Nothing of the eleven is painted: what is left on screen is the one PR the user has
+    // already started reviewing, in its own section.
+    expect(paintedRows(state)).toBe(1);
+    expect(sections.find((section) => section.key === 'parkingLot:untouched')?.count).toBe(0);
+    expect(sections.find((section) => section.key === 'parkingLot:reviewing')?.count).toBe(1);
   });
 
   it('paints every row once the section is opened', () => {
     const sections = sectionsOf(response).map((section) => ({ ...section, collapsed: false }));
     const state = { sections, banner: null, trouble: null, connected: true } as PanelState;
-    expect(paintedRows(state)).toBe(11);
+    expect(paintedRows(state)).toBe(12);
   });
 });
