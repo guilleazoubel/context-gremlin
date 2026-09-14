@@ -102,6 +102,9 @@ export interface WorkItem {
   agents: WorkItemAgent[];
   needsYou: boolean;
   attention: { reasons: string[]; since: string; acked: boolean; refs: string[] };
+  /** Whether this item is dismissed right now, and when — un-set the instant it needs you again. */
+  dismissed: boolean;
+  dismissedAt: string | null;
 }
 
 export type TicketSourceKind = 'notConfigured' | 'auth' | 'unavailable' | 'ok';
@@ -129,6 +132,8 @@ export interface WorkListsWire {
 export interface ItemsResponse {
   evaluatedAt: string;
   lists: WorkListsWire;
+  /** The ids of the dismissed items, newest dismissal first — not in `lists`, but still in `items`. */
+  dismissed: WorkItemId[];
   items: WorkItem[];
   ticketSource: TicketSource;
   threadSource: ThreadSource;
