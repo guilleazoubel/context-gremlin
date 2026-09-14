@@ -28,6 +28,14 @@ export const SHOW_LOG_ROW = 'show log';
 /** How the command shows up in the palette; the message tells the user to run it by name. */
 const START_COMMAND = 'cgremlin: Start the engine';
 
+/** The primary button's wording wherever there is no usable engine. */
+const START_THE_ENGINE = 'Start the engine';
+
+/** The engine is simply not there. One sentence, and the row's button is the whole fix. */
+export const NOT_RUNNING_MESSAGE =
+  'The cgremlin engine is not running, so there is nothing to list. Start it to pick up where ' +
+  'you left off.';
+
 /** The command ids the row and the status bar dispatch. Mirrored in `package.json`. */
 const START_ID = 'cgremlin.engine.start';
 const SHOW_LOG_ID = 'cgremlin.engine.showLog';
@@ -51,7 +59,13 @@ export interface EngineHealth {
 export type EngineTrouble =
   | { kind: 'foreign'; socketPath: string | null }
   | { kind: 'failed'; reason: string }
-  | { kind: 'outdated' };
+  | { kind: 'outdated' }
+  /**
+   * There is no engine at all — it was stopped, or the incident's SIGTERM storm outlived the
+   * respawn budget and nothing started it again. Four empty lists with no explanation is what
+   * the user actually saw; this is the row that says so and offers the one click that fixes it.
+   */
+  | { kind: 'notRunning' };
 
 /** The state machine's answer, flattened to what the surfaces read. */
 export function healthOf(state: EngineState, socketPath: string | null): EngineHealth {
@@ -63,19 +77,23 @@ export function healthOf(state: EngineState, socketPath: string | null): EngineH
   };
 }
 
-/** The two states that owe the user an explanation, or `null` when nothing is wrong. */
+/** The states that owe the user an explanation, or `null` when nothing is wrong. */
 export function troubleOf(health: EngineHealth): EngineTrouble | null {
   if (health.kind === 'foreign') return { kind: 'foreign', socketPath: health.socketPath ?? null };
   if (health.kind === 'failed') {
     return { kind: 'failed', reason: health.reason ?? 'the engine did not start' };
   }
   if (health.kind === 'outdated') return { kind: 'outdated' };
+  // The incident's ending, and the ordinary case of `cgremlin: Stop the engine`: nothing is
+  // listening, and the panel's job is to offer the way back rather than to go quiet.
+  if (health.kind === 'stopped') return { kind: 'notRunning' };
   return null;
 }
 
 /** The whole explanation, in one sentence pair. Shown in the row, the tooltip and the popup. */
 export function troubleMessage(trouble: EngineTrouble): string {
   if (trouble.kind === 'outdated') return OUTDATED_EXTENSION_MESSAGE;
+  if (trouble.kind === 'notRunning') return NOT_RUNNING_MESSAGE;
   if (trouble.kind === 'failed') return `The cgremlin engine failed: ${trouble.reason}`;
   const where = trouble.socketPath ?? 'the cgremlin socket';
   return (
@@ -90,21 +108,37 @@ export function troubleRowLabel(trouble: EngineTrouble): string {
   return trouble.kind === 'failed' ? `${message} — ${SHOW_LOG_ROW}` : message;
 }
 
-/** Clicking the row (or the status bar): a re-probe for a stranger, the log for a failure. */
+/**
+ * The row's primary act. Every trouble that means "there is no usable engine" — a stranger on the
+ * socket, a failed start, a stopped engine — is one click from starting one. The log is a second
+ * button now ({@link troubleSecondary}) rather than the only offer: reading why it died is not a
+ * way out of it, and the incident ended with a user who had no way out at all.
+ */
 export function troubleCommand(trouble: EngineTrouble): string {
-  if (trouble.kind === 'outdated') return RELOAD_WINDOW_ID;
-  return trouble.kind === 'foreign' ? START_ID : SHOW_LOG_ID;
+  return trouble.kind === 'outdated' ? RELOAD_WINDOW_ID : START_ID;
 }
 
 /** The row's (and the notification's) button, beside the same sentence. */
 export function troubleActionLabel(trouble: EngineTrouble): string {
-  if (trouble.kind === 'outdated') return RELOAD_WINDOW;
-  return trouble.kind === 'foreign' ? 'Start the engine' : SHOW_LOG;
+  return trouble.kind === 'outdated' ? RELOAD_WINDOW : START_THE_ENGINE;
+}
+
+/**
+ * The second, quieter offer — `null` when there is only one thing to say. A start that failed and
+ * an engine that is simply not there both owe the user the log; a stranger on the socket does not
+ * (there is nothing of ours in it), and a window that is behind has nothing to read either.
+ */
+export function troubleSecondary(
+  trouble: EngineTrouble,
+): { command: string; actionLabel: string } | null {
+  if (trouble.kind !== 'failed' && trouble.kind !== 'notRunning') return null;
+  return { command: SHOW_LOG_ID, actionLabel: SHOW_LOG };
 }
 
 /** The status bar's short form. The bar has no room for the sentence; the tooltip carries it. */
 export function troubleStatusText(trouble: EngineTrouble): string {
   if (trouble.kind === 'outdated') return '$(warning) cgremlin: reload this window';
+  if (trouble.kind === 'notRunning') return '$(circle-slash) cgremlin: engine is not running';
   return trouble.kind === 'foreign'
     ? '$(warning) cgremlin: engine not usable'
     : '$(warning) cgremlin: engine failed';
@@ -168,8 +202,8 @@ export function itemsTroubleOf(status: number, message: string): SourceTrouble {
 /**
  * What the Refresh command says when there is nothing to refresh, or `null` when the engine is
  * running and the refresh should just happen. Trouble reuses the same wording the row shows;
- * every other not-running kind names the state, because "starting…" and "stopped" call for
- * patience and a command respectively, not the same explanation.
+ * every other not-ready kind names the state, because "starting…" and "stopping…" call for
+ * patience rather than for the same explanation.
  */
 export function refreshBlockedMessage(health: EngineHealth): string | null {
   if (health.kind === 'running') return null;

@@ -648,10 +648,12 @@ describe('the status bar (R17, R23)', () => {
     expect(statusBarTooltip(foreign)).toContain(FAKE_PATHS.socketPath);
   });
 
-  it('says the engine failed, and shows the log on a click', () => {
+  it('says the engine failed, and starts it on a click', () => {
     const failed = withEngine({ kind: 'failed', reason: 'boom' });
     expect(statusBarText(failed)).toBe('$(warning) cgremlin: engine failed');
-    expect(statusBarCommand(failed)).toBe('cgremlin.engine.showLog');
+    // The log is still one click away, in the row's second button; the bar has room for the act
+    // that actually ends the failure.
+    expect(statusBarCommand(failed)).toBe('cgremlin.engine.start');
     expect(statusBarWarning(failed)).toBe(true);
     expect(statusBarTooltip(failed)).toContain('boom');
   });

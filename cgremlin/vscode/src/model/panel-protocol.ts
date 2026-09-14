@@ -163,7 +163,16 @@ export interface PanelState {
    * Something that replaces the lists entirely and says what to do about it: an engine this
    * extension cannot use (Phase 8), or an engine whose `/items` the extension cannot read.
    */
-  trouble: { message: string; command: string; actionLabel: string } | null;
+  trouble: {
+    message: string;
+    command: string;
+    actionLabel: string;
+    /**
+     * The second, quieter offer — the log, beside a Start that is the actual way out. Absent or
+     * `null` when the trouble has only one thing to offer.
+     */
+    secondary?: { command: string; actionLabel: string } | null;
+  } | null;
   /** P10: the dismissible offer to open the managed workspace. `null` once it is not owed. */
   notice: PanelNoticeView | null;
   connected: boolean;

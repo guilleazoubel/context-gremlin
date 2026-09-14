@@ -56,6 +56,7 @@ import {
   troubleActionLabel,
   troubleCommand,
   troubleMessage,
+  troubleSecondary,
   type EngineTrouble,
   type SourceTrouble,
 } from '../model/engine-trouble';
@@ -326,6 +327,7 @@ export class PanelView implements WebviewViewProviderLike {
         message: troubleMessage(this.trouble),
         command: troubleCommand(this.trouble),
         actionLabel: troubleActionLabel(this.trouble),
+        secondary: troubleSecondary(this.trouble),
       };
     }
     if (this.sourceTrouble !== null) {
@@ -333,6 +335,7 @@ export class PanelView implements WebviewViewProviderLike {
         message: this.sourceTrouble.message,
         command: this.sourceTrouble.command,
         actionLabel: this.sourceTrouble.actionLabel,
+        secondary: null,
       };
     }
     return null;

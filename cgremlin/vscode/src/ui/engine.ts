@@ -439,7 +439,7 @@ export class EngineSurface {
     // back to being a panel — which it can only do once it has refetched.
     if (
       (state.kind === 'running' || state.kind === 'outdated') &&
-      (previous === 'foreign' || previous === 'failed')
+      (previous === 'foreign' || previous === 'failed' || previous === 'stopped')
     ) {
       this.pending.track(this.deps.reconnect());
     }

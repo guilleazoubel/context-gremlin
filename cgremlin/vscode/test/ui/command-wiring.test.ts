@@ -281,11 +281,24 @@ describe('an engine that is not one this extension can use', () => {
     expect(h.state().trouble?.command).toBe('cgremlin.engine.start');
   });
 
-  it('shows the failure and a way to the log when the engine failed', async () => {
+  it('shows the failure, offers a start first and keeps the log beside it', async () => {
     const h = await connected();
     h.engine.emit({ kind: 'failed', reason: 'the engine exited with code 1', logTail: [] });
     expect(h.state().trouble?.message).toContain('the engine exited with code 1');
-    expect(h.state().trouble?.command).toBe('cgremlin.engine.showLog');
+    expect(h.state().trouble?.command).toBe('cgremlin.engine.start');
+    expect(h.state().trouble?.secondary).toEqual({
+      command: 'cgremlin.engine.showLog',
+      actionLabel: 'Show log',
+    });
+  });
+
+  /** With no engine at all, the panel owes the user one click that brings it back. */
+  it('offers a start when the engine is simply not running', async () => {
+    const h = await connected();
+    h.engine.emit({ kind: 'stopped' });
+    expect(h.state().trouble?.message).toContain('is not running');
+    expect(h.state().trouble?.command).toBe('cgremlin.engine.start');
+    expect(h.state().trouble?.actionLabel).toBe('Start the engine');
   });
 
   it('warns in the status bar, in the engine warning colour', async () => {
@@ -431,7 +444,9 @@ describe('Refresh while the engine is not running', () => {
     await h.host.invoke('cgremlin.refreshInventory');
     await h.ui.settled();
     expect(h.since(mark)).toEqual([]);
-    expect(String(h.host.callsOf('showInformationMessage')[0].args[0])).toContain('stopped');
+    expect(String(h.host.callsOf('showInformationMessage')[0].args[0])).toContain(
+      'is not running',
+    );
   });
 
   it('scans as it always did when the engine is running', async () => {
