@@ -41,6 +41,9 @@ const GO_TO: Record<PanelChildView['kind'], string> = {
 
 export function createExpanded(): HTMLElement {
   const node = el('div', 'expanded');
+  // P10: the panel's notice, repeated where the user is actually reading. Text only — the notice
+  // itself carries the buttons, and two Opens for one offer is the clutter this all replaces.
+  node.appendChild(el('div', 'expanded-hint'));
   const slots = el('div', 'slots');
   slots.setAttribute('role', 'group');
   slots.setAttribute('aria-label', 'Lifecycle');
@@ -75,6 +78,9 @@ function changeLine(name: string, label: string): HTMLElement {
 
 export function patchExpanded(node: HTMLElement, row: PanelRowView, focusedKey: string | null): void {
   node.dataset.id = row.id;
+  const hint = child(node, '.expanded-hint');
+  setText(hint, row.hint ?? '');
+  setHidden(hint, row.hint === null);
   patchSlots(child(node, '.slots'), node, row.lifecycle);
   patchParts(child(node, '.parts'), node, row, focusedKey);
   patchPeople(child(node, '.people'), row.people);

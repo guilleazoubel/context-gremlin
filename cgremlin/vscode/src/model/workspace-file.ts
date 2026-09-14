@@ -56,6 +56,15 @@ export function managedWorkspaceContent(worktreePath: string, name: string): str
   )}\n`;
 }
 
+/**
+ * The managed file with no folder in it yet — what `cgremlin.openManagedWorkspace` writes when
+ * the user asks for the workspace before any row click has planned one. The next swap fills it:
+ * `planWorkspaceAction` reads zero folders as a swap with nothing to remove.
+ */
+export function emptyManagedWorkspaceContent(): string {
+  return `${JSON.stringify({ folders: [], settings: { 'cgremlin.managed': true } }, null, 2)}\n`;
+}
+
 function samePath(a: string, b: string): boolean {
   return path.resolve(a) === path.resolve(b);
 }

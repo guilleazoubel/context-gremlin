@@ -88,6 +88,7 @@ export function stateOf(over: StateOptions = {}): PanelState {
             changes: expanded ? (over.changes ?? { committed: '—', workingTree: '—' }) : null,
             people: expanded ? humanInteractions(row.item.prs[0], NOW) : [],
             actions,
+            hint: null,
           };
         }),
     }));
@@ -102,7 +103,7 @@ export function stateOf(over: StateOptions = {}): PanelState {
       sections,
     };
   });
-  return { lists, needsYou: [], banner: null, trouble: null, connected: true };
+  return { lists, needsYou: [], banner: null, trouble: null, notice: null, connected: true };
 }
 
 function slotsOf(

@@ -91,3 +91,54 @@ describe('one click at a time', () => {
     expect(host.callsOf('updateWorkspaceFolders')).toHaveLength(1);
   });
 });
+
+describe('P10 — the swap says nothing out loud', () => {
+  it('raises no informational popup when it replaces the open worktree', async () => {
+    host.messageAnswers = [SWITCH_ANYWAY];
+    await swapper.swapTo('a', '/wt/a');
+    expect(host.callsOf('updateWorkspaceFolders')).toHaveLength(1);
+    // The status bar already names the session whose worktree is open; a toast on top of it is
+    // the same fact twice, over whatever the user was doing.
+    expect(host.callsOf('showInformationMessage')).toEqual([]);
+  });
+});
+
+describe('P10 — the offer to open the managed workspace', () => {
+  beforeEach(() => {
+    // A window that is not the managed workspace: every click plans `offer-open-managed`.
+    host.workspaceFilePath = undefined;
+    host.dirty = [];
+  });
+
+  it('writes the bootstrap, tells the panel, and raises nothing at all', async () => {
+    const offers: number[] = [];
+    swapper = new WorktreeSwapper({ host, config, onOfferManaged: () => offers.push(1) });
+    await swapper.swapTo('a', '/wt/a');
+    await swapper.swapTo('b', '/wt/b');
+
+    expect(host.callsOf('showInformationMessage')).toEqual([]);
+    expect(host.callsOf('showWarningMessage')).toEqual([]);
+    expect(host.callsOf('updateWorkspaceFolders')).toEqual([]);
+    expect(host.callsOf('writeFile').map((c) => c.args[0])).toEqual([MANAGED_PATH]);
+    // Every click re-arms the panel's notice; none of them opens a folder behind the user's back.
+    expect(offers).toHaveLength(2);
+    expect(
+      host.callsOf('executeCommand').filter((c) => c.args[0] === 'vscode.openFolder'),
+    ).toEqual([]);
+  });
+
+  it('opens the workspace when the command asks for it, offer or no offer', async () => {
+    await swapper.swapTo('a', '/wt/a');
+    await swapper.openManagedWorkspace();
+    const opens = host.callsOf('executeCommand').filter((c) => c.args[0] === 'vscode.openFolder');
+    expect(opens).toHaveLength(1);
+    expect((opens[0].args[1] as { fsPath: string }).fsPath).toBe(MANAGED_PATH);
+  });
+
+  it('opens it from a cold command too, writing the managed file if it is missing', async () => {
+    await swapper.openManagedWorkspace();
+    expect(host.files.has(MANAGED_PATH)).toBe(true);
+    const opens = host.callsOf('executeCommand').filter((c) => c.args[0] === 'vscode.openFolder');
+    expect(opens).toHaveLength(1);
+  });
+});

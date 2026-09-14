@@ -23,6 +23,7 @@ import type { EngineHealthSource } from './engine';
 import type { DisposableLike, Host } from './host';
 import type { ItemTab } from './item-tab';
 import type { PanelView } from './panel-view';
+import type { WorktreeSwapper } from './preview';
 import type { ChatSessions } from './terminal';
 import type { RefreshCoordinator } from './refresh';
 
@@ -64,6 +65,8 @@ export interface CommandDeps {
   panel: PanelView;
   itemTab: ItemTab;
   chat: ChatSessions;
+  /** P10: the worktree swap, for the one command that opens the managed workspace outright. */
+  swapper?: WorktreeSwapper;
   /**
    * The engine's own surface, when there is one. Refresh consults it first: a scan sent to a
    * socket with no usable engine on it fails invisibly, and the panel simply stays as it was.
@@ -127,6 +130,16 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
 
   return [
     host.registerCommand('cgremlin.openItem', (arg) => openItem(arg)),
+
+    /**
+     * P10: the panel's notice offers this, and so does the command palette. Running it ALWAYS
+     * opens — the user asking directly outranks a "Not now" they clicked earlier, which is also
+     * why the dismissal is cleared here.
+     */
+    host.registerCommand('cgremlin.openManagedWorkspace', async () => {
+      panel.clearWorkspaceNoticeDismissal();
+      await deps.swapper?.openManagedWorkspace();
+    }),
 
     // R48/R65: a child opens the SAME tab, focused on that child, and is addressed by the
     // child's own path rather than by the row's id.

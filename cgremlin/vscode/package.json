@@ -152,6 +152,11 @@
         "command": "cgremlin.engine.showLog",
         "title": "Show the engine log",
         "category": "cgremlin"
+      },
+      {
+        "command": "cgremlin.openManagedWorkspace",
+        "title": "Open the cgremlin workspace",
+        "category": "cgremlin"
       }
     ],
     "configuration": {

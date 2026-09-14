@@ -117,7 +117,13 @@ export function createUi(options: UiOptions): Ui {
     client,
     ttlMs: () => coordinator.config()?.humanTurnTtlMs,
   });
-  const swapper = new WorktreeSwapper({ host, config: () => coordinator.config() });
+  const swapper = new WorktreeSwapper({
+    host,
+    config: () => coordinator.config(),
+    // P10: the offer that used to be a popup on every row click. The panel decides whether to
+    // paint it — it is the half that remembers a "Not now".
+    onOfferManaged: () => panel.setWorkspaceOffer(true),
+  });
   const itemTab = new ItemTab({
     host,
     client,
@@ -139,6 +145,7 @@ export function createUi(options: UiOptions): Ui {
       panel,
       itemTab,
       chat,
+      swapper,
       engine: options.engine,
     }),
   ];
