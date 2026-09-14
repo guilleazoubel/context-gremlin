@@ -303,6 +303,32 @@ export function writeCollapsed(store: SortStore, state: CollapseState): void {
 }
 
 // ---------------------------------------------------------------------------
+// §6: which area the panel is narrowed to
+// ---------------------------------------------------------------------------
+
+/** `all`, or one of the six section keys. */
+export type PanelFocus = string;
+
+export const FOCUS_ALL = 'all';
+export const FOCUS_STATE_KEY = 'cgremlin.panel.focus';
+
+/**
+ * Read with the same defensive shape as `readSort`: a value this panel did not write — a
+ * hand-edited `globalState`, a section key from a build that named them differently — falls back
+ * to `all` rather than narrowing the panel to nothing and leaving the user with a blank column.
+ */
+export function readFocus(store: SortStore): PanelFocus {
+  const stored = store.getState<unknown>(FOCUS_STATE_KEY);
+  if (typeof stored !== 'string') return FOCUS_ALL;
+  if (stored === FOCUS_ALL) return FOCUS_ALL;
+  return PANEL_SECTIONS.some((section) => section.key === stored) ? stored : FOCUS_ALL;
+}
+
+export function writeFocus(store: SortStore, focus: PanelFocus): void {
+  store.setState(FOCUS_STATE_KEY, focus);
+}
+
+// ---------------------------------------------------------------------------
 // The view model
 // ---------------------------------------------------------------------------
 

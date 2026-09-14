@@ -22,12 +22,15 @@ import {
   buildItemChildren,
   buildWorkLists,
   readCollapsed,
+  readFocus,
   readSort,
   readSorts,
   ticketBanner,
   writeCollapsed,
+  writeFocus,
   writeSort,
   COLLAPSE_STATE_KEY,
+  FOCUS_ALL,
   PANEL_SECTIONS,
   type CollapseState,
   type ItemsResponse,
@@ -42,6 +45,7 @@ import {
   type HostToPanel,
   type PanelActionView,
   type PanelChangesView,
+  type PanelFocusOption,
   type PanelPartView,
   type PanelRowView,
   type PanelSectionView,
@@ -137,6 +141,8 @@ export class PanelView implements WebviewViewProviderLike {
   /** The swap asked for the managed workspace and could not do it itself (P10). */
   private offerManaged = false;
   private noticeDismissed: boolean;
+  /** §6: `all`, or the one section key the panel is narrowed to (R64). */
+  private focus: string;
   private sorts: Record<WorkListKind, WorkSortKind>;
   /** §3.3: `setConnected` + `setItems` + `setSourceTrouble` in one refresh are ONE post. */
   private batchDepth = 0;
@@ -149,6 +155,7 @@ export class PanelView implements WebviewViewProviderLike {
     this.selectedId = deps.host.getState<string>(SELECTED_STATE_KEY) ?? null;
     this.expandedId = deps.host.getState<string>(EXPANDED_STATE_KEY) ?? null;
     this.noticeDismissed = deps.host.getState<boolean>(WORKSPACE_NOTICE_DISMISSED_KEY) === true;
+    this.focus = readFocus(deps.host);
   }
 
   /** The swap's report: this window is not the managed workspace, so the notice is owed. */
@@ -293,8 +300,13 @@ export class PanelView implements WebviewViewProviderLike {
 
   state(): PanelState {
     const trouble = this.troubleView();
+    const sections = trouble === null ? this.sections() : [];
     return {
-      sections: trouble === null ? this.sections() : [],
+      // §6: the control lists every area with its count; the panel paints only the focused one,
+      // so the keyboard cannot reach a row that is not on screen.
+      sections: this.focus === FOCUS_ALL ? sections : sections.filter((s) => s.key === this.focus),
+      focus: this.focus,
+      focusOptions: focusOptionsOf(sections),
       // P3: the strip survives a trouble state — what wants the user is still true while the
       // engine is explaining itself, and it is the one thing worth carrying across.
       needsYou: needsYouEntries(this.items()),
@@ -557,6 +569,11 @@ export class PanelView implements WebviewViewProviderLike {
       case 'toggleSection':
         this.setCollapsed(message.key, message.collapsed);
         return;
+      case 'setFocus':
+        this.focus = message.focus;
+        writeFocus(this.deps.host, message.focus);
+        this.render();
+        return;
       case 'toggleRow':
         // The keyboard's way of opening a row, and it reads the detail for the same reason a
         // click does: an expand is the one moment the row is certainly worth a round trip.
@@ -630,6 +647,19 @@ export class PanelView implements WebviewViewProviderLike {
  * tab's `buttonsFor` asks the same function, over the union of `item.lists`, so the panel and
  * the tab cannot disagree about what a click would do.
  */
+/** `All areas (17)`, then the six with their own counts — including the ones off screen (§6). */
+function focusOptionsOf(sections: readonly PanelSectionView[]): PanelFocusOption[] {
+  const total = sections.reduce((sum, section) => sum + section.count, 0);
+  return [
+    { key: FOCUS_ALL, title: 'All areas', count: total },
+    ...sections.map((section) => ({
+      key: section.key,
+      title: section.title,
+      count: section.count,
+    })),
+  ];
+}
+
 export function actionsFor(item: WorkItem, list: WorkListKind): PanelActionView[] {
   // §4: `Ack` renders only while something needs you AND you have not already said so. The rule
   // table cannot see the acknowledgement, so the one field it lacks is applied here.

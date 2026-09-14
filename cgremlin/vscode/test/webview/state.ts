@@ -25,6 +25,8 @@ export interface StateOptions {
   changes?: { committed: string; workingTree: string };
   /** Which sections the user has closed, by section key. */
   collapsed?: Record<string, boolean>;
+  /** §6: `all`, or the one section key the panel is narrowed to. */
+  focus?: string;
 }
 
 export function stateOf(over: StateOptions = {}): PanelState {
@@ -74,7 +76,28 @@ export function stateOf(over: StateOptions = {}): PanelState {
       rows,
     };
   });
-  return { sections, needsYou: [], banner: null, trouble: null, notice: null, connected: true };
+  const focus = over.focus ?? 'all';
+  return {
+    sections: focus === 'all' ? sections : sections.filter((section) => section.key === focus),
+    focus,
+    focusOptions: [
+      {
+        key: 'all',
+        title: 'All areas',
+        count: sections.reduce((sum, section) => sum + section.count, 0),
+      },
+      ...sections.map((section) => ({
+        key: section.key,
+        title: section.title,
+        count: section.count,
+      })),
+    ],
+    needsYou: [],
+    banner: null,
+    trouble: null,
+    notice: null,
+    connected: true,
+  };
 }
 
 function partsOf(

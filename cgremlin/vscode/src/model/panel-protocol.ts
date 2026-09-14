@@ -10,6 +10,7 @@
 import type { NeedsYouEntry } from './needs-you';
 import type { ActionPlacement } from './row-actions';
 import {
+  FOCUS_ALL,
   PANEL_SECTIONS,
   SORT_OPTIONS,
   WORK_LIST_KINDS,
@@ -136,8 +137,19 @@ export interface PanelNoticeView {
   dismissLabel: string;
 }
 
+/** One entry of §6's focus control: `All areas (17)`, then the six sections with their counts. */
+export interface PanelFocusOption {
+  key: string;
+  title: string;
+  count: number;
+}
+
 export interface PanelState {
   sections: PanelSectionView[];
+  /** §6: `all`, or the one section key the panel is narrowed to. */
+  focus: string;
+  /** Every area the control offers, with its own count — including the ones not on screen. */
+  focusOptions: PanelFocusOption[];
   /** P3: what wants the user, as a strip at the top of the panel instead of a toast. */
   needsYou: NeedsYouEntry[];
   /** A stale ticket or thread source, or the Jira auth failure (R35). */
@@ -170,6 +182,8 @@ export type PanelToHost =
   | { type: 'openChild'; id: string; childId: string }
   | { type: 'setSort'; list: WorkListKind; sort: WorkSortKind }
   | { type: 'toggleSection'; key: string; collapsed: boolean }
+  /** §6: narrow the panel to one area, or back to all of them. Persisted by the host (R64). */
+  | { type: 'setFocus'; focus: string }
   | { type: 'toggleRow'; id: string; expanded: boolean }
   /** P10's "Not now": remembered in the host's global state, not in the webview. */
   | { type: 'dismissNotice' }
@@ -223,6 +237,14 @@ export function parsePanelMessage(raw: unknown): PanelToHost | null {
         return null;
       }
       return { type: 'setSort', list, sort: sort as WorkSortKind };
+    }
+    case 'setFocus': {
+      const focus = message.focus;
+      if (typeof focus !== 'string') return null;
+      if (focus !== FOCUS_ALL && !PANEL_SECTIONS.some((section) => section.key === focus)) {
+        return null;
+      }
+      return { type: 'setFocus', focus };
     }
     case 'toggleSection': {
       // Only a key the panel itself draws (§5) — a hand-crafted key would write a collapse state

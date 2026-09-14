@@ -70,6 +70,31 @@ body {
   --cg-section: var(--cg-sec-waitingForReview);
 }
 
+/* --- §6: the focus control --------------------------------------------- */
+
+/*
+ * One line at any width, and the platform's own control: no popup of ours, no wrapping row of
+ * chips, and every keyboard and screen-reader behaviour for free. It is the panel's first tab
+ * stop, which is why it is the first thing in the document too.
+ */
+.focus {
+  display: block;
+  width: 100%;
+  min-height: 24px;
+  padding: 4px 6px;
+  border: 1px solid var(--vscode-dropdown-border, var(--cg-divider));
+  border-radius: 3px;
+  background: var(--vscode-dropdown-background, var(--vscode-sideBar-background));
+  color: var(--vscode-dropdown-foreground, var(--vscode-foreground));
+  font-family: inherit;
+  font-size: 11px;
+}
+
+.focus:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
 /* --- the needs-you strip (P3) ------------------------------------------ */
 
 /*

@@ -41,9 +41,12 @@ const strip = (): FakeElement | undefined => dom.root.byClass('attention')[0];
 const items = (): FakeElement[] => dom.root.byClass('attention-item');
 
 describe('P3 the needs-you strip', () => {
-  it('leads the panel, above the lists', () => {
+  it('leads the panel, under §6’s focus control and above every section', () => {
     panel.render(withStrip());
-    expect(dom.root.childNodes[0]?.className).toBe('attention');
+    expect(dom.root.childNodes.map((node) => node.className).slice(0, 2)).toEqual([
+      'focus',
+      'attention',
+    ]);
   });
 
   it('says how many, then one line per item with its reason', () => {

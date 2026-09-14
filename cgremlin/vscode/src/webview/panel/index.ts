@@ -21,6 +21,7 @@ import { button, el } from './dom';
 import { installKeyboard } from './keyboard';
 import { createSection, patchSection, type SectionContext } from './list';
 import { reconcile, setClass, setHidden, setText } from './reconcile';
+import { createFocus, patchFocus } from './focus';
 import { createStrip, patchStrip } from './strip';
 import type { HostToPanel, PanelState } from '../../model/panel-protocol';
 
@@ -104,6 +105,7 @@ function collectKeys(node: HTMLElement): void {
 }
 
 type Entry =
+  | { kind: 'focus'; state: PanelState }
   | { kind: 'trouble'; state: PanelState }
   | { kind: 'strip'; state: PanelState }
   | { kind: 'banner'; text: string; tone: string }
@@ -112,6 +114,11 @@ type Entry =
 
 function entriesOf(next: PanelState): { key: string; data: Entry }[] {
   const entries: { key: string; data: Entry }[] = [];
+  // §6: the panel's first tab stop, above everything — including the strip, because narrowing the
+  // panel is the thing the user reaches for when the strip is long.
+  if (next.focusOptions.length > 0) {
+    entries.push({ key: 'focus', data: { kind: 'focus', state: next } });
+  }
   // P3: the strip leads the panel and outlives a trouble state — what wants the user is still
   // true while the engine is explaining itself.
   if (next.needsYou.length > 0) {
@@ -145,6 +152,7 @@ function entriesOf(next: PanelState): { key: string; data: Entry }[] {
 }
 
 function create(entry: Entry, context: SectionContext): HTMLElement {
+  if (entry.kind === 'focus') return createFocus();
   if (entry.kind === 'section') {
     return createSection(entry.state.sections[entry.index], context);
   }
@@ -168,6 +176,10 @@ function create(entry: Entry, context: SectionContext): HTMLElement {
 }
 
 function patch(node: HTMLElement, entry: Entry, context: SectionContext): void {
+  if (entry.kind === 'focus') {
+    patchFocus(node, entry.state.focusOptions, entry.state.focus);
+    return;
+  }
   if (entry.kind === 'section') {
     patchSection(node, entry.state.sections[entry.index], context);
     return;

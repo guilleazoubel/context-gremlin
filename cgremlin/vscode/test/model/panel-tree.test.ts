@@ -31,7 +31,16 @@ function stateOf(
         rows: section.rows,
       }) as unknown as PanelSectionView,
   );
-  return { sections: views, needsYou: [], banner: null, trouble: null, notice: null, connected: true };
+  return {
+    sections: views,
+    focus: 'all',
+    focusOptions: [],
+    needsYou: [],
+    banner: null,
+    trouble: null,
+    notice: null,
+    connected: true,
+  };
 }
 
 describe('freezing the painted order (§2.2 rule 4)', () => {
