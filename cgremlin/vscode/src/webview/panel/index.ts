@@ -20,7 +20,7 @@ import { post, setSink } from './channel';
 import { button, el } from './dom';
 import { installKeyboard } from './keyboard';
 import { createSection, patchSection, type SectionContext } from './list';
-import { reconcile, setClass, setHidden, setText } from './reconcile';
+import { reconcile, setAttr, setClass, setHidden, setText } from './reconcile';
 import { createFocus, patchFocus } from './focus';
 import { createStrip, patchStrip } from './strip';
 import type { HostToPanel, PanelState } from '../../model/panel-protocol';
@@ -106,6 +106,7 @@ function collectKeys(node: HTMLElement): void {
 
 type Entry =
   | { kind: 'focus'; state: PanelState }
+  | { kind: 'dismissedToggle'; state: PanelState }
   | { kind: 'trouble'; state: PanelState }
   | { kind: 'strip'; state: PanelState }
   | { kind: 'banner'; text: string; tone: string }
@@ -118,6 +119,12 @@ function entriesOf(next: PanelState): { key: string; data: Entry }[] {
   // panel is the thing the user reaches for when the strip is long.
   if (next.focusOptions.length > 0) {
     entries.push({ key: 'focus', data: { kind: 'focus', state: next } });
+  }
+  // Item 2: beside the focus control, because "which area" and "am I seeing what I put aside" are
+  // the same question asked twice. Absent entirely while there is nothing behind it — an empty
+  // bin is not worth a line of a 300 px sidebar.
+  if (next.dismissedCount > 0 || next.showDismissed) {
+    entries.push({ key: 'showDismissed', data: { kind: 'dismissedToggle', state: next } });
   }
   // P3: the strip leads the panel and outlives a trouble state — what wants the user is still
   // true while the engine is explaining itself.
@@ -159,6 +166,7 @@ function entriesOf(next: PanelState): { key: string; data: Entry }[] {
 
 function create(entry: Entry, context: SectionContext): HTMLElement {
   if (entry.kind === 'focus') return createFocus();
+  if (entry.kind === 'dismissedToggle') return createDismissedToggle();
   if (entry.kind === 'section') {
     return createSection(entry.state.sections[entry.index], context);
   }
@@ -200,6 +208,10 @@ function patch(node: HTMLElement, entry: Entry, context: SectionContext): void {
     patchFocus(node, entry.state.focusOptions, entry.state.focus);
     return;
   }
+  if (entry.kind === 'dismissedToggle') {
+    patchDismissedToggle(node, entry.state);
+    return;
+  }
   if (entry.kind === 'section') {
     patchSection(node, entry.state.sections[entry.index], context);
     return;
@@ -226,6 +238,28 @@ function patch(node: HTMLElement, entry: Entry, context: SectionContext): void {
   setHidden(node.children[1] as HTMLElement, trouble === null);
   setText(node.children[2] as HTMLElement, second?.actionLabel ?? '');
   setHidden(node.children[2] as HTMLElement, second === null);
+}
+
+/**
+ * A pressed-state button rather than a second select: it is one boolean, and `aria-pressed` says
+ * so to a screen reader without a menu to open. What it posts is the OPPOSITE of what it is
+ * showing, read off the DOM at click time, so a patched button always toggles the current state.
+ */
+function createDismissedToggle(): HTMLElement {
+  const node = button({
+    className: 'dismissed-toggle',
+    label: '',
+    message: () => ({
+      type: 'setShowDismissed',
+      show: node.getAttribute('aria-pressed') !== 'true',
+    }),
+  });
+  return node;
+}
+
+function patchDismissedToggle(node: HTMLElement, state: PanelState): void {
+  setText(node, `Dismissed (${state.dismissedCount})`);
+  setAttr(node, 'aria-pressed', String(state.showDismissed));
 }
 
 /**

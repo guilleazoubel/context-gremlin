@@ -102,6 +102,19 @@ export interface WorkItem {
   agents: WorkItemAgent[];
   needsYou: boolean;
   attention: { reasons: string[]; since: string; acked: boolean; refs: string[] };
+  /**
+   * Item 2: the user has put this one aside. The CORE owns it — it is persisted there, the lists
+   * below already exclude it, and an item that comes to need you is undismissed by the core
+   * itself. An engine older than this contract sends neither field, which reads as "not dismissed"
+   * rather than as an error (`isDismissed`).
+   */
+  dismissed: boolean;
+  dismissedAt: string | null;
+}
+
+/** Tolerant of an engine that predates item 2: an absent field is not a dismissal. */
+export function isDismissed(item: WorkItem): boolean {
+  return item.dismissed === true;
 }
 
 export type TicketSourceKind = 'notConfigured' | 'auth' | 'unavailable' | 'ok';
@@ -128,8 +141,11 @@ export interface WorkListsWire {
 
 export interface ItemsResponse {
   evaluatedAt: string;
+  /** R47: the lists EXCLUDE what the user dismissed; `items` still carries every one of them. */
   lists: WorkListsWire;
   items: WorkItem[];
+  /** Item 2: the dismissed ids, newest first. Absent on an engine that predates the contract. */
+  dismissed: WorkItemId[];
   ticketSource: TicketSource;
   threadSource: ThreadSource;
 }
@@ -326,6 +342,31 @@ export function readFocus(store: SortStore): PanelFocus {
 
 export function writeFocus(store: SortStore, focus: PanelFocus): void {
   store.setState(FOCUS_STATE_KEY, focus);
+}
+
+// ---------------------------------------------------------------------------
+// Item 2: what the user has put aside
+// ---------------------------------------------------------------------------
+
+/**
+ * The dismissed section's key. Deliberately NOT one of `PANEL_SECTIONS`: it is not an area of the
+ * work, it is the bin beside it — it never appears in the focus control, and it is drawn below
+ * whichever areas the focus is showing rather than instead of them.
+ */
+export const DISMISSED_SECTION_KEY = 'dismissed';
+export const DISMISSED_SECTION_TITLE = 'Dismissed';
+/** The same typographic vocabulary the six sections use (§8) — never an icon font, never emoji. */
+export const DISMISSED_SECTION_GLYPH = '⊘';
+
+export const SHOW_DISMISSED_STATE_KEY = 'cgremlin.panel.showDismissed';
+
+/** Read with the same defensive shape as every other persisted view state: hidden unless `true`. */
+export function readShowDismissed(store: SortStore): boolean {
+  return store.getState<unknown>(SHOW_DISMISSED_STATE_KEY) === true;
+}
+
+export function writeShowDismissed(store: SortStore, show: boolean): void {
+  store.setState(SHOW_DISMISSED_STATE_KEY, show);
 }
 
 // ---------------------------------------------------------------------------
@@ -598,10 +639,48 @@ export function identityKeysOf(item: WorkItem): string[] {
   return keys.length === 0 ? [item.title] : keys;
 }
 
-/** §2 L2 — the prose, once. Empty means the line is not rendered, not that it is blank. */
+/**
+ * §2 L2 — the prose, once. Empty means the line is not rendered, not that it is blank.
+ *
+ * Item 1: it is a CHAIN, because the first two rungs are both empty on real data — the core seeds
+ * a ticket candidate with `summary: ''` when the key came from a PR and was not in the JQL
+ * snapshot, and a session-only item has neither a ticket nor a PR. A row that then draws `HB-627`
+ * and nothing else is the "no title on it" complaint, so every rung that names the work is tried:
+ * the ticket summary, the first PR's title, the item's own title, and finally the branch — the
+ * last place a PR always carries a name of some kind.
+ *
+ * The one rung never taken is one that repeats L1: an investigation's own title IS its identity
+ * (`identityKeysOf`), and saying it twice is not a description. The session's `intent` would sit
+ * between the PR title and the item title and deliberately does not — `WorkItemAgent` does not
+ * carry it on the wire, and deriving it here would invent a second source for it.
+ */
 export function descriptionOf(item: WorkItem): string {
-  if (item.ticket !== null && item.ticket.summary !== '') return item.ticket.summary;
-  return item.prs[0]?.title ?? '';
+  const identity = identityKeysOf(item).join(' ');
+  const rungs = [
+    item.ticket?.summary ?? '',
+    item.prs[0]?.title ?? '',
+    titleProse(item.title),
+    item.prs[0]?.branch ?? '',
+  ];
+  for (const rung of rungs) {
+    const text = rung.trim();
+    if (text !== '' && text !== identity) return text;
+  }
+  return '';
+}
+
+/**
+ * The prose half of a core-built `WorkItem.title`, which is `acme/legacy#9 — Bump the toolchain`
+ * or `HB-627 — Caregiver inbox reshuffle`: everything after the first em-dash separator.
+ *
+ * The head is the identity L1 already draws, and putting it back on L2 would restore the very
+ * `grace-frontend#4821 — Fix pagination` line §2 broke apart. A title with no separator is prose
+ * already; a title that is ONLY a head (the PR whose title the wire never carried) leaves nothing,
+ * and the chain moves on to the branch.
+ */
+export function titleProse(title: string): string {
+  const at = title.indexOf(' — ');
+  return at === -1 ? title.trim() : title.slice(at + 3).trim();
 }
 
 /** §2 L3's first and only shrinkable token: `apfm/grace-frontend` reads as `grace-frontend`. */

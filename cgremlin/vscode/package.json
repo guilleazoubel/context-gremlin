@@ -82,6 +82,21 @@
         "category": "cgremlin"
       },
       {
+        "command": "cgremlin.renameItem",
+        "title": "Rename item...",
+        "category": "cgremlin"
+      },
+      {
+        "command": "cgremlin.dismissItem",
+        "title": "Dismiss item",
+        "category": "cgremlin"
+      },
+      {
+        "command": "cgremlin.undismissItem",
+        "title": "Undismiss item",
+        "category": "cgremlin"
+      },
+      {
         "command": "cgremlin.openPr",
         "title": "Open pull request",
         "category": "cgremlin"
@@ -206,6 +221,18 @@
         },
         {
           "command": "cgremlin.startDevelopment",
+          "when": "false"
+        },
+        {
+          "command": "cgremlin.renameItem",
+          "when": "false"
+        },
+        {
+          "command": "cgremlin.dismissItem",
+          "when": "false"
+        },
+        {
+          "command": "cgremlin.undismissItem",
           "when": "false"
         },
         {

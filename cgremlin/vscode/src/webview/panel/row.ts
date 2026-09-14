@@ -46,7 +46,13 @@ export function createRow(row: PanelRowView): HTMLElement {
   id.appendChild(twisty);
   id.appendChild(el('div', 'id-keys'));
   node.appendChild(id);
-  node.appendChild(el('div', 'row-desc'));
+  // L2 is one line with two parts: the prose, and — only when the user wrote it himself — a
+  // small word saying so. Two spans rather than one, because `textContent` on the line would
+  // wipe whichever of them it did not write (§3, MG-B7).
+  const desc = el('div', 'row-desc');
+  desc.appendChild(el('span', 'row-desc-text'));
+  desc.appendChild(el('span', 'row-desc-mark'));
+  node.appendChild(desc);
   node.appendChild(el('div', 'row-signals'));
 
   node.addEventListener('click', () => {
@@ -69,6 +75,7 @@ export function patchRow(
   const classes = ['row', accent];
   if (row.needsYou) classes.push('needs-you');
   if (row.demoted) classes.push('demoted');
+  if (row.dismissed) classes.push('dismissed');
   if (row.selected) classes.push('selected');
   setClass(node, classes.join(' '));
   setTabStop(node, context.focusedKey === key);
@@ -79,7 +86,12 @@ export function patchRow(
   setText(child(node, '.row-twisty'), row.expanded ? '▾' : '▸');
   patchKeys(child(node, '.id-keys'), row.identityKeys);
   const desc = child(node, '.row-desc');
-  setText(desc, row.description);
+  setText(child(desc, '.row-desc-text'), row.description);
+  // A word, not a glyph: the panel says CI in words for the same reason (§3), and a pictogram
+  // here would be one more mark to decode in a column that already has six.
+  const mark = child(desc, '.row-desc-mark');
+  setText(mark, row.descriptionIsOwn ? 'yours' : '');
+  setHidden(mark, !row.descriptionIsOwn);
   // An empty description is not a blank line: the row is two lines tall and says so (§2).
   setHidden(desc, row.description === '');
   patchCells(child(node, '.row-signals'), row.meta);

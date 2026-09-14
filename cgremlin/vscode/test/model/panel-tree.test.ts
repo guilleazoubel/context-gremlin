@@ -36,6 +36,8 @@ function stateOf(
     focus: 'all',
     focusOptions: [],
     needsYou: [],
+    dismissedCount: 0,
+    showDismissed: false,
     banner: null,
     trouble: null,
     notice: null,

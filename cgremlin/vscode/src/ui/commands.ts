@@ -12,10 +12,12 @@
  */
 import { engineErrorText, type CoreClient, type HttpResult } from '../core-client';
 import { refreshBlockedMessage } from '../model/engine-trouble';
+import { readTitle, writeTitle } from '../model/item-title';
 import { withEngineRetry, type EngineRevival } from './engine-retry';
 import {
   agentOfChildId,
   chatTargetOf,
+  descriptionOf,
   itemPathOf,
   type ItemFocus,
   type WorkItem,
@@ -218,6 +220,38 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
       await openTab(deps, path);
     }),
 
+    /**
+     * Item 1: the user's own name for a row. Reachable from the expanded area and from the
+     * palette-free command the panel posts; an empty input clears it, and the derived description
+     * comes back. Nothing is sent to the engine — the core has no field for this, and the panel
+     * is not going to become a writer of work items.
+     */
+    host.registerCommand('cgremlin.renameItem', async (arg) => {
+      const item = needsItem(arg);
+      if (item === null) return;
+      const current = readTitle(host, item);
+      const value = await host.showInputBox({
+        title: 'Rename item',
+        prompt: 'Your own title for this item. Leave it empty to go back to the derived one.',
+        // The derived line as the placeholder, so the user can see what he is replacing.
+        placeHolder: descriptionOf(item),
+        value: current,
+        ignoreFocusOut: true,
+      });
+      if (value === undefined) return;
+      writeTitle(host, item, value);
+      panel.reloadTitles();
+    }),
+
+    /**
+     * Item 2: put an item aside, or take it back. The row moves on the CLICK — a refresh is a
+     * round trip away, and a list that only reacted after it would read as a click that did
+     * nothing — and a request the engine refuses moves it straight back, with the engine's own
+     * wording. That failure is worth a message: it is the panel admitting it lied for a moment.
+     */
+    host.registerCommand('cgremlin.dismissItem', (arg) => setDismissed(deps, arg, true)),
+    host.registerCommand('cgremlin.undismissItem', (arg) => setDismissed(deps, arg, false)),
+
     host.registerCommand('cgremlin.startInvestigation', (arg) =>
       startFromItem(deps, arg, 'investigation'),
     ),
@@ -370,6 +404,49 @@ async function sendTo(
 /** The Item tab's own fetch gets the same treatment: the tab is a user command's destination. */
 async function openTab(deps: CommandDeps, path: string, focus?: ItemFocus): Promise<void> {
   await deps.itemTab.open(path, focus, reviveOf(deps));
+}
+
+/** Item 2's optimistic dismissal, with the rollback that keeps the panel honest. */
+async function setDismissed(deps: CommandDeps, arg: unknown, dismissed: boolean): Promise<void> {
+  const { host, client, coordinator, panel } = deps;
+  const id = typeof arg === 'string' ? arg : null;
+  const item = id === null ? null : (panel.itemOf(id) ?? coordinator.itemOf(id) ?? null);
+  if (item === null) {
+    void host.showWarningMessage('Pick an item in the cgremlin panel first.', undefined);
+    return;
+  }
+  const path = itemPathOf(item.id);
+  if (path === null) {
+    void host.showWarningMessage(
+      `The engine cannot be addressed for '${item.title}' (unrecognised item id '${item.id}').`,
+      undefined,
+    );
+    return;
+  }
+  panel.setPendingDismissal(item.id, dismissed);
+  let result: HttpResult;
+  try {
+    // P11: a click is a request for the engine, so a dead socket is asked once to come back
+    // before this is called a failure and the row is put back where it was.
+    result = await withEngineRetry(reviveOf(deps), () =>
+      dismissed ? client.dismissItem(path) : client.undismissItem(path),
+    );
+  } catch (err: unknown) {
+    panel.clearPendingDismissal(item.id);
+    void host.showWarningMessage(
+      `Could not ${dismissed ? 'dismiss' : 'restore'} '${item.title}': ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+      undefined,
+    );
+    return;
+  }
+  if (result.status < 200 || result.status >= 300) {
+    panel.clearPendingDismissal(item.id);
+    void host.showWarningMessage(engineErrorText(result.body), undefined);
+    return;
+  }
+  coordinator.schedule();
 }
 
 /**
