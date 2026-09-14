@@ -17,6 +17,8 @@ import type {
   EnginePidFile,
   EngineProcessPort,
   ProbeResult,
+  ShutdownOutcome,
+  ShutdownRequestBody,
   SignalOutcome,
   SpawnSpec,
   SpawnedEngine,
@@ -127,6 +129,22 @@ export function childEnv(
   return env;
 }
 
+/** A 409's own words, when it has any: the engine's sentence is what the user should read. */
+function refusalOf(text: string): ShutdownOutcome {
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    body = null;
+  }
+  const b = (body ?? {}) as Record<string, unknown>;
+  return {
+    kind: 'refused',
+    reason: typeof b.reason === 'string' ? b.reason : 'the engine refused',
+    engineBuildTime: typeof b.engineBuildTime === 'string' ? b.engineBuildTime : null,
+  };
+}
+
 export class NodeEngineProcess implements EngineProcessPort {
   constructor(private readonly opts: NodeEngineProcessOptions = {}) {}
 
@@ -173,6 +191,56 @@ export class NodeEngineProcess implements EngineProcessPort {
         done(OFFLINE_CODES.has(err.code ?? '') ? null : 'foreign');
       });
       req.end();
+    });
+  }
+
+  /**
+   * `POST /shutdown`. Every answer that is not a verdict — nothing listening, a connection that
+   * broke, a timeout, a 404 from an engine that predates the route, a body that makes no sense —
+   * comes back as `unavailable`, because the manager may only fall back to a signal when there
+   * was nobody to ask. A 409 is a real answer and is reported as such.
+   */
+  requestShutdown(socketPath: string, body: ShutdownRequestBody): Promise<ShutdownOutcome> {
+    const payload = Buffer.from(JSON.stringify(body), 'utf8');
+    return new Promise<ShutdownOutcome>((resolve) => {
+      let settled = false;
+      const done = (value: ShutdownOutcome): void => {
+        if (settled) return;
+        settled = true;
+        resolve(value);
+      };
+      const req = http.request(
+        {
+          socketPath,
+          path: '/shutdown',
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Content-Length': payload.byteLength,
+            Accept: 'application/json',
+          },
+        },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (chunk: Buffer) => chunks.push(chunk));
+          res.on('error', () => done({ kind: 'unavailable', detail: 'the answer was cut off' }));
+          res.on('end', () => {
+            const status = res.statusCode ?? 0;
+            if (status === 202) return done({ kind: 'accepted' });
+            const text = Buffer.concat(chunks).toString('utf8');
+            if (status === 409) return done(refusalOf(text));
+            done({ kind: 'unavailable', detail: `the engine answered HTTP ${status}` });
+          });
+        },
+      );
+      req.setTimeout(this.opts.probeTimeoutMs ?? PROBE_TIMEOUT_MS, () => {
+        done({ kind: 'unavailable', detail: 'the engine did not answer in time' });
+        req.destroy();
+      });
+      req.on('error', (err: NodeJS.ErrnoException) => {
+        done({ kind: 'unavailable', detail: err.code ?? err.message });
+      });
+      req.end(payload);
     });
   }
 

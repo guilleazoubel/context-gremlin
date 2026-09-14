@@ -56,6 +56,27 @@ export interface EnginePidFile {
 
 export type SignalOutcome = 'signalled' | 'gone' | 'foreign';
 
+/**
+ * What `POST /shutdown` carries. The build TIME is what the engine decides on — a content address
+ * cannot order two builds — and the reason is the trigger: a person (`'user'`) is never refused.
+ */
+export interface ShutdownRequestBody {
+  requesterBuildTime: string | null;
+  requesterBuildId: string;
+  reason: 'restart' | 'stop' | 'user';
+}
+
+/**
+ * The engine's answer. `'refused'` is a 409 — it is NEWER than this window, and this window is
+ * the one that has to change. `'unavailable'` covers everything that is not a verdict: nothing
+ * listening, a connection that failed, a body that made no sense, or an engine predating the
+ * route. Only that last case may fall back to a signal.
+ */
+export type ShutdownOutcome =
+  | { kind: 'accepted' }
+  | { kind: 'refused'; reason: string; engineBuildTime: string | null }
+  | { kind: 'unavailable'; detail: string };
+
 /** A spawned child, kept (unref'ed) only so its exit can be observed (R26). */
 export interface SpawnedEngine {
   pid: number;
@@ -84,6 +105,8 @@ export interface EngineProcessPort {
   /** R11/R30: rotate BEFORE the spawn recreates the file; a no-op below the threshold. */
   rotateLog(path: string, maxBytes: number): Promise<void>;
   readPidFile(path: string): Promise<EnginePidFile | null>;
+  /** `POST /shutdown` on the socket — a request, which is the whole point: it can be refused. */
+  requestShutdown(socketPath: string, body: ShutdownRequestBody): Promise<ShutdownOutcome>;
   signal(pid: number, sig: 'SIGTERM'): SignalOutcome;
   logTail(path: string, lines: number): Promise<string[]>;
   sleep(ms: number): Promise<void>;
@@ -95,7 +118,9 @@ export type EngineState =
   | { kind: 'stopped' }
   | { kind: 'starting'; since: number }
   | { kind: 'running'; version: string; pid: number; adopted: boolean }
-  | { kind: 'stopping'; since: number; pid: number; elapsedMs: number }
+  /** `pid` is `null` when the engine accepted a request rather than taking a signal: nothing in
+   *  that path ever needed to name a process, so nothing looked one up. */
+  | { kind: 'stopping'; since: number; pid: number | null; elapsedMs: number }
   | { kind: 'mismatch'; running: string; bundled: string; pid: number }
   /**
    * The mirror of `mismatch`: the engine on the socket is NEWER than this window's extension.
@@ -236,8 +261,12 @@ export class EngineManager {
     return this.serial('ensure', () => this.runEnsure(trigger));
   }
 
-  stop(): Promise<EngineState> {
-    return this.serial('stop', () => this.runStop());
+  /**
+   * Ask the engine to stop. `'user'` is a person, and the engine honours that whatever the build
+   * order says; `'auto'` is this window acting on its own, and the engine may refuse it.
+   */
+  stop(trigger: Trigger = 'auto'): Promise<EngineState> {
+    return this.serial('stop', () => this.runStop(trigger === 'user' ? 'user' : 'stop'));
   }
 
   /**
@@ -294,7 +323,7 @@ export class EngineManager {
         return this.current;
       }
     }
-    const stopped = await this.runStop();
+    const stopped = await this.runStop(trigger === 'user' ? 'user' : 'restart');
     if (stopped.kind !== 'stopped') return stopped;
     // Only a stop that actually proved ownership and succeeded spends the identity — a failed or
     // timed-out stop leaves it untouched so the next legitimate auto trigger may try again (R26).
@@ -534,9 +563,37 @@ export class EngineManager {
     return await this.failed(`the engine exited with code ${code === null ? 'unknown' : String(code)}`);
   }
 
-  private async runStop(): Promise<EngineState> {
+  /**
+   * The stop, in the order that matters: ASK first, signal only if there is nobody to ask.
+   *
+   * A request names its requester and can be answered; a signal does neither, and a window
+   * running an extension too old to know about any of this is exactly the window whose SIGTERM
+   * nothing could refuse. So `POST /shutdown` is the path, `409` is a real answer this manager
+   * obeys (it adopts the newer engine and asks for a reload), and the two-part ownership proof +
+   * SIGTERM survives for the one case a request cannot reach: an engine whose socket answers
+   * nothing at all.
+   */
+  private async runStop(reason: ShutdownRequestBody['reason']): Promise<EngineState> {
     const proc = this.opts.process;
     const paths = this.opts.paths();
+    const asked = await proc.requestShutdown(paths.socketPath, {
+      requesterBuildTime: this.opts.bundledBuildTime,
+      requesterBuildId: this.opts.bundledBuildId,
+      reason,
+    });
+    if (asked.kind === 'accepted') {
+      this.opts.log(`engine.shutdown_accepted: the engine agreed to stop (${reason}); nothing was signalled`);
+      return await this.pollUntilSilent(paths, proc.now(), null);
+    }
+    if (asked.kind === 'refused') {
+      this.opts.log(
+        `engine.shutdown_refused: the engine refused to stop (${asked.reason}; it was built ${asked.engineBuildTime ?? 'at an unknown time'} and this window ships ${this.opts.bundledBuildTime ?? 'an unbundled build'}); nothing was signalled`,
+      );
+      return await this.adoptRefuser(paths, asked.reason);
+    }
+    this.opts.log(
+      `engine.shutdown_unanswered: ${paths.socketPath} did not answer the stop request (${asked.detail}); proving ownership before any signal`,
+    );
     const first = await this.proof(paths);
     if (typeof first === 'string') return await this.failed(first);
 
@@ -556,14 +613,41 @@ export class EngineManager {
       return await this.failed(`pid ${second.pid} is not ours to signal; nothing was stopped`);
     }
 
-    const since = proc.now();
+    return await this.pollUntilSilent(paths, proc.now(), second.pid);
+  }
+
+  /**
+   * The same wait whichever way the engine was asked to go: poll until the socket is silent, and
+   * past the budget keep WATCHING rather than escalating (R23).
+   */
+  private async pollUntilSilent(
+    paths: EnginePaths,
+    since: number,
+    pid: number | null,
+  ): Promise<EngineState> {
+    const proc = this.opts.process;
     const budget = since + STOP_BUDGET_MS;
     for (;;) {
       await proc.sleep(STOP_POLL_MS);
       if ((await proc.probe(paths.socketPath)) === null) return this.setState({ kind: 'stopped' });
       if (proc.now() >= budget) break;
     }
-    return await this.waitOutStop(paths, since, second.pid);
+    return await this.waitOutStop(paths, since, pid);
+  }
+
+  /**
+   * A refusal is the engine telling this window it is behind. The engine is re-probed and
+   * classified exactly as `ensureRunning` would classify it — which lands on `outdated`, the
+   * state whose only cure is reloading this window — so a refusal and an adoption say the same
+   * thing to the surfaces. Nothing is signalled, now or later.
+   */
+  private async adoptRefuser(paths: EnginePaths, why: string): Promise<EngineState> {
+    const probe = await this.probeOrRetry(paths.socketPath);
+    const state = probe === 'foreign' ? null : this.classify(probe, true);
+    if (state !== null) return state;
+    return await this.failed(
+      `the engine refused to stop (${why}) and then stopped answering on ${paths.socketPath}; nothing was signalled`,
+    );
   }
 
   /**
@@ -573,7 +657,7 @@ export class EngineManager {
   private async waitOutStop(
     paths: EnginePaths,
     since: number,
-    pid: number,
+    pid: number | null,
   ): Promise<EngineState> {
     const proc = this.opts.process;
     const bound = proc.now() + STOPPING_BOUND_MS;
@@ -584,7 +668,7 @@ export class EngineManager {
       if (proc.now() >= bound) {
         const minutes = Math.round((proc.now() - since) / 60_000);
         return await this.failed(
-          `the engine is still answering ${minutes} minutes after SIGTERM; see ${paths.engineLogPath}`,
+          `the engine is still answering ${minutes} minutes after it was asked to stop; see ${paths.engineLogPath}`,
         );
       }
       this.setState({ kind: 'stopping', since, pid, elapsedMs: proc.now() - since });

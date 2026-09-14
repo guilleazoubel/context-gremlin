@@ -30,7 +30,7 @@ export interface EngineManagerLike {
   state(): EngineState;
   onStateChange(cb: (state: EngineState) => void): () => void;
   ensureRunning(trigger?: Trigger): Promise<EngineState>;
-  stop(): Promise<EngineState>;
+  stop(trigger?: Trigger): Promise<EngineState>;
   restart(trigger?: Trigger): Promise<EngineState>;
   /** `GET /version`'s `activeRuns`, or `null` when nothing answered (R21). */
   activeRuns(): Promise<number | null>;
@@ -496,7 +496,8 @@ export class EngineSurface {
       STOP_ENGINE,
     );
     if (answer !== STOP_ENGINE) return;
-    await manager.stop();
+    // A person asked, in a modal, and said yes: the engine honours that whatever build it is on.
+    await manager.stop('user');
   }
 
   private async showLog(): Promise<void> {
@@ -540,7 +541,7 @@ function describe(state: EngineState): string {
     case 'running':
       return `running ${state.version} (pid ${state.pid}${state.adopted ? ', adopted' : ''})`;
     case 'stopping':
-      return `stopping (pid ${state.pid}, ${Math.round(state.elapsedMs / 1000)}s)`;
+      return `stopping (pid ${state.pid ?? 'unknown'}, ${Math.round(state.elapsedMs / 1000)}s)`;
     case 'mismatch':
       return `version mismatch: running ${state.running}, bundled ${state.bundled}`;
     case 'outdated':

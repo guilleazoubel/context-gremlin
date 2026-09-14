@@ -385,7 +385,9 @@ describe('MG-C2 never-kill-what-we-cannot-prove', () => {
     fake.probes = [identity(), identity(), null];
     fake.pidFiles = [pidFile()];
     await withClock(manager.stop(), 1_000);
-    expect(fake.order().slice(0, 5)).toEqual([
+    expect(fake.order().slice(0, 6)).toEqual([
+      // The request comes first, always; the proof exists for the engine that cannot answer it.
+      'requestShutdown',
       'readPidFile',
       'probe',
       'readPidFile',
@@ -937,10 +939,15 @@ describe('R-shutdown: stopping is a request the engine may refuse', () => {
     fake.pidFiles = [pidFile()];
     await withClock(manager.stop('auto'), 1_000);
     await withClock(manager.stop('user'), 1_000);
-    fake.probes = [identity()];
-    fake.spawnedAnswer = identity();
-    await withClock(manager.restart('auto'), 2_000);
-    await withClock(manager.restart('user'), 2_000);
+    // A refusal ends a restart there and then, which is all this case needs to read the reason off.
+    fake.shutdownOutcome = {
+      kind: 'refused',
+      reason: 'engine is newer than the requester',
+      engineBuildTime: NEWER,
+    };
+    fake.probes = [identity({ buildId: 'bbbbbbbbbbbbbbbb', buildTime: NEWER })];
+    await manager.restart('auto');
+    await manager.restart('user');
     expect(fake.shutdowns.map((s) => s.reason)).toEqual(['stop', 'user', 'restart', 'user']);
   });
 });
