@@ -738,6 +738,10 @@ describe.skipIf(!coreIsBuilt())('integration: the extension against a real engin
     }, TIMEOUT);
 
     it('turns an AGENT_STATE write by the agent into a frame and a refetch, and no popup (R7)', async () => {
+      // Earlier tests in this describe legitimately offer the managed-workspace toast when they
+      // open an item, and the host records calls for the whole file — so count from here, not zero.
+      const infoBefore = host.callsOf('showInformationMessage').length;
+      const warnBefore = host.callsOf('showWarningMessage').length;
       await writeFile(
         path.join(h.sessionsDir, h.seeded.development, 'AGENT_STATE'),
         'needs-input',
@@ -753,7 +757,8 @@ describe.skipIf(!coreIsBuilt())('integration: the extension against a real engin
         { timeoutMs: 20_000, what: 'the AGENT_STATE write to reach the panel' },
       );
       // P10: the news is the panel's needs-you strip, the view badge and the status bar. No toast.
-      expect(host.callsOf('showInformationMessage')).toEqual([]);
+      expect(host.callsOf('showInformationMessage').slice(infoBefore)).toEqual([]);
+      expect(host.callsOf('showWarningMessage').slice(warnBefore)).toEqual([]);
     }, TIMEOUT);
   });
 
