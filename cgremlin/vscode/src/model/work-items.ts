@@ -66,6 +66,38 @@ export interface WorkItemPr {
   reviews?: { login: string; state: string; body: string | null }[] | null;
   checks?: { name: string; state: string; detailsUrl: string | null }[] | null;
   openThreads?: number | null;
+  /**
+   * What the PR IS: `open`/`draft` from the open-PR inventory, `merged`/`closed`
+   * from the engine's pr-state cache. **Optional**: an engine older than this
+   * contract sends nothing, which reads as "unknown" — never as merged, and
+   * never as open either (`isLanded` and `prState` both fall back to the old
+   * draft/reviewDecision wording).
+   */
+  state?: PrState | null;
+}
+
+export type PrState = 'open' | 'draft' | 'merged' | 'closed';
+
+/**
+ * Merged and closed are the terminal states: the code is in (or gone) and no
+ * verb points forward any more.
+ *
+ * The parameter is deliberately `string`-wide: the wire's `state` and the
+ * panel's own display wording (`prState`) coincide EXACTLY on the two
+ * terminal values, so the Item tab's `TabPr.state` — which is the display
+ * wording — can be asked the same question without a second field.
+ */
+export function isLandedPr(pr: { state?: string | null } | undefined): boolean {
+  return pr?.state === 'merged' || pr?.state === 'closed';
+}
+
+/**
+ * "The code is in." Every one of the item's PRs has landed — which SINKS the
+ * row rather than hiding it: the ticket behind it may well still be in UAT,
+ * and that is exactly the context the user asked to keep.
+ */
+export function isLandedItem(item: { prs: readonly { state?: string | null }[] }): boolean {
+  return item.prs.length > 0 && item.prs.every((pr) => isLandedPr(pr));
 }
 
 export interface WorkItemTicket {
@@ -80,6 +112,12 @@ export interface WorkItemTicket {
 
 export interface WorkItemAgent {
   sessionId: string;
+  /**
+   * The session's own repo slug (`owner/name`). **Optional**: an engine older
+   * than this contract sends none, and a ticket-led row then simply has no
+   * repo token, exactly as before.
+   */
+  repo?: string | null;
   mode: WorkAgentMode;
   phase: string;
   running: boolean;
@@ -88,6 +126,48 @@ export interface WorkItemAgent {
   primaryArtifact: string | null;
   worktreePath: string | null;
   ref: string;
+  /**
+   * PANEL-LOCAL optimism, never on the wire: this window has just asked the
+   * engine to start this stage and has not yet seen it in `/items`. It makes
+   * the row say so at once — the defect it answers is a click on `Start
+   * review` that silently moved the row to another section with nothing
+   * saying the work had begun ("nothing happened").
+   *
+   * A pending agent is INERT everywhere a real session id is required: no
+   * chat target, no child row, no `openChild`.
+   */
+  pending?: boolean;
+}
+
+/** The synthetic agent a just-started stage wears until `/items` carries the real one. */
+export function pendingAgentOf(mode: WorkAgentMode): WorkItemAgent {
+  return {
+    sessionId: '',
+    repo: null,
+    mode,
+    phase: 'starting',
+    running: true,
+    needsYou: false,
+    claimed: false,
+    primaryArtifact: null,
+    worktreePath: null,
+    ref: '',
+    pending: true,
+  };
+}
+
+/**
+ * The item as the panel should draw it while a start is in flight. A no-op
+ * once a REAL agent of that mode is on the item — which is how the optimism
+ * reconciles itself the moment `/items` catches up.
+ */
+export function withPendingStart(item: WorkItem, mode: WorkAgentMode): WorkItem {
+  if (item.agents.some((agent) => agent.mode === mode)) return item;
+  // Only the AGENTS change. `lists` and `parkingLotGroup` are the core's
+  // answer (D2, guarded by MG-B8) and are left exactly as they came: the row
+  // says what has begun where it already is, and moves when the engine moves
+  // it — selected and expanded, because the command revealed it.
+  return { ...item, agents: [...item.agents, pendingAgentOf(mode)] };
 }
 
 export interface WorkItem {
@@ -414,7 +494,8 @@ export type RowMetaKind =
   | 'landed'
   | 'ticketStatus'
   | 'prState'
-  | 'agentPhase';
+  | 'agentPhase'
+  | 'running';
 
 export interface RowMetaCell {
   kind: RowMetaKind;
@@ -425,7 +506,7 @@ export interface RowMetaCell {
    * panel assigns no DOM `title` at all (§3), so this reaches the reader through `aria-label`.
    */
   label?: string;
-  tone?: 'good' | 'warn' | 'bad';
+  tone?: 'good' | 'warn' | 'bad' | 'muted' | 'active';
 }
 
 export interface WorkRow {
@@ -685,7 +766,11 @@ export function titleProse(title: string): string {
 
 /** §2 L3's first and only shrinkable token: `apfm/grace-frontend` reads as `grace-frontend`. */
 export function repoTailOf(item: WorkItem): string {
-  const repo = item.prs[0]?.repo ?? '';
+  // The PR names the repo; where there is no PR (a ticket-led row, or one
+  // whose PR left the inventory) the SESSION does, and the work has a repo
+  // from the moment a session exists. A ticket with neither legitimately
+  // shows no repo at all — there is nothing yet to name.
+  const repo = item.prs[0]?.repo ?? item.agents.find((a) => (a.repo ?? '') !== '')?.repo ?? '';
   return repo === '' ? '' : (repo.split('/').pop() ?? '');
 }
 
@@ -834,13 +919,30 @@ function metaOf(
   const primary = item.prs[0];
   const cells: RowMetaCell[] = [];
 
+  const pushAgent = (agent: WorkItemAgent): void => {
+    cells.push(phaseCell(agent));
+    if (agent.running) cells.push(runningCell());
+  };
+
   if (list === 'investigations') {
-    for (const agent of item.agents) cells.push(phaseCell(agent));
+    for (const agent of item.agents) pushAgent(agent);
     cells.push({ kind: 'age', text: parts.age });
     return cells;
   }
 
   if (parts.repo !== '') cells.push({ kind: 'repo', text: parts.repo });
+
+  // Straight after the repo, because it changes what every token after it
+  // means: `grace · merged · UAT · 3d` reads "the code is in, the ticket is
+  // not done yet". Muted, one word, no glyph and no tooltip (§3).
+  if (isLandedPr(primary)) {
+    cells.push({
+      kind: 'prState',
+      text: primary?.state === 'closed' ? 'closed' : 'merged',
+      label: primary?.state === 'closed' ? 'PR closed without merging' : 'PR merged',
+      tone: 'muted',
+    });
+  }
 
   // The ONE thing each list's row answers (§1), in the slot the eye lands on after the repo.
   if (list === 'waitingForReview') {
@@ -848,9 +950,14 @@ function metaOf(
     if (landed !== '') cells.push({ kind: 'landed', text: landed });
   } else if (list === 'myWork') {
     if (item.ticket !== null) cells.push({ kind: 'ticketStatus', text: item.ticket.status });
-    for (const agent of item.agents) cells.push(phaseCell(agent));
-  } else if (item.parkingLotGroup === 'reviewing') {
-    for (const agent of item.agents) cells.push(phaseCell(agent));
+    for (const agent of item.agents) pushAgent(agent);
+  } else if (item.agents.length > 0) {
+    // An agent of ours outranks the author and the activity line wherever the
+    // row sits: "what is happening to this PR right now" is the answer the
+    // user is after, and a row whose review has just been started must not
+    // keep reading `@jane · 2w`. This is presentation, not membership — the
+    // group the row is IN stays the core's answer (D2).
+    for (const agent of item.agents) pushAgent(agent);
   } else if (item.parkingLotGroup === 'someoneOnIt' && parts.activity !== '') {
     cells.push({ kind: 'activity', text: parts.activity });
   } else if (primary?.author !== null && primary?.author !== undefined) {
@@ -869,6 +976,15 @@ function metaOf(
 
 function phaseCell(agent: WorkItemAgent): RowMetaCell {
   return { kind: 'agentPhase', text: `${MODE_GLYPH[agent.mode] ?? '•'} ${agent.phase}` };
+}
+
+/**
+ * The one token that says an agent is WORKING right now, beside the stage it
+ * is working on. A word, not a spinner and not an emoji: the user's complaint
+ * was that a started review was indistinguishable from one that never began.
+ */
+function runningCell(): RowMetaCell {
+  return { kind: 'running', text: 'running', label: 'an agent is running', tone: 'active' };
 }
 
 const CI_CELLS: Record<CiStatus, RowMetaCell | null> = {
@@ -986,6 +1102,11 @@ function order(rows: WorkRow[], sort: WorkSortKind, group: ParkingLotGroup | nul
 type EffectiveSort = WorkSortKind | 'needsYouThenOldest';
 
 function compare(a: WorkRow, b: WorkRow, sort: EffectiveSort): number {
+  // Ahead of every selected sort, and a KEY rather than a filter: landed work
+  // stays on the list (its ticket may still be live) but never above work
+  // that has not landed.
+  const landed = Number(isLandedItem(a.item)) - Number(isLandedItem(b.item));
+  if (landed !== 0) return landed;
   switch (sort) {
     case 'needsYouThenRecent':
       return byNeedsYou(a, b) || descending(recencyOf(a.item), recencyOf(b.item)) || byId(a, b);
@@ -1086,7 +1207,10 @@ export function chatTargetOfAgents(
 ): string | null {
   const eligible = agents.filter(
     (agent) =>
-      agent.mode !== 'respond' || agent.phase === 'addressing' || agent.phase === 'ready',
+      // A pending agent has no session to talk to yet: it is this window's
+      // own optimism, not something the engine has named.
+      (agent as { pending?: boolean }).pending !== true &&
+      (agent.mode !== 'respond' || agent.phase === 'addressing' || agent.phase === 'ready'),
   );
   if (eligible.length === 0) return null;
   const best =
@@ -1119,6 +1243,9 @@ export function agentOfChildId(childId: string | null | undefined): string | nul
 export function buildItemChildren(item: WorkItem): WorkChild[] {
   const children: WorkChild[] = [];
   for (const agent of item.agents) {
+    // A pending agent has no session yet: a child row for it would address
+    // the engine with an id it has never heard of.
+    if (agent.pending === true) continue;
     children.push({
       kind: 'agent',
       id: `agent:${agent.sessionId}`,
@@ -1155,6 +1282,10 @@ export function buildItemChildren(item: WorkItem): WorkChild[] {
 }
 
 export function prState(pr: WorkItemPr): string {
+  // The terminal states outrank everything: a merged PR that was approved is
+  // merged, and saying `approved` there is what kept offering a review of it.
+  if (pr.state === 'merged') return 'merged';
+  if (pr.state === 'closed') return 'closed';
   if (pr.isDraft === true) return 'draft';
   if (pr.reviewDecision === 'APPROVED') return 'approved';
   if (pr.reviewDecision === 'CHANGES_REQUESTED') return 'changes_requested';

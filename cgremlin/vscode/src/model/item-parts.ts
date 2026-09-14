@@ -15,7 +15,7 @@
  * Pure module — no editor API (MG-B1).
  */
 import type { LifecycleSlot } from './lifecycle';
-import { chatTargetOfAgents, prState, sizeOf, type WorkItem, type WorkListKind } from './work-items';
+import { chatTargetOfAgents, isLandedPr, prState, sizeOf, type WorkItem, type WorkListKind } from './work-items';
 import { nextStages, type ActionFacts, type RowAction, type StageKind } from './row-actions';
 
 export type PartKind = StageKind | 'ticket' | 'pr';
@@ -105,7 +105,9 @@ export function itemParts(input: ItemPartsInput): ItemPart[] {
       kind: 'pr',
       name: `${pr.repo}#${pr.number}`,
       glyph: '◇',
-      state: '',
+      // The one PR state the stylesheet cares about: a landed PR is muted,
+      // because the row is still here for its ticket, not for the change.
+      state: isLandedPr(pr) ? prState(pr) : '',
       stateText: prStateText(pr, input.now),
       detail: peopleLine(pr),
       childId,

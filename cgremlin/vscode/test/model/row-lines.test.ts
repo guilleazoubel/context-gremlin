@@ -73,6 +73,8 @@ describe('task 2 — line one is keys, line two is prose, line three is signals'
         'In Progress',
         '∴ plan_ready',
         '◆ developing',
+        // P: a running agent is unmistakable on the collapsed row.
+        'running',
         '6d',
         'L',
         '12 files +300/−80',

@@ -26,6 +26,8 @@ export interface LifecycleAgent {
   needsYou: boolean;
   primaryArtifact: string | null;
   worktreePath?: string | null;
+  /** Panel-local: a start this window has asked for and not yet seen in `/items`. */
+  pending?: boolean;
 }
 
 export interface LifecycleSlot {
@@ -75,7 +77,10 @@ export function lifecycleSlots(input: LifecycleInput): LifecycleSlot[] {
       glyph: GLYPHS[stage],
       state,
       stateText: stateTextOf(state, agent, input.artifactAt?.[agent?.sessionId ?? ''] ?? null, now),
-      sessionId: agent?.sessionId ?? null,
+      // A pending agent (this window's optimism while a start is in flight)
+      // names no session: the slot says `running`, and nothing addressable
+      // hangs off it until `/items` carries the real one.
+      sessionId: agent?.pending === true ? null : (agent?.sessionId ?? null),
       next: allowed.has(stage),
     };
   });
