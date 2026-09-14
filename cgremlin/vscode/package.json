@@ -82,6 +82,11 @@
         "category": "cgremlin"
       },
       {
+        "command": "cgremlin.renameItem",
+        "title": "Rename item...",
+        "category": "cgremlin"
+      },
+      {
         "command": "cgremlin.openPr",
         "title": "Open pull request",
         "category": "cgremlin"
@@ -206,6 +211,10 @@
         },
         {
           "command": "cgremlin.startDevelopment",
+          "when": "false"
+        },
+        {
+          "command": "cgremlin.renameItem",
           "when": "false"
         },
         {

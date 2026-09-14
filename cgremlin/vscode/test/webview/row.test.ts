@@ -35,6 +35,7 @@ function rowView(over: Partial<PanelRowView> = {}): PanelRowView {
     identity: '#101',
     identityKeys: ['#101'],
     description: 'Fix hydration on /communities',
+    descriptionIsOwn: false,
     badges: [],
     chips: [],
     age: '12d',
@@ -106,6 +107,17 @@ describe('§2 — three lines, fixed order, fixed meaning', () => {
     expect(desc.hidden).toBe(false);
   });
 
+  it('marks line two as the user’s own when he wrote it — in a word, never a pictogram', () => {
+    const derived = build().byClass('row-desc-mark')[0];
+    expect(derived.textContent).toBe('');
+    expect(derived.hidden).toBe(true);
+
+    const own = build({ description: 'The one nobody owns', descriptionIsOwn: true });
+    expect(own.byClass('row-desc-text')[0].textContent).toBe('The one nobody owns');
+    expect(own.byClass('row-desc-mark')[0].textContent).toBe('yours');
+    expect(own.byClass('row-desc-mark')[0].hidden).toBe(false);
+  });
+
   it('does not render line two as a blank gap when there is nothing to say', () => {
     const node = build({ description: '' });
     const desc = node.byClass('row-desc')[0];
@@ -171,7 +183,7 @@ describe('§2 — one shrinkable child per line', () => {
       .map(([selector]) => selector);
     // `.id-keys` is a wrapper, not a token: it may shrink so that the line can, but nothing in
     // it ever truncates (L1 is ≤14 characters by construction).
-    expect(shrinkable).toEqual(['.id-keys', '.row-desc', '.cell-repo']);
+    expect(shrinkable).toEqual(['.id-keys', '.row-desc', '.row-desc-text', '.cell-repo']);
   });
 
 

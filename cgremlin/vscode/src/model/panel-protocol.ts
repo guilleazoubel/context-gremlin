@@ -34,6 +34,11 @@ export interface PanelRowView {
   identityKeys: string[];
   /** §2 L2 — the prose, or empty when the line is not drawn at all. */
   description: string;
+  /**
+   * Item 1: whether that prose is the title the USER wrote (`model/item-title`) rather than
+   * anything derived. The row draws a small mark beside it — his line, and he can tell.
+   */
+  descriptionIsOwn: boolean;
   badges: string[];
   chips: string[];
   /** Rendered cells, already `—` where the field took its R45 default (MG-12). */

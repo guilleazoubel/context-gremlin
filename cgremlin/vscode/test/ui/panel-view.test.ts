@@ -333,6 +333,8 @@ describe('R42/R51/P0-2 the row actions are a rule about the LIST', () => {
     expect(actionsOf(h, 'parkingLot', 'pr:acme/web#101')).toEqual([
       'cgremlin.startReview',
       'cgremlin.openPr',
+      // Item 1: naming a row is not a rule about a list, so it is on every row of every one.
+      'cgremlin.renameItem',
     ]);
   });
 

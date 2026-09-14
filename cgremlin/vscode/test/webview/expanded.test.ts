@@ -58,6 +58,7 @@ function rowView(over: Partial<PanelRowView> = {}): PanelRowView {
     identity: 'HB-627',
     identityKeys: ['HB-627'],
     description: 'Convert the tour scheduler to RSC',
+    descriptionIsOwn: false,
     badges: [],
     chips: [],
     age: '2d',

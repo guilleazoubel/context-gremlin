@@ -434,6 +434,8 @@ body {
 }
 
 .row-desc {
+  display: flex;
+  align-items: baseline;
   margin-top: 2px;
   font-size: 12px;
   font-weight: 400;
@@ -441,11 +443,31 @@ body {
   /* One step under the identity, by COLOUR rather than by weight: nothing about a row's type
    * changes when its state does, so no state can reflow it. */
   color: color-mix(in srgb, var(--vscode-foreground) 80%, transparent);
-  /* The one shrinkable child of line two. */
+  min-width: 0;
+}
+
+/* The one shrinkable child of line two. */
+.row-desc-text {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/*
+ * Item 1: the row's own title is the user's, and it says so in a word rather than a pictogram —
+ * the same reason CI says "CI failing" (§3). It never takes the prose's space: `flex: 0 0 auto`
+ * keeps the ellipsis on the sentence, which is the part worth reading.
+ */
+.row-desc-mark {
+  flex: 0 0 auto;
+  margin-left: 6px;
+  padding: 0 3px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--vscode-descriptionForeground) 16%, transparent);
+  color: var(--vscode-descriptionForeground);
+  font-size: 10px;
+  line-height: 1.5;
 }
 
 .row-signals {

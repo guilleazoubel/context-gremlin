@@ -12,9 +12,11 @@
  */
 import { engineErrorText, type CoreClient, type HttpResult } from '../core-client';
 import { refreshBlockedMessage } from '../model/engine-trouble';
+import { readTitle, writeTitle } from '../model/item-title';
 import {
   agentOfChildId,
   chatTargetOf,
+  descriptionOf,
   itemPathOf,
   type ItemFocus,
   type WorkItem,
@@ -207,6 +209,29 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
       if (!surface(await client.startAgent(path, { mode: 'respond' }))) return;
       coordinator.schedule();
       await itemTab.open(path);
+    }),
+
+    /**
+     * Item 1: the user's own name for a row. Reachable from the expanded area and from the
+     * palette-free command the panel posts; an empty input clears it, and the derived description
+     * comes back. Nothing is sent to the engine — the core has no field for this, and the panel
+     * is not going to become a writer of work items.
+     */
+    host.registerCommand('cgremlin.renameItem', async (arg) => {
+      const item = needsItem(arg);
+      if (item === null) return;
+      const current = readTitle(host, item);
+      const value = await host.showInputBox({
+        title: 'Rename item',
+        prompt: 'Your own title for this item. Leave it empty to go back to the derived one.',
+        // The derived line as the placeholder, so the user can see what he is replacing.
+        placeHolder: descriptionOf(item),
+        value: current,
+        ignoreFocusOut: true,
+      });
+      if (value === undefined) return;
+      writeTitle(host, item, value);
+      panel.reloadTitles();
     }),
 
     host.registerCommand('cgremlin.startInvestigation', (arg) =>

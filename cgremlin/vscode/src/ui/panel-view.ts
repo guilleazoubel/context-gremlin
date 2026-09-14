@@ -17,6 +17,7 @@ import crypto from 'node:crypto';
 import { changeSummary, type SessionChanges } from '../model/changes';
 import { detailSignatureOf, lifecycleSlots } from '../model/lifecycle';
 import { itemParts } from '../model/item-parts';
+import { readTitle } from '../model/item-title';
 import { itemActionFacts, rowActions } from '../model/row-actions';
 import {
   buildItemChildren,
@@ -392,13 +393,19 @@ export class PanelView implements WebviewViewProviderLike {
   private rowView(row: WorkRow): PanelRowView {
     const expanded = this.expandedId === row.id;
     const actions = actionsFor(row.item, row.list);
+    // Item 1: the user's own title wins over everything derived, and the row says so — in the
+    // accessible name here, and as a mark beside L2 in the webview.
+    const own = readTitle(this.deps.host, row.item);
+    const description = own === '' ? row.description : own;
+    const label = [row.identity, description].filter((part) => part !== '').join(' — ');
     return {
       id: row.id,
       list: row.list,
-      label: row.label,
+      label: own === '' ? label : `${label} (your title)`,
       identity: row.identity,
       identityKeys: row.identityKeys,
-      description: row.description,
+      description,
+      descriptionIsOwn: own !== '',
       badges: row.badges,
       chips: row.chips,
       age: row.age,
@@ -655,6 +662,14 @@ export class PanelView implements WebviewViewProviderLike {
     void this.deps.host.setState(EXPANDED_STATE_KEY, id);
   }
 
+  /**
+   * Item 1: the user has written (or cleared) his own title for an item. It lives in the host's
+   * global state rather than on the wire, so nothing refetches — the rows are simply rebuilt.
+   */
+  reloadTitles(): void {
+    this.render();
+  }
+
   /** Re-reads the persisted sorts — used when the host state changed behind the panel's back. */
   reloadSorts(): void {
     for (const list of Object.keys(this.sorts) as WorkListKind[]) {
@@ -686,7 +701,11 @@ function focusOptionsOf(sections: readonly PanelSectionView[]): PanelFocusOption
 export function actionsFor(item: WorkItem, list: WorkListKind): PanelActionView[] {
   // §4: `Ack` renders only while something needs you AND you have not already said so. The rule
   // table cannot see the acknowledgement, so the one field it lacks is applied here.
-  return rowActions(itemActionFacts(item), list).filter(
+  const actions = rowActions(itemActionFacts(item), list).filter(
     (action) => action.command !== 'cgremlin.ack' || !item.attention.acked,
   );
+  // Item 1: naming a row is never a rule about a list, which is why it is added here rather than
+  // in the shared table — the Item tab's buttons are about the WORK, and this is about the panel.
+  actions.push({ command: 'cgremlin.renameItem', label: 'Rename', placement: 'inline' });
+  return actions;
 }
