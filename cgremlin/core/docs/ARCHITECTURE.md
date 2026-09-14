@@ -740,8 +740,10 @@ in `close()`'s `finally` *and* on a failed listen. It is therefore two things at
   pid would make every later `serve` refuse forever. This is the same posture
   `NodeLocalAppRunner.isOurListener` takes before it trusts a pgid.
 - **a stop the engine may refuse.** `POST /shutdown` is the primary way to stop an engine,
-  and the engine decides: the requester must prove its bundle is strictly newer than the
-  engine's own `buildTime`, or be a person (`reason: 'user'`). Anything else is `409` and the
+  and the engine decides: it refuses when, and only when, IT can prove it is the newer of the
+  two (the mirror of the extension's own `weAreNewer`), and a person (`reason: 'user'`) is never
+  refused. Two builds stamped at the same moment are one engine, so an ordinary same-build
+  restart still goes through; an older or undated window asking automatically gets `409` and the
   engine keeps serving. A signal is not a request — it carries no sender (POSIX puts it in
   `siginfo_t`, Node exposes none of it) and cannot be refused, so SIGTERM is left for the one
   case a request cannot cover: an engine that no longer answers its socket at all.

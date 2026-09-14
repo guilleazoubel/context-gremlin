@@ -128,8 +128,8 @@ describe('decideShutdown', () => {
     });
   });
 
-  it('refuses an older, an equal and an unknown requester asking for a restart', () => {
-    for (const requesterBuildTime of [OLDER, ENGINE_BUILT, null]) {
+  it('refuses an older and an undated requester asking for a restart', () => {
+    for (const requesterBuildTime of [OLDER, null]) {
       expect(decideShutdown(ask({ requesterBuildTime }), ENGINE_BUILT)).toEqual({
         accepted: false,
         reason: ENGINE_IS_NEWER,
@@ -152,14 +152,27 @@ describe('decideShutdown', () => {
     );
   });
 
+  /**
+   * Two builds stamped at the same moment are ONE engine — `classify()`'s own verdict — so the
+   * ordinary same-build restart (a config save, a person's Restart) is never refused. Refusing it
+   * would leave every window unable to restart the engine it actually ships.
+   */
+  it('accepts a requester built at the very same moment as the engine', () => {
+    expect(decideShutdown(ask({ requesterBuildTime: ENGINE_BUILT }), ENGINE_BUILT)).toEqual({
+      accepted: true,
+    });
+    expect(decideShutdown(ask({ requesterBuildTime: null }), null)).toEqual({ accepted: true });
+  });
+
   /** An engine that cannot say when it was built orders as older than one that can — the same
    * rule the extension's own `classify()` applies, so the two sides can never disagree. */
   it('accepts any dated requester when the engine itself has no build time', () => {
     expect(decideShutdown(ask({ requesterBuildTime: OLDER }), null)).toEqual({ accepted: true });
-    expect(decideShutdown(ask({ requesterBuildTime: null }), null)).toEqual({
+    // …and one that IS dated refuses the window that is not: it cannot show it is not behind.
+    expect(decideShutdown(ask({ requesterBuildTime: null }), ENGINE_BUILT)).toEqual({
       accepted: false,
       reason: ENGINE_IS_NEWER,
-      engineBuildTime: null,
+      engineBuildTime: ENGINE_BUILT,
     });
   });
 });

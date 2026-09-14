@@ -5,8 +5,8 @@
  * they are. That asymmetry is the whole bug — a window still running a pre-ordering extension
  * build restarted the engine on any build mismatch, the newer window restarted it back, and
  * nothing in between could say no. `POST /shutdown` makes stopping a question the engine answers:
- * the requester must prove its bundle is strictly NEWER than the engine's, or a person must be
- * the one asking. Everything else is refused, and the engine keeps serving.
+ * the engine refuses when, and only when, IT can prove it is the newer of the two, and a person
+ * asking is never refused. A refusal leaves the engine serving and tells the window it is behind.
  *
  * The ordering is deliberately the same rule the extension's own `classify()` applies to decide
  * whether it may replace an engine, so the two sides can never reach opposite conclusions about
@@ -50,6 +50,12 @@ export function parseShutdownRequest(body: unknown): ShutdownRequest {
 /**
  * Pure, and the only place the order is decided. ISO-8601 timestamps compare correctly as
  * strings, which is what the extension's `classify()` already relies on.
+ *
+ * The refusal is the exact mirror of the extension's own `weAreNewer`: the engine says no when,
+ * and only when, IT is the one that can prove it is newer. Two builds stamped at the same moment
+ * are the same engine — that is `classify()`'s own verdict, and it is what keeps the ordinary
+ * same-build restart (a config save, a person's Restart) working; a requester that cannot say
+ * when it was built cannot show it is not the one that is behind, so it is refused.
  */
 export function decideShutdown(
   request: ShutdownRequest,
@@ -57,9 +63,10 @@ export function decideShutdown(
 ): ShutdownDecision {
   if (request.reason === 'user') return { accepted: true };
   const theirs = request.requesterBuildTime;
-  const requesterIsNewer = theirs !== null && (engineBuildTime === null || theirs > engineBuildTime);
-  if (requesterIsNewer) return { accepted: true };
-  return { accepted: false, reason: ENGINE_IS_NEWER, engineBuildTime };
+  const engineIsNewer =
+    engineBuildTime !== null && (theirs === null || engineBuildTime > theirs);
+  if (engineIsNewer) return { accepted: false, reason: ENGINE_IS_NEWER, engineBuildTime };
+  return { accepted: true };
 }
 
 export interface ShutdownInstall {

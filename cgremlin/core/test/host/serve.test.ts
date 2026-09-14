@@ -912,18 +912,25 @@ describe('serve — POST /shutdown', () => {
     }
   });
 
-  it('refuses a requester that cannot prove it is newer, and keeps serving', async () => {
+  /**
+   * An engine built from a checkout has no build time, so it can never claim to be the newer of
+   * the two and refuses nobody — the dev flow keeps working. The refusal itself is proved where
+   * the engine's build time can be set: `test/api/shutdown-route.test.ts`, and against two real
+   * bundles in the extension's own integration suite.
+   */
+  it('refuses nothing it cannot prove it is newer than, and a bad request changes nothing', async () => {
     const handle = await serve(testConfig(), testAdapters(), { log: () => {} });
     try {
-      const res = await requestOn(handle.socketPath, 'POST', '/shutdown', ask({ requesterBuildTime: null }));
-      expect(res.status).toBe(409);
-      expect(res.body).toMatchObject({ accepted: false, engineBuildTime: null });
+      const bad = await requestOn(handle.socketPath, 'POST', '/shutdown', { reason: 'whenever' });
+      expect(bad.status).toBe(400);
       await new Promise((r) => setTimeout(r, 20));
       expect(await requestOn(handle.socketPath, 'GET', '/sessions')).toEqual({
         status: 200,
         body: { sessions: [] },
       });
       expect(existsSync(path.join(dir, 'engine.json'))).toBe(true);
+      // …and an undated requester is accepted by an equally undated engine: same build, no order.
+      expect((await requestOn(handle.socketPath, 'POST', '/shutdown', ask({ requesterBuildTime: null }))).status).toBe(202);
     } finally {
       await handle.close();
     }
