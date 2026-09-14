@@ -365,7 +365,7 @@ describe('R48 the three focuses', () => {
     h.ready();
     const pr = h.state().prs.find((p) => p.number === 310);
     expect(pr?.state).toBe('approved');
-    expect(pr?.ci).toBe('🟢');
+    expect(pr?.ci).toBe('●');
     expect(pr?.changedFiles).toBe(12);
   });
 

@@ -566,6 +566,7 @@ body {
 .part-glyph {
   flex: 0 0 auto;
   width: 14px;
+  color: var(--vscode-descriptionForeground);
   font-size: 11px;
   line-height: 1.5;
   text-align: center;

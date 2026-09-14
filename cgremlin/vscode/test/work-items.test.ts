@@ -157,12 +157,12 @@ describe('MG-B8 the row description', () => {
     const built = lists();
     const hb = built.myWork.sections[0].rows.find((r) => r.id === 'ticket:HB-627');
     if (hb === undefined) throw new Error('no HB-627 row');
-    expect(hb.badges).toEqual(['I❗', 'D🔄']);
+    expect(hb.badges).toEqual(['I!', 'D⟳']);
     expect(hb.chips).toEqual(['acme/web#310', 'acme/api#88']);
     // §2.2 rule 7: compact. "opened … ago" cost seven characters in a 300 px sidebar.
     expect(hb.age).toBe('6d');
     expect(hb.size).toBe('12 files +300/−80');
-    expect(hb.ci).toBe('🟢');
+    expect(hb.ci).toBe('●');
     // P10: the date is the point of the line — "reviewed" with no date cannot be acted on.
     expect(hb.activity).toBe('@dana reviewed 5h');
     expect(hb.meta.map((cell) => cell.text)).toContain('6d');
@@ -174,8 +174,8 @@ describe('MG-B8 the row description', () => {
     const respond = built.waitingForReview.sections[0].rows.find(
       (r) => r.id === 'pr:acme/web#200',
     );
-    expect(respond?.badges).toEqual(['C🔄']);
-    expect(built.investigations.sections[0].rows[0].badges).toEqual(['I👤']);
+    expect(respond?.badges).toEqual(['C⟳']);
+    expect(built.investigations.sections[0].rows[0].badges).toEqual(['I◉']);
   });
 
   it('summarises human activity as reviewed, commented or requested', () => {
@@ -480,11 +480,11 @@ describe('R48/MG-15 the children are the item parts', () => {
     const children = buildItemChildren(item);
     expect(children.map((c) => c.kind)).toEqual(['agent', 'agent', 'ticket', 'pr', 'pr']);
     expect(children.map((c) => c.label)).toEqual([
-      '🔍 Investigation · plan_ready',
-      '🔨 Development · developing',
-      '🎫 HB-627 — Caregiver inbox reshuffle (In Progress)',
-      '🔀 acme/web#310 — approved · 🟢',
-      '🔀 acme/api#88 — open · 🟡',
+      '∴ Investigation · plan_ready',
+      '◆ Development · developing',
+      '▣ HB-627 — Caregiver inbox reshuffle (In Progress)',
+      '◇ acme/web#310 — approved · ●',
+      '◇ acme/api#88 — open · ◐',
     ]);
   });
 
@@ -503,7 +503,7 @@ describe('R48/MG-15 the children are the item parts', () => {
     });
     const children = buildItemChildren(grown);
     expect(children).toHaveLength(6);
-    expect(children[2].label).toBe('💬 Respond · ready');
+    expect(children[2].label).toBe('❝ Respond · ready');
   });
 
   it('drops exactly one child when the ticket goes, and reports none for a bare item', () => {

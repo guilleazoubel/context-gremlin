@@ -60,7 +60,7 @@ describe('task 2 — line one is keys, line two is prose, line three is signals'
     expect(lines(rows().get('parkingLot/pr:acme/web#102') as WorkRow)).toEqual([
       '#102',
       'Drop the legacy shim',
-      ['web', '🔎 review_ready', '5d', 'L', '3 files +20/−400', 'CI failing'],
+      ['web', '◈ review_ready', '5d', 'L', '3 files +20/−400', 'CI failing'],
     ]);
   });
 
@@ -71,8 +71,8 @@ describe('task 2 — line one is keys, line two is prose, line three is signals'
       [
         'web',
         'In Progress',
-        '🔍 plan_ready',
-        '🔨 developing',
+        '∴ plan_ready',
+        '◆ developing',
         '6d',
         'L',
         '12 files +300/−80',
@@ -85,7 +85,7 @@ describe('task 2 — line one is keys, line two is prose, line three is signals'
     expect(lines(rows().get('investigations/session:inv-stacktrace-1') as WorkRow)).toEqual([
       'Investigate the nightly crash',
       '',
-      ['🔍 investigating', '7h'],
+      ['∴ investigating', '7h'],
     ]);
   });
 

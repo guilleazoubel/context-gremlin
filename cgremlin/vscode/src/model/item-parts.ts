@@ -36,10 +36,16 @@ export interface ItemPart {
   actions: RowAction[];
 }
 
+/**
+ * Geometric marks, never emoji: emoji size inconsistently in a sidebar, take a colour the theme
+ * does not control, and become a box wherever the emoji font is missing — and `font-src 'none'`
+ * (R38) means the panel cannot ship one. A hollow diamond is a PR, a filled one is work of mine,
+ * a nested one is a review of it, and a therefore-sign is a conclusion.
+ */
 const STAGE_GLYPHS: Record<StageKind, string> = {
-  investigation: '🔍',
-  development: '🔨',
-  review: '🔎',
+  investigation: '∴',
+  development: '◆',
+  review: '◈',
 };
 
 const START_COMMAND: Record<StageKind, string> = {
@@ -81,7 +87,7 @@ export function itemParts(input: ItemPartsInput): ItemPart[] {
       key: `ticket:${item.ticket.key}`,
       kind: 'ticket',
       name: item.ticket.key,
-      glyph: '🎫',
+      glyph: '▣',
       state: '',
       stateText: item.ticket.status,
       detail: '',
@@ -98,7 +104,7 @@ export function itemParts(input: ItemPartsInput): ItemPart[] {
       key: childId,
       kind: 'pr',
       name: `${pr.repo}#${pr.number}`,
-      glyph: '🔀',
+      glyph: '◇',
       state: '',
       stateText: prStateText(pr, input.now),
       detail: peopleLine(pr),

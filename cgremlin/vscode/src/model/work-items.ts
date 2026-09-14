@@ -617,11 +617,12 @@ const MODE_LETTER: Record<WorkAgentMode, string> = {
   development: 'D',
 };
 
+/** The same geometric marks the parts use (`model/item-parts`), and for the same reason. */
 const MODE_GLYPH: Record<WorkAgentMode, string> = {
-  review: '🔎',
-  respond: '💬',
-  investigation: '🔍',
-  development: '🔨',
+  review: '◈',
+  respond: '❝',
+  investigation: '∴',
+  development: '◆',
 };
 
 const MODE_NAME: Record<WorkAgentMode, string> = {
@@ -633,9 +634,9 @@ const MODE_NAME: Record<WorkAgentMode, string> = {
 
 /** Claim, then a live run, then the gate — the precedence the tree used before the panel (R18). */
 export function agentGlyph(agent: WorkItemAgent): string {
-  if (agent.claimed) return '👤';
-  if (agent.running) return '🔄';
-  if (agent.needsYou) return '❗';
+  if (agent.claimed) return '◉';
+  if (agent.running) return '⟳';
+  if (agent.needsYou) return '!';
   return '';
 }
 
@@ -644,9 +645,9 @@ function badgeOf(agent: WorkItemAgent): string {
 }
 
 const CI_DOTS: Record<CiStatus, string> = {
-  success: '🟢',
-  pending: '🟡',
-  failure: '🔴',
+  success: '●',
+  pending: '◐',
+  failure: '✕',
   none: '',
 };
 
@@ -667,7 +668,7 @@ export function sizeOf(pr: WorkItemPr | undefined): string {
 /**
  * R47: who is already on it — **with the date**, which is the whole question that group asks.
  *
- * `👤 @DavidAPFM commented` cannot tell a comment from this morning from one from three weeks
+ * `@DavidAPFM commented` cannot tell a comment from this morning from one from three weeks
  * ago, so the age goes on the line. What the wire carries is `{ reviewedBy, commentedBy, lastAt }`
  * and ONE timestamp for the PR, not one per actor — so every interaction is dated by the same
  * `lastAt`, and none of them is dated by a clock invented here (MG-12).
@@ -1054,7 +1055,7 @@ export function buildItemChildren(item: WorkItem): WorkChild[] {
     children.push({
       kind: 'ticket',
       id: `ticket:${ticket.key}`,
-      label: `🎫 ${ticket.key}${summary} (${ticket.status})`,
+      label: `▣ ${ticket.key}${summary} (${ticket.status})`,
       focus: { kind: 'ticket' },
       goTo: { kind: 'url', url: ticket.url },
       path: itemPathOf(`ticket:${ticket.key}`),
@@ -1065,7 +1066,7 @@ export function buildItemChildren(item: WorkItem): WorkChild[] {
     children.push({
       kind: 'pr',
       id: `pr:${pr.repo}#${pr.number}`,
-      label: `🔀 ${pr.repo}#${pr.number} — ${prState(pr)}${ci === '' ? '' : ` · ${ci}`}`,
+      label: `◇ ${pr.repo}#${pr.number} — ${prState(pr)}${ci === '' ? '' : ` · ${ci}`}`,
       focus: { kind: 'pr', repo: pr.repo, number: pr.number },
       goTo: { kind: 'url', url: pr.url },
       path: itemPathOf(`pr:${pr.repo}#${pr.number}`),

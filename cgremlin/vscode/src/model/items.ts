@@ -249,6 +249,6 @@ export interface ListItem {
   item: AttentionItem;
   label: string;
   description: string;
-  indicator: '' | '🔄' | '⏸️' | '✅' | '🛑' | '❗' | '👤';
+  indicator: '' | '⟳' | '◑' | '✓' | '■' | '!' | '◉';
   contextValue: string;
 }

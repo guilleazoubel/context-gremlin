@@ -58,9 +58,9 @@ const TITLES: Record<StageKind, string> = {
 
 /** Unicode, never an icon font — `font-src 'none'` would drop one silently (R38, R54). */
 const GLYPHS: Record<StageKind, string> = {
-  investigation: '🔍',
-  development: '🔨',
-  review: '🔎',
+  investigation: '∴',
+  development: '◆',
+  review: '◈',
 };
 
 export function lifecycleSlots(input: LifecycleInput): LifecycleSlot[] {
