@@ -17,7 +17,7 @@
 import { post } from './channel';
 import { patchCells } from './cells';
 import { el } from './dom';
-import { setAttr, setClass, setTabStop, setText } from './reconcile';
+import { reconcile, setAttr, setClass, setHidden, setTabStop, setText } from './reconcile';
 import type { PanelRowView } from '../../model/panel-protocol';
 
 export interface RowContext {
@@ -35,13 +35,12 @@ export function createRow(row: PanelRowView): HTMLElement {
   node.setAttribute('role', 'treeitem');
   node.setAttribute('aria-level', '1');
 
-  const main = el('div', 'row-main');
-  const title = el('div', 'row-title');
-  title.appendChild(el('span', 'twisty'));
-  title.appendChild(el('span', 'row-label'));
-  main.appendChild(title);
-  main.appendChild(el('div', 'row-meta'));
-  node.appendChild(main);
+  // Three lines, fixed order, fixed meaning (§2): the keys, the prose, the signals. No twisty:
+  // the row's state is said by the block it opens into, and a chevron on every line of a 300 px
+  // sidebar is a column of punctuation.
+  node.appendChild(el('div', 'row-id'));
+  node.appendChild(el('div', 'row-desc'));
+  node.appendChild(el('div', 'row-signals'));
 
   node.addEventListener('click', () => {
     post({ type: 'selectRow', id: node.dataset.id ?? '', list: node.dataset.list ?? '' });
@@ -64,9 +63,23 @@ export function patchRow(node: HTMLElement, row: PanelRowView, context: RowConte
   setAttr(node, 'aria-selected', String(row.selected));
   setAttr(node, 'aria-expanded', String(row.expanded));
 
-  setText(child(node, '.twisty'), row.expanded ? '▾' : '▸');
-  setText(child(node, '.row-label'), row.label);
-  patchCells(child(node, '.row-meta'), row.meta);
+  setAttr(node, 'aria-label', row.label);
+  patchKeys(child(node, '.row-id'), row.identityKeys);
+  const desc = child(node, '.row-desc');
+  setText(desc, row.description);
+  // An empty description is not a blank line: the row is two lines tall and says so (§2).
+  setHidden(desc, row.description === '');
+  patchCells(child(node, '.row-signals'), row.meta);
+}
+
+/** One span per key, keyed by position so a ticket that grows a PR patches rather than rebuilds. */
+function patchKeys(parent: HTMLElement, keys: readonly string[]): void {
+  reconcile(
+    parent,
+    keys.map((key, index) => ({ key: `${index}`, data: key })),
+    () => el('span', 'id-key'),
+    (node, key) => setText(node, key),
+  );
 }
 
 /** `instanceof HTMLElement` deliberately not used: this code is also driven against a fake DOM. */

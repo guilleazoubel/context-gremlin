@@ -5,6 +5,8 @@
  * every refresh loses `:hover` mid-click; a row whose height depends on hover moves the thing the
  * user was aiming at. Both are assertions about the mutation log, not about markup.
  */
+import fs from 'node:fs';
+import path from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createRow, patchRow, rowKey } from '../../src/webview/panel/row';
 import { setSink } from '../../src/webview/panel/channel';
@@ -28,6 +30,7 @@ function rowView(over: Partial<PanelRowView> = {}): PanelRowView {
     list: 'parkingLot',
     label: '#101 — Fix hydration on /communities',
     identity: '#101',
+    identityKeys: ['#101'],
     description: 'Fix hydration on /communities',
     badges: [],
     chips: [],
@@ -69,8 +72,6 @@ function build(over: Partial<PanelRowView> = {}): FakeElement {
   return node;
 }
 
-const textOf = (node: FakeElement, cls: string): string => node.byClass(cls)[0]?.textContent ?? '';
-
 /** Every `<button>` anywhere under the row — a walk, because the fake DOM has no selectors. */
 function buttonsIn(node: FakeElement): FakeElement[] {
   const found: FakeElement[] = [];
@@ -82,11 +83,30 @@ function buttonsIn(node: FakeElement): FakeElement[] {
   return found;
 }
 
-describe('what the row says without being hovered', () => {
-  it('carries its title and every signal as its own cell', () => {
+describe('§2 — three lines, fixed order, fixed meaning', () => {
+  it('puts the keys on line one, one span each, and never the prose', () => {
+    const node = build({ identity: 'HB-627 #310', identityKeys: ['HB-627', '#310'] });
+    const keys = node.byClass('row-id')[0].children;
+    expect(keys.map((key) => key.className)).toEqual(['id-key', 'id-key']);
+    expect(keys.map((key) => key.textContent)).toEqual(['HB-627', '#310']);
+  });
+
+  it('puts the description on line two, as one text node', () => {
     const node = build();
-    expect(textOf(node, 'row-label')).toBe('#101 — Fix hydration on /communities');
-    const cells = node.byClass('row-meta')[0].children;
+    const desc = node.byClass('row-desc')[0];
+    expect(desc.textContent).toBe('Fix hydration on /communities');
+    expect(desc.hidden).toBe(false);
+  });
+
+  it('does not render line two as a blank gap when there is nothing to say', () => {
+    const node = build({ description: '' });
+    const desc = node.byClass('row-desc')[0];
+    expect(desc.textContent).toBe('');
+    expect(desc.hidden).toBe(true);
+  });
+
+  it('puts every signal on line three, as its own cell, repo first', () => {
+    const cells = build().byClass('row-signals')[0].children;
     expect(cells.map((cell) => cell.className)).toEqual([
       'cell cell-repo',
       'cell cell-author',
@@ -102,21 +122,38 @@ describe('what the row says without being hovered', () => {
   });
 
   it('renders no buttons at all — a collapsed row is purely informational', () => {
-    // The user said the per-row popup "shows all the time and it is really annoying". So the
-    // gutter, its one primary verb and the `⋯` popover are gone: every verb lives in the block
-    // the row opens into, and the collapsed row is title, signals and state.
     const node = build();
     expect(buttonsIn(node)).toEqual([]);
     expect(node.byClass('row-gutter')).toEqual([]);
-    expect(node.byClass('row-primary')).toEqual([]);
-    expect(node.byClass('row-more')).toEqual([]);
-    expect(node.byClass('row-overflow')).toEqual([]);
+    expect(node.byClass('twisty')).toEqual([]);
   });
 
   it('marks needs-you, demoted and selected as classes, not as extra content', () => {
     const node = build({ needsYou: true, demoted: true, selected: true });
     expect(node.className).toBe('row section-parkingLot needs-you demoted selected');
     expect(node.getAttribute('aria-selected')).toBe('true');
+  });
+});
+
+/**
+ * §2's truncation rule, which is a CSS rule and therefore asserted against the stylesheet: on
+ * every line EXACTLY ONE child may shrink, and every other child is `flex: 0 0 auto`. Two
+ * shrinkable children is how the old row ellipsised both the size and the age at 300 px.
+ */
+describe('§2 — one shrinkable child per line', () => {
+  const css = fs.readFileSync(path.resolve(__dirname, '../../media/panel.css'), 'utf8');
+
+  it('declares min-width:0 on the description and on the repo token, and on no other row part', () => {
+    const shrinkable = [...css.matchAll(/([^{}]+)\{([^}]*)\}/g)]
+      .map(([, selector, body]) => [selector.trim(), body] as const)
+      .filter(([selector]) => /^\.(row|cell|id-key)/.test(selector))
+      .filter(([, body]) => /min-width:\s*0\s*;/.test(body))
+      .map(([selector]) => selector);
+    expect(shrinkable).toEqual(['.row-desc', '.cell-repo']);
+  });
+
+  it('pins every other cell, so the right-hand cluster lines up down the column', () => {
+    expect(css).toMatch(/\.row-signals > \.cell\s*\{[^}]*flex:\s*0 0 auto/);
   });
 });
 
@@ -136,10 +173,11 @@ describe('what a patch does to a row that is already on screen', () => {
     expect(doc.log).toEqual([{ kind: 'text', tag: 'SPAN', key: 'cell cell-age', detail: '13d' }]);
   });
 
-  it('turns the twisty and aria-expanded when the row opens, and nothing else', () => {
+  it('turns aria-expanded when the row opens, and changes nothing else about the row', () => {
     const node = build();
     patchRow(node as unknown as HTMLElement, rowView({ expanded: true }), { focusedKey: null });
-    expect(doc.log.map((m) => m.detail)).toEqual(['aria-expanded=true', '▾']);
+    // No twisty to turn: what opens is a sibling block, and the row keeps its exact shape (§7).
+    expect(doc.log.map((m) => m.detail)).toEqual(['aria-expanded=true']);
   });
 
   it('moves the single tab stop without touching the row it left (R66)', () => {

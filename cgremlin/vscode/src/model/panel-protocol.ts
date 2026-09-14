@@ -30,6 +30,8 @@ export interface PanelRowView {
   label: string;
   /** §2 L1 — keys only. */
   identity: string;
+  /** L1 renders one span per key (§8), so the split is the model's rather than the view's. */
+  identityKeys: string[];
   /** §2 L2 — the prose, or empty when the line is not drawn at all. */
   description: string;
   badges: string[];

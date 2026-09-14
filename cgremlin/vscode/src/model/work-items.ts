@@ -353,6 +353,8 @@ export interface WorkRow {
   label: string;
   /** §2 L1 — KEYS only: `#4821`, `HB-627`, `HB-627 #4821`, or an investigation's own title. */
   identity: string;
+  /** The same thing, one entry per key, because L1 renders one span per key (§8). */
+  identityKeys: string[];
   /** §2 L2 — the ticket summary, else the PR title, else empty (the line is then not drawn). */
   description: string;
   /** §2 L3 — the signals, repo tail first and every other token fixed-width. */
@@ -498,7 +500,8 @@ export function toRow(item: WorkItem, list: WorkListKind, now: number): WorkRow 
   const tier = tierOf(primary);
   const ci = ciDot(primary?.ci ?? null);
   const activity = humanActivitySummary(primary, now);
-  const identity = identityOf(item);
+  const identityKeys = identityKeysOf(item);
+  const identity = identityKeys.join(' ');
   const description = descriptionOf(item);
   const badges = item.agents.map(badgeOf);
   const chips = item.prs.map((pr) => `${pr.repo}#${pr.number}`);
@@ -509,6 +512,7 @@ export function toRow(item: WorkItem, list: WorkListKind, now: number): WorkRow 
     item,
     label: [identity, description].filter((part) => part !== '').join(' — '),
     identity,
+    identityKeys,
     description,
     meta,
     tier,
@@ -539,13 +543,17 @@ export function toRow(item: WorkItem, list: WorkListKind, now: number): WorkRow 
  * title IS the identifier — it is the only name that work has.
  */
 export function identityOf(item: WorkItem): string {
+  return identityKeysOf(item).join(' ');
+}
+
+export function identityKeysOf(item: WorkItem): string[] {
   const keys: string[] = [];
   if (item.ticket !== null) keys.push(item.ticket.key);
   // The FIRST PR only: a second `#88` on the same line is the other PR's number, which reads as
   // part of the first one. Every PR is named in the block the row opens into (§4).
   const primary = item.prs[0];
   if (primary !== undefined) keys.push(`#${primary.number}`);
-  return keys.length === 0 ? item.title : keys.join(' ');
+  return keys.length === 0 ? [item.title] : keys;
 }
 
 /** §2 L2 — the prose, once. Empty means the line is not rendered, not that it is blank. */

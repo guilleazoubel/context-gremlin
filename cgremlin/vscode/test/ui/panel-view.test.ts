@@ -635,7 +635,7 @@ describe('R54 the look', () => {
       /--cg-divider:\s*color-mix\(in srgb, var\(--vscode-panel-border\) 40%, transparent\)/,
     );
     expect(css).toMatch(/\.row\s*\{[^}]*border-bottom:\s*1px solid var\(--cg-divider\)/);
-    expect(css).toMatch(/\.row-meta,\n\.row-state\s*\{[^}]*var\(--vscode-descriptionForeground\)/);
+    expect(css).toMatch(/\.row-signals\s*\{[^}]*var\(--vscode-descriptionForeground\)/);
     expect(css).toMatch(/:focus-visible[^}]*outline/);
   });
 
@@ -734,9 +734,10 @@ describe('the per-section accents', () => {
     expect(css).toMatch(/\.row\.needs-you\s*\{[^}]*box-shadow:\s*inset 2px 0 0 var\(--cg-accent\)/);
   });
 
-  it('sets the title a notch above the editor size and the signals below it', () => {
-    expect(css).toMatch(/\.row-title\s*\{[^}]*font-size:\s*calc\(var\(--vscode-font-size[^)]*\)[^}]*\}/);
-    expect(css).toMatch(/\.row-label\s*\{[^}]*font-weight:\s*600/);
-    expect(css).toMatch(/\.row-meta,\n\.row-state\s*\{[^}]*font-size:\s*11px/);
+  it('sets the three lines on the type scale §8 allows, and on nothing else', () => {
+    expect(css).toMatch(/\.row-id\s*\{[^}]*font-size:\s*var\(--vscode-font-size, 13px\)/);
+    expect(css).toMatch(/\.row-id\s*\{[^}]*font-weight:\s*600/);
+    expect(css).toMatch(/\.row-desc\s*\{[^}]*font-size:\s*12px/);
+    expect(css).toMatch(/\.row-signals\s*\{[^}]*font-size:\s*11px/);
   });
 });

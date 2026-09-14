@@ -61,6 +61,7 @@ export function stateOf(over: StateOptions = {}): PanelState {
             list: row.list,
             label: row.label,
             identity: row.identity,
+            identityKeys: row.identityKeys,
             description: row.description,
             badges: row.badges,
             chips: row.chips,

@@ -404,6 +404,7 @@ export class PanelView implements WebviewViewProviderLike {
       list: row.list,
       label: row.label,
       identity: row.identity,
+      identityKeys: row.identityKeys,
       description: row.description,
       badges: row.badges,
       chips: row.chips,

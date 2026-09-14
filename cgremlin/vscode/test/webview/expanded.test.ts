@@ -41,6 +41,7 @@ function rowView(over: Partial<PanelRowView> = {}): PanelRowView {
     list: 'myWork',
     label: 'HB-627 — Convert the tour scheduler to RSC',
     identity: 'HB-627',
+    identityKeys: ['HB-627'],
     description: 'Convert the tour scheduler to RSC',
     badges: [],
     chips: [],
