@@ -253,9 +253,7 @@ body {
 /* --- the row ----------------------------------------------------------- */
 
 .row {
-  display: grid;
-  grid-template-columns: 1fr 28px;
-  column-gap: 8px;
+  display: block;
   padding: 8px 10px;
   border-bottom: 1px solid var(--cg-divider);
   cursor: pointer;
@@ -285,6 +283,14 @@ body {
 
 .row-main {
   min-width: 0;
+}
+
+/* The rare verbs, on one line at the foot of the open block — never a popover. */
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 8px;
 }
 
 .row-title {
@@ -368,32 +374,13 @@ body {
   background: var(--vscode-charts-red);
 }
 
-/* --- the gutter (§2.2 rules 1 and 2) ------------------------------------ */
+/* --- the buttons, which now live only in the block a row opens into ------ */
 
-.row-gutter {
-  position: relative;
-  grid-row: 1;
-  grid-column: 2;
-  display: flex;
-  align-items: flex-start;
-  justify-content: flex-end;
-  gap: 2px;
-  opacity: 0;
-  transition: opacity 80ms ease;
-}
-
-.row:hover .row-gutter,
-.row:focus-within .row-gutter,
-.row.selected .row-gutter {
-  opacity: 1;
-}
-
-.row-primary,
-.row-more,
 .slot-open,
 .slot-chat,
 .slot-start,
 .part-goto,
+.row-action,
 .trouble-action {
   min-height: 24px;
   padding: 4px 8px;
@@ -405,54 +392,6 @@ body {
   font-size: 11px;
   white-space: nowrap;
   cursor: pointer;
-}
-
-/* The primary verb sits left of the gutter, which is only 28px wide: it may overhang. */
-.row-primary {
-  position: absolute;
-  right: 24px;
-  top: 0;
-}
-
-.row-more {
-  min-width: 24px;
-  padding: 4px 2px;
-  border-color: transparent;
-  background: transparent;
-  color: var(--vscode-descriptionForeground);
-}
-
-/* The popover: absolutely positioned, so opening it cannot change the row's height. */
-.row-overflow {
-  position: absolute;
-  top: 26px;
-  right: 0;
-  z-index: 2;
-  display: flex;
-  flex-direction: column;
-  min-width: 180px;
-  padding: 4px;
-  border: 1px solid var(--vscode-widget-border, var(--cg-divider));
-  border-radius: 4px;
-  background: var(--vscode-menu-background, var(--vscode-editorWidget-background));
-  box-shadow: 0 2px 8px var(--vscode-widget-shadow, transparent);
-}
-
-.row-overflow-item {
-  min-height: 24px;
-  padding: 4px 8px;
-  border: 0;
-  border-radius: 3px;
-  background: transparent;
-  color: var(--vscode-menu-foreground, var(--vscode-foreground));
-  font-family: inherit;
-  font-size: 12px;
-  text-align: left;
-  cursor: pointer;
-}
-
-.row-overflow-item:hover {
-  background: var(--vscode-menu-selectionBackground, var(--vscode-list-hoverBackground));
 }
 
 /* --- what a row opens into --------------------------------------------- */
@@ -572,19 +511,11 @@ body {
 .attention-item:focus-visible,
 .section-header:focus-visible,
 .sort:focus-visible,
-.row-primary:focus-visible,
-.row-more:focus-visible,
-.row-overflow-item:focus-visible,
+.row-action:focus-visible,
 .slot-open:focus-visible,
 .slot-chat:focus-visible,
 .slot-start:focus-visible,
 .part-goto:focus-visible {
   outline: 1px solid var(--vscode-focusBorder);
   outline-offset: -1px;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .row-gutter {
-    transition: none;
-  }
 }

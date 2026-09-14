@@ -55,7 +55,7 @@ export function setTitle(node: HTMLElement, title: string): void {
 }
 
 /**
- * §2.2 rule 1: `hidden`, never `display`. An overflow menu that enters the flow when it opens
+ * §2.2 rule 1: `hidden`, never `display`. A block that enters the flow when it appears
  * changes the row's height, which is the layout shift P0-4 is about.
  */
 export function setHidden(node: HTMLElement, hidden: boolean): void {

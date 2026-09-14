@@ -17,7 +17,6 @@
 import { post } from './channel';
 import { button, el } from './dom';
 import { createExpanded, expandedKey, patchExpanded } from './expanded';
-import { dismissOnScroll } from './overflow';
 import { reconcile, setAttr, setClass, setHidden, setTabStop, setText } from './reconcile';
 import { child, createRow, patchRow, rowKey } from './row';
 import type {
@@ -78,7 +77,6 @@ export function createList(list: PanelListView, context: ListContext): HTMLEleme
 
   const tree = el('div', 'tree');
   tree.setAttribute('role', 'tree');
-  dismissOnScroll(tree);
   tree.addEventListener('pointerenter', () => context.onPointer(true));
   tree.addEventListener('pointerleave', () => context.onPointer(false));
   node.appendChild(tree);

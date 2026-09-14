@@ -10,7 +10,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { createExpanded, patchExpanded } from '../../src/webview/panel/expanded';
 import { setSink } from '../../src/webview/panel/channel';
 import { FakeDocument, type FakeElement } from '../support/fake-dom';
-import type { PanelRowView, PanelSlotView } from '../../src/model/panel-protocol';
+import type { PanelActionView, PanelRowView, PanelSlotView } from '../../src/model/panel-protocol';
 
 let doc: FakeDocument;
 let posted: unknown[];
@@ -174,5 +174,71 @@ describe('the parts and the change counts', () => {
       null,
     );
     expect(doc.log.map((m) => m.detail)).toEqual(['8 files +240/−31', '2 files +12/−0']);
+  });
+});
+
+/**
+ * P10 — the row's gutter and its `⋯` popover are gone, so the expanded block is the ONLY place a
+ * verb lives. Which means it has to carry every verb: the ones the slots already offer, and the
+ * rare ones that have nowhere else to go — Ack, Open on GitHub, Open in Jira.
+ */
+const ACTIONS: PanelActionView[] = [
+  { command: 'cgremlin.startReview', label: 'Start self-review', placement: 'primary' },
+  { command: 'cgremlin.chat', label: 'Chat', childId: 'agent:dev-1', placement: 'inline' },
+  {
+    command: 'cgremlin.openPr',
+    label: 'Open acme/web#310',
+    childId: 'pr:acme/web#310',
+    placement: 'overflow',
+  },
+  {
+    command: 'cgremlin.openTicket',
+    label: 'Open HB-627',
+    childId: 'ticket:HB-627',
+    placement: 'overflow',
+  },
+  { command: 'cgremlin.ack', label: 'Ack', placement: 'overflow' },
+];
+
+describe('the action line', () => {
+  it('exposes every action the row has, once, between the line and the slots', () => {
+    const node = build({ actions: ACTIONS });
+    // The rare ones, in the line.
+    expect(node.byClass('row-action').map((b) => b.textContent)).toEqual([
+      'Open acme/web#310',
+      'Open HB-627',
+      'Ack',
+    ]);
+    // The other two are already verbs on the slots that own them — never said twice.
+    expect(textOf(slots(node)[2], 'slot-start')).toBe('Start self-review');
+    expect(slots(node)[1].byClass('slot-chat')[0].hidden).toBe(false);
+  });
+
+  it('posts the action it was clicked with, naming the part it is about', () => {
+    const node = build({ actions: ACTIONS });
+    node.byClass('row-action')[0].emit('click');
+    node.byClass('row-action')[2].emit('click');
+    expect(posted).toEqual([
+      {
+        type: 'command',
+        command: 'cgremlin.openPr',
+        id: 'ticket:HB-627',
+        childId: 'pr:acme/web#310',
+      },
+      { type: 'command', command: 'cgremlin.ack', id: 'ticket:HB-627' },
+    ]);
+  });
+
+  it('hides the line entirely when the slots already say everything', () => {
+    const node = build({ actions: [ACTIONS[0], ACTIONS[1]] });
+    expect(node.byClass('row-action')).toEqual([]);
+    expect(node.byClass('actions')[0].hidden).toBe(true);
+  });
+
+  it('assigns nothing on a patch over identical actions', () => {
+    const node = build({ actions: ACTIONS });
+    patchExpanded(node as unknown as HTMLElement, rowView({ actions: ACTIONS }), null);
+    expect(doc.log).toEqual([]);
+    expect(doc.writes).toEqual([]);
   });
 });

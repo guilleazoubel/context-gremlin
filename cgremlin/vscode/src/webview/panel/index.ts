@@ -20,7 +20,6 @@ import { post, setSink } from './channel';
 import { button, el } from './dom';
 import { installKeyboard } from './keyboard';
 import { createList, patchList, type ListContext } from './list';
-import { installOverflowDismissal } from './overflow';
 import { reconcile, setClass, setHidden, setText } from './reconcile';
 import { createStrip, patchStrip } from './strip';
 import type { HostToPanel, PanelState } from '../../model/panel-protocol';
@@ -199,8 +198,6 @@ function restoreFocus(): void {
   if (focusedKey === null) return;
   keyed.get(focusedKey)?.focus();
 }
-
-installOverflowDismissal();
 
 installKeyboard({
   nodes: () => nodes,

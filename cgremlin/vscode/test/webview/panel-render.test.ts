@@ -109,11 +109,17 @@ describe('P0-4 keyed reconciliation', () => {
 });
 
 describe('P0-4 the row keeps its height', () => {
-  it('has its action gutter in the row whether or not the pointer is there', () => {
+  it('puts no button in a collapsed row, so nothing in it can change its height', () => {
     panel.render(stateOf());
     const row = rowNodes().find((n) => n.dataset.key === 'row:parkingLot:pr:acme/web#101');
-    expect(row?.byClass('row-gutter')).toHaveLength(1);
-    expect(row?.byClass('row-gutter')[0].hidden).toBe(false);
+    expect(row?.byClass('row-gutter')).toEqual([]);
+    const buttons: string[] = [];
+    const walk = (at: { tagName: string; children: unknown[] }): void => {
+      if (at.tagName === 'BUTTON') buttons.push(at.tagName);
+      for (const child of at.children) walk(child as { tagName: string; children: unknown[] });
+    };
+    walk(row as unknown as { tagName: string; children: unknown[] });
+    expect(buttons).toEqual([]);
   });
 
   it('opens into a SIBLING block, so the row node itself never changes shape', () => {

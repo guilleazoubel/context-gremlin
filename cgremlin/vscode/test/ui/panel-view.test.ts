@@ -382,7 +382,8 @@ describe('R42/R51/P0-2 the row actions are a rule about the LIST', () => {
     const opens = (row?.actions ?? []).filter((a) => a.command === 'cgremlin.openPr');
     expect(opens.map((a) => a.label)).toEqual(['Open acme/web#310', 'Open acme/api#88']);
     expect((row?.actions ?? []).map((a) => a.command)).toContain('cgremlin.openTicket');
-    // The links are the overflow's job, never the one primary button (P1-5).
+    // The links stay `overflow`-placed: the Item tab still reads the placement, and the panel
+    // now renders every placement alike on the open row's action line.
     for (const action of opens) expect(action.placement).toBe('overflow');
   });
 
@@ -641,13 +642,14 @@ describe('R54 the look', () => {
   it('changes nothing but the background on hover (§2.2 rule 1)', () => {
     const hover = /\.row:hover\s*\{([^}]*)\}/.exec(css);
     expect(hover?.[1].trim()).toBe('background: var(--vscode-list-hoverBackground);');
-    // The gutter fades; it never enters or leaves the flow, which is what used to grow the row.
-    expect(css).toMatch(/\.row-gutter\s*\{[^}]*opacity:\s*0;/);
+    // There is no hover-revealed gutter left to fade: a collapsed row carries no control at all.
+    expect(css).not.toContain('.row-gutter');
+    expect(css).not.toContain('.row-overflow');
     expect(css).not.toMatch(/:hover[^{]*\{[^}]*display:/);
   });
 
   it('gives every hit target at least 24 px (§2.2 rule 2)', () => {
-    for (const selector of ['.row-primary', '.row-more', '.slot-start', '.row-overflow-item']) {
+    for (const selector of ['.row-action', '.slot-start', '.slot-open', '.part-goto']) {
       expect(css).toContain(selector);
     }
     expect(css.match(/min-height:\s*24px/g)?.length ?? 0).toBeGreaterThanOrEqual(3);

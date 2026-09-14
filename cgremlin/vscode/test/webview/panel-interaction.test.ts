@@ -87,12 +87,17 @@ describe('§4 — one click is one message', () => {
     ]);
   });
 
-  it('posts the verb alone when the click was on the row’s own button', () => {
-    panel.render(stateOf());
+  it('posts the verb alone when the click was on a button in the open block', () => {
+    panel.render(stateOf({ expanded: 'pr:acme/web#101' }));
     dom.posted.length = 0;
-    rowOf('row:parkingLot:pr:acme/web#101').byClass('row-primary')[0].emit('click');
+    dom.root.byClass('row-action')[0].emit('click');
     expect(dom.posted).toEqual([
-      { type: 'command', command: 'cgremlin.startReview', id: 'pr:acme/web#101' },
+      {
+        type: 'command',
+        command: 'cgremlin.openPr',
+        id: 'pr:acme/web#101',
+        childId: 'pr:acme/web#101',
+      },
     ]);
   });
 
@@ -106,25 +111,6 @@ describe('§4 — one click is one message', () => {
     expect(dom.posted).toEqual([
       { type: 'toggleGroup', list: 'parkingLot', group: 'someoneOnIt', collapsed: false },
     ]);
-  });
-
-  it('wires the popover dismissals into the panel itself, not only into the module', () => {
-    panel.render(stateOf());
-    const row = rowOf('row:parkingLot:pr:acme/web#101');
-    const menu = row.byClass('row-overflow')[0];
-    row.byClass('row-more')[0].emit('click');
-    expect(menu.hidden).toBe(false);
-
-    dom.document.emit('keydown', { key: 'Escape' });
-    expect(menu.hidden).toBe(true);
-
-    row.byClass('row-more')[0].emit('click');
-    dom.document.emit('pointerdown', { target: rowOf('row:parkingLot:pr:acme/legacy#9') });
-    expect(menu.hidden).toBe(true);
-
-    row.byClass('row-more')[0].emit('click');
-    dom.root.byClass('tree')[0].emit('scroll');
-    expect(menu.hidden).toBe(true);
   });
 
   it('changes a sort from its button', () => {

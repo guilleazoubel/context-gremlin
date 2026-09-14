@@ -5,6 +5,11 @@
  * changes only on that click, never on a refresh" can be true of the node the pointer is over: a
  * refresh may add or remove this block, and the row itself never changes shape.
  *
+ * Since the row's gutter and its `⋯` popover are gone, this block is also the ONLY place a verb
+ * lives — so it has to carry every one. The slots already own the ladder's Start and each stage's
+ * Chat; what is left over is the rare stuff with nowhere else to go (Ack, Open on GitHub, Open in
+ * Jira), and that goes on one line at the bottom rather than into a menu that pops up unasked.
+ *
  * The three slots are a real sequence — investigation, then development, then review — so the
  * stylesheet draws them on a spine. That is structure carrying information, not decoration: the
  * one place in the panel where the shape of the content is worth drawing.
@@ -14,8 +19,9 @@
 import { post } from './channel';
 import { button, el, glyph } from './dom';
 import { reconcile, setHidden, setTabStop, setText } from './reconcile';
-import { child } from './row';
+import { child, commandOf } from './row';
 import type {
+  PanelActionView,
   PanelChildView,
   PanelRowView,
   PanelSlotView,
@@ -45,6 +51,11 @@ export function createExpanded(): HTMLElement {
   changes.appendChild(changeLine('committed', 'Committed'));
   changes.appendChild(changeLine('working', 'Working tree'));
   node.appendChild(changes);
+
+  const actions = el('div', 'actions');
+  actions.setAttribute('role', 'group');
+  actions.setAttribute('aria-label', 'Actions');
+  node.appendChild(actions);
   return node;
 }
 
@@ -62,6 +73,40 @@ export function patchExpanded(node: HTMLElement, row: PanelRowView, focusedKey: 
   // `—` whenever the engine has not answered — the row never shows a fabricated zero (MG-12).
   setText(child(node, '.committed-value'), row.changes?.committed ?? '—');
   setText(child(node, '.working-value'), row.changes?.workingTree ?? '—');
+  patchActions(child(node, '.actions'), node, row);
+}
+
+/**
+ * Everything the slots above do not already offer. A verb said twice in one open row is the same
+ * clutter the popover was, so the slots' own Start and Chat are subtracted rather than repeated.
+ */
+function leftoverActions(row: PanelRowView): PanelActionView[] {
+  const taken = new Set<string>();
+  for (const slot of row.lifecycle) {
+    if (slot.start !== null) taken.add(keyOf(slot.start.command, slot.start.childId));
+    if (slot.sessionId !== null) taken.add(keyOf('cgremlin.chat', `agent:${slot.sessionId}`));
+  }
+  return row.actions.filter((action) => !taken.has(keyOf(action.command, action.childId)));
+}
+
+function keyOf(command: string, childId?: string): string {
+  return `${command}:${childId ?? ''}`;
+}
+
+function patchActions(parent: HTMLElement, root: HTMLElement, row: PanelRowView): void {
+  const left = leftoverActions(row);
+  setHidden(parent, left.length === 0);
+  reconcile(
+    parent,
+    left.map((action) => ({ key: keyOf(action.command, action.childId), data: action })),
+    (action) =>
+      button({
+        className: 'row-action',
+        label: action.label,
+        message: () => commandOf(root, action.command, action.childId),
+      }),
+    (node, action) => setText(node, action.label),
+  );
 }
 
 function patchSlots(parent: HTMLElement, root: HTMLElement, slots: readonly PanelSlotView[]): void {
