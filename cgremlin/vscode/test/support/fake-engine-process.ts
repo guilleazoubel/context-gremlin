@@ -11,6 +11,8 @@ import type {
   EnginePidFile,
   EngineProcessPort,
   ProbeResult,
+  ShutdownOutcome,
+  ShutdownRequestBody,
   SignalOutcome,
   SpawnSpec,
   SpawnedEngine,
@@ -54,6 +56,8 @@ export class FakeEngineProcess implements EngineProcessPort {
   readonly spawns: SpawnSpec[] = [];
   readonly signals: { pid: number; sig: string }[] = [];
   readonly rotations: { path: string; maxBytes: number }[] = [];
+  /** Every `POST /shutdown` the manager made — what it asked for, and in what order. */
+  readonly shutdowns: ShutdownRequestBody[] = [];
 
   /** Answered by `probe`, in order; the last one repeats. */
   probes: ProbeResult[] = [null];
@@ -67,6 +71,12 @@ export class FakeEngineProcess implements EngineProcessPort {
   pidFiles: (EnginePidFile | null)[] = [null];
   loginPath: string | null = '/login/bin:/usr/bin';
   signalOutcome: SignalOutcome = 'signalled';
+  /**
+   * What `POST /shutdown` answers. The default is an engine that does not answer the route at
+   * all — every pre-`/shutdown` case in this file is exactly that engine, and the SIGTERM
+   * fallback they assert is the one it earns.
+   */
+  shutdownOutcome: ShutdownOutcome = { kind: 'unavailable', detail: 'no /shutdown route' };
   tail: string[] = ['engine.log line'];
   /** `null` makes `spawnDetached` throw the way a child with no pid does. */
   nextPid: number | null = 9001;
@@ -130,6 +140,12 @@ export class FakeEngineProcess implements EngineProcessPort {
   async readPidFile(path: string): Promise<EnginePidFile | null> {
     this.record('readPidFile', path);
     return this.next(this.pidFiles);
+  }
+
+  async requestShutdown(socketPath: string, body: ShutdownRequestBody): Promise<ShutdownOutcome> {
+    this.record('requestShutdown', socketPath, body);
+    this.shutdowns.push(body);
+    return this.shutdownOutcome;
   }
 
   signal(pid: number, sig: 'SIGTERM'): SignalOutcome {
