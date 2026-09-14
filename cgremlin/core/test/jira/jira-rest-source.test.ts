@@ -215,6 +215,82 @@ describe('JiraRestSource: R32 — both pagination shapes, one fallback per scan'
     await src.search('x');
     expect(jqlHits).toBe(2);
   });
+
+  it('one scan with seeded keys pays the /search/jql 404 exactly once, not once per seeded lookup', async () => {
+    let jqlHits = 0;
+    stub.responder = (req, res) => {
+      if (req.pathname === '/rest/api/3/myself') {
+        return stub.json(res, JSON.stringify({ accountId: '712020:me', displayName: 'Me' }));
+      }
+      if (req.pathname === '/rest/api/3/search/jql') {
+        jqlHits += 1;
+        return stub.json(res, '{}', 404);
+      }
+      const jql = req.query.get('jql') ?? '';
+      const match = /^key = "([^"]+)"$/.exec(jql);
+      if (match !== null) {
+        // Every seeded key resolves in a single legacy page.
+        return stub.json(
+          res,
+          JSON.stringify({
+            startAt: 0,
+            maxResults: 1,
+            total: 1,
+            issues: [{ key: match[1], fields: { summary: `summary of ${match[1]}` } }],
+          }),
+        );
+      }
+      // The main JQL listing finds nothing of its own — everything comes from seeding.
+      return stub.json(res, JSON.stringify({ startAt: 0, maxResults: 50, total: 0, issues: [] }));
+    };
+    const store = new JiraStore(new InMemoryFileSystem(), '/state/jira.json');
+    const scanner = new JiraScanner({
+      source: source(),
+      store,
+      jql: 'assignee = currentUser()',
+      scanBudgetMs: 5_000,
+      seededKeys: async () => ['APP-1', 'APP-2', 'APP-3'],
+    });
+    const report = await scanner.run();
+    expect(report.kind).toBe('ok');
+    expect(report.seeded?.map((i) => i.key)).toEqual(['APP-1', 'APP-2', 'APP-3']);
+    // 404 paid once for the whole scan, not once for the main listing plus
+    // once per seeded key.
+    expect(jqlHits).toBe(1);
+    const legacyCalls = stub.requests.filter((r) => r.pathname === '/rest/api/3/search');
+    // 1 for the main listing + 3 for the seeded keys.
+    expect(legacyCalls.length).toBe(4);
+  });
+
+  it('a healthy site (where /search/jql works) never falls back to /search, seeded lookups included', async () => {
+    stub.responder = (req, res) => {
+      if (req.pathname === '/rest/api/3/myself') {
+        return stub.json(res, JSON.stringify({ accountId: '712020:me', displayName: 'Me' }));
+      }
+      const jql = req.query.get('jql') ?? '';
+      const match = /^key = "([^"]+)"$/.exec(jql);
+      if (match !== null) {
+        return stub.json(
+          res,
+          JSON.stringify({ issues: [{ key: match[1], fields: { summary: `summary of ${match[1]}` } }], isLast: true }),
+        );
+      }
+      return stub.json(res, JSON.stringify({ issues: [], isLast: true }));
+    };
+    const store = new JiraStore(new InMemoryFileSystem(), '/state/jira.json');
+    const scanner = new JiraScanner({
+      source: source(),
+      store,
+      jql: 'assignee = currentUser()',
+      scanBudgetMs: 5_000,
+      seededKeys: async () => ['APP-1', 'APP-2'],
+    });
+    const report = await scanner.run();
+    expect(report.kind).toBe('ok');
+    expect(report.seeded?.map((i) => i.key)).toEqual(['APP-1', 'APP-2']);
+    expect(stub.requests.filter((r) => r.pathname === '/rest/api/3/search/jql').length).toBe(3);
+    expect(stub.requests.some((r) => r.pathname === '/rest/api/3/search')).toBe(false);
+  });
 });
 
 describe('JiraRestSource: failures', () => {

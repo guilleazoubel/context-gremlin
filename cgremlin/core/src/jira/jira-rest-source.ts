@@ -79,6 +79,18 @@ export class JiraRestSource implements JiraSource {
   private readonly timeoutMs: number;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly authorization: string;
+  /**
+   * R32: whether this site's `/search/jql` is gone (404/410), decided ONCE
+   * per scan and reused by every `search()` call the REST of that scan makes
+   * — the main JQL listing AND every seeded-ticket lookup, which all share
+   * the scan's one `AbortSignal` (see `JiraScanner.scan()`). Keyed on that
+   * signal (rather than cached forever on the adapter) so a later, distinct
+   * scan still gets its own probe — a site can come back, and a caller with
+   * no signal at all (a bare `search()` in a test, say) is never cached.
+   * Without this, each call re-probes `/search/jql` and pays its own 404
+   * before falling back, turning one scan's fallback into N of them.
+   */
+  private readonly legacyOnlyForSignal = new WeakMap<AbortSignal, true>();
 
   constructor(private readonly opts: JiraRestSourceOptions) {
     this.fetchImpl = opts.fetch ?? globalThis.fetch;
@@ -208,10 +220,15 @@ export class JiraRestSource implements JiraSource {
     const issues: JiraIssueSummary[] = [];
 
     // R32: `/search/jql` first, paging by nextPageToken. A 404 or 410 means
-    // this instance has not migrated (or has un-migrated), and the fallback
-    // fires ONCE PER SCAN — the flag below lives for the duration of this
-    // call only, so a two-page result cannot issue four requests and the two
-    // cursor schemes are never interleaved.
+    // this instance has not migrated (or has un-migrated); once THAT is
+    // discovered it is cached against this scan's signal, so every later
+    // call this scan makes (the main JQL listing AND every seeded-ticket
+    // lookup) goes straight to the legacy endpoint instead of re-probing
+    // `/search/jql` and re-paying its 404.
+    if (opts?.signal !== undefined && this.legacyOnlyForSignal.has(opts.signal)) {
+      return this.searchLegacy(jql, maxResults, opts);
+    }
+
     let nextPageToken: string | undefined;
     for (;;) {
       const { status, body } = await this.get(
@@ -220,7 +237,10 @@ export class JiraRestSource implements JiraSource {
         opts,
         [404, 410],
       );
-      if (status === 404 || status === 410) return this.searchLegacy(jql, maxResults, opts);
+      if (status === 404 || status === 410) {
+        if (opts?.signal !== undefined) this.legacyOnlyForSignal.set(opts.signal, true);
+        return this.searchLegacy(jql, maxResults, opts);
+      }
       const page = body as { issues?: RawIssue[]; nextPageToken?: string; isLast?: boolean } | null;
       for (const raw of page?.issues ?? []) issues.push(this.toSummary(raw));
       if (page?.isLast === true) break;
