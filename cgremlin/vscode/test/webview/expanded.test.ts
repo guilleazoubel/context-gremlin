@@ -68,6 +68,7 @@ function rowView(over: Partial<PanelRowView> = {}): PanelRowView {
     ],
     changes: null,
     actions: [],
+    people: [],
     ...over,
   };
 }
@@ -238,6 +239,38 @@ describe('the action line', () => {
   it('assigns nothing on a patch over identical actions', () => {
     const node = build({ actions: ACTIONS });
     patchExpanded(node as unknown as HTMLElement, rowView({ actions: ACTIONS }), null);
+    expect(doc.log).toEqual([]);
+    expect(doc.writes).toEqual([]);
+  });
+});
+
+/**
+ * "Someone is on it" is the group the user cannot act on without knowing WHO and WHEN. The
+ * collapsed row carries the strongest one; the open row carries all of them.
+ */
+describe('who has been on it', () => {
+  const PEOPLE = [
+    { login: 'jane', kind: 'reviewed' as const, verdict: 'approved', age: '2d ago' },
+    { login: 'DavidAPFM', kind: 'commented' as const, verdict: null, age: '2d ago' },
+  ];
+
+  it('lists every interaction as login, kind and age', () => {
+    const node = build({ people: PEOPLE });
+    expect(node.byClass('person').map((p) => p.textContent)).toEqual([
+      '@jane · reviewed (approved) · 2d ago',
+      '@DavidAPFM · commented · 2d ago',
+    ]);
+  });
+
+  it('hides the block entirely when no human has touched it', () => {
+    const node = build();
+    expect(node.byClass('person')).toEqual([]);
+    expect(node.byClass('people')[0].hidden).toBe(true);
+  });
+
+  it('assigns nothing on a patch over the same people', () => {
+    const node = build({ people: PEOPLE });
+    patchExpanded(node as unknown as HTMLElement, rowView({ people: PEOPLE }), null);
     expect(doc.log).toEqual([]);
     expect(doc.writes).toEqual([]);
   });

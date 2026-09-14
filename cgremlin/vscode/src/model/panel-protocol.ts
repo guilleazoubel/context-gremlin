@@ -10,6 +10,7 @@
 import type { SlotState } from './lifecycle';
 import type { NeedsYouEntry } from './needs-you';
 import type { ActionPlacement, StageKind } from './row-actions';
+import type { HumanInteraction } from './work-items';
 import {
   SORT_OPTIONS,
   WORK_LIST_KINDS,
@@ -56,6 +57,12 @@ export interface PanelRowView {
   lifecycle: PanelSlotView[];
   /** "Changes so far", or `null` until the engine has answered — the row then paints `—`. */
   changes: PanelChangesView | null;
+  /**
+   * Who has already been on the PR — the evidence behind "someone is on it". Empty unless the
+   * row is expanded. Every entry is dated by the ONE timestamp the wire carries, so they share
+   * an age rather than pretending to per-actor clocks (`model/work-items`).
+   */
+  people: HumanInteraction[];
   /** The row's own actions, already decided by the host (which ones apply is not the view's job). */
   actions: PanelActionView[];
 }

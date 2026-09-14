@@ -492,7 +492,7 @@ export function toRow(item: WorkItem, list: WorkListKind, now: number): WorkRow 
   const size = sizeOf(primary);
   const tier = tierOf(primary);
   const ci = ciDot(primary?.ci ?? null);
-  const activity = activityOf(primary);
+  const activity = humanActivitySummary(primary, now);
   const badges = item.agents.map(badgeOf);
   const chips = item.prs.map((pr) => `${pr.repo}#${pr.number}`);
   const meta = metaOf(item, list, { age, size, tier, openedIso, activity });
@@ -599,17 +599,81 @@ export function sizeOf(pr: WorkItemPr | undefined): string {
   return `${files} +${pr.additions ?? 0}/−${pr.deletions ?? 0}`;
 }
 
-/** R47: who is already on it, as one chip. The core decided `demoted`; this only names it. */
-export function activityOf(pr: WorkItemPr | undefined): string {
+/**
+ * R47: who is already on it — **with the date**, which is the whole question that group asks.
+ *
+ * `👤 @DavidAPFM commented` cannot tell a comment from this morning from one from three weeks
+ * ago, so the age goes on the line. What the wire carries is `{ reviewedBy, commentedBy, lastAt }`
+ * and ONE timestamp for the PR, not one per actor — so every interaction is dated by the same
+ * `lastAt`, and none of them is dated by a clock invented here (MG-12).
+ *
+ * The bots are already gone: the core drops them, and the team-only review requests with them.
+ * There is deliberately no bot test of ANY kind here — `core/src/work/bot-login.ts` holds the one
+ * predicate in the project and MG-4 enforces that it is the only one. A second one here would
+ * drift, and would drift silently.
+ */
+export type HumanActivityKind = 'reviewed' | 'commented';
+
+export interface HumanInteraction {
+  login: string;
+  kind: HumanActivityKind;
+  /** The PR's verdict, and only where exactly one reviewer can own it. */
+  verdict: string | null;
+  /** `2d ago`, `5h ago`, `<1h ago` — or `—` when the engine sent no timestamp. */
+  age: string;
+}
+
+/** Every login the core sent, which is every login that survived its bot filter. */
+function humans(logins: readonly string[] | null | undefined): string[] {
+  return [...(logins ?? [])];
+}
+
+function ago(lastAt: string | null, now: number): string {
+  const age = compactAge(lastAt, now);
+  return age === '—' ? '—' : `${age} ago`;
+}
+
+/** The verdict, only when one reviewer can own it: pinning it on the first of two is a lie. */
+function soleVerdict(pr: WorkItemPr, reviewers: readonly string[]): string | null {
+  return reviewers.length === 1 ? reviewText(pr.reviewDecision ?? null) : null;
+}
+
+/** Every human interaction the core reported, reviewers first — the expanded row's own list. */
+export function humanInteractions(pr: WorkItemPr | undefined, now: number): HumanInteraction[] {
+  if (pr === undefined) return [];
+  const reviewers = humans(pr.humanActivity?.reviewedBy);
+  const commenters = humans(pr.humanActivity?.commentedBy);
+  const age = ago(pr.humanActivity?.lastAt ?? null, now);
+  const verdict = soleVerdict(pr, reviewers);
+  return [
+    ...reviewers.map((login): HumanInteraction => ({ login, kind: 'reviewed', verdict, age })),
+    ...commenters.map((login): HumanInteraction => ({ login, kind: 'commented', verdict: null, age })),
+  ];
+}
+
+/** The one line the collapsed row shows: the stronger kind, every handle in it, and the age. */
+export function humanActivitySummary(pr: WorkItemPr | undefined, now: number): string {
   if (pr === undefined) return '';
-  const activity = pr.humanActivity;
-  if (activity !== null && activity !== undefined) {
-    if (activity.reviewedBy.length > 0) return `👤 @${activity.reviewedBy[0]} reviewed`;
-    if (activity.commentedBy.length > 0) return `👤 @${activity.commentedBy[0]} commented`;
+  const reviewers = humans(pr.humanActivity?.reviewedBy);
+  const commenters = humans(pr.humanActivity?.commentedBy);
+  // A review outranks a comment: it is the stronger thing to have happened, and both share the
+  // one timestamp, so there is no "most recent" to pick between them.
+  const who = reviewers.length > 0 ? reviewers : commenters;
+  if (who.length === 0) {
+    const requested = humans(pr.reviewRequests);
+    return requested.length > 0 ? `👤 @${requested[0]} requested` : '';
   }
-  const requested = pr.reviewRequests ?? [];
-  if (requested.length > 0) return `👤 @${requested[0]} requested`;
-  return '';
+  const verb = reviewers.length > 0 ? 'reviewed' : 'commented';
+  const verdict = reviewers.length > 0 ? soleVerdict(pr, reviewers) : null;
+  const age = ago(pr.humanActivity?.lastAt ?? null, now);
+  return [
+    `👤 ${who.map((login) => `@${login}`).join(', ')}`,
+    verb,
+    verdict === null ? '' : `(${verdict})`,
+    age === '—' ? '' : age,
+  ]
+    .filter((part) => part !== '')
+    .join(' ');
 }
 
 /**

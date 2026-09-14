@@ -9,6 +9,7 @@ import { itemActionFacts, rowActions } from '../../src/model/row-actions';
 import { lifecycleSlots } from '../../src/model/lifecycle';
 import {
   buildItemChildren,
+  humanInteractions,
   buildWorkLists,
   visibleRowCount,
   LIST_GLYPHS,
@@ -85,6 +86,7 @@ export function stateOf(over: StateOptions = {}): PanelState {
               : [],
             lifecycle: expanded ? slotsOf(row.item, actions) : [],
             changes: expanded ? (over.changes ?? { committed: '—', workingTree: '—' }) : null,
+            people: expanded ? humanInteractions(row.item.prs[0], NOW) : [],
             actions,
           };
         }),

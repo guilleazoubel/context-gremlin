@@ -138,7 +138,9 @@ describe('P0-3 the parking-lot signals line', () => {
     const built = lists();
     const row = rowOf(built, 'parkingLot', 'pr:acme/api#55');
     expect(row.demoted).toBe(true);
-    expect(row.meta.find((c) => c.kind === 'activity')?.text).toBe('👤 @dana reviewed');
+    expect(row.meta.find((c) => c.kind === 'activity')?.text).toBe(
+      '👤 @dana reviewed (changes requested) 43h ago',
+    );
     expect(rowOf(built, 'parkingLot', 'pr:acme/web#101').demoted).toBe(false);
   });
 

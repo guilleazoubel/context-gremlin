@@ -20,6 +20,7 @@ import { post } from './channel';
 import { button, el, glyph } from './dom';
 import { reconcile, setHidden, setTabStop, setText } from './reconcile';
 import { child, commandOf } from './row';
+import type { HumanInteraction } from '../../model/work-items';
 import type {
   PanelActionView,
   PanelChildView,
@@ -46,6 +47,12 @@ export function createExpanded(): HTMLElement {
   node.appendChild(slots);
   node.appendChild(el('div', 'parts'));
 
+  // "Someone is on it" without a name and a date is the state the user said tells him nothing.
+  const people = el('div', 'people');
+  people.setAttribute('role', 'group');
+  people.setAttribute('aria-label', 'Who has been on it');
+  node.appendChild(people);
+
   const changes = el('div', 'changes');
   changes.appendChild(el('div', 'changes-title', 'Changes so far'));
   changes.appendChild(changeLine('committed', 'Committed'));
@@ -70,6 +77,7 @@ export function patchExpanded(node: HTMLElement, row: PanelRowView, focusedKey: 
   node.dataset.id = row.id;
   patchSlots(child(node, '.slots'), node, row.lifecycle);
   patchParts(child(node, '.parts'), node, row, focusedKey);
+  patchPeople(child(node, '.people'), row.people);
   // `—` whenever the engine has not answered — the row never shows a fabricated zero (MG-12).
   setText(child(node, '.committed-value'), row.changes?.committed ?? '—');
   setText(child(node, '.working-value'), row.changes?.workingTree ?? '—');
@@ -87,6 +95,22 @@ function leftoverActions(row: PanelRowView): PanelActionView[] {
     if (slot.sessionId !== null) taken.add(keyOf('cgremlin.chat', `agent:${slot.sessionId}`));
   }
   return row.actions.filter((action) => !taken.has(keyOf(action.command, action.childId)));
+}
+
+/** `@jane · reviewed (approved) · 2d ago` — one line per interaction, built as text (MG-B7). */
+function personLine(person: HumanInteraction): string {
+  const kind = person.verdict === null ? person.kind : `${person.kind} (${person.verdict})`;
+  return `@${person.login} · ${kind} · ${person.age}`;
+}
+
+function patchPeople(parent: HTMLElement, people: readonly HumanInteraction[]): void {
+  setHidden(parent, people.length === 0);
+  reconcile(
+    parent,
+    people.map((person) => ({ key: `${person.kind}:${person.login}`, data: person })),
+    () => el('div', 'person'),
+    (node, person) => setText(node, personLine(person)),
+  );
 }
 
 function keyOf(command: string, childId?: string): string {

@@ -565,6 +565,23 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/*
+ * Who has already been on the PR. Muted and small: it is evidence for a decision, not the
+ * decision — the row's own line already carries the strongest one.
+ */
+.people {
+  margin-top: 6px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.person {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* --- focus and motion --------------------------------------------------- */
 
 .row:focus-visible,
