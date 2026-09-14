@@ -240,7 +240,12 @@ export function groupWorkItems(input: GroupWorkItemsInput): WorkItem[] {
   const ticketCandidate = (key: string): Candidate => {
     const existing = candidateOfTicket.get(key);
     if (existing !== undefined) return existing;
-    const issue = input.jira?.issues.find((i) => i.key === key) ?? null;
+    // R28's second half: a key the JQL never returned may still have been
+    // fetched individually into `seeded`. It describes the row and NOTHING
+    // else — step 1 makes candidates out of `issues` alone, so a stale
+    // seeded key can never invent a ticket item.
+    const issue =
+      input.jira?.issues.find((i) => i.key === key) ?? input.jira?.seeded?.find((i) => i.key === key) ?? null;
     // R28: a candidate seeded from the LINK carries the key alone, and the
     // tab fills the rest on demand. Seeding from the snapshot only would let
     // an item's id flip the moment Jira goes down or a ticket leaves the JQL.

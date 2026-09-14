@@ -4,6 +4,8 @@ import type { SessionFileSystem } from '../../src/fs/session-file-system';
 import { JiraStore } from '../../src/jira/jira-store';
 import { JiraScanner } from '../../src/jira/jira-scanner';
 import { JiraAuthError, JiraUnavailableError, type JiraIssueSummary, type JiraSource } from '../../src/jira/jira-source';
+import { groupWorkItems } from '../../src/work/work-item';
+import { PHASE9_ENTRY_DEFAULTS } from '../support/inventory-entry';
 
 const NOW = new Date('2026-09-10T12:00:00.000Z');
 const PATH = '/state/jira.json';
@@ -28,6 +30,8 @@ class FakeJiraSource implements JiraSource {
   constructor(
     private readonly behaviour: {
       issues?: JiraIssueSummary[];
+      byKey?: JiraIssueSummary[];
+      keyError?: unknown;
       searchError?: unknown;
       whoamiError?: unknown;
       hang?: boolean;
@@ -42,9 +46,15 @@ class FakeJiraSource implements JiraSource {
     return { accountId: '712020:me', displayName: 'Me' };
   }
 
-  async search(_jql: string, opts?: { signal?: AbortSignal }): Promise<JiraIssueSummary[]> {
+  async search(jql: string, opts?: { signal?: AbortSignal }): Promise<JiraIssueSummary[]> {
     this.searchCalls += 1;
-    this.calls.push('search');
+    this.calls.push(jql.startsWith('key = ') ? jql : 'search');
+    if (jql.startsWith('key = ')) {
+      const key = jql.slice('key = '.length).replaceAll('"', '');
+      if (this.behaviour.keyError !== undefined) throw this.behaviour.keyError;
+      const found = (this.behaviour.byKey ?? []).find((i) => i.key === key);
+      return found === undefined ? [] : [found];
+    }
     if (this.behaviour.searchError !== undefined) throw this.behaviour.searchError;
     await this.maybeHang(opts?.signal);
     return this.behaviour.issues ?? [];
@@ -63,12 +73,24 @@ class FakeJiraSource implements JiraSource {
   }
 }
 
-function scanner(source: JiraSource | null, fs = new InMemoryFileSystem(), scanBudgetMs = 20_000) {
+function scanner(
+  source: JiraSource | null,
+  fs = new InMemoryFileSystem(),
+  scanBudgetMs = 20_000,
+  seededKeys?: () => Promise<readonly string[]>,
+) {
   const store = new JiraStore(fs, PATH);
   return {
     fs,
     store,
-    scanner: new JiraScanner({ source, store, jql: JQL, scanBudgetMs, now: () => NOW }),
+    scanner: new JiraScanner({
+      source,
+      store,
+      jql: JQL,
+      scanBudgetMs,
+      now: () => NOW,
+      ...(seededKeys !== undefined ? { seededKeys } : {}),
+    }),
   };
 }
 
@@ -224,5 +246,89 @@ describe('JiraScanner: single flight and the budget (R34)', () => {
     await scanner(src).scanner.run();
     expect(whoamiSignal).toBeDefined();
     expect(searchSignal).toBe(whoamiSignal);
+  });
+});
+
+describe('JiraScanner: the summary of a key the JQL never returned (R28)', () => {
+  it('fetches every seeded key the snapshot does not hold, and caches it in jira.json', async () => {
+    const fs = new InMemoryFileSystem();
+    const src = new FakeJiraSource({ issues: [issue('HB-627')], byKey: [issue('HB-999')] });
+    const { scanner: s } = scanner(src, fs, 20_000, async () => ['HB-627', 'HB-999']);
+    const report = await s.run();
+
+    // HB-627 is already held by the JQL snapshot: it is NOT re-fetched.
+    expect(src.calls).toEqual(['whoami', 'search', 'key = "HB-999"']);
+    expect(report.seeded?.map((i) => [i.key, i.summary])).toEqual([['HB-999', 'summary of HB-999']]);
+    expect(report.issues.map((i) => i.key)).toEqual(['HB-627']);
+
+    const cached = await new JiraStore(fs, PATH).load();
+    expect(cached?.seeded?.map((i) => i.key)).toEqual(['HB-999']);
+  });
+
+  it('never blocks: an unconfigured Jira asks nothing and a failing fetch leaves the key out', async () => {
+    const off = scanner(null, new InMemoryFileSystem(), 20_000, async () => ['HB-999']);
+    expect((await off.scanner.run()).seeded ?? []).toEqual([]);
+
+    const src = new FakeJiraSource({ issues: [], keyError: new JiraUnavailableError('boom') });
+    const { scanner: s } = scanner(src, new InMemoryFileSystem(), 20_000, async () => ['HB-999']);
+    const report = await s.run();
+    expect(report.kind).toBe('ok');
+    expect(report.error).toBeNull();
+    expect(report.seeded ?? []).toEqual([]);
+  });
+
+  it('a garbage key is never turned into a JQL fragment', async () => {
+    const src = new FakeJiraSource({ issues: [] });
+    const { scanner: s } = scanner(src, new InMemoryFileSystem(), 20_000, async () => ['" OR key != "x', 'not-a-key']);
+    await s.run();
+    expect(src.calls).toEqual(['whoami', 'search']);
+  });
+});
+
+describe('a seeded ticket carries its summary into the work item (R28)', () => {
+  it('a PR whose branch names HB-999, absent from the JQL, still gets a described row', async () => {
+    const src = new FakeJiraSource({ issues: [], byKey: [issue('HB-999')] });
+    const { scanner: s } = scanner(src, new InMemoryFileSystem(), 20_000, async () => ['HB-999']);
+    const jira = await s.run();
+
+    const items = groupWorkItems({
+      items: [],
+      inventory: {
+        scannedAt: NOW.toISOString(),
+        repos: ['acme/app'],
+        entries: [
+          {
+            ...PHASE9_ENTRY_DEFAULTS,
+            repo: 'acme/app',
+            number: 1,
+            url: 'https://github.com/acme/app/pull/1',
+            title: 'PR 1',
+            author: 'me-user',
+            isDraft: false,
+            headSha: 'sha',
+            baseRef: 'main',
+            branch: 'feature/HB-999-x',
+            updatedAt: '2026-09-03T00:00:00.000Z',
+            createdAt: '2026-09-01T00:00:00.000Z',
+            reviewDecision: '',
+            isMine: true,
+            teamActivity: [],
+            ours: { status: 'none' },
+            seenAt: '2026-09-04T00:00:00.000Z',
+            ticketKeys: ['HB-999'],
+          },
+        ],
+        errors: [],
+      },
+      jira,
+      me: 'me-user',
+      watchAuthors: [],
+      showAllRepoPrs: false,
+      projectKeys: ['HB'],
+    });
+
+    expect(items.map((i) => i.id)).toEqual(['ticket:HB-999']);
+    expect(items[0].ticket?.summary).toBe('summary of HB-999');
+    expect(items[0].title).toBe('HB-999 — summary of HB-999');
   });
 });

@@ -1,4 +1,4 @@
-import { JiraAuthError, type JiraSource } from './jira-source';
+import { JiraAuthError, type JiraIssueSummary, type JiraSource } from './jira-source';
 import type { JiraScanReport, JiraStore } from './jira-store';
 
 export interface JiraScannerDeps {
@@ -9,8 +9,24 @@ export interface JiraScannerDeps {
   /** R34 — ONE budget for the whole leg: whoami plus every page. */
   scanBudgetMs: number;
   maxResults?: number;
+  /**
+   * R28 — every ticket key a PR branch or a session lineage named. The ones
+   * the JQL did not return are fetched individually, so a row seeded from a
+   * LINK still has a summary instead of ''. Absent = no seeding at all.
+   */
+  seededKeys?: () => Promise<readonly string[]>;
   now?: () => Date;
 }
+
+/** The same shape `parseWorkItemId` accepts — anything else never reaches a JQL string. */
+const TICKET_KEY = /^[A-Za-z][A-Za-z0-9]*-[0-9]+$/;
+
+/**
+ * A ceiling on the extra requests one scan may make. The seeded set is
+ * normally a handful of keys; a config change that suddenly widens
+ * `projectKeys` must not turn one tick into a rate-limit incident.
+ */
+const MAX_SEEDED_FETCHES = 25;
 
 function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
@@ -67,6 +83,54 @@ export class JiraScanner {
     return { scannedAt: this.nowIso(), me: null, issues: [], error, kind };
   }
 
+  /**
+   * One extra request per seeded key the snapshot does not already hold,
+   * inside the SAME budget as the rest of the leg (the scan's own signal is
+   * passed in, so an expiring budget simply ends the loop). Every failure —
+   * an unconfigured Jira, a 404 for a key someone typo'd into a branch name,
+   * an aborted request — falls back to what the cache already knew and
+   * otherwise leaves the summary '' rather than failing the scan.
+   */
+  private async fetchSeeded(
+    source: JiraSource,
+    held: readonly JiraIssueSummary[],
+    signal: AbortSignal,
+  ): Promise<JiraIssueSummary[]> {
+    if (this.deps.seededKeys === undefined) return [];
+    let keys: readonly string[];
+    try {
+      keys = await this.deps.seededKeys();
+    } catch {
+      return [];
+    }
+    const known = new Set(held.map((i) => i.key));
+    const wanted = [...new Set(keys)]
+      .filter((key) => TICKET_KEY.test(key) && !known.has(key))
+      .slice(0, MAX_SEEDED_FETCHES);
+    if (wanted.length === 0) return [];
+
+    // The previous scan's answers: what a failed re-fetch degrades to.
+    const cached = new Map(
+      ((this.last ?? (await this.deps.store.load()))?.seeded ?? []).map((i) => [i.key, i] as const),
+    );
+    const seeded: JiraIssueSummary[] = [];
+    for (const key of wanted) {
+      let found: JiraIssueSummary | undefined;
+      try {
+        // `search` and not `issue`: the summary port already returns exactly
+        // these fields in one request, where `issue()` also fetches comments
+        // and rendered HTML the row will never show. The key is matched
+        // against TICKET_KEY above, so nothing else can reach the JQL.
+        [found] = await source.search(`key = "${key}"`, { signal, maxResults: 1 });
+      } catch {
+        found = undefined;
+      }
+      const resolved = found ?? cached.get(key);
+      if (resolved !== undefined) seeded.push(resolved);
+    }
+    return seeded;
+  }
+
   private async scan(): Promise<JiraScanReport> {
     const source = this.deps.source;
     if (source === null) {
@@ -85,10 +149,12 @@ export class JiraScanner {
         signal: controller.signal,
         ...(this.deps.maxResults !== undefined ? { maxResults: this.deps.maxResults } : {}),
       });
+      const seeded = await this.fetchSeeded(source, issues, controller.signal);
       const report: JiraScanReport = {
         scannedAt: this.nowIso(),
         me: me.accountId,
         issues,
+        ...(seeded.length > 0 ? { seeded } : {}),
         error: null,
         kind: 'ok',
       };
@@ -109,6 +175,7 @@ export class JiraScanner {
         scannedAt: this.nowIso(),
         me: previous?.me ?? null,
         issues: previous?.issues ?? [],
+        ...(previous?.seeded !== undefined && previous.seeded.length > 0 ? { seeded: previous.seeded } : {}),
         error: errorMessage(err),
         kind: err instanceof JiraAuthError ? 'auth' : 'unavailable',
       };
