@@ -92,15 +92,23 @@ export function createUi(options: UiOptions): Ui {
     },
     /** What the ONE expanded row needs and the list response does not carry (§4, amended). */
     loadExpanded: async (item) => {
+      // P11: a read that finds no engine is not a reason to refuse the row. The panel expands
+      // from the snapshot it already has and says, in one line, that the detail is stale — the
+      // parts, the PR and the ticket are all in hand, and opening either needs no engine.
+      let offline = false;
+      const note = (err: unknown): null => {
+        if (err instanceof EngineNotRunningError) offline = true;
+        return null;
+      };
       const path = itemPathOf(item.id);
-      const detail = path === null ? null : await client.item(path).catch(() => null);
+      const detail = path === null ? null : await client.item(path).catch(note);
       const artifactAt: Record<string, string | null> = {};
       for (const [sessionId, listing] of Object.entries(detail?.artifacts ?? {})) {
         artifactAt[sessionId] = latestArtifactAt(listing);
       }
       const agent = currentAgentOf(item.agents);
-      const changes = agent === null ? null : await client.changes(agent.sessionId).catch(() => null);
-      return { artifactAt, changes };
+      const changes = agent === null ? null : await client.changes(agent.sessionId).catch(note);
+      return { artifactAt, changes, offline };
     },
   });
   const coordinator = new RefreshCoordinator({

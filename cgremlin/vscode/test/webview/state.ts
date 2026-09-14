@@ -61,6 +61,7 @@ export function stateOf(over: StateOptions = {}): PanelState {
         changes: expanded ? (over.changes ?? { committed: '—', workingTree: '—' }) : null,
         actions,
         hint: null,
+        detailNotice: null,
       };
     });
     return {

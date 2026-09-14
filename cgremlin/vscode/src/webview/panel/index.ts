@@ -126,6 +126,12 @@ function entriesOf(next: PanelState): { key: string; data: Entry }[] {
   }
   if (next.trouble !== null) {
     entries.push({ key: 'trouble', data: { kind: 'trouble', state: next } });
+    // It replaces the lists only when there are none: an engine that died did not delete the
+    // work, and the rows the host is still holding open and their external links (P11).
+    if (next.sections.length === 0) return entries;
+    next.sections.forEach((section, index) =>
+      entries.push({ key: `section:${section.key}`, data: { kind: 'section', index, state: next } }),
+    );
     return entries;
   }
   if (next.banner !== null) {

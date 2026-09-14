@@ -272,10 +272,9 @@ describe('R24 one refresh, one request', () => {
 describe('an engine that is not one this extension can use', () => {
   const FOREIGN = { kind: 'foreign' } as const;
 
-  it('replaces the lists with one explanation of what happened', async () => {
+  it('explains what happened, above whatever it had already listed', async () => {
     const h = await connected();
     h.engine.emit(FOREIGN);
-    expect(h.state().sections).toEqual([]);
     expect(h.state().trouble?.message).toContain('not a cgremlin engine this extension can use');
     expect(h.state().trouble?.message).toContain('cgremlin: Start the engine');
     expect(h.state().trouble?.command).toBe('cgremlin.engine.start');
@@ -309,11 +308,12 @@ describe('an engine that is not one this extension can use', () => {
     expect(h.host.statusBarItems[0].warning).toBe(true);
   });
 
-  it('gives the four lists back the moment a usable engine is adopted', async () => {
+  it('clears the explanation the moment a usable engine is adopted', async () => {
     const h = await connected();
     h.engine.emit(FOREIGN);
-    expect(h.state().sections).toEqual([]);
+    expect(h.state().trouble).not.toBeNull();
     h.engine.emit({ kind: 'running', version: '0.0.1', pid: 10, adopted: true });
+    expect(h.state().trouble).toBeNull();
     expect(h.state().sections).toHaveLength(6);
     expect(h.host.statusBarItems[0].warning).toBe(false);
   });
@@ -1230,5 +1230,69 @@ describe('a user command revives a dead engine', () => {
     expect(String(h.host.callsOf('showWarningMessage')[0]?.args[0])).toContain(
       'cgremlin engine is not running',
     );
+  });
+});
+
+/**
+ * The other half of the incident: with the engine dead, clicking a row answered with the socket
+ * error rather than with the row. Everything the submenu needs — the item's parts, its PR and
+ * ticket links — is already in the snapshot the panel is holding, and opening a Jira page needs
+ * no engine at all. So the lists stay, the row still expands, and the only new thing on screen is
+ * one line saying the detail is the last one that loaded.
+ */
+describe('the panel degrades to its snapshot when the engine goes', () => {
+  const OFFLINE_LINE = 'Engine offline — showing what was last loaded';
+
+  async function stopped(): Promise<Harness> {
+    let client!: CoreClient;
+    const h = await connected({
+      client: (socketPath) => {
+        client = new (class extends CoreClient {
+          override request(method: string, path: string, body?: unknown): Promise<HttpResult> {
+            return this.dead
+              ? Promise.reject(new EngineNotRunningError(socketPath))
+              : super.request(method, path, body);
+          }
+          dead = false;
+        })(socketPath);
+        return client;
+      },
+    });
+    (client as CoreClient & { dead: boolean }).dead = true;
+    h.engine.emit({ kind: 'stopped' });
+    return h;
+  }
+
+  it('keeps the lists it already has under the trouble row', async () => {
+    const h = await stopped();
+    expect(h.state().trouble?.command).toBe('cgremlin.engine.start');
+    expect(h.rows().length).toBeGreaterThan(0);
+  });
+
+  it('still expands a row, from the snapshot, and says so in one line', async () => {
+    const h = await stopped();
+    h.toPanel({ type: 'selectRow', id: HB_ITEM, list: 'myWork' });
+    await settleDetail();
+
+    const row = h.rowOf(HB_ITEM);
+    expect(row.expanded).toBe(true);
+    expect(row.parts.length).toBeGreaterThan(0);
+    expect(row.detailNotice).toBe(OFFLINE_LINE);
+    // A line in the row the user opened, and not a popup over whatever they were doing.
+    expect(h.host.callsOf('showWarningMessage')).toEqual([]);
+  });
+
+  it('opens the ticket and the pull request with no engine at all', async () => {
+    const h = await stopped();
+    h.toPanel({ type: 'selectRow', id: HB_ITEM, list: 'myWork' });
+    await settleDetail();
+
+    await h.host.invoke('cgremlin.openTicket', HB_ITEM);
+    await h.host.invoke('cgremlin.openPr', HB_ITEM);
+    expect(h.host.callsOf('openExternal').map((c) => c.args[0])).toEqual([
+      'https://aplaceformom.atlassian.net/browse/HB-627',
+      'https://github.com/acme/web/pull/310',
+    ]);
+    expect(h.host.callsOf('showWarningMessage')).toEqual([]);
   });
 });

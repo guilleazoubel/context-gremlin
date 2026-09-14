@@ -70,6 +70,12 @@ export interface PanelRowView {
    * the toast again, in ink.
    */
   hint: string | null;
+  /**
+   * One line inside the expanded block when its detail could not be read because there is no
+   * engine: the parts and the links above it came out of the last snapshot and still work, and
+   * saying so beats both a popup and a silently stale row. `null` the rest of the time.
+   */
+  detailNotice: string | null;
 }
 
 /** One part of an expanded row (§4). Built by `model/item-parts`. */
