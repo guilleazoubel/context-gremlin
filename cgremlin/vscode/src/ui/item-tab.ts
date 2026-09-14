@@ -27,6 +27,7 @@ import {
 import type { ItemDetailResponse } from '../model/work-items';
 import { rowActionsForLists, type ActionFacts } from '../model/row-actions';
 import type { CoreConfigView } from '../model/items';
+import { withEngineRetry, type EngineRevival } from './engine-retry';
 import type { WorktreeSwapper } from './preview';
 import type { DisposableLike, Host, WebviewPanelLike } from './host';
 
@@ -77,11 +78,16 @@ export class ItemTab {
     return this.detail?.item.id ?? null;
   }
 
-  /** Opens (or re-points) the one panel at `path`, optionally focused on one of its parts. */
-  async open(path: string, focus?: ItemFocusMessage): Promise<void> {
+  /**
+   * Opens (or re-points) the one panel at `path`, optionally focused on one of its parts.
+   *
+   * `revive` is how a user command asks for an engine that is not there (`ui/engine-retry`): the
+   * fetch is sent again after a user-triggered start, and only a second failure is reported.
+   */
+  async open(path: string, focus?: ItemFocusMessage, revive?: EngineRevival): Promise<void> {
     let detail: ItemDetailResponse;
     try {
-      detail = await this.deps.client.item(path);
+      detail = await withEngineRetry(revive, () => this.deps.client.item(path));
     } catch (err) {
       void this.deps.host.showWarningMessage(messageOf(err), undefined);
       return;

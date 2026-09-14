@@ -10,7 +10,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CoreClient } from '../../src/core-client';
+import { CoreClient, EngineNotRunningError, type HttpResult } from '../../src/core-client';
+import type { EngineState, Trigger } from '../../src/engine/manager';
 import { createUi, type Ui } from '../../src/ui/wiring';
 import { validatePrUrl, validateTicket } from '../../src/ui/commands';
 import { heartbeatIntervalMs } from '../../src/ui/terminal';
@@ -54,12 +55,21 @@ interface Harness {
   toPanel(message: unknown): void;
 }
 
-async function harness(opts: { handler?: StubHandler; socketPath?: string } = {}): Promise<Harness> {
+interface HarnessOptions {
+  handler?: StubHandler;
+  socketPath?: string;
+  /** A client that can be made to answer "no engine at all", for the revival tests. */
+  client?: (socketPath: string) => CoreClient;
+  /** A manager that reacts to a `'user'` start, for the revival tests. */
+  engine?: () => FakeEngineManager;
+}
+
+async function harness(opts: HarnessOptions = {}): Promise<Harness> {
   const server = await startStubServer({ handler: opts.handler });
   servers.push(server);
   const host = new FakeHost();
   const level = { value: 'needs-you-only' as NotificationLevel };
-  const engine = new FakeEngineManager();
+  const engine = opts.engine?.() ?? new FakeEngineManager();
   engine.current = { kind: 'running', version: '0.0.1', pid: 10, adopted: false };
   const surface = new EngineSurface({
     host,
@@ -74,7 +84,9 @@ async function harness(opts: { handler?: StubHandler; socketPath?: string } = {}
   });
   const ui = createUi({
     host,
-    client: new CoreClient(opts.socketPath ?? server.socketPath),
+    client: (opts.client ?? ((p: string) => new CoreClient(p)))(
+      opts.socketPath ?? server.socketPath,
+    ),
     notificationLevel: () => level.value,
     engine: surface,
     coalesceMs: 5,
@@ -118,7 +130,7 @@ async function harness(opts: { handler?: StubHandler; socketPath?: string } = {}
   };
 }
 
-async function connected(opts: { handler?: StubHandler } = {}): Promise<Harness> {
+async function connected(opts: HarnessOptions = {}): Promise<Harness> {
   const h = await harness(opts);
   expect(await h.ui.connect()).toBe(true);
   return h;
@@ -1124,5 +1136,84 @@ describe('MG-B2 needs-you never pops (host half)', () => {
     await h.ui.settled();
     expect(h.host.callsOf('showInformationMessage')).toEqual([]);
     expect(h.host.callsOf('showWarningMessage')).toEqual([]);
+  });
+});
+
+/**
+ * The live incident: an old window SIGTERM'd the engine until the respawn backoff was spent, and
+ * the engine stayed dead. Nothing in the extension retried, so every click answered with
+ * "cgremlin engine is not running" and the only cure was reloading the window.
+ *
+ * A person clicking is a person asking for the engine, so a user command that finds the socket
+ * empty asks for a start — `'user'`, which bypasses the backoff — and sends its request again.
+ */
+describe('a user command revives a dead engine', () => {
+  /** A client whose socket has gone away, exactly as `CoreClient` reports that. */
+  class DeadSocketClient extends CoreClient {
+    offline = false;
+
+    override request(method: string, path: string, body?: unknown): Promise<HttpResult> {
+      if (this.offline) {
+        return Promise.reject(new EngineNotRunningError('/tmp/cgremlin-fixture/engine.sock'));
+      }
+      return super.request(method, path, body);
+    }
+  }
+
+  /** The manager as the incident left it: dead, and only a `'user'` ask starts it again. */
+  class RevivableEngine extends FakeEngineManager {
+    onUserStart: (() => void) | null = null;
+
+    override async ensureRunning(trigger: Trigger = 'auto'): Promise<EngineState> {
+      const state = await super.ensureRunning(trigger);
+      if (trigger === 'user') this.onUserStart?.();
+      return state;
+    }
+  }
+
+  async function dead(): Promise<{ h: Harness; client: DeadSocketClient }> {
+    let client!: DeadSocketClient;
+    const h = await connected({
+      client: (socketPath) => (client = new DeadSocketClient(socketPath)),
+      engine: () => new RevivableEngine(),
+    });
+    (h.engine as RevivableEngine).onUserStart = () => {
+      client.offline = false;
+    };
+    client.offline = true;
+    return { h, client };
+  }
+
+  it('asks for a user start and retries the request once, saying nothing at all', async () => {
+    const { h } = await dead();
+    const mark = h.mark();
+
+    await h.host.invoke('cgremlin.ack', HB_ITEM);
+
+    expect(h.engine.calls).toContain('ensureRunning:user');
+    expect(paths(h, mark)).toEqual(['POST /items/ticket/HB-627/ack']);
+    expect(h.host.callsOf('showWarningMessage')).toEqual([]);
+  });
+
+  it('opens the item tab after the revival rather than reporting the dead socket', async () => {
+    const { h } = await dead();
+
+    await h.host.invoke('cgremlin.openItem', HB_ITEM);
+
+    expect(h.engine.calls).toContain('ensureRunning:user');
+    expect(h.host.callsOf('showWarningMessage')).toEqual([]);
+    expect(h.ui.itemTab.itemId()).toBe(HB_ITEM);
+  });
+
+  it('surfaces the engine\'s own wording only when the second attempt fails too', async () => {
+    const { h } = await dead();
+    (h.engine as RevivableEngine).onUserStart = null;
+
+    await h.host.invoke('cgremlin.ack', HB_ITEM);
+
+    expect(h.engine.calls).toContain('ensureRunning:user');
+    expect(String(h.host.callsOf('showWarningMessage')[0]?.args[0])).toContain(
+      'cgremlin engine is not running',
+    );
   });
 });
