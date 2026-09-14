@@ -23,6 +23,7 @@ import { PR_VIEW_FIELDS, failingChecks, parsePrView } from '../gh/pr-view';
 import type { JiraSource } from '../jira/jira-source';
 import { InventoryStore } from '../inventory/inventory-store';
 import { createApiServer, type EngineInfo } from '../api/server';
+import { ShutdownController } from '../api/shutdown';
 import { EventRing, attachEventRing } from '../api/event-stream';
 import { NodeSessionWatcher } from '../fs/node-session-watcher';
 import type { SessionWatcher } from '../fs/session-watcher';
@@ -68,6 +69,12 @@ export interface Engine {
   eventRing: EventRing;
   /** What `GET /version` reports and what `serve()` records in its `engine.json` lock — one object, so the two can never disagree. */
   engineInfo: EngineInfo;
+  /**
+   * R-shutdown: `POST /shutdown`'s decision, built here because the build time it orders by is
+   * this same `engineInfo`'s. It is inert until `serve()` installs the graceful `close()` — a
+   * wiring with no `close()` answers 404 rather than accepting a stop it could not perform.
+   */
+  shutdown: ShutdownController;
 }
 
 export interface TickableParts {
@@ -364,6 +371,8 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     socketPath: config.socketPath!,
   };
 
+  const shutdown = new ShutdownController(engineInfo.buildTime);
+
   const server = createApiServer({
     sessionStore: store,
     workspaceManager: workspace,
@@ -382,8 +391,9 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     lock,
     config,
     engineInfo,
+    shutdown,
     ...(environment ? { environment } : {}),
   });
 
-  return { server, scheduler, scanner, pipeline, events, store, lock, config, environment, attention, workItems, eventRing, engineInfo };
+  return { server, scheduler, scanner, pipeline, events, store, lock, config, environment, attention, workItems, eventRing, engineInfo, shutdown };
 }

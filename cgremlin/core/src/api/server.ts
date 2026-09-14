@@ -39,6 +39,7 @@ import { ITEM_SOURCES, parseItemRef, prRef, sessionRef, type ItemRef, type ItemS
 import { OwnPrError } from '../gh/own-pr-error';
 import { parsePrUrl } from '../gh/pr-url';
 import { computeSessionChanges } from './session-changes';
+import { parseShutdownRequest, type ShutdownController } from './shutdown';
 
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
@@ -106,6 +107,12 @@ export interface ApiServerDeps {
    * Absent for a wiring built without one: `GET /version` then 404s.
    */
   engineInfo?: EngineInfo;
+  /**
+   * R-shutdown: the stop the engine may refuse. Built by `buildEngine`, armed by `serve()` with
+   * the graceful `close()`; absent or unarmed leaves `POST /shutdown` a clean 404, because an
+   * engine with nothing wired to close it must never accept a stop it cannot perform.
+   */
+  shutdown?: ShutdownController;
   /** R-changes (Phase 10) — `GET /sessions/:id/changes`. Absent leaves that route a clean 404. */
   git?: GitRunner;
 }
@@ -851,6 +858,29 @@ async function handleRequest(
       // run for pipeline.stop() to find, yet a restart aborts it.
       const activeRuns = deps.pipeline.activeSessionIds().length + (deps.environment?.inFlightCount() ?? 0);
       sendJson(res, 200, { name, version, buildId, buildTime, pid, startedAt, socketPath, activeRuns });
+      return;
+    }
+
+    // R-shutdown: the stop that can be REFUSED, and the reason the ping-pong ended. First-class
+    // beside /version and under no lock, for the same reason: a window has to be able to ask an
+    // engine to stand down whatever else that engine is doing, and get a verdict either way.
+    if (method === 'POST' && parts.length === 1 && parts[0] === 'shutdown') {
+      if (!deps.engineInfo || deps.shutdown === undefined || !deps.shutdown.installed) {
+        sendJson(res, 404, { error: 'shutdown not available' });
+        return;
+      }
+      const request = parseShutdownRequest(await readJsonBody(req));
+      const decision = deps.shutdown.decide(request);
+      if (!decision.accepted) {
+        sendJson(res, 409, decision);
+        return;
+      }
+      sendJson(res, 202, { accepted: true });
+      // AFTER the answer is on the wire: close() drops every open connection, so performing it
+      // inline would cut this very response off before the requester could read it.
+      const perform = (): void => deps.shutdown?.perform();
+      if (res.writableFinished) perform();
+      else res.once('finish', perform);
       return;
     }
 

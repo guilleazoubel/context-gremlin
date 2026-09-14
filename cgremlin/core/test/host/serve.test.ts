@@ -901,10 +901,11 @@ describe('serve — POST /shutdown', () => {
       expect(res).toEqual({ status: 202, body: { accepted: true } });
       // The very things `close()` owns: the socket file and R22's lock are gone, and the process
       // signal handlers it registered are unregistered.
+      // R22's lock is removed in the same `finally` that unlinks the socket, just after it.
       await vi.waitFor(async () => {
         await expect(stat(handle.socketPath)).rejects.toThrow();
+        expect(existsSync(path.join(dir, 'engine.json'))).toBe(false);
       });
-      expect(existsSync(path.join(dir, 'engine.json'))).toBe(false);
       expect(lines.some((l) => l.includes('shutdown.accepted'))).toBe(true);
     } finally {
       await handle.close();

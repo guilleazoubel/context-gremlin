@@ -58,9 +58,12 @@ function ask(over: Partial<ShutdownRequest> = {}): ShutdownRequest {
 }
 
 let dir: string;
+/** Unix socket paths are capped at ~104 bytes, so these stay SHORT and unique per server. */
+let nextSocket = 0;
 
 beforeEach(async () => {
-  dir = await mkdtemp(path.join(tmpdir(), 'cgremlin-core-shutdown-test-'));
+  dir = await mkdtemp(path.join(tmpdir(), 'cg-shutdown-'));
+  nextSocket = 0;
 });
 
 afterEach(async () => {
@@ -78,7 +81,8 @@ interface Served {
 async function bareServer(
   opts: { engineBuildTime?: string | null; install?: boolean } = {},
 ): Promise<Served> {
-  const sock = path.join(dir, `engine-${Math.random().toString(36).slice(2)}.sock`);
+  nextSocket += 1;
+  const sock = path.join(dir, `e${nextSocket}.sock`);
   const shutdown = new ShutdownController(
     opts.engineBuildTime === undefined ? ENGINE_BUILT : opts.engineBuildTime,
   );

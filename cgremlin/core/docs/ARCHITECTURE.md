@@ -739,6 +739,12 @@ in `close()`'s `finally` *and* on a failed listen. It is therefore two things at
   explicit "delete that file if no engine is running". Without that check one recycled
   pid would make every later `serve` refuse forever. This is the same posture
   `NodeLocalAppRunner.isOurListener` takes before it trusts a pgid.
+- **a stop the engine may refuse.** `POST /shutdown` is the primary way to stop an engine,
+  and the engine decides: the requester must prove its bundle is strictly newer than the
+  engine's own `buildTime`, or be a person (`reason: 'user'`). Anything else is `409` and the
+  engine keeps serving. A signal is not a request — it carries no sender (POSIX puts it in
+  `siginfo_t`, Node exposes none of it) and cannot be refused, so SIGTERM is left for the one
+  case a request cannot cover: an engine that no longer answers its socket at all.
 - **the ownership proof, for whoever stops the engine.** A pid file alone never
   authorizes a signal. `GET /version` on that socket must confirm the same `pid` **and**
   the same `startedAt` — `startedAt` is what survives pid reuse — and that pair must be
