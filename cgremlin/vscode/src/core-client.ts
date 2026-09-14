@@ -247,6 +247,19 @@ export class CoreClient {
   }
 
   /**
+   * Item 2: put this item aside, or take it back. The core owns the flag — it persists it, it
+   * drops the item from every list, and it undismisses on its own the moment the item needs you.
+   * Both answer `200 { item }`; the panel re-reads `/items` rather than trusting the echo.
+   */
+  async dismissItem(path: string): Promise<HttpResult> {
+    return await this.request('POST', `/items/${assertItemPath(path)}/dismiss`);
+  }
+
+  async undismissItem(path: string): Promise<HttpResult> {
+    return await this.request('POST', `/items/${assertItemPath(path)}/undismiss`);
+  }
+
+  /**
    * The artifact body, which the host relays over `postMessage` — never a file URI (R19).
    * Returned as the bytes the engine sent: an artifact that parses as JSON is still a document.
    */

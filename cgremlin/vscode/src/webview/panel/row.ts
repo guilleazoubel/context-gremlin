@@ -75,6 +75,7 @@ export function patchRow(
   const classes = ['row', accent];
   if (row.needsYou) classes.push('needs-you');
   if (row.demoted) classes.push('demoted');
+  if (row.dismissed) classes.push('dismissed');
   if (row.selected) classes.push('selected');
   setClass(node, classes.join(' '));
   setTabStop(node, context.focusedKey === key);

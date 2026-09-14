@@ -59,6 +59,8 @@ body {
   --cg-sec-myWork: color-mix(in srgb, var(--vscode-charts-green, var(--cg-chart-fallback)) 78%, var(--vscode-foreground));
   --cg-sec-investigations: color-mix(in srgb, var(--vscode-charts-orange, var(--cg-chart-fallback)) 78%, var(--vscode-foreground));
   --cg-sec-waitingForReview: color-mix(in srgb, var(--vscode-charts-yellow, var(--cg-chart-fallback)) 78%, var(--vscode-foreground));
+  /* Item 2's bin takes no hue of its own: it is not an area of the work, it is the margin. */
+  --cg-sec-dismissed: var(--vscode-descriptionForeground);
 }
 
 /*
@@ -90,6 +92,10 @@ body {
   --cg-section: var(--cg-sec-waitingForReview);
 }
 
+.sec-dismissed {
+  --cg-section: var(--cg-sec-dismissed);
+}
+
 /* --- §6: the focus control --------------------------------------------- */
 
 /*
@@ -113,6 +119,47 @@ body {
 .focus:focus-visible {
   outline: 1px solid var(--vscode-focusBorder);
   outline-offset: -1px;
+}
+
+/*
+ * Item 2's toggle, on the SAME line as the focus control: two controls, one row, no wrapping —
+ * `inline-block` siblings in a block container, and the select gives up the width only when the
+ * toggle is actually there (`:has`), so a panel with an empty bin is unchanged.
+ */
+.dismissed-toggle {
+  display: inline-block;
+  width: 36%;
+  min-height: 24px;
+  margin-left: 2%;
+  padding: 4px 6px;
+  border: 1px solid var(--vscode-dropdown-border, var(--cg-divider));
+  border-radius: 3px;
+  background: transparent;
+  color: var(--vscode-descriptionForeground);
+  font-family: inherit;
+  font-size: 11px;
+  text-align: center;
+  vertical-align: middle;
+}
+
+.dismissed-toggle[aria-pressed='true'] {
+  background: var(--vscode-toolbar-activeBackground, var(--vscode-list-inactiveSelectionBackground));
+  color: var(--vscode-foreground);
+}
+
+.dismissed-toggle:hover {
+  background: var(--vscode-toolbar-hoverBackground, var(--vscode-list-hoverBackground));
+}
+
+.dismissed-toggle:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+#cgremlin-panel:has(.dismissed-toggle) .focus {
+  display: inline-block;
+  width: 62%;
+  vertical-align: middle;
 }
 
 /* --- the needs-you strip (P3) ------------------------------------------ */
@@ -377,6 +424,14 @@ body {
 
 .row.demoted {
   opacity: 0.65;
+}
+
+/*
+ * Item 2: what the user put aside. Quieter than "someone is on it" — he has said he does not care
+ * about it — but still legible, because the whole point of opening the bin is to read it.
+ */
+.row.dismissed {
+  opacity: 0.55;
 }
 
 /*

@@ -234,6 +234,15 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
       panel.reloadTitles();
     }),
 
+    /**
+     * Item 2: put an item aside, or take it back. The row moves on the CLICK — a refresh is a
+     * round trip away, and a list that only reacted after it would read as a click that did
+     * nothing — and a request the engine refuses moves it straight back, with the engine's own
+     * wording. That failure is worth a message: it is the panel admitting it lied for a moment.
+     */
+    host.registerCommand('cgremlin.dismissItem', (arg) => setDismissed(deps, arg, true)),
+    host.registerCommand('cgremlin.undismissItem', (arg) => setDismissed(deps, arg, false)),
+
     host.registerCommand('cgremlin.startInvestigation', (arg) =>
       startFromItem(deps, arg, 'investigation'),
     ),
@@ -350,6 +359,45 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
       await openSession(deps, session);
     }),
   ];
+}
+
+/** Item 2's optimistic dismissal, with the rollback that keeps the panel honest. */
+async function setDismissed(deps: CommandDeps, arg: unknown, dismissed: boolean): Promise<void> {
+  const { host, client, coordinator, panel } = deps;
+  const id = typeof arg === 'string' ? arg : null;
+  const item = id === null ? null : (panel.itemOf(id) ?? coordinator.itemOf(id) ?? null);
+  if (item === null) {
+    void host.showWarningMessage('Pick an item in the cgremlin panel first.', undefined);
+    return;
+  }
+  const path = itemPathOf(item.id);
+  if (path === null) {
+    void host.showWarningMessage(
+      `The engine cannot be addressed for '${item.title}' (unrecognised item id '${item.id}').`,
+      undefined,
+    );
+    return;
+  }
+  panel.setPendingDismissal(item.id, dismissed);
+  let result: HttpResult;
+  try {
+    result = dismissed ? await client.dismissItem(path) : await client.undismissItem(path);
+  } catch (err: unknown) {
+    panel.clearPendingDismissal(item.id);
+    void host.showWarningMessage(
+      `Could not ${dismissed ? 'dismiss' : 'restore'} '${item.title}': ${
+        err instanceof Error ? err.message : String(err)
+      }`,
+      undefined,
+    );
+    return;
+  }
+  if (result.status < 200 || result.status >= 300) {
+    panel.clearPendingDismissal(item.id);
+    void host.showWarningMessage(engineErrorText(result.body), undefined);
+    return;
+  }
+  coordinator.schedule();
 }
 
 /**

@@ -102,6 +102,19 @@ export interface WorkItem {
   agents: WorkItemAgent[];
   needsYou: boolean;
   attention: { reasons: string[]; since: string; acked: boolean; refs: string[] };
+  /**
+   * Item 2: the user has put this one aside. The CORE owns it — it is persisted there, the lists
+   * below already exclude it, and an item that comes to need you is undismissed by the core
+   * itself. An engine older than this contract sends neither field, which reads as "not dismissed"
+   * rather than as an error (`isDismissed`).
+   */
+  dismissed: boolean;
+  dismissedAt: string | null;
+}
+
+/** Tolerant of an engine that predates item 2: an absent field is not a dismissal. */
+export function isDismissed(item: WorkItem): boolean {
+  return item.dismissed === true;
 }
 
 export type TicketSourceKind = 'notConfigured' | 'auth' | 'unavailable' | 'ok';
@@ -128,8 +141,11 @@ export interface WorkListsWire {
 
 export interface ItemsResponse {
   evaluatedAt: string;
+  /** R47: the lists EXCLUDE what the user dismissed; `items` still carries every one of them. */
   lists: WorkListsWire;
   items: WorkItem[];
+  /** Item 2: the dismissed ids, newest first. Absent on an engine that predates the contract. */
+  dismissed: WorkItemId[];
   ticketSource: TicketSource;
   threadSource: ThreadSource;
 }
@@ -326,6 +342,31 @@ export function readFocus(store: SortStore): PanelFocus {
 
 export function writeFocus(store: SortStore, focus: PanelFocus): void {
   store.setState(FOCUS_STATE_KEY, focus);
+}
+
+// ---------------------------------------------------------------------------
+// Item 2: what the user has put aside
+// ---------------------------------------------------------------------------
+
+/**
+ * The dismissed section's key. Deliberately NOT one of `PANEL_SECTIONS`: it is not an area of the
+ * work, it is the bin beside it — it never appears in the focus control, and it is drawn below
+ * whichever areas the focus is showing rather than instead of them.
+ */
+export const DISMISSED_SECTION_KEY = 'dismissed';
+export const DISMISSED_SECTION_TITLE = 'Dismissed';
+/** The same typographic vocabulary the six sections use (§8) — never an icon font, never emoji. */
+export const DISMISSED_SECTION_GLYPH = '⊘';
+
+export const SHOW_DISMISSED_STATE_KEY = 'cgremlin.panel.showDismissed';
+
+/** Read with the same defensive shape as every other persisted view state: hidden unless `true`. */
+export function readShowDismissed(store: SortStore): boolean {
+  return store.getState<unknown>(SHOW_DISMISSED_STATE_KEY) === true;
+}
+
+export function writeShowDismissed(store: SortStore, show: boolean): void {
+  store.setState(SHOW_DISMISSED_STATE_KEY, show);
 }
 
 // ---------------------------------------------------------------------------

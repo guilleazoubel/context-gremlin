@@ -10,6 +10,7 @@
 import type { NeedsYouEntry } from './needs-you';
 import type { ActionPlacement } from './row-actions';
 import {
+  DISMISSED_SECTION_KEY,
   FOCUS_ALL,
   PANEL_SECTIONS,
   SORT_OPTIONS,
@@ -51,6 +52,8 @@ export interface PanelRowView {
   tier: string;
   /** R47: "someone is on it" — the core's answer, rendered as a dimmed row. */
   demoted: boolean;
+  /** Item 2: the user has put this one aside. Drawn muted, in the dismissed section. */
+  dismissed: boolean;
   needsYou: boolean;
   hasChildren: boolean;
   expanded: boolean;
@@ -162,6 +165,13 @@ export interface PanelState {
   focusOptions: PanelFocusOption[];
   /** P3: what wants the user, as a strip at the top of the panel instead of a toast. */
   needsYou: NeedsYouEntry[];
+  /**
+   * Item 2. `dismissedCount` is on the toggle whether or not the section is open — it is the whole
+   * reason to reach for it — and `showDismissed` is the toggle's own state, persisted by the host.
+   * The dismissed section itself arrives in `sections`, last, only while the toggle is on.
+   */
+  dismissedCount: number;
+  showDismissed: boolean;
   /** A stale ticket or thread source, or the Jira auth failure (R35). */
   banner: { kind: 'stale' | 'auth'; message: string } | null;
   /**
@@ -194,6 +204,8 @@ export type PanelToHost =
   | { type: 'toggleSection'; key: string; collapsed: boolean }
   /** §6: narrow the panel to one area, or back to all of them. Persisted by the host (R64). */
   | { type: 'setFocus'; focus: string }
+  /** Item 2: reveal (or hide) what the user has put aside. Persisted by the host (R64). */
+  | { type: 'setShowDismissed'; show: boolean }
   | { type: 'toggleRow'; id: string; expanded: boolean }
   /** P10's "Not now": remembered in the host's global state, not in the webview. */
   | { type: 'dismissNotice' }
@@ -256,13 +268,19 @@ export function parsePanelMessage(raw: unknown): PanelToHost | null {
       }
       return { type: 'setFocus', focus };
     }
+    case 'setShowDismissed': {
+      const show = message.show;
+      return typeof show !== 'boolean' ? null : { type: 'setShowDismissed', show };
+    }
     case 'toggleSection': {
-      // Only a key the panel itself draws (§5) — a hand-crafted key would write a collapse state
-      // for a section that does not exist.
+      // Only a key the panel itself draws (§5, plus item 2's dismissed section) — a hand-crafted
+      // key would write a collapse state for a section that does not exist.
       const key = message.key;
       const collapsed = message.collapsed;
       if (typeof key !== 'string' || typeof collapsed !== 'boolean') return null;
-      if (!PANEL_SECTIONS.some((section) => section.key === key)) return null;
+      const drawn =
+        key === DISMISSED_SECTION_KEY || PANEL_SECTIONS.some((section) => section.key === key);
+      if (!drawn) return null;
       return { type: 'toggleSection', key, collapsed };
     }
     case 'toggleRow': {

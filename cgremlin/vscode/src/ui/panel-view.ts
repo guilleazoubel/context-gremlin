@@ -22,15 +22,22 @@ import { itemActionFacts, rowActions } from '../model/row-actions';
 import {
   buildItemChildren,
   buildWorkLists,
+  isDismissed,
   readCollapsed,
   readFocus,
+  readShowDismissed,
   readSort,
   readSorts,
   ticketBanner,
+  toRow,
   writeCollapsed,
   writeFocus,
+  writeShowDismissed,
   writeSort,
   COLLAPSE_STATE_KEY,
+  DISMISSED_SECTION_GLYPH,
+  DISMISSED_SECTION_KEY,
+  DISMISSED_SECTION_TITLE,
   FOCUS_ALL,
   PANEL_SECTIONS,
   type CollapseState,
@@ -144,6 +151,14 @@ export class PanelView implements WebviewViewProviderLike {
   private noticeDismissed: boolean;
   /** §6: `all`, or the one section key the panel is narrowed to (R64). */
   private focus: string;
+  /** Item 2: whether the bin is open. Persisted, because it is a way of working (R64). */
+  private showDismissed: boolean;
+  /**
+   * Item 2's optimism: what THIS window has just asked the engine to dismiss (or restore), until
+   * the engine's own answer arrives and agrees. A click has to move the row now — the refresh is
+   * a round trip away — and a request that fails has to move it back, which is what this remembers.
+   */
+  private readonly pendingDismissal = new Map<string, boolean>();
   private sorts: Record<WorkListKind, WorkSortKind>;
   /** §3.3: `setConnected` + `setItems` + `setSourceTrouble` in one refresh are ONE post. */
   private batchDepth = 0;
@@ -157,6 +172,27 @@ export class PanelView implements WebviewViewProviderLike {
     this.expandedId = deps.host.getState<string>(EXPANDED_STATE_KEY) ?? null;
     this.noticeDismissed = deps.host.getState<boolean>(WORKSPACE_NOTICE_DISMISSED_KEY) === true;
     this.focus = readFocus(deps.host);
+    this.showDismissed = readShowDismissed(deps.host);
+  }
+
+  /**
+   * Item 2: the row leaves (or rejoins) its section on the click, not on the refresh that follows.
+   * The engine is still the owner — this only holds the gap, and `setItems` drops each entry the
+   * moment the engine says the same thing.
+   */
+  setPendingDismissal(id: string, dismissed: boolean): void {
+    this.pendingDismissal.set(id, dismissed);
+    this.render();
+  }
+
+  /** The request failed: the panel stops claiming something the engine never accepted. */
+  clearPendingDismissal(id: string): void {
+    if (!this.pendingDismissal.delete(id)) return;
+    this.render();
+  }
+
+  private dismissedFor(item: WorkItem): boolean {
+    return this.pendingDismissal.get(item.id) ?? isDismissed(item);
   }
 
   /** The swap's report: this window is not the managed workspace, so the notice is owed. */
@@ -226,6 +262,12 @@ export class PanelView implements WebviewViewProviderLike {
 
   setItems(response: ItemsResponse | null): void {
     this.response = response;
+    // An optimistic flag outlives exactly one round trip: the moment the engine's own answer says
+    // the same thing (or the item is gone), the panel goes back to reading the wire.
+    for (const [id, dismissed] of [...this.pendingDismissal]) {
+      const item = response?.items.find((candidate) => candidate.id === id);
+      if (item === undefined || isDismissed(item) === dismissed) this.pendingDismissal.delete(id);
+    }
     this.refreshDetail();
     this.render();
   }
@@ -302,12 +344,19 @@ export class PanelView implements WebviewViewProviderLike {
   state(): PanelState {
     const trouble = this.troubleView();
     const sections = trouble === null ? this.sections() : [];
+    // §6: the control lists every area with its count; the panel paints only the focused one,
+    // so the keyboard cannot reach a row that is not on screen.
+    const shown =
+      this.focus === FOCUS_ALL ? sections : sections.filter((s) => s.key === this.focus);
+    // Item 2: the bin is not an area of the work, so it is not filtered by the focus — it is
+    // drawn below whatever is on screen, and only while the toggle is on.
+    const dismissed = trouble === null ? this.dismissedSection() : null;
     return {
-      // §6: the control lists every area with its count; the panel paints only the focused one,
-      // so the keyboard cannot reach a row that is not on screen.
-      sections: this.focus === FOCUS_ALL ? sections : sections.filter((s) => s.key === this.focus),
+      sections: this.showDismissed && dismissed !== null ? [...shown, dismissed] : shown,
       focus: this.focus,
       focusOptions: focusOptionsOf(sections),
+      dismissedCount: dismissed?.count ?? 0,
+      showDismissed: this.showDismissed,
       // P3: the strip survives a trouble state — what wants the user is still true while the
       // engine is explaining itself, and it is the one thing worth carrying across.
       needsYou: needsYouEntries(this.items()),
@@ -362,7 +411,11 @@ export class PanelView implements WebviewViewProviderLike {
     return PANEL_SECTIONS.map((spec, index) => {
       const list = built[spec.list];
       const source = list.sections.find((section) => section.group === spec.group);
-      const rows = (source?.rows ?? []).map((row) => this.rowView(row));
+      // A row this window has just dismissed leaves its section now; the engine's own lists
+      // already exclude the ones it knows about (D2).
+      const rows = (source?.rows ?? [])
+        .filter((row) => !this.dismissedFor(row.item))
+        .map((row) => this.rowView(row));
       return {
         key: spec.key,
         list: spec.list,
@@ -383,6 +436,43 @@ export class PanelView implements WebviewViewProviderLike {
     });
   }
 
+  /**
+   * Item 2's bin. Its rows come from `dismissed` — the core's own order, newest first — with
+   * whatever this window has just put aside in front of it, because that is the newest of all.
+   *
+   * A dismissed item is NOT in any list, so there is no `WorkRow` to take: each one is built
+   * against the first list it claims to belong to, which is what its row actions are a rule about.
+   */
+  private dismissedSection(): PanelSectionView | null {
+    if (this.response === null) return null;
+    const optimistic = [...this.pendingDismissal]
+      .filter(([, dismissed]) => dismissed)
+      .map(([id]) => id)
+      .reverse();
+    const ids = [...new Set([...optimistic, ...(this.response.dismissed ?? [])])];
+    const now = this.deps.now?.() ?? Date.now();
+    const rows = ids.flatMap((id) => {
+      const item = this.itemOf(id);
+      if (item === undefined || !this.dismissedFor(item)) return [];
+      return [this.rowView(toRow(item, item.lists[0] ?? 'parkingLot', now))];
+    });
+    return {
+      key: DISMISSED_SECTION_KEY,
+      // Only so the section has one: it draws no sort control, and nothing it offers is a rule
+      // about a list — a dismissed row's one action is to stop being dismissed.
+      list: 'parkingLot',
+      group: null,
+      title: DISMISSED_SECTION_TITLE,
+      glyph: DISMISSED_SECTION_GLYPH,
+      count: rows.length,
+      collapsed: this.collapsed[DISMISSED_SECTION_KEY] ?? false,
+      sort: this.sorts.parkingLot,
+      sorts: [],
+      showsSort: false,
+      rows,
+    };
+  }
+
   /** One write per toggle, so the next window opens on the panel the user left behind (R64). */
   private setCollapsed(key: string, collapsed: boolean): void {
     this.collapsed = { ...this.collapsed, [key]: collapsed };
@@ -392,7 +482,8 @@ export class PanelView implements WebviewViewProviderLike {
 
   private rowView(row: WorkRow): PanelRowView {
     const expanded = this.expandedId === row.id;
-    const actions = actionsFor(row.item, row.list);
+    const dismissed = this.dismissedFor(row.item);
+    const actions = actionsFor(row.item, row.list, dismissed);
     // Item 1: the user's own title wins over everything derived, and the row says so — in the
     // accessible name here, and as a mark beside L2 in the webview.
     const own = readTitle(this.deps.host, row.item);
@@ -414,6 +505,7 @@ export class PanelView implements WebviewViewProviderLike {
       meta: row.meta,
       tier: row.tier,
       demoted: row.demoted,
+      dismissed,
       needsYou: row.needsYou,
       // Every row expands now: what it expands INTO is the three lifecycle slots, which exist
       // whether or not the item has a second part to name (§4, amended).
@@ -590,6 +682,11 @@ export class PanelView implements WebviewViewProviderLike {
         }
         this.render();
         return;
+      case 'setShowDismissed':
+        this.showDismissed = message.show;
+        writeShowDismissed(this.deps.host, message.show);
+        this.render();
+        return;
       case 'toggleRow':
         // The keyboard's way of opening a row, and it reads the detail for the same reason a
         // click does: an expand is the one moment the row is certainly worth a round trip.
@@ -698,7 +795,16 @@ function focusOptionsOf(sections: readonly PanelSectionView[]): PanelFocusOption
   ];
 }
 
-export function actionsFor(item: WorkItem, list: WorkListKind): PanelActionView[] {
+export function actionsFor(
+  item: WorkItem,
+  list: WorkListKind,
+  dismissed = isDismissed(item),
+): PanelActionView[] {
+  // Item 2: a row the user has put aside offers exactly one verb — stop putting it aside. Every
+  // other verb would start work on something he has just said he does not care about.
+  if (dismissed) {
+    return [{ command: 'cgremlin.undismissItem', label: 'Undismiss', placement: 'inline' }];
+  }
   // §4: `Ack` renders only while something needs you AND you have not already said so. The rule
   // table cannot see the acknowledgement, so the one field it lacks is applied here.
   const actions = rowActions(itemActionFacts(item), list).filter(
@@ -707,5 +813,6 @@ export function actionsFor(item: WorkItem, list: WorkListKind): PanelActionView[
   // Item 1: naming a row is never a rule about a list, which is why it is added here rather than
   // in the shared table — the Item tab's buttons are about the WORK, and this is about the panel.
   actions.push({ command: 'cgremlin.renameItem', label: 'Rename', placement: 'inline' });
+  actions.push({ command: 'cgremlin.dismissItem', label: 'Dismiss', placement: 'inline' });
   return actions;
 }

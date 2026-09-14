@@ -51,6 +51,7 @@ function rowView(over: Partial<PanelRowView> = {}): PanelRowView {
     ],
     tier: 'M',
     demoted: false,
+    dismissed: false,
     needsYou: false,
     hasChildren: true,
     expanded: false,
