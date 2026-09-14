@@ -22,7 +22,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { EngineSurface } from '../../src/ui/engine';
 import { loadBridge } from '../../src/engine/bridge';
 import { NodeEngineProcess } from '../../src/engine/node-engine-process';
-import type { EngineIdentity, SignalOutcome } from '../../src/engine/manager';
+import type { EngineIdentity, ShutdownOutcome, SignalOutcome } from '../../src/engine/manager';
 import { FakeHost } from '../support/fake-host';
 import {
   coreIsBuilt,
@@ -72,6 +72,22 @@ class CountingProcess extends NodeEngineProcess {
     this.sigterms += 1;
     return super.signal(pid, sig);
   }
+}
+
+/**
+ * An engine too old to answer `POST /shutdown` — a 404 on the route, which is what every engine
+ * built before it answers. It is the ONE case that still earns a signal, and the only way to
+ * exercise the ownership proof against a real pid now that a live engine answers for itself.
+ */
+class UnanswerableShutdown extends CountingProcess {
+  override async requestShutdown(): Promise<ShutdownOutcome> {
+    return { kind: 'unavailable', detail: 'this engine has no /shutdown route' };
+  }
+}
+
+/** How many accepted stops the engines in this state dir have logged. */
+function acceptedShutdowns(logPath: string): number {
+  return (readEngineLog(logPath).match(/"type":"shutdown\.accepted"/g) ?? []).length;
 }
 
 /**
@@ -189,7 +205,12 @@ describe.skipIf(!coreIsBuilt())('integration: the bundled engine through its man
     // completely silent, which is exactly why this guard exists.
     await writeFile(h.enginePidPath, JSON.stringify({ ...real, pid: process.pid }), 'utf8');
 
-    const state = await h.manager.stop();
+    // Against an engine that CAN answer, a stop is a request and never reaches a signal at all —
+    // so this drives the fallback path, which is the only one the proof guards.
+    const deaf = createManager(h, {
+      process: new UnanswerableShutdown({ env: h.env, shell: h.loginShell }),
+    });
+    const state = await deaf.stop('user');
     expect(state.kind).toBe('failed');
     expect(state.kind === 'failed' ? state.reason : '').toContain('disagree');
     expect(process.kill(process.pid, 0)).toBe(true);
@@ -327,7 +348,9 @@ describe.skipIf(!coreIsBuilt())('integration: the bundled engine through its man
       { what: 'the restarted engine to write a new engine.json' },
     );
     expect(after?.startedAt).not.toBe(before.startedAt);
-    expect(process_.sigterms).toBe(1);
+    // The engine was ASKED and agreed; nothing was signalled, which is the whole point.
+    expect(process_.sigterms).toBe(0);
+    expect(acceptedShutdowns(seed.engineLogPath)).toBe(1);
 
     // The replacement is the same bundle, so it is STILL a mismatch — and it is left alone. A
     // generous window, because a second restart would be a real process doing real work and this
@@ -335,7 +358,8 @@ describe.skipIf(!coreIsBuilt())('integration: the bundled engine through its man
     expect(manager.state().kind).toBe('mismatch');
     await sleep(1_000);
     await surface.settled();
-    expect(process_.sigterms).toBe(1);
+    expect(process_.sigterms).toBe(0);
+    expect(acceptedShutdowns(seed.engineLogPath)).toBe(1);
     expect(engineProcessCount(seed.configPath)).toBe(1);
     expect(host.callsOf('showInformationMessage')).toHaveLength(0);
   }, STOP_TIMEOUT);
@@ -354,7 +378,7 @@ describe.skipIf(!coreIsBuilt())('integration: the bundled engine through its man
    * once; the stale one adopts it and says the window is what needs reloading. Twenty seconds of
    * both windows probing is what proves the loop is gone.
    */
-  it('two windows on different builds leave exactly ONE SIGTERM in the log (the ping-pong)', async () => {
+  it('two windows on different builds leave exactly ONE accepted stop and NO signal (the ping-pong)', async () => {
     const seed = await seedStateDir();
     const bridge = loadBridge(EXTENSION_ROOT);
     const engineBuiltAt = Date.parse(bridge.ENGINE_BUILD_TIME ?? '');
@@ -415,10 +439,11 @@ describe.skipIf(!coreIsBuilt())('integration: the bundled engine through its man
       await sleep(500);
     }
 
+    // Not one signal between them, from either side: the engine was asked, and it agreed once.
     const sigterms = (readEngineLog(seed.engineLogPath).match(/"signal":"SIGTERM"/g) ?? []).length;
-    expect(sigterms).toBe(1);
-    expect(freshProcess.sigterms + staleProcess.sigterms).toBe(1);
-    expect(staleProcess.sigterms).toBe(0);
+    expect(sigterms).toBe(0);
+    expect(freshProcess.sigterms + staleProcess.sigterms).toBe(0);
+    expect(acceptedShutdowns(seed.engineLogPath)).toBe(1);
     expect(stale.state().kind).toBe('outdated');
     expect(engineProcessCount(seed.configPath)).toBe(1);
   }, 90_000);

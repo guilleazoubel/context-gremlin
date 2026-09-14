@@ -877,3 +877,80 @@ describe('serve — human-turn claims are cleared at boot (R20)', () => {
     }
   });
 });
+
+/**
+ * R-shutdown: an engine that can refuse a stop.
+ *
+ * A SIGTERM cannot be refused, so the only window that could ever be told "no" was none — and two
+ * windows on two builds therefore signalled each other's engines for ever. `POST /shutdown` is the
+ * same graceful `close()` the signal path performs, behind a decision the engine itself makes.
+ */
+describe('serve — POST /shutdown', () => {
+  const ask = (over: Record<string, unknown> = {}) => ({
+    requesterBuildTime: '2030-01-01T00:00:00.000Z',
+    requesterBuildId: 'a-newer-window',
+    reason: 'restart',
+    ...over,
+  });
+
+  it('accepts a newer requester and performs the same close SIGTERM performs', async () => {
+    const lines: string[] = [];
+    const handle = await serve(testConfig(), testAdapters(), { log: (l) => lines.push(l) });
+    try {
+      const res = await requestOn(handle.socketPath, 'POST', '/shutdown', ask());
+      expect(res).toEqual({ status: 202, body: { accepted: true } });
+      // The very things `close()` owns: the socket file and R22's lock are gone, and the process
+      // signal handlers it registered are unregistered.
+      // R22's lock is removed in the same `finally` that unlinks the socket, just after it.
+      await vi.waitFor(async () => {
+        await expect(stat(handle.socketPath)).rejects.toThrow();
+        expect(existsSync(path.join(dir, 'engine.json'))).toBe(false);
+      });
+      expect(lines.some((l) => l.includes('shutdown.accepted'))).toBe(true);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  /**
+   * An engine built from a checkout has no build time, so it can never claim to be the newer of
+   * the two and refuses nobody — the dev flow keeps working. The refusal itself is proved where
+   * the engine's build time can be set: `test/api/shutdown-route.test.ts`, and against two real
+   * bundles in the extension's own integration suite.
+   */
+  it('refuses nothing it cannot prove it is newer than, and a bad request changes nothing', async () => {
+    const handle = await serve(testConfig(), testAdapters(), { log: () => {} });
+    try {
+      const bad = await requestOn(handle.socketPath, 'POST', '/shutdown', { reason: 'whenever' });
+      expect(bad.status).toBe(400);
+      await new Promise((r) => setTimeout(r, 20));
+      expect(await requestOn(handle.socketPath, 'GET', '/sessions')).toEqual({
+        status: 200,
+        body: { sessions: [] },
+      });
+      expect(existsSync(path.join(dir, 'engine.json'))).toBe(true);
+      // …and an undated requester is accepted by an equally undated engine: same build, no order.
+      expect((await requestOn(handle.socketPath, 'POST', '/shutdown', ask({ requesterBuildTime: null }))).status).toBe(202);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it("honours a person's stop from a window with no build time at all", async () => {
+    const handle = await serve(testConfig(), testAdapters(), { log: () => {} });
+    try {
+      const res = await requestOn(
+        handle.socketPath,
+        'POST',
+        '/shutdown',
+        ask({ requesterBuildTime: null, reason: 'user' }),
+      );
+      expect(res.status).toBe(202);
+      await vi.waitFor(async () => {
+        await expect(stat(handle.socketPath)).rejects.toThrow();
+      });
+    } finally {
+      await handle.close();
+    }
+  });
+});

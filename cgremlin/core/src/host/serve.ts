@@ -227,7 +227,7 @@ export async function serve(config: CoreConfig, adapters: EngineAdapters, opts: 
   await adapters.fs.mkdir(mirrorsDir, { recursive: true });
 
   const engine = buildEngine(config, adapters, { makeTickable: opts.makeTickable });
-  const { server, scheduler, scanner, pipeline, events, environment, attention, workItems, engineInfo } = engine;
+  const { server, scheduler, scanner, pipeline, events, environment, attention, workItems, engineInfo, shutdown } = engine;
   const lockPath = config.enginePidPath!;
 
   const unsubscribers: Array<() => void> = [
@@ -337,9 +337,23 @@ export async function serve(config: CoreConfig, adapters: EngineAdapters, opts: 
   // at item granularity. It starts nothing and locks nothing.
   workItems.start();
 
+  // R-shutdown: the route can now ask for exactly what a signal asks for, and the engine gets to
+  // answer. Installed here rather than in `buildEngine` because `close()` only exists at this
+  // point — and it is the SAME memoized close the signal handler below calls, so an accepted
+  // shutdown and a SIGTERM are one code path with one set of semantics.
+  shutdown.install({
+    close: () => close(),
+    log: (type, payload) => logLine(opts.log, type, payload),
+  });
+
   const signals = opts.signals ?? (['SIGINT', 'SIGTERM'] as const);
   const signalHandler = (sig: NodeJS.Signals): void => {
-    logLine(opts.log, 'signal', { signal: sig });
+    // Who sent it is not knowable: POSIX carries the sender in `siginfo_t`, and Node's signal
+    // events expose none of it (`process.on('SIGTERM', cb)` is called with the signal name and
+    // nothing else). So the line says what it can — and the fact that it CANNOT say who is
+    // precisely why `POST /shutdown` exists: a request names its requester and can be refused,
+    // a signal does neither.
+    logLine(opts.log, 'signal', { signal: sig, sender: null });
     // Fire-and-forget from this synchronous handler's own perspective, but
     // still attach a rejection handler — close() is memoized below, so this
     // is the SAME promise any other caller (e.g. the CLI's serve command)

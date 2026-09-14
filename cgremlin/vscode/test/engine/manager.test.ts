@@ -385,7 +385,9 @@ describe('MG-C2 never-kill-what-we-cannot-prove', () => {
     fake.probes = [identity(), identity(), null];
     fake.pidFiles = [pidFile()];
     await withClock(manager.stop(), 1_000);
-    expect(fake.order().slice(0, 5)).toEqual([
+    expect(fake.order().slice(0, 6)).toEqual([
+      // The request comes first, always; the proof exists for the engine that cannot answer it.
+      'requestShutdown',
       'readPidFile',
       'probe',
       'readPidFile',
@@ -840,5 +842,112 @@ describe('restart', () => {
     expect(state.kind).toBe('failed');
     expect(fake.signals).toHaveLength(0);
     expect(fake.spawns).toHaveLength(0);
+  });
+});
+
+/**
+ * The engine can say no, and that is what finally ends the ping-pong.
+ *
+ * Ordering by build time keeps a window that HAS the ordering from fighting. It does nothing
+ * about a window still running the previous extension in memory: that code restarts on any build
+ * mismatch, and a SIGTERM cannot be refused, so the pair traded restarts until every window was
+ * reloaded. So the stop stops being a signal: the manager ASKS (`POST /shutdown`, carrying its own
+ * build time, build id and the trigger's reason) and the engine decides. A signal is left for the
+ * one case a request cannot cover — an engine that no longer answers its socket at all.
+ */
+describe('R-shutdown: stopping is a request the engine may refuse', () => {
+  it('asks before it signals, and signals nothing at all when the engine accepts', async () => {
+    fake.shutdownOutcome = { kind: 'accepted' };
+    fake.probes = [null]; // the engine goes quiet on its own, the way close() does
+    fake.pidFiles = [pidFile()];
+    const state = await withClock(manager.stop('user'), 1_000);
+    expect(state).toEqual({ kind: 'stopped' });
+    expect(fake.signals).toHaveLength(0);
+    expect(fake.shutdowns).toEqual([
+      {
+        requesterBuildTime: BUNDLED_BUILD_TIME,
+        requesterBuildId: BUNDLED_BUILD_ID,
+        reason: 'user',
+      },
+    ]);
+  });
+
+  it('a new window over an old engine: one request, no signal, and the restart goes through', async () => {
+    const old = identity({ buildId: 'bbbbbbbbbbbbbbbb', buildTime: OLDER });
+    fake.probes = [old, null];
+    fake.pidFiles = [pidFile()];
+    fake.shutdownOutcome = { kind: 'accepted' };
+    fake.spawnedAnswer = identity();
+    const state = await withClock(manager.restart('auto'), 2_000);
+    expect(state).toMatchObject({ kind: 'running' });
+    expect(fake.shutdowns.map((s) => s.reason)).toEqual(['restart']);
+    expect(fake.signals).toHaveLength(0);
+    expect(fake.spawns).toHaveLength(1);
+  });
+
+  it('an old window over a new engine: refused, adopted as outdated, and nothing is signalled', async () => {
+    const newer = identity({ buildId: 'bbbbbbbbbbbbbbbb', buildTime: NEWER, pid: 77 });
+    fake.probes = [newer];
+    fake.pidFiles = [pidFile()];
+    fake.shutdownOutcome = {
+      kind: 'refused',
+      reason: 'engine is newer than the requester',
+      engineBuildTime: NEWER,
+    };
+    const state = await manager.stop('auto');
+    expect(state).toMatchObject({ kind: 'outdated', pid: 77 });
+    expect(fake.signals).toHaveLength(0);
+    expect(fake.spawns).toHaveLength(0);
+    expect(logs.filter((l) => l.startsWith('engine.shutdown_refused'))).toHaveLength(1);
+  });
+
+  it('a refused restart neither stops nor starts anything', async () => {
+    const newer = identity({ buildId: 'bbbbbbbbbbbbbbbb', buildTime: NEWER, pid: 77 });
+    fake.probes = [newer];
+    fake.pidFiles = [pidFile()];
+    fake.shutdownOutcome = {
+      kind: 'refused',
+      reason: 'engine is newer than the requester',
+      engineBuildTime: NEWER,
+    };
+    const state = await manager.restart('auto');
+    expect(state).toMatchObject({ kind: 'outdated' });
+    expect(fake.signals).toHaveLength(0);
+    expect(fake.spawns).toHaveLength(0);
+  });
+
+  it('falls back to the two-part proof and ONE signal only when the route does not answer', async () => {
+    fake.shutdownOutcome = { kind: 'unavailable', detail: 'nothing answered' };
+    fake.probes = [identity(), identity(), null];
+    fake.pidFiles = [pidFile()];
+    const state = await withClock(manager.stop('user'), 1_000);
+    expect(state).toEqual({ kind: 'stopped' });
+    expect(fake.signals).toEqual([{ pid: 4242, sig: 'SIGTERM' }]);
+    expect(fake.order().slice(0, 6)).toEqual([
+      'requestShutdown',
+      'readPidFile',
+      'probe',
+      'readPidFile',
+      'probe',
+      'signal',
+    ]);
+  });
+
+  it("names the trigger: 'user' for a person, 'restart'/'stop' for the window itself", async () => {
+    fake.shutdownOutcome = { kind: 'accepted' };
+    fake.probes = [null];
+    fake.pidFiles = [pidFile()];
+    await withClock(manager.stop('auto'), 1_000);
+    await withClock(manager.stop('user'), 1_000);
+    // A refusal ends a restart there and then, which is all this case needs to read the reason off.
+    fake.shutdownOutcome = {
+      kind: 'refused',
+      reason: 'engine is newer than the requester',
+      engineBuildTime: NEWER,
+    };
+    fake.probes = [identity({ buildId: 'bbbbbbbbbbbbbbbb', buildTime: NEWER })];
+    await manager.restart('auto');
+    await manager.restart('user');
+    expect(fake.shutdowns.map((s) => s.reason)).toEqual(['stop', 'user', 'restart', 'user']);
   });
 });

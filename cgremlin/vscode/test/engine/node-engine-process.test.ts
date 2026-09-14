@@ -357,3 +357,87 @@ describe('childEnv', () => {
     });
   });
 });
+
+/**
+ * `POST /shutdown`, against a real socket. The manager decides what to do with the answer; this
+ * proves the adapter can tell the three answers apart — and, above all, that only "there was
+ * nobody to ask" reads as `unavailable`, because that is the single case allowed to fall back to
+ * a signal.
+ */
+describe('requestShutdown', () => {
+  const ASK = {
+    requesterBuildTime: '2026-09-11T09:00:00.000Z',
+    requesterBuildId: 'a-window',
+    reason: 'restart' as const,
+  };
+
+  /** A stub engine that answers `/shutdown` with `status`/`body` and records what it was sent. */
+  async function shutdownServer(
+    status: number,
+    body: unknown,
+  ): Promise<{ socketPath: string; received: () => unknown }> {
+    const socketPath = path.join(tempDir(), 'engine.sock');
+    let received: unknown;
+    const server = http.createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (c: Buffer) => chunks.push(c));
+      req.on('end', () => {
+        received = JSON.parse(Buffer.concat(chunks).toString('utf8') || 'null');
+        res.writeHead(status, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify(body));
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(socketPath, () => resolve()));
+    cleanups.push(() => server.close());
+    return { socketPath, received: () => received };
+  }
+
+  it('sends the request body and reads a 202 as accepted', async () => {
+    const engine = await shutdownServer(202, { accepted: true });
+    const outcome = await new NodeEngineProcess().requestShutdown(engine.socketPath, ASK);
+    expect(outcome).toEqual({ kind: 'accepted' });
+    expect(engine.received()).toEqual(ASK);
+  });
+
+  it("reads a 409 as a refusal, carrying the engine's own words", async () => {
+    const engine = await shutdownServer(409, {
+      accepted: false,
+      reason: 'engine is newer than the requester',
+      engineBuildTime: '2026-09-12T09:00:00.000Z',
+    });
+    expect(await new NodeEngineProcess().requestShutdown(engine.socketPath, ASK)).toEqual({
+      kind: 'refused',
+      reason: 'engine is newer than the requester',
+      engineBuildTime: '2026-09-12T09:00:00.000Z',
+    });
+  });
+
+  it('reads an engine that has no such route, and a socket nobody holds, as unavailable', async () => {
+    const old = await shutdownServer(404, { error: 'not found' });
+    expect(await new NodeEngineProcess().requestShutdown(old.socketPath, ASK)).toMatchObject({
+      kind: 'unavailable',
+    });
+    const nowhere = path.join(tempDir(), 'engine.sock');
+    expect(await new NodeEngineProcess().requestShutdown(nowhere, ASK)).toMatchObject({
+      kind: 'unavailable',
+      detail: 'ENOENT',
+    });
+  });
+
+  it('gives up as unavailable on a socket that accepts and never answers', async () => {
+    const socketPath = path.join(tempDir(), 'engine.sock');
+    const server = http.createServer(() => {
+      /* accepts the request and says nothing, for ever */
+    });
+    await new Promise<void>((resolve) => server.listen(socketPath, () => resolve()));
+    cleanups.push(() => {
+      server.closeAllConnections();
+      server.close();
+    });
+    const outcome = await new NodeEngineProcess({ probeTimeoutMs: 50 }).requestShutdown(
+      socketPath,
+      ASK,
+    );
+    expect(outcome).toMatchObject({ kind: 'unavailable' });
+  });
+});
