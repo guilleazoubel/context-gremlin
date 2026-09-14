@@ -314,12 +314,30 @@ body {
 
 .row {
   display: block;
-  padding: 8px 10px;
+  padding: 10px;
   /* The section's rule, on every row of it (§5). Reserved even where there is no colour, so a
    * border that appeared with the accent could never move the text sideways. */
   border-left: 3px solid var(--cg-section, transparent);
-  border-bottom: 1px solid var(--cg-divider);
   cursor: pointer;
+}
+
+/*
+ * §7 — the breakpoint between two items is 4 px of sidebar ground with the section's rule BROKEN
+ * across it. The interrupted rule is the separation: structure carrying information, rather than
+ * a hairline drawn for its own sake (which is what the 1 px 40% divider was). An open row and the
+ * block it opens into keep NO gap, so the two read as one taller band rather than as a panel that
+ * appeared underneath.
+ */
+.row + .row {
+  margin-top: 4px;
+}
+
+.expanded + .row {
+  margin-top: 4px;
+}
+
+.row + .expanded {
+  margin-top: 0;
 }
 
 /* The ONLY thing hover changes. */
@@ -329,6 +347,15 @@ body {
 
 .row.selected {
   background: var(--vscode-list-inactiveSelectionBackground);
+}
+
+.expanded {
+  background: var(--vscode-list-inactiveSelectionBackground);
+}
+
+/* The selected row says so twice: the ground, and one step of weight on the line being scanned. */
+.row.selected .row-id {
+  font-weight: 700;
 }
 
 .row.demoted {
@@ -469,9 +496,9 @@ body {
 /* --- what a row opens into --------------------------------------------- */
 
 .expanded {
-  padding: 4px 10px 10px 26px;
-  border-bottom: 1px solid var(--cg-divider);
-  background: var(--vscode-sideBar-background);
+  padding: 0 10px 10px 26px;
+  /* The row's own rule, continued: the block belongs to the item above it (§7). */
+  border-left: 3px solid var(--cg-section, transparent);
 }
 
 /*

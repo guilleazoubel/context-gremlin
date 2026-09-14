@@ -8,6 +8,8 @@
  * Asserted against an instrumented DOM: a render over identical data must produce an EMPTY
  * mutation log, and a change must patch exactly the leaves that changed.
  */
+import fs from 'node:fs';
+import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { installDom, type FakeElement, type InstalledDom } from '../support/fake-dom';
 import { itemsResponse, stateOf } from './state';
@@ -204,5 +206,58 @@ describe('the per-section accents', () => {
     panel.render(stateOf({ selected: 'pr:acme/web#102' }));
     const row = rowNodes().find((n) => n.dataset.key === 'row:parkingLot:pr:acme/web#102');
     expect(row?.className).toBe('row sec-parkingLot-reviewing needs-you selected');
+  });
+});
+
+/**
+ * §7 — separation. The panel used to separate rows with a single 1px hairline at 40% and no gap,
+ * which reads as a grid rather than as a rhythm. What replaces it is 4px of sidebar background
+ * between consecutive rows with the section's coloured rule BREAKING across it: the interrupted
+ * rule is the breakpoint, which is structure carrying information rather than a divider drawn for
+ * its own sake. An open row and its submenu keep no gap at all, so they read as one taller band.
+ */
+describe('§7 the separation, as the stylesheet declares it', () => {
+  const css = fs.readFileSync(path.resolve(__dirname, '../../media/panel.css'), 'utf8');
+
+  it('puts 4px of ground between consecutive rows, and none before an open block', () => {
+    expect(css).toMatch(/\.row \+ \.row\s*\{[^}]*margin-top:\s*4px/);
+    expect(css).toMatch(/\.expanded \+ \.row\s*\{[^}]*margin-top:\s*4px/);
+    expect(css).toMatch(/\.row \+ \.expanded\s*\{[^}]*margin-top:\s*0/);
+  });
+
+  it('draws no hairline under a row at all — the gap IS the separation', () => {
+    expect(css).not.toMatch(/\.row\s*\{[^}]*border-bottom/);
+  });
+
+  it('keeps the section rule on the open block, so the item reads as one band', () => {
+    expect(css).toMatch(/\.expanded\s*\{[^}]*border-left:\s*3px solid var\(--cg-section/);
+  });
+
+  it('changes nothing but the background on hover, anywhere', () => {
+    for (const [, body] of css.matchAll(/:hover[^{]*\{([^}]*)\}/g)) {
+      const properties = body
+        .split(';')
+        .map((line) => line.split(':')[0].trim())
+        .filter((name) => name !== '');
+      expect(properties).toEqual(['background']);
+    }
+  });
+
+  it('toggles no node in the flow with display, so nothing can change a row’s height', () => {
+    expect(css).not.toMatch(/\.row[^{]*\{[^}]*display:\s*none/);
+    expect(css).not.toMatch(/:hover[^{]*\{[^}]*display:/);
+  });
+
+  it('marks the selected row with a ground and a heavier first line, and no new box', () => {
+    expect(css).toMatch(
+      /\.row\.selected\s*\{[^}]*background:\s*var\(--vscode-list-inactiveSelectionBackground\)/,
+    );
+    expect(css).toMatch(/\.row\.selected \.row-id\s*\{[^}]*font-weight:\s*700/);
+    // No cards, no radius on rows, no shadows (§7) — the one inset shadow is needs-you's bar.
+    expect(css).not.toMatch(/\.row\s*\{[^}]*border-radius/);
+  });
+
+  it('pads a row 10px on both axes, so three lines are about 68px', () => {
+    expect(css).toMatch(/\.row\s*\{[^}]*padding:\s*10px/);
   });
 });

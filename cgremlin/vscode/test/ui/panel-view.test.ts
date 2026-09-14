@@ -611,12 +611,13 @@ describe('R54 the look', () => {
     expect(script).not.toContain('codicon');
   });
 
-  it('separates card rows with a hairline and dims the second line', () => {
-    // §2.3: the divider is the panel border at 40%, so it reads as a rhythm and not as a grid.
+  it('separates rows with a gap in the section rule and dims the signals line', () => {
+    // §7: the hairline is gone — 4 px of ground with the coloured rule broken across it says the
+    // same thing and says which section it is at the same time.
     expect(css).toMatch(
       /--cg-divider:\s*color-mix\(in srgb, var\(--vscode-panel-border\) 40%, transparent\)/,
     );
-    expect(css).toMatch(/\.row\s*\{[^}]*border-bottom:\s*1px solid var\(--cg-divider\)/);
+    expect(css).toMatch(/\.row \+ \.row\s*\{[^}]*margin-top:\s*4px/);
     expect(css).toMatch(/\.row-signals\s*\{[^}]*var\(--vscode-descriptionForeground\)/);
     expect(css).toMatch(/:focus-visible[^}]*outline/);
   });
