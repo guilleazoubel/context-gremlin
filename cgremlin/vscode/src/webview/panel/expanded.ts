@@ -1,63 +1,39 @@
 /**
- * What a row opens into (§4, amended): the lifecycle, then the parts, then the size of the change.
+ * What a row opens into (§4): one list of the item's parts, then the size of the change.
  *
  * It is a SIBLING of the row rather than a child of it. That is the whole reason "row height
  * changes only on that click, never on a refresh" can be true of the node the pointer is over: a
  * refresh may add or remove this block, and the row itself never changes shape.
  *
- * Since the row's gutter and its `⋯` popover are gone, this block is also the ONLY place a verb
- * lives — so it has to carry every one. The slots already own the ladder's Start and each stage's
- * Chat; what is left over is the rare stuff with nowhere else to go (Ack, Open on GitHub, Open in
- * Jira), and that goes on one line at the bottom rather than into a menu that pops up unasked.
- *
- * The three slots are a real sequence — investigation, then development, then review — so the
- * stylesheet draws them on a spine. That is structure carrying information, not decoration: the
- * one place in the panel where the shape of the content is worth drawing.
+ * What it replaces is "three lifecycle slots + parts + people": three fixed stages drawn on every
+ * row, including the two that could only ever produce a nonsensical session on a teammate's PR.
+ * The parts arrive already filtered and already carrying their own buttons (`model/item-parts`),
+ * so nothing is decided here — this file lays them out and posts what they say.
  *
  * Runs in a browser context (R40).
  */
 import { post } from './channel';
-import { button, el, glyph } from './dom';
-import { reconcile, setHidden, setTabStop, setText } from './reconcile';
+import { button, el } from './dom';
+import { reconcile, setAttr, setClass, setHidden, setTabStop, setText } from './reconcile';
 import { child, commandOf } from './row';
-import type { HumanInteraction } from '../../model/work-items';
-import type {
-  PanelActionView,
-  PanelChildView,
-  PanelRowView,
-  PanelSlotView,
-} from '../../model/panel-protocol';
+import type { PanelActionView, PanelPartView, PanelRowView } from '../../model/panel-protocol';
 
 export function expandedKey(rowKey: string): string {
   return `expanded:${rowKey}`;
 }
-
-/** R48's secondary action: the browser for a PR or a ticket, the conversation for a session. */
-const GO_TO: Record<PanelChildView['kind'], string> = {
-  ticket: 'cgremlin.openTicket',
-  pr: 'cgremlin.openPr',
-  agent: 'cgremlin.chat',
-};
 
 export function createExpanded(): HTMLElement {
   const node = el('div', 'expanded');
   // P10: the panel's notice, repeated where the user is actually reading. Text only — the notice
   // itself carries the buttons, and two Opens for one offer is the clutter this all replaces.
   node.appendChild(el('div', 'expanded-hint'));
-  const slots = el('div', 'slots');
-  slots.setAttribute('role', 'group');
-  slots.setAttribute('aria-label', 'Lifecycle');
-  node.appendChild(slots);
-  node.appendChild(el('div', 'parts'));
 
-  // "Someone is on it" without a name and a date is the state the user said tells him nothing.
-  const people = el('div', 'people');
-  people.setAttribute('role', 'group');
-  people.setAttribute('aria-label', 'Who has been on it');
-  node.appendChild(people);
+  const parts = el('div', 'parts');
+  parts.setAttribute('role', 'group');
+  parts.setAttribute('aria-label', 'Parts of this item');
+  node.appendChild(parts);
 
   const changes = el('div', 'changes');
-  changes.appendChild(el('div', 'changes-title', 'Changes so far'));
   changes.appendChild(changeLine('committed', 'Committed'));
   changes.appendChild(changeLine('working', 'Working tree'));
   node.appendChild(changes);
@@ -81,46 +57,28 @@ export function patchExpanded(node: HTMLElement, row: PanelRowView, focusedKey: 
   const hint = child(node, '.expanded-hint');
   setText(hint, row.hint ?? '');
   setHidden(hint, row.hint === null);
-  patchSlots(child(node, '.slots'), node, row.lifecycle);
   patchParts(child(node, '.parts'), node, row, focusedKey);
-  patchPeople(child(node, '.people'), row.people);
   // `—` whenever the engine has not answered — the row never shows a fabricated zero (MG-12).
   setText(child(node, '.committed-value'), row.changes?.committed ?? '—');
   setText(child(node, '.working-value'), row.changes?.workingTree ?? '—');
   patchActions(child(node, '.actions'), node, row);
 }
 
+function keyOf(command: string, childId?: string): string {
+  return `${command}:${childId ?? ''}`;
+}
+
 /**
- * Everything the slots above do not already offer. A verb said twice in one open row is the same
- * clutter the popover was, so the slots' own Start and Chat are subtracted rather than repeated.
+ * Everything the parts do not already offer. A verb said twice in one open row is the same
+ * clutter the popover was, so every part's own buttons are subtracted rather than repeated —
+ * which in practice leaves `Ack`, and only while something needs the user (§4).
  */
 function leftoverActions(row: PanelRowView): PanelActionView[] {
   const taken = new Set<string>();
-  for (const slot of row.lifecycle) {
-    if (slot.start !== null) taken.add(keyOf(slot.start.command, slot.start.childId));
-    if (slot.sessionId !== null) taken.add(keyOf('cgremlin.chat', `agent:${slot.sessionId}`));
+  for (const part of row.parts) {
+    for (const action of part.actions) taken.add(keyOf(action.command, action.childId));
   }
   return row.actions.filter((action) => !taken.has(keyOf(action.command, action.childId)));
-}
-
-/** `@jane · reviewed (approved) · 2d ago` — one line per interaction, built as text (MG-B7). */
-function personLine(person: HumanInteraction): string {
-  const kind = person.verdict === null ? person.kind : `${person.kind} (${person.verdict})`;
-  return `@${person.login} · ${kind} · ${person.age}`;
-}
-
-function patchPeople(parent: HTMLElement, people: readonly HumanInteraction[]): void {
-  setHidden(parent, people.length === 0);
-  reconcile(
-    parent,
-    people.map((person) => ({ key: `${person.kind}:${person.login}`, data: person })),
-    () => el('div', 'person'),
-    (node, person) => setText(node, personLine(person)),
-  );
-}
-
-function keyOf(command: string, childId?: string): string {
-  return `${command}:${childId ?? ''}`;
 }
 
 function patchActions(parent: HTMLElement, root: HTMLElement, row: PanelRowView): void {
@@ -139,80 +97,6 @@ function patchActions(parent: HTMLElement, root: HTMLElement, row: PanelRowView)
   );
 }
 
-function patchSlots(parent: HTMLElement, root: HTMLElement, slots: readonly PanelSlotView[]): void {
-  reconcile(
-    parent,
-    slots.map((slot) => ({ key: slot.stage, data: slot })),
-    (slot) => createSlot(root, slot),
-    (node, slot) => {
-      setText(child(node, '.slot-state'), slot.stateText);
-      node.dataset.state = slot.state;
-      const open = child(node, '.slot-open');
-      const chat = child(node, '.slot-chat');
-      node.dataset.session = slot.sessionId ?? '';
-      setHidden(open, slot.sessionId === null);
-      setHidden(chat, slot.sessionId === null);
-      const start = child(node, '.slot-start');
-      setHidden(start, slot.start === null);
-      setText(start, slot.start?.label ?? '');
-      start.dataset.command = slot.start?.command ?? '';
-    },
-  );
-}
-
-function createSlot(root: HTMLElement, slot: PanelSlotView): HTMLElement {
-  const node = el('div', 'slot');
-  node.appendChild(glyph(slot.glyph));
-  const text = el('div', 'slot-text');
-  text.appendChild(el('div', 'slot-title', slot.title));
-  text.appendChild(el('div', 'slot-state'));
-  node.appendChild(text);
-
-  const actions = el('div', 'slot-actions');
-  // "Open" is the item tab focused on that agent; "Chat" is that stage's own conversation, gated
-  // exactly as it is everywhere else (R50) — a stage that never ran offers neither.
-  actions.appendChild(
-    button({
-      className: 'slot-open',
-      label: 'Open',
-      message: () => ({ type: 'openChild', id: root.dataset.id ?? '', childId: agent(node) }),
-    }),
-  );
-  actions.appendChild(
-    button({
-      className: 'slot-chat',
-      label: 'Chat',
-      message: () => ({
-        type: 'command',
-        command: 'cgremlin.chat',
-        id: root.dataset.id ?? '',
-        childId: agent(node),
-      }),
-    }),
-  );
-  actions.appendChild(
-    button({
-      className: 'slot-start',
-      label: '',
-      message: () => ({
-        type: 'command',
-        command: child(node, '.slot-start').dataset.command ?? '',
-        id: root.dataset.id ?? '',
-      }),
-    }),
-  );
-  node.appendChild(actions);
-  return node;
-}
-
-function agent(slot: HTMLElement): string {
-  return `agent:${slot.dataset.session ?? ''}`;
-}
-
-/**
- * The parts, as the `treeitem`s R66's model already counts — the ticket and the PRs. The agents
- * are the slots above, so no session is named twice in one open row.
- */
 function patchParts(
   parent: HTMLElement,
   root: HTMLElement,
@@ -221,37 +105,74 @@ function patchParts(
 ): void {
   reconcile(
     parent,
-    row.children.map((part) => ({ key: `child:${row.id}:${part.id}`, data: part })),
+    row.parts.map((part) => ({ key: `part:${row.id}:${part.key}`, data: part })),
     (part, key) => createPart(root, part, key),
     (node, part, key) => {
-      setText(child(node, '.part-label'), part.label);
-      setText(child(node, '.part-goto'), part.goToLabel);
+      setClass(node, `part part-${part.kind}`);
+      node.dataset.state = part.state;
+      node.dataset.childId = part.childId ?? '';
+      setText(child(node, '.part-glyph'), part.glyph);
+      setText(child(node, '.part-name'), part.name);
+      setText(child(node, '.part-state'), part.stateText);
+      const detail = child(node, '.part-detail');
+      setText(detail, part.detail);
+      setHidden(detail, part.detail === '');
+      setAttr(node, 'aria-label', `${part.name} ${part.stateText}`);
+      patchPartActions(child(node, '.part-actions'), root, node, part);
       setTabStop(node, focusedKey === key);
     },
   );
 }
 
-function createPart(root: HTMLElement, part: PanelChildView, key: string): HTMLElement {
+/** Each part's own buttons, by command — so a Start that stopped applying simply leaves. */
+function patchPartActions(
+  parent: HTMLElement,
+  root: HTMLElement,
+  partNode: HTMLElement,
+  part: PanelPartView,
+): void {
+  reconcile(
+    parent,
+    part.actions.map((action) => ({ key: keyOf(action.command, action.childId), data: action })),
+    (action) =>
+      button({
+        className: `part-action part-action-${action.command.split('.').pop() ?? ''}`,
+        label: action.label,
+        message: () =>
+          action.command === 'cgremlin.openChild'
+            ? {
+                type: 'openChild',
+                id: root.dataset.id ?? '',
+                childId: partNode.dataset.childId ?? '',
+              }
+            : commandOf(root, action.command, action.childId),
+      }),
+    (node, action) => setText(node, action.label),
+  );
+}
+
+function createPart(root: HTMLElement, part: PanelPartView, key: string): HTMLElement {
   const node = el('div', 'part');
   node.dataset.key = key;
-  node.dataset.childId = part.id;
   node.setAttribute('role', 'treeitem');
   node.setAttribute('aria-level', '2');
-  node.appendChild(el('span', 'part-label'));
-  node.appendChild(
-    button({
-      className: 'part-goto',
-      label: '',
-      message: () => ({
-        type: 'command',
-        command: GO_TO[part.kind],
-        id: root.dataset.id ?? '',
-        childId: part.id,
-      }),
-    }),
-  );
+  // Unicode, aria-hidden: the part's NAME is the accessible text, and the glyph is the mark that
+  // makes the five kinds tellable apart at a glance (§8 — never an icon font).
+  const mark = el('span', 'part-glyph');
+  mark.setAttribute('aria-hidden', 'true');
+  node.appendChild(mark);
+  const text = el('div', 'part-text');
+  text.appendChild(el('div', 'part-name'));
+  text.appendChild(el('div', 'part-state'));
+  text.appendChild(el('div', 'part-detail'));
+  node.appendChild(text);
+  const actions = el('div', 'part-actions');
+  node.appendChild(actions);
   node.addEventListener('click', () => {
-    post({ type: 'openChild', id: root.dataset.id ?? '', childId: part.id });
+    // A stage that never ran opens nothing: there is no session behind it to open (§4).
+    const childId = node.dataset.childId ?? '';
+    if (childId === '') return;
+    post({ type: 'openChild', id: root.dataset.id ?? '', childId });
   });
   return node;
 }

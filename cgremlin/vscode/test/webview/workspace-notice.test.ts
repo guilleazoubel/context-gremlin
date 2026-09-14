@@ -77,10 +77,8 @@ describe('the same hint inside the expanded row', () => {
 
   it('carries the hint when the row is open and the offer stands', () => {
     const state = withNotice(ROW);
-    for (const list of state.lists) {
-      for (const section of list.sections) {
-        for (const row of section.rows) if (row.expanded) row.hint = NOTICE.message;
-      }
+    for (const section of state.sections) {
+      for (const row of section.rows) if (row.expanded) row.hint = NOTICE.message;
     }
     panel.render(state);
     // The fixture's row appears in more than one list; every open copy carries the same line.

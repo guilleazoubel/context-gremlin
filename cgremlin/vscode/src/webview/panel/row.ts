@@ -17,7 +17,7 @@
 import { post } from './channel';
 import { patchCells } from './cells';
 import { el } from './dom';
-import { setAttr, setClass, setTabStop, setText } from './reconcile';
+import { reconcile, setAttr, setClass, setHidden, setTabStop, setText } from './reconcile';
 import type { PanelRowView } from '../../model/panel-protocol';
 
 export interface RowContext {
@@ -35,14 +35,19 @@ export function createRow(row: PanelRowView): HTMLElement {
   node.setAttribute('role', 'treeitem');
   node.setAttribute('aria-level', '1');
 
-  const main = el('div', 'row-main');
-  const title = el('div', 'row-title');
-  title.appendChild(el('span', 'twisty'));
-  title.appendChild(el('span', 'row-label'));
-  main.appendChild(title);
-  main.appendChild(el('div', 'row-meta'));
-  main.appendChild(el('div', 'row-state'));
-  node.appendChild(main);
+  // Three lines, fixed order, fixed meaning (§2): the keys, the prose, the signals. No twisty:
+  // the row's state is said by the block it opens into, and a chevron on every line of a 300 px
+  // sidebar is a column of punctuation.
+  const id = el('div', 'row-id');
+  // The disclosure, back on screen: `aria-expanded` said the row opened and nothing visible did.
+  // One character in a fixed-width box, so turning it moves no text (§7).
+  const twisty = el('span', 'row-twisty');
+  twisty.setAttribute('aria-hidden', 'true');
+  id.appendChild(twisty);
+  id.appendChild(el('div', 'id-keys'));
+  node.appendChild(id);
+  node.appendChild(el('div', 'row-desc'));
+  node.appendChild(el('div', 'row-signals'));
 
   node.addEventListener('click', () => {
     post({ type: 'selectRow', id: node.dataset.id ?? '', list: node.dataset.list ?? '' });
@@ -50,13 +55,18 @@ export function createRow(row: PanelRowView): HTMLElement {
   return node;
 }
 
-export function patchRow(node: HTMLElement, row: PanelRowView, context: RowContext): void {
+export function patchRow(
+  node: HTMLElement,
+  row: PanelRowView,
+  accent: string,
+  context: RowContext,
+): void {
   node.dataset.id = row.id;
   node.dataset.list = row.list;
   const key = rowKey(row);
-  // The list is a CLASS rather than a data attribute, because it is what the accent selects on
-  // and every other row state is a class too.
-  const classes = ['row', `section-${row.list}`];
+  // The section is a CLASS rather than a data attribute, because it is what the accent selects
+  // on and every other row state is a class too (§5).
+  const classes = ['row', accent];
   if (row.needsYou) classes.push('needs-you');
   if (row.demoted) classes.push('demoted');
   if (row.selected) classes.push('selected');
@@ -65,10 +75,24 @@ export function patchRow(node: HTMLElement, row: PanelRowView, context: RowConte
   setAttr(node, 'aria-selected', String(row.selected));
   setAttr(node, 'aria-expanded', String(row.expanded));
 
-  setText(child(node, '.twisty'), row.expanded ? '▾' : '▸');
-  setText(child(node, '.row-label'), row.label);
-  patchCells(child(node, '.row-meta'), row.meta);
-  patchCells(child(node, '.row-state'), row.stateLine);
+  setAttr(node, 'aria-label', row.label);
+  setText(child(node, '.row-twisty'), row.expanded ? '▾' : '▸');
+  patchKeys(child(node, '.id-keys'), row.identityKeys);
+  const desc = child(node, '.row-desc');
+  setText(desc, row.description);
+  // An empty description is not a blank line: the row is two lines tall and says so (§2).
+  setHidden(desc, row.description === '');
+  patchCells(child(node, '.row-signals'), row.meta);
+}
+
+/** One span per key, keyed by position so a ticket that grows a PR patches rather than rebuilds. */
+function patchKeys(parent: HTMLElement, keys: readonly string[]): void {
+  reconcile(
+    parent,
+    keys.map((key, index) => ({ key: `${index}`, data: key })),
+    () => el('span', 'id-key'),
+    (node, key) => setText(node, key),
+  );
 }
 
 /** `instanceof HTMLElement` deliberately not used: this code is also driven against a fake DOM. */

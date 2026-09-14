@@ -19,8 +19,9 @@ import { freezeOrder, panelTreeNodes, paintedOrderOf, type PaintedOrder, type Pa
 import { post, setSink } from './channel';
 import { button, el } from './dom';
 import { installKeyboard } from './keyboard';
-import { createList, patchList, type ListContext } from './list';
+import { createSection, patchSection, type SectionContext } from './list';
 import { reconcile, setClass, setHidden, setText } from './reconcile';
+import { createFocus, patchFocus } from './focus';
 import { createStrip, patchStrip } from './strip';
 import type { HostToPanel, PanelState } from '../../model/panel-protocol';
 
@@ -66,7 +67,7 @@ export function render(next: PanelState): void {
 
 function paint(next: PanelState): void {
   const container = root();
-  const context: ListContext = { focusedKey, onPointer };
+  const context: SectionContext = { focusedKey, onPointer };
   // Whether the panel HAD the caret, decided before the reconcile. A refresh must put focus back
   // where it was, and must not take it from the editor the user has since typed into.
   const held = heldFocus();
@@ -104,14 +105,20 @@ function collectKeys(node: HTMLElement): void {
 }
 
 type Entry =
+  | { kind: 'focus'; state: PanelState }
   | { kind: 'trouble'; state: PanelState }
   | { kind: 'strip'; state: PanelState }
   | { kind: 'banner'; text: string; tone: string }
   | { kind: 'notice'; state: PanelState }
-  | { kind: 'list'; index: number; state: PanelState };
+  | { kind: 'section'; index: number; state: PanelState };
 
 function entriesOf(next: PanelState): { key: string; data: Entry }[] {
   const entries: { key: string; data: Entry }[] = [];
+  // §6: the panel's first tab stop, above everything — including the strip, because narrowing the
+  // panel is the thing the user reaches for when the strip is long.
+  if (next.focusOptions.length > 0) {
+    entries.push({ key: 'focus', data: { kind: 'focus', state: next } });
+  }
   // P3: the strip leads the panel and outlives a trouble state — what wants the user is still
   // true while the engine is explaining itself.
   if (next.needsYou.length > 0) {
@@ -138,14 +145,17 @@ function entriesOf(next: PanelState): { key: string; data: Entry }[] {
       data: { kind: 'banner', text: 'The cgremlin engine is not reachable.', tone: 'stale' },
     });
   }
-  next.lists.forEach((_, index) =>
-    entries.push({ key: `list:${index}`, data: { kind: 'list', index, state: next } }),
+  next.sections.forEach((section, index) =>
+    entries.push({ key: `section:${section.key}`, data: { kind: 'section', index, state: next } }),
   );
   return entries;
 }
 
-function create(entry: Entry, context: ListContext): HTMLElement {
-  if (entry.kind === 'list') return createList(entry.state.lists[entry.index], context);
+function create(entry: Entry, context: SectionContext): HTMLElement {
+  if (entry.kind === 'focus') return createFocus();
+  if (entry.kind === 'section') {
+    return createSection(entry.state.sections[entry.index], context);
+  }
   if (entry.kind === 'strip') return createStrip();
   if (entry.kind === 'banner') return el('div', 'banner');
   if (entry.kind === 'notice') return createNotice();
@@ -165,9 +175,13 @@ function create(entry: Entry, context: ListContext): HTMLElement {
   return node;
 }
 
-function patch(node: HTMLElement, entry: Entry, context: ListContext): void {
-  if (entry.kind === 'list') {
-    patchList(node, entry.state.lists[entry.index], context);
+function patch(node: HTMLElement, entry: Entry, context: SectionContext): void {
+  if (entry.kind === 'focus') {
+    patchFocus(node, entry.state.focusOptions, entry.state.focus);
+    return;
+  }
+  if (entry.kind === 'section') {
+    patchSection(node, entry.state.sections[entry.index], context);
     return;
   }
   if (entry.kind === 'strip') {

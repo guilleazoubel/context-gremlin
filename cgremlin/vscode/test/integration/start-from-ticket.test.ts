@@ -115,9 +115,9 @@ describe.skipIf(!coreIsBuilt())('integration: starting work from a ticket-only r
 
   function rowOf(list: string, id: string): PanelRowView {
     const state = lastRender<PanelState>(panelView);
-    const found = state.lists
-      .find((candidate) => candidate.kind === list)
-      ?.sections.flatMap((section) => section.rows)
+    const found = state.sections
+      .filter((candidate) => candidate.list === list)
+      .flatMap((section) => section.rows)
       .find((row) => row.id === id);
     if (found === undefined) throw new Error(`no ${list} row '${id}' in the panel`);
     return found;
@@ -136,9 +136,9 @@ describe.skipIf(!coreIsBuilt())('integration: starting work from a ticket-only r
     expect(row.actions.map((action) => action.command)).toEqual(
       expect.arrayContaining(['cgremlin.startInvestigation', 'cgremlin.startDevelopment']),
     );
-    const slot = row.lifecycle.find((candidate) => candidate.stage === 'investigation');
-    // The row is collapsed, so it has no slots yet — the actions are the contract here.
-    expect(slot ?? null).toBeNull();
+    const part = row.parts.find((candidate) => candidate.key === 'investigation');
+    // The row is collapsed, so it has no parts yet — the actions are the contract here.
+    expect(part ?? null).toBeNull();
   });
 
   it('refuses a ticket-only start with no repoUrl, and says why', async () => {
@@ -213,8 +213,8 @@ describe.skipIf(!coreIsBuilt())('integration: starting work from a ticket-only r
     const row = rowOf('myWork', TICKET_ID);
     expect(row.selected).toBe(true);
     expect(row.expanded).toBe(true);
-    const slot = row.lifecycle.find((candidate) => candidate.stage === 'investigation');
-    expect(slot?.sessionId).toBe(id);
+    const part = row.parts.find((candidate) => candidate.key === 'investigation');
+    expect(part?.childId).toBe(`agent:${id}`);
 
     // …and the workspace followed the new worktree.
     const fresh = (await h.client.request('GET', `/sessions/${id}`)).body as { session: SessionView };

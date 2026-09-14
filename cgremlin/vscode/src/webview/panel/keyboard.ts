@@ -33,15 +33,6 @@ export function onKeyDown(key: string, ports: KeyboardPorts): boolean {
     post({ type: 'toggleRow', id: intent.id, expanded: intent.expanded });
     return true;
   }
-  if (intent.kind === 'toggleGroup') {
-    post({
-      type: 'toggleGroup',
-      list: intent.list,
-      group: intent.group,
-      collapsed: intent.collapsed,
-    });
-    return true;
-  }
   return activate(intent.node);
 }
 
@@ -55,10 +46,6 @@ function activate(node: PanelTreeNode): boolean {
     post({ type: 'openChild', id: node.rowId, childId: node.id });
     return true;
   }
-  if (node.kind === 'group' && node.group !== null) {
-    post({ type: 'toggleGroup', list: node.list, group: node.group, collapsed: node.expanded });
-    return true;
-  }
   return false;
 }
 
@@ -67,8 +54,10 @@ export function installKeyboard(ports: KeyboardPorts): void {
     // A button owns its own <kbd>Enter</kbd> and <kbd>Space</kbd> — the list header's disclosure,
     // a sort, a row's primary verb. Letting the tree act on them too would fire two things at
     // once, so the tree's keys apply only when the caret is not on a control (P2).
+    // A control owns its own keys — a section header's disclosure, a sort, and §6's focus select,
+    // whose arrows change the selection and whose Alt+Down opens it natively.
     const target = event.target as { tagName?: string } | null;
-    if (target?.tagName === 'BUTTON') return;
+    if (target?.tagName === 'BUTTON' || target?.tagName === 'SELECT') return;
     if (onKeyDown(event.key, ports)) event.preventDefault();
   });
 }

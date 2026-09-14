@@ -56,7 +56,7 @@ const activity = (over: Partial<WorkItemPr['humanActivity'] & object> = {}) => (
 describe('the collapsed line', () => {
   it('names the one human and says how long ago', () => {
     const line = humanActivitySummary(pr({ humanActivity: activity({ commentedBy: ['DavidAPFM'] }) }), NOW);
-    expect(line).toBe('👤 @DavidAPFM commented 2d ago');
+    expect(line).toBe('@DavidAPFM commented 2d');
   });
 
   it('ranks a review above a comment — it is the stronger thing to have happened', () => {
@@ -64,10 +64,10 @@ describe('the collapsed line', () => {
       pr({ humanActivity: activity({ reviewedBy: ['jane'], commentedBy: ['DavidAPFM'] }) }),
       NOW,
     );
-    expect(line).toBe('👤 @jane reviewed 2d ago');
+    expect(line).toBe('@jane reviewed 2d');
   });
 
-  it('carries the verdict when exactly one reviewer can own it', () => {
+  it('leaves the verdict to the PR part of the submenu, not to this line (§2)', () => {
     const line = humanActivitySummary(
       pr({
         reviewDecision: 'CHANGES_REQUESTED',
@@ -75,7 +75,7 @@ describe('the collapsed line', () => {
       }),
       NOW,
     );
-    expect(line).toBe('👤 @jane reviewed (changes requested) 5h ago');
+    expect(line).toBe('@jane reviewed 5h');
   });
 
   it('drops the verdict when two reviewers could own it, rather than pinning it on one', () => {
@@ -86,17 +86,17 @@ describe('the collapsed line', () => {
       }),
       NOW,
     );
-    expect(line).toBe('👤 @jane, @dana reviewed 2d ago');
+    expect(line).toBe('@jane, @dana reviewed 2d');
   });
 
   it('lists several commenters by handle', () => {
     const line = humanActivitySummary(pr({ humanActivity: activity({ commentedBy: ['a', 'b'] }) }), NOW);
-    expect(line).toBe('👤 @a, @b commented 2d ago');
+    expect(line).toBe('@a, @b commented 2d');
   });
 
   it('says who was asked when nobody has done anything yet', () => {
     expect(humanActivitySummary(pr({ reviewRequests: ['platform-team'] }), NOW)).toBe(
-      '👤 @platform-team requested',
+      '@platform-team requested',
     );
   });
 
@@ -120,7 +120,7 @@ describe('the collapsed line', () => {
   it('says the age is unknown rather than inventing one', () => {
     expect(
       humanActivitySummary(pr({ humanActivity: activity({ commentedBy: ['a'], lastAt: null }) }), NOW),
-    ).toBe('👤 @a commented');
+    ).toBe('@a commented');
   });
 });
 
@@ -133,7 +133,7 @@ describe('grace#2199, as the core delivers it', () => {
   });
 
   it('reads as one human commenting, two days ago', () => {
-    expect(humanActivitySummary(grace, NOW)).toBe('👤 @DavidAPFM commented 2d ago');
+    expect(humanActivitySummary(grace, NOW)).toBe('@DavidAPFM commented 2d');
   });
 
   it('opens into that one interaction and nothing else', () => {

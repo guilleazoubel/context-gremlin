@@ -8,6 +8,8 @@
  * Asserted against an instrumented DOM: a render over identical data must produce an EMPTY
  * mutation log, and a change must patch exactly the leaves that changed.
  */
+import fs from 'node:fs';
+import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { installDom, type FakeElement, type InstalledDom } from '../support/fake-dom';
 import { itemsResponse, stateOf } from './state';
@@ -103,7 +105,6 @@ describe('P0-4 keyed reconciliation', () => {
     for (let at = 0; at < 50; at += 1) panel.render(stateOf({ expanded: 'ticket:HB-627' }));
     expect(rowNodes().find((n) => n.dataset.key === 'row:myWork:ticket:HB-627')).toBe(row);
     expect(dom.document.activeElement).toBe(focusedBefore);
-    expect(dom.root.byClass('slot').length).toBeGreaterThan(0);
     expect(dom.root.byClass('part').length).toBeGreaterThan(0);
   });
 });
@@ -176,17 +177,17 @@ describe('P0-4 the tree roles survive reconciliation (R66)', () => {
 });
 
 /**
- * Four lists in one 300 px column look alike from two feet away, and the user reads them from two
- * feet away. So each one carries a colour of its own — on its header's glyph and title, and as a
- * thin line down the left edge of its rows — and the row's title is set a notch larger and bolder
- * than the signals under it, because the title is the thing being scanned.
+ * Six sections in one 300 px column look alike from two feet away, and the user reads them from
+ * two feet away. So each one carries a colour of its own — on its header's glyph, its count badge
+ * and the 3 px rule that runs down every row of it (§5).
  */
-describe('the section accents', () => {
-  it('names the section on every list header, so the stylesheet can colour it', () => {
+describe('the per-section accents', () => {
+  it('names the section on every header, so the stylesheet can colour it', () => {
     panel.render(stateOf());
-    const headers = dom.root.byClass('list-header');
-    expect(headers.map((node) => node.dataset.section)).toEqual([
-      'parkingLot',
+    expect(dom.root.byClass('section').map((node) => node.dataset.section)).toEqual([
+      'parkingLot:untouched',
+      'parkingLot:reviewing',
+      'parkingLot:someoneOnIt',
       'myWork',
       'investigations',
       'waitingForReview',
@@ -196,16 +197,86 @@ describe('the section accents', () => {
   it('names it on every row too, as a class, so the accent reaches the row edge', () => {
     panel.render(stateOf());
     const row = rowNodes().find((n) => n.dataset.key === 'row:parkingLot:pr:acme/web#101');
-    expect(row?.className.split(' ')).toContain('section-parkingLot');
-    for (const node of rowNodes()) {
-      const section = (node.dataset.key ?? '').split(':')[1];
-      expect(node.className.split(' ')).toContain(`section-${section}`);
-    }
+    expect(row?.className.split(' ')).toContain('sec-parkingLot-untouched');
+    const mine = rowNodes().find((n) => n.dataset.key === 'row:myWork:ticket:HB-627');
+    expect(mine?.className.split(' ')).toContain('sec-myWork');
   });
 
   it('keeps the section class out of the way of the state classes', () => {
     panel.render(stateOf({ selected: 'pr:acme/web#102' }));
     const row = rowNodes().find((n) => n.dataset.key === 'row:parkingLot:pr:acme/web#102');
-    expect(row?.className).toBe('row section-parkingLot needs-you selected');
+    expect(row?.className).toBe('row sec-parkingLot-reviewing needs-you selected');
+  });
+});
+
+/**
+ * §7 — separation. The panel used to separate rows with a single 1px hairline at 40% and no gap,
+ * which reads as a grid rather than as a rhythm. What replaces it is 4px of sidebar background
+ * between consecutive rows with the section's coloured rule BREAKING across it: the interrupted
+ * rule is the breakpoint, which is structure carrying information rather than a divider drawn for
+ * its own sake. An open row and its submenu keep no gap at all, so they read as one taller band.
+ */
+describe('§7 the separation, as the stylesheet declares it', () => {
+  const css = fs.readFileSync(path.resolve(__dirname, '../../media/panel.css'), 'utf8');
+
+  it('puts 4px of ground between consecutive rows, and none before an open block', () => {
+    expect(css).toMatch(/\.row \+ \.row\s*\{[^}]*margin-top:\s*4px/);
+    expect(css).toMatch(/\.expanded \+ \.row\s*\{[^}]*margin-top:\s*4px/);
+    expect(css).toMatch(/\.row \+ \.expanded\s*\{[^}]*margin-top:\s*0/);
+  });
+
+  it('draws no hairline under a row at all — the gap IS the separation', () => {
+    expect(css).not.toMatch(/\.row\s*\{[^}]*border-bottom/);
+  });
+
+  it('keeps the section rule on the open block, so the item reads as one band', () => {
+    expect(css).toMatch(/\.expanded\s*\{[^}]*border-left:\s*3px solid var\(--cg-section/);
+  });
+
+  it('changes nothing but the background on hover, anywhere', () => {
+    for (const [, body] of css.matchAll(/:hover[^{]*\{([^}]*)\}/g)) {
+      const properties = body
+        .split(';')
+        .map((line) => line.split(':')[0].trim())
+        .filter((name) => name !== '');
+      expect(properties).toEqual(['background']);
+    }
+  });
+
+  it('toggles no node in the flow with display, so nothing can change a row’s height', () => {
+    expect(css).not.toMatch(/\.row[^{]*\{[^}]*display:\s*none/);
+    expect(css).not.toMatch(/:hover[^{]*\{[^}]*display:/);
+  });
+
+  it('marks the selected row with a ground and nothing else, so nothing reflows', () => {
+    expect(css).toMatch(
+      /\.row\.selected\s*\{[^}]*background:\s*var\(--vscode-list-inactiveSelectionBackground\)/,
+    );
+    // Identity is the line being scanned, so it is 700 on EVERY row: re-weighting it on select
+    // or on needs-you re-flowed the line under the pointer mid-click.
+    expect(css).toMatch(/\.row-id\s*\{[^}]*font-weight:\s*700/);
+    expect(css).not.toMatch(/\.row\.selected \.row-id/);
+    expect(css).not.toMatch(/\.row\.needs-you \.row-id/);
+    // No cards, no radius on rows, no shadows (§7) — the one inset shadow is needs-you's bar.
+    expect(css).not.toMatch(/\.row\s*\{[^}]*border-radius/);
+  });
+
+  it('sets the description under the identity by colour, not by weight', () => {
+    expect(css).toMatch(
+      /\.row-desc\s*\{[^}]*color:\s*color-mix\(in srgb, var\(--vscode-foreground\) 80%, transparent\)/,
+    );
+  });
+
+  it('says "CI pending" in a colour that passes contrast on a light theme', () => {
+    // `--vscode-charts-yellow` is about 2:1 on Light+, which is unreadable for a word (it was
+    // fine for an 8px dot and is not fine for text).
+    expect(css).toMatch(
+      /\.cell-ci\.tone-warn\s*\{[^}]*color:\s*var\(--vscode-editorWarning-foreground\)/,
+    );
+    expect(css).not.toMatch(/\.cell-ci\.tone-warn\s*\{[^}]*charts-yellow/);
+  });
+
+  it('pads a row 10px on both axes, so three lines are about 68px', () => {
+    expect(css).toMatch(/\.row\s*\{[^}]*padding:\s*10px/);
   });
 });

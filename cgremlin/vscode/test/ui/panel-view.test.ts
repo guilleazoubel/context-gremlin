@@ -126,18 +126,21 @@ describe('MG-B8 four lists and no tree', () => {
     );
   });
 
-  it('renders exactly the four lists, in R47 order', () => {
+  it('renders exactly the six sections, in §5 order', () => {
     const h = build();
     h.ready();
-    expect(h.state().lists.map((list) => list.kind)).toEqual([
-      'parkingLot',
+    expect(h.state().sections.map((section) => section.key)).toEqual([
+      'parkingLot:untouched',
+      'parkingLot:reviewing',
+      'parkingLot:someoneOnIt',
       'myWork',
       'investigations',
       'waitingForReview',
     ]);
-    // `reviewing` survives only as the parking lot's first GROUP, never as a list of its own.
-    expect(JSON.stringify(h.state().lists)).not.toContain('"kind":"reviewing"');
-    expect(h.state().lists[0].sections[0].group).toBe('reviewing');
+    // `reviewing` is a SECTION of the parking lot, never a list of its own — membership is still
+    // the core's answer, and `list` says which list's rules the row plays by.
+    expect(h.state().sections[1].list).toBe('parkingLot');
+    expect(h.state().sections[1].group).toBe('reviewing');
   });
 });
 
@@ -171,7 +174,7 @@ describe('MG-B7 the panel half: the CSP, the roots and the escaping', () => {
     h.ready();
     const row = h
       .state()
-      .lists.flatMap((list) => list.sections.flatMap((s) => s.rows))
+      .sections.flatMap((section) => section.rows)
       .find((r) => r.id === 'pr:acme/web#101');
     // The row crosses the channel as DATA: the webview sets it with textContent, and no HTML is
     // built on this side at all.
@@ -234,7 +237,7 @@ describe('R54 the messages the panel acts on', () => {
     h.ready();
     h.view.webview.emit({ type: 'setSort', list: 'parkingLot', sort: 'smallestChange' });
     expect(h.host.state.get('cgremlin.sort.parkingLot')).toBe('smallestChange');
-    expect(h.state().lists[0].sort).toBe('smallestChange');
+    expect(h.state().sections[0].sort).toBe('smallestChange');
 
     const second = new FakeWebviewView();
     h.panel.resolveWebviewView(second);
@@ -242,41 +245,36 @@ describe('R54 the messages the panel acts on', () => {
     const render = second.webview.posted.find(
       (m) => (m as { type: string }).type === 'render',
     ) as { state: PanelState };
-    expect(render.state.lists[0].sort).toBe('smallestChange');
+    expect(render.state.sections[0].sort).toBe('smallestChange');
   });
 
-  it('R47 — the sort reorders within the parking lot’s groups, never across them', () => {
+  it('R47 — the sort reorders within each parking-lot section, never across them', () => {
     const h = build();
     h.ready();
     h.view.webview.emit({ type: 'setSort', list: 'parkingLot', sort: 'smallestChange' });
-    const parking = h.state().lists[0];
-    expect(parking.sections.map((s) => s.group)).toEqual([
-      'reviewing',
+    const sections = h.state().sections;
+    expect(sections.slice(0, 3).map((s) => s.group)).toEqual([
       'untouched',
+      'reviewing',
       'someoneOnIt',
     ]);
-    expect(parking.sections[2].rows.map((r) => r.id)).toEqual(['pr:acme/api#55']);
+    expect(sections[2].rows.map((r) => r.id)).toEqual(['pr:acme/api#55']);
     // #56 is an L and #101 an M, so the smallest-change order inside `untouched` is 101 then 56
-    // — the sort really did move a row that changed group, and never across the group boundary.
-    expect(parking.sections[1].rows.map((r) => r.id)).toEqual([
+    // — the sort really did move a row, and never across a section boundary.
+    expect(sections[0].rows.map((r) => r.id)).toEqual([
       'pr:acme/web#101',
       'pr:acme/api#56',
       'pr:acme/legacy#9',
     ]);
   });
 
-  it('R47 — the "someone is on it" group is collapsed by default and toggles', () => {
+  it('R47 — the "someone is on it" section is collapsed by default and toggles', () => {
     const h = build();
     h.ready();
-    const collapsed = () => h.state().lists[0].sections.map((s) => s.collapsed);
-    expect(collapsed()).toEqual([false, false, true]);
-    h.view.webview.emit({
-      type: 'toggleGroup',
-      list: 'parkingLot',
-      group: 'someoneOnIt',
-      collapsed: false,
-    });
-    expect(collapsed()).toEqual([false, false, false]);
+    const collapsed = () => h.state().sections.map((s) => s.collapsed);
+    expect(collapsed()).toEqual([false, false, true, false, false, false]);
+    h.view.webview.emit({ type: 'toggleSection', key: 'parkingLot:someoneOnIt', collapsed: false });
+    expect(collapsed()).toEqual([false, false, false, false, false, false]);
   });
 
   it('R48 — a row expands to its children, and the expansion survives a re-render', () => {
@@ -285,19 +283,21 @@ describe('R54 the messages the panel acts on', () => {
     const hb = () =>
       h
         .state()
-        .lists.flatMap((l) => l.sections.flatMap((s) => s.rows))
+        .sections.flatMap((s) => s.rows)
         .find((r) => r.id === 'ticket:HB-627');
     expect(hb()?.expanded).toBe(false);
     expect(hb()?.hasChildren).toBe(true);
     h.view.webview.emit({ type: 'toggleRow', id: 'ticket:HB-627', expanded: true });
     expect(hb()?.expanded).toBe(true);
-    // The PARTS only. The agents are the three lifecycle slots instead, so a session is never
-    // listed twice in one expanded row (§4, amended).
-    expect(hb()?.children.map((c) => c.kind)).toEqual(['ticket', 'pr', 'pr']);
-    expect(hb()?.lifecycle.map((slot) => slot.stage)).toEqual([
+    // §4: the item's own parts, each once — the stages it has reached, then the ticket, then a
+    // row per PR. No session is named twice in one expanded row.
+    expect(hb()?.parts.map((part) => part.key)).toEqual([
       'investigation',
       'development',
       'review',
+      'ticket:HB-627',
+      'pr:acme/web#310',
+      'pr:acme/api#88',
     ]);
     h.panel.setItems(response());
     expect(hb()?.expanded).toBe(true);
@@ -308,8 +308,8 @@ describe('R42/R51/P0-2 the row actions are a rule about the LIST', () => {
   function rowIn(h: Built, list: string, id: string) {
     return h
       .state()
-      .lists.find((l) => l.kind === list)
-      ?.sections.flatMap((s) => s.rows)
+      .sections.filter((section) => section.list === list)
+      .flatMap((section) => section.rows)
       .find((r) => r.id === id);
   }
 
@@ -339,7 +339,7 @@ describe('R42/R51/P0-2 the row actions are a rule about the LIST', () => {
   it('P0-2 — no list offers Start development or Start investigation on somebody else’s PR', () => {
     const h = build();
     h.ready();
-    const every = h.state().lists.flatMap((l) => l.sections.flatMap((s) => s.rows));
+    const every = h.state().sections.flatMap((s) => s.rows);
     const parking = every.filter((r) => r.list === 'parkingLot');
     expect(parking.length).toBeGreaterThan(0);
     for (const row of parking) {
@@ -414,7 +414,7 @@ describe('R42/R51/P0-2 the row actions are a rule about the LIST', () => {
   it('P1-5 — every row flags exactly one primary action', () => {
     const h = build();
     h.ready();
-    for (const row of h.state().lists.flatMap((l) => l.sections.flatMap((s) => s.rows))) {
+    for (const row of h.state().sections.flatMap((s) => s.rows)) {
       const primaries = row.actions.filter((a) => a.placement === 'primary');
       expect(primaries.length, `${row.list}/${row.id}`).toBeLessThanOrEqual(1);
       if (row.actions.length > 0) expect(primaries.length, `${row.list}/${row.id}`).toBe(1);
@@ -429,7 +429,7 @@ describe('R35/Phase 8 the banners', () => {
     const h = build({ response: payload });
     h.ready();
     expect(h.state().banner?.kind).toBe('stale');
-    expect(h.state().lists[1].count).toBeGreaterThan(0);
+    expect(h.state().sections[3].count).toBeGreaterThan(0);
   });
 
   it('gives a Jira auth failure the engine-trouble wording, naming the command', () => {
@@ -447,9 +447,9 @@ describe('R35/Phase 8 the banners', () => {
     h.panel.setTrouble({ kind: 'foreign', socketPath: '/tmp/engine.sock' });
     expect(h.state().trouble?.message).toContain('not a cgremlin engine this extension can use');
     expect(h.state().trouble?.command).toBe('cgremlin.engine.start');
-    expect(h.state().lists).toEqual([]);
+    expect(h.state().sections).toEqual([]);
     h.panel.setTrouble(null);
-    expect(h.state().lists).toHaveLength(4);
+    expect(h.state().sections).toHaveLength(6);
   });
 });
 
@@ -463,17 +463,20 @@ describe('R66/R54 the panel is an accessible tree, and the keys are the tree mod
     return panelTreeNodes(h.state());
   }
 
-  it('gives every node a level: 1 for a group header or a row, 2 for a child', () => {
+  it('gives every node a level: 1 for a row, 2 for one of its parts', () => {
     const h = build();
     h.ready();
     h.view.webview.emit({ type: 'toggleRow', id: 'ticket:HB-627', expanded: true });
     const seen = nodes(h);
-    expect(seen.filter((n) => n.kind === 'group').map((n) => n.level)).toEqual([1]);
+    // §5: a section header is a disclosure BUTTON, not a tree item, so the tree is rows and
+    // parts and nothing else — the browser owns the header's own Enter and Space.
+    expect(seen.every((n) => n.kind === 'row' || n.kind === 'child')).toBe(true);
     expect(seen.filter((n) => n.kind === 'row').every((n) => n.level === 1)).toBe(true);
-    // HB-627 is legitimately in two lists (`myWork` and `waitingForReview`), so its three parts
-    // are rendered under each of them.
+    // HB-627 is legitimately in two lists (`myWork` and `waitingForReview`), so its parts are
+    // rendered under each of them — and §4 gives it a different set in each, because the two
+    // lists ask different questions of the same item.
     const children = seen.filter((n) => n.kind === 'child');
-    expect(children.length).toBe(6);
+    expect(children.length).toBe(11);
     expect(children.every((n) => n.level === 2)).toBe(true);
   });
 
@@ -481,8 +484,6 @@ describe('R66/R54 the panel is an accessible tree, and the keys are the tree mod
     const h = build();
     h.ready();
     const seen = nodes(h);
-    const group = seen.find((n) => n.kind === 'group');
-    expect(group).toMatchObject({ expandable: true, expanded: false });
     expect(seen.find((n) => n.id === 'ticket:HB-627')).toMatchObject({
       expandable: true,
       expanded: false,
@@ -493,20 +494,6 @@ describe('R66/R54 the panel is an accessible tree, and the keys are the tree mod
       expandable: true,
       expanded: false,
     });
-  });
-
-  it('hides a collapsed group’s rows from the sequence but keeps its header focusable', () => {
-    const h = build();
-    h.ready();
-    const seen = nodes(h);
-    expect(seen.some((n) => n.id === 'pr:acme/api#55')).toBe(false);
-    h.view.webview.emit({
-      type: 'toggleGroup',
-      list: 'parkingLot',
-      group: 'someoneOnIt',
-      collapsed: false,
-    });
-    expect(nodes(h).some((n) => n.id === 'pr:acme/api#55')).toBe(true);
   });
 
   it('walks the sequence with up and down, and clamps at both ends', () => {
@@ -555,18 +542,13 @@ describe('R66/R54 the panel is an accessible tree, and the keys are the tree mod
     });
   });
 
-  it('toggles a collapsible group with right and left', () => {
+  it('never walks a row of a collapsed section, so the keyboard cannot reach one', () => {
     const h = build();
     h.ready();
-    const seen = nodes(h);
-    const group = seen.find((n) => n.kind === 'group');
-    if (group === undefined) throw new Error('no group');
-    expect(handleKey('ArrowRight', seen, group.key)).toEqual({
-      kind: 'toggleGroup',
-      list: 'parkingLot',
-      group: 'someoneOnIt',
-      collapsed: false,
-    });
+    // "Someone is on it" starts closed (R47): its one row is not in the sequence at all.
+    expect(nodes(h).some((n) => n.id === 'pr:acme/api#55')).toBe(false);
+    h.view.webview.emit({ type: 'toggleSection', key: 'parkingLot:someoneOnIt', collapsed: false });
+    expect(nodes(h).some((n) => n.id === 'pr:acme/api#55')).toBe(true);
   });
 
   it('activates the focused node with Enter and with Space', () => {
@@ -629,13 +611,14 @@ describe('R54 the look', () => {
     expect(script).not.toContain('codicon');
   });
 
-  it('separates card rows with a hairline and dims the second line', () => {
-    // §2.3: the divider is the panel border at 40%, so it reads as a rhythm and not as a grid.
+  it('separates rows with a gap in the section rule and dims the signals line', () => {
+    // §7: the hairline is gone — 4 px of ground with the coloured rule broken across it says the
+    // same thing and says which section it is at the same time.
     expect(css).toMatch(
       /--cg-divider:\s*color-mix\(in srgb, var\(--vscode-panel-border\) 40%, transparent\)/,
     );
-    expect(css).toMatch(/\.row\s*\{[^}]*border-bottom:\s*1px solid var\(--cg-divider\)/);
-    expect(css).toMatch(/\.row-meta,\n\.row-state\s*\{[^}]*var\(--vscode-descriptionForeground\)/);
+    expect(css).toMatch(/\.row \+ \.row\s*\{[^}]*margin-top:\s*4px/);
+    expect(css).toMatch(/\.row-signals\s*\{[^}]*var\(--vscode-descriptionForeground\)/);
     expect(css).toMatch(/:focus-visible[^}]*outline/);
   });
 
@@ -649,7 +632,7 @@ describe('R54 the look', () => {
   });
 
   it('gives every hit target at least 24 px (§2.2 rule 2)', () => {
-    for (const selector of ['.row-action', '.slot-start', '.slot-open', '.part-goto']) {
+    for (const selector of ['.row-action', '.part-action', '.sort']) {
       expect(css).toContain(selector);
     }
     expect(css.match(/min-height:\s*24px/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
@@ -662,30 +645,31 @@ describe('MG-12 the panel half — defaults render as unknown', () => {
     h.ready();
     const row = h
       .state()
-      .lists.flatMap((l) => l.sections.flatMap((s) => s.rows))
+      .sections.flatMap((s) => s.rows)
       .find((r) => r.id === 'pr:acme/legacy#9');
     expect(row?.age).toBe('—');
     expect(row?.size).toBe('—');
     expect(row?.ci).toBe('');
-    expect(row?.description).not.toContain('0 files');
-    expect(row?.description).toContain('—');
+    const line = row?.meta.map((cell) => cell.text).join(' ') ?? '';
+    expect(line).not.toContain('0 files');
+    expect(line).toContain('—');
   });
 });
 
-describe('R48 the children are clickable, with two actions', () => {
-  it('gives each child its Info click and its Go-to label', () => {
+describe('R48 the parts are clickable, with two actions', () => {
+  it('gives each part its Open and its browser action', () => {
     const h = build();
     h.ready();
     h.view.webview.emit({ type: 'toggleRow', id: 'ticket:HB-627', expanded: true });
     const row = h
       .state()
-      .lists.flatMap((l) => l.sections.flatMap((s) => s.rows))
+      .sections.flatMap((s) => s.rows)
       .find((r) => r.id === 'ticket:HB-627');
-    expect(row?.children.map((c) => c.goToLabel)).toEqual([
-      'Open in Jira',
-      'Open on GitHub',
-      'Open on GitHub',
-    ]);
+    expect(
+      row?.parts
+        .filter((part) => part.kind === 'ticket' || part.kind === 'pr')
+        .map((part) => part.actions.map((action) => action.label).join('/')),
+    ).toEqual(['Open/Open in Jira', 'Open/Open on GitHub', 'Open/Open on GitHub']);
     h.view.webview.emit({ type: 'openChild', id: 'ticket:HB-627', childId: 'pr:acme/web#310' });
     expect(h.children).toEqual([['ticket:HB-627', 'pr:acme/web#310']]);
   });
@@ -701,41 +685,50 @@ describe('R48 the children are clickable, with two actions', () => {
 describe('the per-section accents', () => {
   const css = fs.readFileSync(path.join(root, 'media/panel.css'), 'utf8');
 
+  /** §5's table, verbatim. `--vscode-charts-red` is reserved for CI and marks no section. */
   const ACCENTS: Record<string, string> = {
-    parkingLot: '--vscode-charts-purple',
-    myWork: '--vscode-charts-blue',
+    'parkingLot-untouched': '--vscode-charts-blue',
+    'parkingLot-reviewing': '--vscode-charts-purple',
+    myWork: '--vscode-charts-green',
     investigations: '--vscode-charts-orange',
-    waitingForReview: '--vscode-charts-green',
+    waitingForReview: '--vscode-charts-yellow',
   };
 
-  it('defines one custom property per list, from the token it is meant to be', () => {
+  it('defines one custom property per section, from the token §5 names', () => {
     const found: Record<string, string> = {};
-    for (const [, list, token] of css.matchAll(
-      /--cg-section-(\w+):\s*var\((--vscode-[\w-]+)\)/g,
+    for (const [, key, token] of css.matchAll(
+      /--cg-sec-([\w-]+):\s*color-mix\(in srgb, var\((--vscode-charts-[\w-]+)[^;]*78%, var\(--vscode-foreground\)\);/g,
     )) {
-      found[list] = token;
+      found[key] = token;
     }
+    // Every chart hue is mixed 78% with the foreground: two of the six (yellow and green) fall
+    // under 3:1 on Light+ raw, and a rule the user cannot see is not a section marker.
     expect(found).toEqual(ACCENTS);
+    // "Someone is on it" takes the neutral chart foreground: it is the section you are meant to
+    // skip, and a sixth hue for it would compete with the five that mean something.
+    expect(css).toContain('--cg-sec-parkingLot-someoneOnIt: var(--cg-chart-fallback)');
+    expect(css).not.toMatch(/--cg-sec-[\w-]+:\s*var\(--vscode-charts-red/);
   });
 
-  it('spends each one on that list’s header and on its rows’ left edge', () => {
-    for (const list of Object.keys(ACCENTS)) {
-      expect(css).toContain(`.list-header[data-section='${list}']`);
-      expect(css).toContain(`.row.section-${list}`);
-      expect(css).toContain(`var(--cg-section-${list})`);
+  it('spends each one on that section’s header and on its rows’ left edge', () => {
+    for (const key of [...Object.keys(ACCENTS), 'parkingLot-someoneOnIt']) {
+      expect(css).toContain(`.sec-${key} {`);
+      expect(css).toContain(`--cg-section: var(--cg-sec-${key})`);
     }
+    expect(css).toMatch(/\.section-header\s*\{[^}]*border-left:\s*3px solid var\(--cg-section/);
+    expect(css).toMatch(/\.row\s*\{[^}]*border-left:\s*3px solid var\(--cg-section/);
   });
 
   it('keeps needs-you on a surface of its own, so the two accents never read as one', () => {
     // The section line is the row's BORDER; needs-you is an inset bar drawn inside it, in the one
     // accent the panel has. Different boxes, so a needs-you row in the parking lot says both.
-    expect(css).toMatch(/\.row\s*\{[^}]*border-left:\s*2px solid transparent/);
-    expect(css).toMatch(/\.row\.needs-you\s*\{[^}]*box-shadow:\s*inset 2px 0 0 var\(--cg-accent\)/);
+    expect(css).toMatch(/\.row\.needs-you\s*\{[^}]*box-shadow:\s*inset 3px 0 0 var\(--cg-accent\)/);
   });
 
-  it('sets the title a notch above the editor size and the signals below it', () => {
-    expect(css).toMatch(/\.row-title\s*\{[^}]*font-size:\s*calc\(var\(--vscode-font-size[^)]*\)[^}]*\}/);
-    expect(css).toMatch(/\.row-label\s*\{[^}]*font-weight:\s*600/);
-    expect(css).toMatch(/\.row-meta,\n\.row-state\s*\{[^}]*font-size:\s*11px/);
+  it('sets the three lines on the type scale §8 allows, and on nothing else', () => {
+    expect(css).toMatch(/\.row-id\s*\{[^}]*font-size:\s*var\(--vscode-font-size, 13px\)/);
+    expect(css).toMatch(/\.row-id\s*\{[^}]*font-weight:\s*700/);
+    expect(css).toMatch(/\.row-desc\s*\{[^}]*font-size:\s*12px/);
+    expect(css).toMatch(/\.row-signals\s*\{[^}]*font-size:\s*11px/);
   });
 });

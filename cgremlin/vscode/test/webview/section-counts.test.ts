@@ -12,9 +12,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { installDom, type FakeElement, type InstalledDom } from '../support/fake-dom';
 import { itemsResponse, stateOf } from './state';
-import { visibleRowCount } from '../../src/model/work-items';
 import type { ItemsResponse, ParkingLotGroup, WorkItem } from '../../src/model/work-items';
-import type { PanelListView, PanelState } from '../../src/model/panel-protocol';
+import type { PanelState } from '../../src/model/panel-protocol';
 
 interface Panel {
   render(next: PanelState): void;
@@ -61,61 +60,50 @@ function onlyGroup(group: ParkingLotGroup, n: number): ItemsResponse {
 }
 
 const rows = (): FakeElement[] => dom.root.byClass('row');
-/** `Title (count)` per VISIBLE group header — the parking lot's three. */
+
+/** `Title (count)` per section header — the six of them, in DOM order (§5). */
 const headerTexts = (): string[] =>
   dom.root
     .byClass('section-header')
-    .filter((node) => !node.hidden)
     .map(
       (node) =>
         `${node.byClass('section-title')[0]?.textContent ?? ''} (${node.byClass('section-count')[0]?.textContent ?? ''})`,
     );
-/** `[title, count]` per list header, which P2 splits into a title and a count badge. */
-const listHeaders = (): string[] =>
-  dom.root
-    .byClass('list-toggle')
-    .map(
-      (node) =>
-        `${node.byClass('list-title')[0]?.textContent ?? ''} (${node.byClass('list-count')[0]?.textContent ?? ''})`,
-    );
 
-/** Opens every group, exactly as the user clicking each chevron would. */
+/** Opens every section, exactly as the user clicking each chevron would. */
 function expandAll(state: PanelState): PanelState {
-  const lists: PanelListView[] = state.lists.map((list) => {
-    const sections = list.sections.map((section) => ({ ...section, collapsed: false }));
-    return { ...list, sections, count: visibleRowCount(sections) };
-  });
-  return { ...state, lists };
+  return {
+    ...state,
+    sections: state.sections.map((section) => ({ ...section, collapsed: false })),
+  };
 }
 
-describe('P1 header counts', () => {
-  it('counts the visible rows, not the ones a collapsed group holds', () => {
-    const state = stateOf({ response: onlyGroup('someoneOnIt', 11) });
-    panel.render(state);
+describe('§5 header counts', () => {
+  it('leaves no count above a closed section to over-claim it', () => {
+    panel.render(stateOf({ response: onlyGroup('someoneOnIt', 11) }));
     expect(rows().length).toBe(0);
-    expect(listHeaders()).toContain('Parking lot (0)');
-    // The eleven are not lost — the group that holds them says so on its own header.
+    // The eleven are not lost, and nothing else claims them: the section that holds them says so
+    // on its own header, and there is no list header above it any more (§5).
+    expect(headerTexts()).toContain('Someone is on it (11)');
+    expect(headerTexts()).toContain('Parking lot (0)');
+  });
+
+  it('counts every row once the section is expanded', () => {
+    panel.render(expandAll(stateOf({ response: onlyGroup('someoneOnIt', 11) })));
+    expect(rows().length).toBe(11);
     expect(headerTexts()).toContain('Someone is on it (11)');
   });
 
-  it('counts every row once the groups are expanded', () => {
-    panel.render(expandAll(stateOf({ response: onlyGroup('someoneOnIt', 11) })));
-    expect(rows().length).toBe(11);
-    expect(listHeaders()).toContain('Parking lot (11)');
-  });
-
   it('holds for an untouched-only parking lot, which is never collapsed', () => {
-    const state = stateOf({ response: onlyGroup('untouched', 11) });
-    panel.render(state);
+    panel.render(stateOf({ response: onlyGroup('untouched', 11) }));
     expect(rows().length).toBe(11);
-    expect(listHeaders()).toContain('Parking lot (11)');
-    expect(headerTexts()).toContain('Untouched (11)');
+    expect(headerTexts()).toContain('Parking lot (11)');
   });
 
-  it('agrees with the tree on the real fixture, with every group open', () => {
+  it('agrees with the tree on the real fixture, with every section open', () => {
     const state = expandAll(stateOf());
     panel.render(state);
-    const total = state.lists.reduce((sum, list) => sum + list.count, 0);
+    const total = state.sections.reduce((sum, section) => sum + section.count, 0);
     expect(rows().length).toBe(total);
   });
 });

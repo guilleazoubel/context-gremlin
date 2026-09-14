@@ -16,25 +16,24 @@
 import crypto from 'node:crypto';
 import { changeSummary, type SessionChanges } from '../model/changes';
 import { detailSignatureOf, lifecycleSlots } from '../model/lifecycle';
-import { itemActionFacts, rowActions, type StageKind } from '../model/row-actions';
+import { itemParts } from '../model/item-parts';
+import { itemActionFacts, rowActions } from '../model/row-actions';
 import {
   buildItemChildren,
   buildWorkLists,
-  groupCollapseKey,
-  humanInteractions,
-  listCollapseKey,
   readCollapsed,
+  readFocus,
   readSort,
   readSorts,
   ticketBanner,
-  visibleRowCount,
   writeCollapsed,
+  writeFocus,
   writeSort,
   COLLAPSE_STATE_KEY,
-  LIST_GLYPHS,
+  FOCUS_ALL,
+  PANEL_SECTIONS,
   type CollapseState,
   type ItemsResponse,
-  type ParkingLotGroup,
   type WorkChild,
   type WorkItem,
   type WorkListKind,
@@ -46,10 +45,10 @@ import {
   type HostToPanel,
   type PanelActionView,
   type PanelChangesView,
-  type PanelChildView,
-  type PanelListView,
+  type PanelFocusOption,
+  type PanelPartView,
   type PanelRowView,
-  type PanelSlotView,
+  type PanelSectionView,
   type PanelState,
   type PanelNoticeView,
 } from '../model/panel-protocol';
@@ -119,12 +118,6 @@ export const MANAGED_WORKSPACE_HINT =
 const OPEN_MANAGED_LABEL = 'Open';
 const DISMISS_LABEL = 'Not now';
 
-const START_COMMAND: Record<StageKind, string> = {
-  investigation: 'cgremlin.startInvestigation',
-  development: 'cgremlin.startDevelopment',
-  review: 'cgremlin.startReview',
-};
-
 export class PanelView implements WebviewViewProviderLike {
   private view: WebviewViewLike | null = null;
   private subscription: DisposableLike | null = null;
@@ -143,11 +136,13 @@ export class PanelView implements WebviewViewProviderLike {
   private detailSignature: string | null = null;
   /** An engine frame named the open row, or one of its sessions, since the last read. */
   private detailStale = false;
-  /** P2: `parkingLot` for a whole list, `parkingLot:someoneOnIt` for one of its groups. */
+  /** §5: which of the six sections the user has closed, by section key. */
   private collapsed: CollapseState;
   /** The swap asked for the managed workspace and could not do it itself (P10). */
   private offerManaged = false;
   private noticeDismissed: boolean;
+  /** §6: `all`, or the one section key the panel is narrowed to (R64). */
+  private focus: string;
   private sorts: Record<WorkListKind, WorkSortKind>;
   /** §3.3: `setConnected` + `setItems` + `setSourceTrouble` in one refresh are ONE post. */
   private batchDepth = 0;
@@ -160,6 +155,7 @@ export class PanelView implements WebviewViewProviderLike {
     this.selectedId = deps.host.getState<string>(SELECTED_STATE_KEY) ?? null;
     this.expandedId = deps.host.getState<string>(EXPANDED_STATE_KEY) ?? null;
     this.noticeDismissed = deps.host.getState<boolean>(WORKSPACE_NOTICE_DISMISSED_KEY) === true;
+    this.focus = readFocus(deps.host);
   }
 
   /** The swap's report: this window is not the managed workspace, so the notice is owed. */
@@ -304,8 +300,13 @@ export class PanelView implements WebviewViewProviderLike {
 
   state(): PanelState {
     const trouble = this.troubleView();
+    const sections = trouble === null ? this.sections() : [];
     return {
-      lists: trouble === null ? this.lists() : [],
+      // §6: the control lists every area with its count; the panel paints only the focused one,
+      // so the keyboard cannot reach a row that is not on screen.
+      sections: this.focus === FOCUS_ALL ? sections : sections.filter((s) => s.key === this.focus),
+      focus: this.focus,
+      focusOptions: focusOptionsOf(sections),
       // P3: the strip survives a trouble state — what wants the user is still true while the
       // engine is explaining itself, and it is the one thing worth carrying across.
       needsYou: needsYouEntries(this.items()),
@@ -345,48 +346,40 @@ export class PanelView implements WebviewViewProviderLike {
 
   // --- internals -----------------------------------------------------------
 
-  private lists(): PanelListView[] {
+  /**
+   * §5 — the six sections, flat. `buildWorkLists` still answers per list (membership is the
+   * core's, D2); this walks `PANEL_SECTIONS` and takes each one's rows out of the list it belongs
+   * to, so the parking lot's three groups arrive as sections without the core knowing.
+   */
+  private sections(): PanelSectionView[] {
     if (this.response === null) return [];
     const built = buildWorkLists({
       response: this.response,
       sorts: this.sorts,
       now: this.deps.now?.(),
     });
-    return (Object.keys(built) as WorkListKind[]).map((kind) => {
-      const list = built[kind];
-      const sections = list.sections.map((section) => ({
-        group: section.group,
-        title: section.title,
-        count: section.count,
-        collapsible: section.collapsible,
-        collapsed: this.groupCollapsed(kind, section.group, section.collapsed),
-        rows: section.rows.map((row) => this.rowView(row)),
-      }));
-      const shut = this.collapsed[listCollapseKey(kind)] ?? false;
+    return PANEL_SECTIONS.map((spec, index) => {
+      const list = built[spec.list];
+      const source = list.sections.find((section) => section.group === spec.group);
+      const rows = (source?.rows ?? []).map((row) => this.rowView(row));
       return {
-        kind,
-        title: list.title,
-        glyph: LIST_GLYPHS[kind],
-        // P1: the USER's collapse state, not the default one, decides what the header may claim.
-        // A CLOSED list still says how much is behind it — that is why it was worth closing.
-        count: shut
-          ? sections.reduce((total, section) => total + section.rows.length, 0)
-          : visibleRowCount(sections),
-        collapsed: shut,
+        key: spec.key,
+        list: spec.list,
+        group: spec.group,
+        title: spec.title,
+        glyph: spec.glyph,
+        // What the header claims is what the section holds — the count IS the reason to open it,
+        // and there is no second level underneath it left to hide anything (P1).
+        count: rows.length,
+        collapsed: this.collapsed[spec.key] ?? spec.collapsed,
         sort: list.sort,
         sorts: [...list.sorts],
-        sections,
+        // One sort control per LIST, on the first section of it (the parking lot's three share
+        // one sort, and three copies of one control is noise).
+        showsSort: PANEL_SECTIONS.findIndex((other) => other.list === spec.list) === index,
+        rows,
       };
     });
-  }
-
-  private groupCollapsed(
-    list: WorkListKind,
-    group: ParkingLotGroup | null,
-    fallback: boolean,
-  ): boolean {
-    if (group === null) return false;
-    return this.collapsed[groupCollapseKey(list, group)] ?? fallback;
   }
 
   /** One write per toggle, so the next window opens on the panel the user left behind (R64). */
@@ -403,6 +396,8 @@ export class PanelView implements WebviewViewProviderLike {
       id: row.id,
       list: row.list,
       label: row.label,
+      identity: row.identity,
+      identityKeys: row.identityKeys,
       description: row.description,
       badges: row.badges,
       chips: row.chips,
@@ -410,7 +405,6 @@ export class PanelView implements WebviewViewProviderLike {
       size: row.size,
       ci: row.ci,
       meta: row.meta,
-      stateLine: row.stateLine,
       tier: row.tier,
       demoted: row.demoted,
       needsYou: row.needsYou,
@@ -419,15 +413,9 @@ export class PanelView implements WebviewViewProviderLike {
       hasChildren: true,
       expanded,
       selected: this.selectedId === row.id,
-      // The PARTS. The agents are the lifecycle slots instead, so they are not listed twice.
-      children: expanded
-        ? buildItemChildren(row.item)
-            .filter((child) => child.kind !== 'agent')
-            .map(childView)
-        : [],
-      lifecycle: expanded ? this.slotsOf(row, actions) : [],
+      // §4: the item's OWN parts, each already carrying only the buttons the list allows.
+      parts: expanded ? this.partsOf(row, actions) : [],
       changes: expanded ? this.changesView(row.id) : null,
-      people: expanded ? humanInteractions(row.item.prs[0], this.deps.now?.() ?? Date.now()) : [],
       actions,
       // The notice again, where the user is actually looking — the open row, and only it.
       hint: expanded && this.noticeView() !== null ? MANAGED_WORKSPACE_HINT : null,
@@ -435,27 +423,26 @@ export class PanelView implements WebviewViewProviderLike {
   }
 
   /**
-   * The lifecycle slots, each carrying the Start the forward-only rule allows — taken from the
-   * row's OWN actions, so a slot can never offer a verb the row's button refuses (P0-2).
+   * §4's parts. The lifecycle slots still say the state wording (`model/lifecycle`), and
+   * `itemParts` decides which of them belong on THIS row in THIS list and hands each one the
+   * buttons the row's own actions already allow — so a part can never offer a verb the row
+   * refuses (P0-2).
    */
-  private slotsOf(row: WorkRow, actions: PanelActionView[]): PanelSlotView[] {
+  private partsOf(row: WorkRow, actions: PanelActionView[]): PanelPartView[] {
     const detail = this.detail?.id === row.id ? this.detail.detail : null;
-    return lifecycleSlots({
-      agents: row.item.agents,
-      facts: itemActionFacts(row.item),
-      artifactAt: detail?.artifactAt,
+    const facts = itemActionFacts(row.item);
+    return itemParts({
+      item: row.item,
+      list: row.list,
+      slots: lifecycleSlots({
+        agents: row.item.agents,
+        facts,
+        artifactAt: detail?.artifactAt,
+        now: this.deps.now?.(),
+      }),
+      actions,
       now: this.deps.now?.(),
-    }).map((slot) => ({
-      stage: slot.stage,
-      title: slot.title,
-      glyph: slot.glyph,
-      state: slot.state,
-      stateText: slot.stateText,
-      sessionId: slot.sessionId,
-      start: slot.next
-        ? (actions.find((action) => action.command === START_COMMAND[slot.stage]) ?? null)
-        : null,
-    }));
+    });
   }
 
   /** `—` until the engine has answered, and `—` forever on an engine that has no such route. */
@@ -582,11 +569,19 @@ export class PanelView implements WebviewViewProviderLike {
         writeSort(this.deps.host, message.list, message.sort);
         this.render();
         return;
-      case 'toggleGroup':
-        this.setCollapsed(groupCollapseKey(message.list, message.group), message.collapsed);
+      case 'toggleSection':
+        this.setCollapsed(message.key, message.collapsed);
         return;
-      case 'toggleList':
-        this.setCollapsed(listCollapseKey(message.list), message.collapsed);
+      case 'setFocus':
+        this.focus = message.focus;
+        writeFocus(this.deps.host, message.focus);
+        // Choosing an area is asking to SEE it, so a section that starts closed (R47's "someone
+        // is on it") opens rather than answering the choice with an empty header.
+        if (message.focus !== FOCUS_ALL && this.collapsed[message.focus] !== false) {
+          this.setCollapsed(message.focus, false);
+          return;
+        }
+        this.render();
         return;
       case 'toggleRow':
         // The keyboard's way of opening a row, and it reads the detail for the same reason a
@@ -607,6 +602,10 @@ export class PanelView implements WebviewViewProviderLike {
    * put a modal in front of the user — is even asked for.
    */
   private select(id: string): void {
+    // A row the user is being SENT to — from the needs-you strip, or from a command's reveal —
+    // must end up on screen. A filter that silently swallowed it would make the strip a dead end,
+    // so the focus widens rather than the selection disappearing (§6).
+    this.widenTo(id);
     this.selectedId = id;
     void this.deps.host.setState(SELECTED_STATE_KEY, id);
     // Clicking the row that is already open closes it: the accordion has a shut position, and
@@ -624,11 +623,21 @@ export class PanelView implements WebviewViewProviderLike {
    * so this stays what it says it is: the panel's own highlight and accordion.
    */
   reveal(id: string): void {
+    this.widenTo(id);
     this.selectedId = id;
     void this.deps.host.setState(SELECTED_STATE_KEY, id);
     this.setExpanded(id);
     this.render();
     this.refreshDetail();
+  }
+
+  /** Widens the panel back to all areas when `id` is not a row of the focused one (§6). */
+  private widenTo(id: string): void {
+    if (this.focus === FOCUS_ALL) return;
+    const focused = this.sections().find((section) => section.key === this.focus);
+    if (focused?.rows.some((row) => row.id === id) === true) return;
+    this.focus = FOCUS_ALL;
+    writeFocus(this.deps.host, FOCUS_ALL);
   }
 
   /** P10: the dismissal outlives the window, so it is written before the repaint. */
@@ -655,27 +664,29 @@ export class PanelView implements WebviewViewProviderLike {
   }
 }
 
-const GO_TO_LABEL: Record<WorkChild['kind'], string> = {
-  agent: 'Resume',
-  ticket: 'Open in Jira',
-  pr: 'Open on GitHub',
-};
-
-function childView(child: WorkChild): PanelChildView {
-  return {
-    id: child.id,
-    kind: child.kind,
-    label: child.label,
-    goToLabel: GO_TO_LABEL[child.kind],
-  };
-}
-
 /**
  * The row's actions (R42, R50, R51, R26) — **which ones apply is a rule about the list**, so it
  * is asked of the one shared module (`model/row-actions`) rather than decided twice. The Item
  * tab's `buttonsFor` asks the same function, over the union of `item.lists`, so the panel and
  * the tab cannot disagree about what a click would do.
  */
+/** `All areas (17)`, then the six with their own counts — including the ones off screen (§6). */
+function focusOptionsOf(sections: readonly PanelSectionView[]): PanelFocusOption[] {
+  const total = sections.reduce((sum, section) => sum + section.count, 0);
+  return [
+    { key: FOCUS_ALL, title: 'All areas', count: total },
+    ...sections.map((section) => ({
+      key: section.key,
+      title: section.title,
+      count: section.count,
+    })),
+  ];
+}
+
 export function actionsFor(item: WorkItem, list: WorkListKind): PanelActionView[] {
-  return rowActions(itemActionFacts(item), list);
+  // §4: `Ack` renders only while something needs you AND you have not already said so. The rule
+  // table cannot see the acknowledgement, so the one field it lacks is applied here.
+  return rowActions(itemActionFacts(item), list).filter(
+    (action) => action.command !== 'cgremlin.ack' || !item.attention.acked,
+  );
 }

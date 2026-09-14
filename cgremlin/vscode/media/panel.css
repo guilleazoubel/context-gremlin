@@ -12,6 +12,20 @@
  *  - one accent in the entire panel, and it means "this needs you" (§2.2 rule 10).
  */
 
+/*
+ * §8's one responsive rule. The panel is the container, so the query answers the SIDEBAR's width
+ * rather than the window's — the same panel is 300 px docked and 500 px pulled out.
+ */
+#cgremlin-panel {
+  container-type: inline-size;
+}
+
+@container (max-width: 380px) {
+  .cell-size {
+    display: none;
+  }
+}
+
 body {
   margin: 0;
   padding: 0;
@@ -27,52 +41,78 @@ body {
   --cg-accent: var(--vscode-notificationsWarningIcon-foreground);
 
   /*
-   * One colour per list. They are the editor's own chart tokens, so every theme — light, dark,
-   * high contrast — supplies its own four, and nothing here is a hex code. They say WHICH list a
-   * row belongs to and nothing else; the panel still has exactly one accent that means "this
-   * needs you", and it is `--cg-accent` on a different surface (see `.row.needs-you`).
+   * §5 — one colour per SECTION, six of them, and they are the editor's own chart tokens so every
+   * theme supplies its own. `--vscode-charts-red` is deliberately absent: it is reserved for a
+   * failing build, and a section that borrowed it would read as an alarm. Every token falls back
+   * twice, because a theme that defines no chart colours must still draw a rule.
    */
-  --cg-section-parkingLot: var(--vscode-charts-purple);
-  --cg-section-myWork: var(--vscode-charts-blue);
-  --cg-section-investigations: var(--vscode-charts-orange);
-  --cg-section-waitingForReview: var(--vscode-charts-green);
+  --cg-chart-fallback: var(--vscode-charts-foreground, var(--vscode-descriptionForeground));
+  /*
+   * Each hue is mixed 78% with the theme's own foreground. Raw, two of the six — yellow and
+   * green — sit under 3:1 against a light sidebar, and a rule nobody can see is not a section
+   * marker; the mix darkens them on a light theme and lightens them on a dark one, because the
+   * foreground is whatever that theme's text is.
+   */
+  --cg-sec-parkingLot-untouched: color-mix(in srgb, var(--vscode-charts-blue, var(--cg-chart-fallback)) 78%, var(--vscode-foreground));
+  --cg-sec-parkingLot-reviewing: color-mix(in srgb, var(--vscode-charts-purple, var(--cg-chart-fallback)) 78%, var(--vscode-foreground));
+  --cg-sec-parkingLot-someoneOnIt: var(--cg-chart-fallback);
+  --cg-sec-myWork: color-mix(in srgb, var(--vscode-charts-green, var(--cg-chart-fallback)) 78%, var(--vscode-foreground));
+  --cg-sec-investigations: color-mix(in srgb, var(--vscode-charts-orange, var(--cg-chart-fallback)) 78%, var(--vscode-foreground));
+  --cg-sec-waitingForReview: color-mix(in srgb, var(--vscode-charts-yellow, var(--cg-chart-fallback)) 78%, var(--vscode-foreground));
 }
 
-.list-header[data-section='parkingLot'] .list-glyph,
-.list-header[data-section='parkingLot'] .list-title {
-  color: var(--cg-section-parkingLot);
+/*
+ * Each section names its own colour once, as a local custom property, and every part that carries
+ * it — the header's rule and glyph, the count badge, the rule down each row — reads `--cg-section`
+ * rather than repeating the token six times over.
+ */
+.sec-parkingLot-untouched {
+  --cg-section: var(--cg-sec-parkingLot-untouched);
 }
 
-.list-header[data-section='myWork'] .list-glyph,
-.list-header[data-section='myWork'] .list-title {
-  color: var(--cg-section-myWork);
+.sec-parkingLot-reviewing {
+  --cg-section: var(--cg-sec-parkingLot-reviewing);
 }
 
-.list-header[data-section='investigations'] .list-glyph,
-.list-header[data-section='investigations'] .list-title {
-  color: var(--cg-section-investigations);
+.sec-parkingLot-someoneOnIt {
+  --cg-section: var(--cg-sec-parkingLot-someoneOnIt);
 }
 
-.list-header[data-section='waitingForReview'] .list-glyph,
-.list-header[data-section='waitingForReview'] .list-title {
-  color: var(--cg-section-waitingForReview);
+.sec-myWork {
+  --cg-section: var(--cg-sec-myWork);
 }
 
-/* The same colour as a hairline down the rows, so a row read alone still says which list it is. */
-.row.section-parkingLot {
-  border-left-color: var(--cg-section-parkingLot);
+.sec-investigations {
+  --cg-section: var(--cg-sec-investigations);
 }
 
-.row.section-myWork {
-  border-left-color: var(--cg-section-myWork);
+.sec-waitingForReview {
+  --cg-section: var(--cg-sec-waitingForReview);
 }
 
-.row.section-investigations {
-  border-left-color: var(--cg-section-investigations);
+/* --- §6: the focus control --------------------------------------------- */
+
+/*
+ * One line at any width, and the platform's own control: no popup of ours, no wrapping row of
+ * chips, and every keyboard and screen-reader behaviour for free. It is the panel's first tab
+ * stop, which is why it is the first thing in the document too.
+ */
+.focus {
+  display: block;
+  width: 100%;
+  min-height: 24px;
+  padding: 4px 6px;
+  border: 1px solid var(--vscode-dropdown-border, var(--cg-divider));
+  border-radius: 3px;
+  background: var(--vscode-dropdown-background, var(--vscode-sideBar-background));
+  color: var(--vscode-dropdown-foreground, var(--vscode-foreground));
+  font-family: inherit;
+  font-size: 11px;
 }
 
-.row.section-waitingForReview {
-  border-left-color: var(--cg-section-waitingForReview);
+.focus:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
 }
 
 /* --- the needs-you strip (P3) ------------------------------------------ */
@@ -176,55 +216,53 @@ body {
   font-size: 11px;
 }
 
-/* --- the two header levels (P2) ---------------------------------------- */
+/* --- the one header level (§5) ------------------------------------------ */
 
 /*
- * Four lists in a 300 px sidebar need a rhythm, not a ruler. Both header levels are disclosures,
- * and they are told apart by WEIGHT and GROUND rather than by size: the list header sits on the
- * editor's own section-header ground at 600, the group header is bare at 400. Both stick, the
- * list above the group, so scrolling the parking lot never loses which list you are in.
- *
- * The chevron and the list glyph share the 14 px column the row's twisty occupies, so every line
- * in the panel — header, group, row — starts on the same vertical.
+ * Six sections in a 300 px sidebar need a rhythm, and §5 gives them one: a single sticky header
+ * level, sentence case, set well above the row text so the eye can skip a whole section without
+ * reading it. The header TEXT stays on the editor's own section-header colour — yellow and green
+ * titles fail contrast on a light theme — and the section's colour goes on the 3 px rule, the
+ * glyph and the count badge instead.
  */
 
-.list + .list {
-  margin-top: 12px;
+.section + .section {
+  margin-top: 16px;
 }
 
-.list-header {
+.section-bar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  gap: 6px;
   position: sticky;
   top: 0;
   z-index: 3;
-  padding: 0 6px 0 0;
+  padding-right: 6px;
   background: var(--vscode-sideBarSectionHeader-background, var(--vscode-sideBar-background));
-  border-top: 1px solid var(--vscode-sideBarSectionHeader-border, var(--cg-divider));
-  border-bottom: 1px solid var(--vscode-sideBarSectionHeader-border, var(--cg-divider));
 }
 
-.list-toggle {
+.section-header {
   display: flex;
   flex: 1 1 auto;
   align-items: center;
   gap: 6px;
-  min-height: 24px;
   min-width: 0;
-  padding: 5px 4px 5px 10px;
+  padding: 10px 4px 10px 10px;
   border: 0;
+  border-left: 3px solid var(--cg-section, transparent);
   background: transparent;
   color: var(--vscode-sideBarSectionHeader-foreground, var(--vscode-foreground));
   font-family: inherit;
-  font-size: 11px;
-  font-weight: 600;
+  font-size: calc(var(--vscode-font-size, 13px) * 1.15);
+  font-weight: 700;
   text-align: left;
   cursor: pointer;
 }
 
-.list-chevron,
+.section-header:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
 .section-chevron {
   flex: 0 0 auto;
   width: 1em;
@@ -233,44 +271,46 @@ body {
   font-weight: 400;
 }
 
-.list-glyph {
+.section-glyph {
   flex: 0 0 auto;
   width: 1em;
-  color: var(--vscode-descriptionForeground);
+  color: var(--cg-section, var(--vscode-descriptionForeground));
   font-size: 11px;
   text-align: center;
 }
 
-.list-title {
+.section-title {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 /* The count is the answer to "is there anything for me here", so it reads as a value. */
-.list-count,
 .section-count {
   flex: 0 0 auto;
   min-width: 16px;
   padding: 0 5px;
   border-radius: 8px;
-  background: var(--vscode-badge-background);
-  color: var(--vscode-badge-foreground);
+  background: color-mix(in srgb, var(--cg-section, transparent) 22%, transparent);
+  color: var(--vscode-foreground);
   font-size: 10px;
   font-weight: 400;
   font-variant-numeric: tabular-nums;
   text-align: center;
 }
 
+/* A line of its own, under the header it belongs to: beside the title it squeezed `Parking lot`
+ * to `Par…` at 300 px, and there is exactly one of these per list. */
 .sorts {
   display: flex;
-  flex: 0 0 auto;
+  flex-wrap: wrap;
   gap: 2px;
+  padding: 2px 10px 4px;
 }
 
 .sort {
   min-height: 24px;
-  padding: 4px 8px;
+  padding: 4px 6px;
   border: 1px solid transparent;
   border-radius: 3px;
   background: transparent;
@@ -285,41 +325,9 @@ body {
   border-color: var(--cg-divider);
 }
 
-.section + .section {
-  margin-top: 2px;
-}
-
-.section-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  position: sticky;
-  top: 27px;
-  z-index: 2;
-  padding: 5px 10px;
-  background: var(--vscode-sideBar-background);
-  color: var(--vscode-descriptionForeground);
-  font-size: 11px;
-}
-
-.section-header.collapsible {
-  cursor: pointer;
-}
-
-.section-header.collapsible:hover {
-  background: var(--vscode-list-hoverBackground);
-}
-
-.section-title {
-  flex: 1 1 auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* An empty list is an answer, so it is written down rather than left as a gap. */
-.list-empty {
-  padding: 8px 10px 8px 26px;
+/* An empty section is an answer, so it is written down rather than left as a gap. */
+.section-empty {
+  padding: 6px 10px 6px 26px;
   color: var(--vscode-descriptionForeground);
   font-size: 11px;
 }
@@ -328,12 +336,30 @@ body {
 
 .row {
   display: block;
-  padding: 8px 10px;
-  /* Reserved on every row, coloured per list: a border that appeared with the accent would move
-   * the text sideways between one list and the next. */
-  border-left: 2px solid transparent;
-  border-bottom: 1px solid var(--cg-divider);
+  padding: 10px;
+  /* The section's rule, on every row of it (§5). Reserved even where there is no colour, so a
+   * border that appeared with the accent could never move the text sideways. */
+  border-left: 3px solid var(--cg-section, transparent);
   cursor: pointer;
+}
+
+/*
+ * §7 — the breakpoint between two items is 4 px of sidebar ground with the section's rule BROKEN
+ * across it. The interrupted rule is the separation: structure carrying information, rather than
+ * a hairline drawn for its own sake (which is what the 1 px 40% divider was). An open row and the
+ * block it opens into keep NO gap, so the two read as one taller band rather than as a panel that
+ * appeared underneath.
+ */
+.row + .row {
+  margin-top: 4px;
+}
+
+.expanded + .row {
+  margin-top: 4px;
+}
+
+.row + .expanded {
+  margin-top: 0;
 }
 
 /* The ONLY thing hover changes. */
@@ -345,26 +371,21 @@ body {
   background: var(--vscode-list-inactiveSelectionBackground);
 }
 
+.expanded {
+  background: var(--vscode-list-inactiveSelectionBackground);
+}
+
 .row.demoted {
   opacity: 0.65;
 }
 
 /*
- * §2.2 rule 10: one accent, as a 2 px bar that takes no space. It is drawn INSIDE the border box,
- * so it sits beside the section's hairline rather than replacing it — a needs-you row in the
- * parking lot says both things at once, and neither is mistaken for the other.
+ * §7: one accent, as a 3 px bar that takes no space. It is drawn INSIDE the border box, OVER the
+ * section's own rule rather than beside it — a needs-you row says the louder thing, and the text
+ * never moves sideways between one state and the next.
  */
 .row.needs-you {
-  box-shadow: inset 2px 0 0 var(--cg-accent);
-}
-
-/* Every title is already 600 (see `.row-label`), so needs-you goes one step further. */
-.row.needs-you .row-label {
-  font-weight: 700;
-}
-
-.row-main {
-  min-width: 0;
+  box-shadow: inset 3px 0 0 var(--cg-accent);
 }
 
 /* The rare verbs, on one line at the foot of the open block — never a popover. */
@@ -372,102 +393,130 @@ body {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
-  margin-top: 8px;
+  margin-top: 10px;
 }
 
 /*
- * The title is the line being scanned, so it is set a notch above the editor's own size and at
- * 600 — and the signals under it stay at 11 px and muted. That gap is the hierarchy; without it
- * three lines of the same weight make the user read all three to find the one he wanted.
+ * §2 — three lines, and the hierarchy is scale and weight alone. There is no typeface to spend
+ * personality on (`font-src 'none'`), so line one is the editor's size at 600 with tabular
+ * numerals, line two is 12 px at 400, and line three is 11 px and muted.
  */
-.row-title {
+.row-id {
   display: flex;
   align-items: baseline;
   gap: 6px;
-  font-size: calc(var(--vscode-font-size, 13px) * 1.08);
-  line-height: 1.35;
+  font-size: var(--vscode-font-size, 13px);
+  /* Unconditionally 700: identity is the line being scanned, and re-weighting it on select or on
+   * needs-you re-flowed the very line the pointer was over. */
+  font-weight: 700;
+  line-height: 1.3;
 }
 
-.twisty {
+.row-twisty {
   flex: 0 0 auto;
   width: 1em;
   color: var(--vscode-descriptionForeground);
   font-size: 10px;
+  font-weight: 400;
 }
 
-.row-label {
-  flex: 1 1 auto;
-  font-weight: 600;
+.id-keys {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* L1 never truncates: it is at most a ticket key and a PR number by construction (§2). */
+.id-key {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.row-desc {
+  margin-top: 2px;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.35;
+  /* One step under the identity, by COLOUR rather than by weight: nothing about a row's type
+   * changes when its state does, so no state can reflow it. */
+  color: color-mix(in srgb, var(--vscode-foreground) 80%, transparent);
+  /* The one shrinkable child of line two. */
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.row-meta,
-.row-state {
+.row-signals {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
+  align-items: baseline;
   gap: 6px;
-  min-width: 0;
   margin-top: 2px;
   color: var(--vscode-descriptionForeground);
   font-size: 11px;
-  line-height: 1.5;
+  font-weight: 400;
+  line-height: 1.4;
 }
 
-/* §2.3: the separators are CSS, so no cell is ever joined into an ellipsised sentence. */
-.row-meta > .cell:not(:first-child)::before,
-.row-state > .cell:not(:first-child)::before {
-  content: '·';
-  margin-right: 6px;
-  opacity: 0.6;
+/*
+ * Every token but the repo is pinned — and the `:not()` is load-bearing: `.row-signals > .cell`
+ * is specificity 0,2,0 and beat `.cell-repo`'s 0,1,0, so the repo could not shrink at all and the
+ * line overflowed at 300 px.
+ */
+.row-signals > .cell:not(.cell-repo) {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
-.cell {
+/* It GROWS as well as shrinks, which is what right-packs the cluster: the age, the tier and the
+ * size line up down the column instead of chasing a ragged repo name. */
+.cell-repo {
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
+.cell-age,
+.cell-size,
 .cell-tier {
-  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.cell-tier {
   padding: 0 4px;
   border-radius: 3px;
   background: var(--vscode-badge-background);
   color: var(--vscode-badge-foreground);
   font-size: 10px;
-  font-variant-numeric: tabular-nums;
 }
 
-/* §2.2 rule 9: an 8px dot, never an emoji — emoji size inconsistently in a sidebar. */
-.cell-ci {
-  flex: 0 0 auto;
+/*
+ * §3 — a green build is a dot, because it is not news; a pending or failing one says so in words,
+ * because it is. The dot is drawn on the cell itself, so the two shapes share one box.
+ */
+.cell-ci.tone-good {
   width: 8px;
   height: 8px;
+  align-self: center;
   border-radius: 50%;
-  background: var(--vscode-descriptionForeground);
-}
-
-.cell-ci.tone-good {
   background: var(--vscode-charts-green);
 }
 
+/* A word needs contrast a dot does not: `--vscode-charts-yellow` is about 2:1 on Light+. */
 .cell-ci.tone-warn {
-  background: var(--vscode-charts-yellow);
+  color: var(--vscode-editorWarning-foreground);
 }
 
 .cell-ci.tone-bad {
-  background: var(--vscode-charts-red);
+  color: var(--vscode-charts-red);
 }
 
 /* --- the buttons, which now live only in the block a row opens into ------ */
 
-.slot-open,
-.slot-chat,
-.slot-start,
-.part-goto,
+.part-action,
 .row-action,
 .notice-open,
 .notice-dismiss,
@@ -487,84 +536,72 @@ body {
 /* --- what a row opens into --------------------------------------------- */
 
 .expanded {
-  padding: 4px 10px 10px 26px;
-  border-bottom: 1px solid var(--cg-divider);
-  background: var(--vscode-sideBar-background);
+  padding: 0 10px 10px 26px;
+  /* The row's own rule, continued: the block belongs to the item above it (§7). */
+  border-left: 3px solid var(--cg-section, transparent);
 }
 
 /*
- * The one drawn structure in the panel, and it is earned: the three stages ARE a sequence, so a
- * spine down their glyphs says so without a word of copy.
+ * §4 — the parts, as one list. The old three-slot spine is gone with the three fixed slots it
+ * drew: the parts a row has are now a variable sequence, and a spine down a variable sequence
+ * would be decoration rather than structure.
  */
-.slots {
-  position: relative;
-  padding-left: 14px;
-}
-
-.slots::before {
-  content: '';
-  position: absolute;
-  left: 4px;
-  top: 10px;
-  bottom: 10px;
-  width: 1px;
-  background: var(--cg-divider);
-}
-
-.slot {
+.part {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 0;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 6px 0;
+  cursor: pointer;
 }
 
-.glyph {
+/* A stage that never ran has no session to open, so it is not a pointer target — its own Start
+ * button still is. A hand that changes shape over something that does nothing is a lie. */
+.part[data-child-id=''] {
+  cursor: default;
+}
+
+.part + .part {
+  border-top: 1px solid var(--cg-divider);
+}
+
+.part-glyph {
   flex: 0 0 auto;
   width: 14px;
+  color: var(--vscode-descriptionForeground);
   font-size: 11px;
-  line-height: 1;
+  line-height: 1.5;
   text-align: center;
 }
 
-.slot-text {
+.part-text {
   flex: 1 1 auto;
   min-width: 0;
 }
 
-.slot-title {
+.part-name {
   font-size: 12px;
+  color: var(--vscode-foreground);
 }
 
-.slot-state {
+.part-state,
+.part-detail {
   color: var(--vscode-descriptionForeground);
   font-size: 11px;
-}
-
-.slot[data-state='needsYou'] .slot-state {
-  color: var(--cg-accent);
-}
-
-.slot-actions {
-  display: flex;
-  flex: 0 0 auto;
-  gap: 2px;
-}
-
-.part {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  padding: 4px 0;
-  color: var(--vscode-descriptionForeground);
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.part-label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* The one accent again: a stage that is waiting for the user says so in the colour that means it. */
+.part[data-state='needsYou'] .part-state {
+  color: var(--cg-accent);
+}
+
+.part-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 2px;
 }
 
 .changes {
@@ -593,36 +630,15 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-/*
- * Who has already been on the PR. Muted and small: it is evidence for a decision, not the
- * decision — the row's own line already carries the strongest one.
- */
-.people {
-  margin-top: 6px;
-  color: var(--vscode-descriptionForeground);
-  font-size: 11px;
-  line-height: 1.6;
-}
-
-.person {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 /* --- focus and motion --------------------------------------------------- */
 
 .row:focus-visible,
 .part:focus-visible,
-.list-toggle:focus-visible,
-.attention-item:focus-visible,
 .section-header:focus-visible,
+.attention-item:focus-visible,
 .sort:focus-visible,
 .row-action:focus-visible,
-.slot-open:focus-visible,
-.slot-chat:focus-visible,
-.slot-start:focus-visible,
-.part-goto:focus-visible {
+.part-action:focus-visible {
   outline: 1px solid var(--vscode-focusBorder);
   outline-offset: -1px;
 }

@@ -204,9 +204,9 @@ describe.skipIf(!coreIsBuilt())('integration: the Phase 10 panel flows against a
   /** The row as the panel would paint it, in whichever of its lists is asked for. */
   function rowOf(list: string, id: string): PanelRowView {
     const state = lastRender<PanelState>(panelView);
-    const found = state.lists
-      .find((candidate) => candidate.kind === list)
-      ?.sections.flatMap((section) => section.rows)
+    const found = state.sections
+      .filter((candidate) => candidate.list === list)
+      .flatMap((section) => section.rows)
       .find((row) => row.id === id);
     if (found === undefined) throw new Error(`no ${list} row '${id}' in the panel`);
     return found;
@@ -260,11 +260,12 @@ describe.skipIf(!coreIsBuilt())('integration: the Phase 10 panel flows against a
     const row = rowOf('myWork', MY_PR_ID);
     expect(row.selected).toBe(true);
     expect(row.expanded).toBe(true);
-    // The three lifecycle slots exist whether or not the item has an agent in each (§4).
-    expect(row.lifecycle.map((slot) => [slot.stage, slot.state])).toEqual([
-      ['investigation', 'notStarted'],
+    // §4: only the parts this item HAS, in their fixed order — a PR of mine that a development
+    // agent produced, so no investigation part, and a review that may now be started.
+    expect(row.parts.map((part) => [part.key, part.state])).toEqual([
       ['development', 'done'],
       ['review', 'notStarted'],
+      ['pr:fake/repo#5', ''],
     ]);
   }, TIMEOUT);
 
@@ -340,10 +341,13 @@ describe.skipIf(!coreIsBuilt())('integration: the Phase 10 panel flows against a
     // said "Start review" would be describing somebody else's change.
     expect(start).toMatchObject({ label: 'Start self-review', placement: 'primary' });
 
-    // The slot agrees with the button, because it IS the button (P0-2): one rule, one place.
-    const slots = row.lifecycle;
-    expect(slots.filter((slot) => slot.start !== null).map((slot) => slot.stage)).toEqual(['review']);
-    expect(slots.find((slot) => slot.stage === 'review')?.start?.label).toBe('Start self-review');
+    // The part agrees with the button, because it IS the button (P0-2): one rule, one place.
+    const starts = row.parts.flatMap((part) =>
+      part.actions.filter((action) => action.command === 'cgremlin.startReview').map(() => part.key),
+    );
+    expect(starts).toEqual(['review']);
+    const review = row.parts.find((part) => part.key === 'review');
+    expect(review?.actions.map((action) => action.label)).toContain('Start self-review');
   });
 
   it('refuses a review of my own PR without the flag, and creates one WITH it (selfReview)', async () => {

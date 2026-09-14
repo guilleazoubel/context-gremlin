@@ -61,7 +61,9 @@ function header(current: ItemTabState): HTMLElement {
     link.className = 'chip';
     link.href = '#';
     link.textContent = chip.label;
-    link.title = chip.url;
+    // §3: the chip already names the PR, so the URL behind it was a tooltip saying nothing new.
+    // What a screen reader lacked was where the link GOES, and that is said as a name, not a hover.
+    link.setAttribute('aria-label', `Open ${chip.label} on GitHub`);
     link.addEventListener('click', (event) => {
       event.preventDefault();
       post({ type: 'openLink', url: href });
@@ -72,19 +74,31 @@ function header(current: ItemTabState): HTMLElement {
   return box;
 }
 
+/**
+ * The buttons, and — under them — why any of them is disabled.
+ *
+ * §3: the reason used to be the disabled button's `title`, which is the one tooltip a browser
+ * will not even show on a disabled control in every engine. A disabled button with no readable
+ * reason is the worst of both, so the reasons are a line of text beneath the group.
+ */
 function buttons(current: ItemTabState): HTMLElement {
+  const box = el('div', 'button-group');
   const row = el('div', 'buttons');
   for (const button of current.buttons) {
     const node = document.createElement('button');
     node.textContent = button.label;
     node.disabled = !button.enabled;
-    if (button.reason !== undefined) node.title = button.reason;
     node.addEventListener('click', () =>
       post({ type: 'command', command: button.id, arg: current.itemId }),
     );
     row.appendChild(node);
   }
-  return row;
+  box.appendChild(row);
+  for (const button of current.buttons) {
+    if (button.enabled || button.reason === undefined) continue;
+    box.appendChild(el('p', 'button-reason', `${button.label}: ${button.reason}`));
+  }
+  return box;
 }
 
 function agentTabs(current: ItemTabState): HTMLElement {
@@ -93,7 +107,6 @@ function agentTabs(current: ItemTabState): HTMLElement {
     const tab = document.createElement('button');
     tab.className = agent.sessionId === current.selectedSessionId ? 'agent-tab selected' : 'agent-tab';
     tab.textContent = `${agent.glyph} ${agent.mode} · ${agent.phase}`;
-    tab.title = agent.sessionId;
     tab.addEventListener('click', () => post({ type: 'selectAgent', sessionId: agent.sessionId }));
     tabs.appendChild(tab);
   }
@@ -115,6 +128,9 @@ function artifactBlock(artifact: TabArtifact): HTMLElement {
 
 function agentFocus(agent: TabAgent): HTMLElement {
   const box = el('section', 'focus agent-focus');
+  // §3: the session id was the tab's tooltip. It is the one string a user needs when talking to
+  // the engine about a run, so it is written down — once, on the pane it identifies.
+  box.appendChild(el('p', 'agent-session', `${agent.mode} · ${agent.phase} · ${agent.sessionId}`));
   if (agent.artifacts.length === 0) {
     box.appendChild(el('p', 'empty', 'This agent has written no artifact yet.'));
     return box;

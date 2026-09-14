@@ -12,82 +12,65 @@
 import type { ParkingLotGroup, WorkListKind } from './work-items';
 import type { PanelState } from './panel-protocol';
 
-export type PanelNodeKind = 'group' | 'row' | 'child';
+export type PanelNodeKind = 'row' | 'child';
 
 export interface PanelTreeNode {
   /** Unique within the rendered panel, and stable across re-renders. */
   key: string;
   kind: PanelNodeKind;
   list: WorkListKind;
-  /** 1 for a group header or a row, 2 for a child (R66). */
+  /** 1 for a row, 2 for one of its parts (R66). */
   level: 1 | 2;
   label: string;
   expandable: boolean;
   expanded: boolean;
-  /** The row a child belongs to, `null` for a row or a group header. */
+  /** The row a child belongs to, `null` for a row. */
   rowId: string | null;
-  /** The item id for a row, the child id for a child, `null` for a group header. */
+  /** The item id for a row, the child id for a child. */
   id: string | null;
   group: ParkingLotGroup | null;
 }
 
 /**
- * Every focusable node, in render order: a collapsible group header, then its rows, then each
- * expanded row's children. A collapsed group contributes its header and nothing else.
+ * Every focusable node, in render order: each section's rows, then each expanded row's parts.
+ *
+ * §5 promoted the parking lot's groups to sections, and a section header is a `<button>`
+ * disclosure rather than a `treeitem` — the browser owns its Enter and Space, exactly as the list
+ * header's already did. So the tree is rows and parts, and nothing else. A collapsed section
+ * contributes nothing at all, which is what keeps the keyboard out of rows the user cannot see.
  */
 export function panelTreeNodes(state: PanelState): PanelTreeNode[] {
   const nodes: PanelTreeNode[] = [];
-  for (const list of state.lists) {
-    // P2: a closed list contributes nothing. Its header is a disclosure button of its own rather
-    // than a tree item, so the tree it owns is simply not there while it is shut.
-    if (list.collapsed) continue;
-    for (const section of list.sections) {
-      // P2: a group with nothing in it is not a thing to expand, and a header that expands into
-      // nothing is worse than no header — so it is not rendered and not walked.
-      if (section.group !== null && section.count === 0) continue;
-      if (section.group !== null && section.collapsible) {
+  for (const section of state.sections) {
+    if (section.collapsed) continue;
+    for (const row of section.rows) {
+      nodes.push({
+        key: `row:${section.list}:${row.id}`,
+        kind: 'row',
+        list: section.list,
+        level: 1,
+        label: row.label,
+        expandable: row.hasChildren,
+        expanded: row.expanded,
+        rowId: null,
+        id: row.id,
+        group: section.group,
+      });
+      if (!row.expanded) continue;
+      for (const part of row.parts) {
         nodes.push({
-          key: `group:${list.kind}:${section.group}`,
-          kind: 'group',
-          list: list.kind,
-          level: 1,
-          label: `${section.title} (${section.count})`,
-          expandable: true,
-          expanded: !section.collapsed,
-          rowId: null,
-          id: null,
+          key: `part:${row.id}:${part.key}`,
+          kind: 'child',
+          list: section.list,
+          level: 2,
+          label: `${part.name} ${part.stateText}`,
+          expandable: false,
+          expanded: false,
+          rowId: row.id,
+          // A stage that never ran opens nothing, so activating it does nothing (§4).
+          id: part.childId,
           group: section.group,
         });
-      }
-      if (section.collapsed) continue;
-      for (const row of section.rows) {
-        nodes.push({
-          key: `row:${list.kind}:${row.id}`,
-          kind: 'row',
-          list: list.kind,
-          level: 1,
-          label: row.label,
-          expandable: row.hasChildren,
-          expanded: row.expanded,
-          rowId: null,
-          id: row.id,
-          group: section.group,
-        });
-        if (!row.expanded) continue;
-        for (const child of row.children) {
-          nodes.push({
-            key: `child:${row.id}:${child.id}`,
-            kind: 'child',
-            list: list.kind,
-            level: 2,
-            label: child.label,
-            expandable: false,
-            expanded: false,
-            rowId: row.id,
-            id: child.id,
-            group: section.group,
-          });
-        }
       }
     }
   }
@@ -97,7 +80,6 @@ export function panelTreeNodes(state: PanelState): PanelTreeNode[] {
 export type KeyIntent =
   | { kind: 'focus'; key: string }
   | { kind: 'toggleRow'; id: string; expanded: boolean }
-  | { kind: 'toggleGroup'; list: WorkListKind; group: ParkingLotGroup; collapsed: boolean }
   | { kind: 'activate'; node: PanelTreeNode }
   | null;
 
@@ -149,9 +131,6 @@ export function handleKey(
 }
 
 function expand(node: PanelTreeNode, expanded: boolean): KeyIntent {
-  if (node.kind === 'group' && node.group !== null) {
-    return { kind: 'toggleGroup', list: node.list, group: node.group, collapsed: !expanded };
-  }
   return node.id === null ? null : { kind: 'toggleRow', id: node.id, expanded };
 }
 
@@ -159,21 +138,15 @@ function expand(node: PanelTreeNode, expanded: boolean): KeyIntent {
 // Order freezing (§2.2 rule 4, P0-4)
 // ---------------------------------------------------------------------------
 
-/** The row ids actually painted, per section — the key is `<list>:<group>`. */
+/** The row ids actually painted, per section — the key is the section's own (§5). */
 export type PaintedOrder = Map<string, string[]>;
 
 export function paintedOrderOf(state: PanelState): PaintedOrder {
   const order: PaintedOrder = new Map();
-  for (const list of state.lists) {
-    for (const section of list.sections) {
-      order.set(sectionKey(list.kind, section.group), section.rows.map((row) => row.id));
-    }
+  for (const section of state.sections) {
+    order.set(section.key, section.rows.map((row) => row.id));
   }
   return order;
-}
-
-function sectionKey(list: WorkListKind, group: ParkingLotGroup | null): string {
-  return `${list}:${group ?? ''}`;
 }
 
 /**
@@ -187,19 +160,16 @@ function sectionKey(list: WorkListKind, group: ParkingLotGroup | null): string {
 export function freezeOrder(next: PanelState, painted: PaintedOrder): PanelState {
   return {
     ...next,
-    lists: next.lists.map((list) => ({
-      ...list,
-      sections: list.sections.map((section) => {
-        const prior = painted.get(sectionKey(list.kind, section.group));
-        if (prior === undefined) return section;
-        const byId = new Map(section.rows.map((row) => [row.id, row]));
-        const kept = prior.flatMap((id) => {
-          const row = byId.get(id);
-          return row === undefined ? [] : [row];
-        });
-        const added = section.rows.filter((row) => !prior.includes(row.id));
-        return { ...section, rows: [...kept, ...added] };
-      }),
-    })),
+    sections: next.sections.map((section) => {
+      const prior = painted.get(section.key);
+      if (prior === undefined) return section;
+      const byId = new Map(section.rows.map((row) => [row.id, row]));
+      const kept = prior.flatMap((id) => {
+        const row = byId.get(id);
+        return row === undefined ? [] : [row];
+      });
+      const added = section.rows.filter((row) => !prior.includes(row.id));
+      return { ...section, rows: [...kept, ...added] };
+    }),
   };
 }

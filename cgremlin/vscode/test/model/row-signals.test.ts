@@ -11,7 +11,6 @@ import {
   buildWorkLists,
   compactAge,
   landedOf,
-  stateLineOf,
   tierOf,
   type ItemsResponse,
   type RowMetaCell,
@@ -119,12 +118,11 @@ describe('P1-6 the size tier (§2.2 rule 6)', () => {
 describe('P0-3 the parking-lot signals line', () => {
   it('renders @author · age · tier · n files +a/−d, plus the CI dot and the review chip', () => {
     const row = rowOf(lists(), 'parkingLot', 'pr:acme/web#101');
-    expect(kinds(row.meta)).toEqual(['author', 'age', 'tier', 'size', 'ci', 'review']);
-    expect(texts(row.meta).slice(0, 4)).toEqual(['@jane', '12d', 'M', '7 files +120/−30']);
+    expect(kinds(row.meta)).toEqual(['repo', 'author', 'age', 'tier', 'size', 'ci']);
+    expect(texts(row.meta).slice(0, 5)).toEqual(['web', '@jane', '12d', 'M', '7 files +120/−30']);
     const ci = row.meta.find((c) => c.kind === 'ci');
     expect(ci?.tone).toBe('good');
-    expect(ci?.title).toContain('success');
-    expect(row.meta.find((c) => c.kind === 'review')?.text).toBe('review required');
+    expect(ci?.label).toBe('CI passing');
   });
 
   it('keeps every signal for a row whose fields all defaulted, as — (MG-12)', () => {
@@ -138,9 +136,7 @@ describe('P0-3 the parking-lot signals line', () => {
     const built = lists();
     const row = rowOf(built, 'parkingLot', 'pr:acme/api#55');
     expect(row.demoted).toBe(true);
-    expect(row.meta.find((c) => c.kind === 'activity')?.text).toBe(
-      '👤 @dana reviewed (changes requested) 43h ago',
-    );
+    expect(row.meta.find((c) => c.kind === 'activity')?.text).toBe('@dana reviewed 43h');
     expect(rowOf(built, 'parkingLot', 'pr:acme/web#101').demoted).toBe(false);
   });
 
@@ -156,40 +152,32 @@ describe('P0-3/P1-8 waiting for review says what landed', () => {
   it('names the reviewer and the verdict', () => {
     expect(
       landedOf(pr({ reviewDecision: 'CHANGES_REQUESTED', humanActivity: { reviewedBy: ['jane'], commentedBy: [], lastAt: null } })),
-    ).toBe('💬 @jane requested changes');
+    ).toBe('@jane requested changes');
     expect(landedOf(pr({ reviewDecision: 'APPROVED', humanActivity: { reviewedBy: ['dana'], commentedBy: [], lastAt: null } }))).toBe(
-      '💬 @dana approved',
+      '@dana approved',
     );
     expect(landedOf(pr({ humanActivity: { reviewedBy: ['kim'], commentedBy: [], lastAt: null } }))).toBe(
-      '💬 @kim review arrived',
+      '@kim review arrived',
     );
     expect(landedOf(pr({}))).toBe('');
   });
 
   it('puts it on the row, with the needs-you flag', () => {
     const row = rowOf(lists(), 'waitingForReview', 'pr:acme/web#200');
-    expect(texts(row.meta)).toContain('💬 @jane requested changes');
+    expect(texts(row.meta)).toContain('@jane requested changes');
     expect(row.needsYou).toBe(true);
   });
 });
 
-describe('P0-3/P1-7 my work reads as state', () => {
-  it('renders ticket status · PR state · agent phase without expanding', () => {
-    const cells = stateLineOf(
-      JSON.parse(JSON.stringify(itemsFixture)).items.find(
-        (i: { id: string }) => i.id === 'ticket:HB-627',
-      ),
-    );
-    expect(kinds(cells)).toEqual(['ticketStatus', 'prState', 'prState', 'agentPhase', 'agentPhase']);
-    expect(texts(cells)[0]).toBe('🎫 In Progress');
-    expect(texts(cells)[1]).toBe('🔀 acme/web#310 approved');
-    expect(texts(cells)[3]).toBe('🔍 plan_ready');
+describe('§2 L3 my work reads as state', () => {
+  it('reads repo, ticket status and every agent phase, on the signals line itself', () => {
+    const row = rowOf(lists(), 'myWork', 'ticket:HB-627');
+    expect(kinds(row.meta).slice(0, 4)).toEqual(['repo', 'ticketStatus', 'agentPhase', 'agentPhase']);
+    expect(texts(row.meta).slice(0, 4)).toEqual(['web', 'In Progress', '∴ plan_ready', '◆ developing']);
   });
 
-  it('is on the my-work row and empty on a parking-lot row', () => {
-    const built = lists();
-    expect(rowOf(built, 'myWork', 'ticket:HB-627').stateLine.length).toBeGreaterThan(0);
-    expect(rowOf(built, 'parkingLot', 'pr:acme/web#101').stateLine).toEqual([]);
+  it('says nothing of the sort on a parking-lot row, which asks a different question', () => {
+    expect(kinds(rowOf(lists(), 'parkingLot', 'pr:acme/web#101').meta)).not.toContain('ticketStatus');
   });
 });
 
@@ -197,6 +185,6 @@ describe('P0-3 investigations', () => {
   it('reads phase then age, and takes its age from the work when there is no PR', () => {
     const row = rowOf(lists(), 'investigations', 'session:inv-stacktrace-1');
     expect(kinds(row.meta)).toEqual(['agentPhase', 'age']);
-    expect(texts(row.meta)).toEqual(['🔍 investigating', '7h']);
+    expect(texts(row.meta)).toEqual(['∴ investigating', '7h']);
   });
 });

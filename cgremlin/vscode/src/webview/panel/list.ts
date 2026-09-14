@@ -1,29 +1,24 @@
 /**
- * One list: its header, its sort control, and the tree of sections beneath it (R47, R66).
+ * One section: its header, its sort control, and the rows beneath it (§5, R66).
+ *
+ * §5 promoted the parking lot's three groups to sections, so there is exactly ONE header level
+ * now — one sticky offset, one colour per section, one disclosure. The header is a real
+ * `<button>`, so <kbd>Enter</kbd> and <kbd>Space</kbd> are the browser's and the tree's roles
+ * stay clean: the rows it owns are its siblings, not its descendants.
  *
  * Every level here is reconciled by key, so the only nodes that ever move are the ones whose
  * position actually changed. A row and the block it opens into are siblings in the same sequence
  * — `row:…` followed by `expanded:row:…` — which is what keeps the tree's document order the same
  * as the order `panelTreeNodes` walks.
  *
- * P2: both header levels are disclosures. The list's own is a real `<button>`, so
- * <kbd>Enter</kbd> and <kbd>Space</kbd> are the browser's and the tree's roles stay clean — the
- * tree it owns is a sibling of the button, not a descendant of it. A group's header stays a
- * `treeitem`, which is what the keyboard model already navigates. Neither one ever hides rows in
- * silence: the chevron says which way it is, and the count says how much is behind it.
- *
  * Runs in a browser context (R40).
  */
-import { post } from './channel';
 import { button, el } from './dom';
 import { createExpanded, expandedKey, patchExpanded } from './expanded';
-import { reconcile, setAttr, setClass, setHidden, setTabStop, setText } from './reconcile';
+import { reconcile, setAttr, setClass, setHidden, setText } from './reconcile';
 import { child, createRow, patchRow, rowKey } from './row';
-import type {
-  PanelListView,
-  PanelRowView,
-  PanelSectionView,
-} from '../../model/panel-protocol';
+import { sectionClassOf } from '../../model/work-items';
+import type { PanelRowView, PanelSectionView } from '../../model/panel-protocol';
 
 const SORT_LABELS: Record<string, string> = {
   untouchedFirstThenOldest: 'untouched',
@@ -33,50 +28,51 @@ const SORT_LABELS: Record<string, string> = {
   needsYouThenRecent: 'needs you',
 };
 
-/** Down for open, right for shut — the twisty a row already uses, one level up. */
+/** Down for open, right for shut. */
 const OPEN = '▾';
 const SHUT = '▸';
 
-/** An empty list is an answer, not a gap (P2). */
+/** An empty section is an answer, not a gap (§6). */
 const NOTHING = 'Nothing waiting for you';
 
-export interface ListContext {
+export interface SectionContext {
   focusedKey: string | null;
   /** Told whenever the pointer enters or leaves a tree, so the order can be frozen (§2.2 rule 4). */
   onPointer: (inside: boolean) => void;
 }
 
-export function createList(list: PanelListView, context: ListContext): HTMLElement {
-  const node = el('div', 'list');
-  node.dataset.kind = list.kind;
+export function createSection(section: PanelSectionView, context: SectionContext): HTMLElement {
+  const node = el('div', 'section');
+  node.dataset.section = section.key;
 
-  const header = el('div', 'list-header');
-  // Which list this is, said on the node the stylesheet colours. The four lists look alike from
-  // two feet away, and two feet away is where the sidebar is read.
-  header.dataset.section = list.kind;
-  const toggle = button({
-    className: 'list-toggle',
+  const bar = el('div', 'section-bar');
+  const header = button({
+    className: 'section-header',
     label: '',
     message: () => ({
-      type: 'toggleList',
-      list: node.dataset.kind ?? '',
-      collapsed: toggle.getAttribute('aria-expanded') === 'true',
+      type: 'toggleSection',
+      key: node.dataset.section ?? '',
+      collapsed: header.getAttribute('aria-expanded') === 'true',
     }),
   });
-  toggle.appendChild(el('span', 'list-chevron'));
-  const glyph = el('span', 'list-glyph');
+  const chevron = el('span', 'section-chevron');
+  chevron.setAttribute('aria-hidden', 'true');
+  header.appendChild(chevron);
+  const glyph = el('span', 'section-glyph');
   glyph.setAttribute('aria-hidden', 'true');
-  toggle.appendChild(glyph);
-  toggle.appendChild(el('span', 'list-title'));
-  toggle.appendChild(el('span', 'list-count'));
-  header.appendChild(toggle);
+  header.appendChild(glyph);
+  header.appendChild(el('span', 'section-title'));
+  header.appendChild(el('span', 'section-count'));
+  bar.appendChild(header);
+  node.appendChild(bar);
 
+  // A line of its own: beside the title, the chips squeezed `Parking lot` to `Par…` at 300 px,
+  // and the header is the one thing in a section that must stay readable.
   const sorts = el('div', 'sorts');
   sorts.setAttribute('role', 'group');
-  header.appendChild(sorts);
-  node.appendChild(header);
+  node.appendChild(sorts);
 
-  node.appendChild(el('div', 'list-empty', NOTHING));
+  node.appendChild(el('div', 'section-empty', NOTHING));
 
   const tree = el('div', 'tree');
   tree.setAttribute('role', 'tree');
@@ -86,114 +82,53 @@ export function createList(list: PanelListView, context: ListContext): HTMLEleme
   return node;
 }
 
-export function patchList(node: HTMLElement, list: PanelListView, context: ListContext): void {
-  const toggle = child(node, '.list-toggle');
-  setAttr(toggle, 'aria-expanded', String(!list.collapsed));
-  setText(child(node, '.list-chevron'), list.collapsed ? SHUT : OPEN);
-  setText(child(node, '.list-glyph'), list.glyph);
-  setText(child(node, '.list-title'), list.title);
-  setText(child(node, '.list-count'), String(list.count));
-  setAttr(toggle, 'aria-label', `${list.title} (${list.count})`);
+export function patchSection(
+  node: HTMLElement,
+  section: PanelSectionView,
+  context: SectionContext,
+): void {
+  const accent = sectionClassOf(section.key);
+  setClass(node, `section ${accent}`);
+  const header = child(node, '.section-header');
+  setClass(header, `section-header ${accent}`);
+  setAttr(header, 'aria-expanded', String(!section.collapsed));
+  setText(child(node, '.section-chevron'), section.collapsed ? SHUT : OPEN);
+  setText(child(node, '.section-glyph'), section.glyph);
+  setText(child(node, '.section-title'), section.title);
+  setText(child(node, '.section-count'), String(section.count));
+  setAttr(header, 'aria-label', `${section.title} (${section.count})`);
 
   const sorts = child(node, '.sorts');
-  setAttr(sorts, 'aria-label', `Sort ${list.title}`);
-  setHidden(sorts, list.collapsed);
+  setAttr(sorts, 'aria-label', `Sort ${section.title}`);
+  const hasSorts = section.showsSort && !section.collapsed;
+  setHidden(sorts, !hasSorts);
   reconcile(
     sorts,
-    list.collapsed ? [] : list.sorts.map((sort) => ({ key: sort, data: sort })),
+    hasSorts ? section.sorts.map((sort) => ({ key: sort, data: sort })) : [],
     (sort) =>
       button({
         className: 'sort',
         label: SORT_LABELS[sort] ?? sort,
-        message: () => ({ type: 'setSort', list: list.kind, sort }),
+        message: () => ({ type: 'setSort', list: section.list, sort }),
       }),
     (item, sort) => {
-      setClass(item, sort === list.sort ? 'sort selected' : 'sort');
-      setAttr(item, 'aria-pressed', String(sort === list.sort));
+      setClass(item, sort === section.sort ? 'sort selected' : 'sort');
+      setAttr(item, 'aria-pressed', String(sort === section.sort));
     },
   );
 
-  // A group that holds nothing is not a thing to expand, so it is not drawn at all — the same
-  // sequence `panelTreeNodes` walks (R66).
-  const sections = list.collapsed
-    ? []
-    : list.sections.filter((section) => section.group === null || section.count > 0);
-  const rows = sections.reduce((total, section) => total + section.rows.length, 0);
-  setHidden(child(node, '.list-empty'), list.collapsed || rows > 0);
+  const rows = section.collapsed ? [] : section.rows;
+  setHidden(child(node, '.section-empty'), section.collapsed || rows.length > 0);
 
   const tree = child(node, '.tree');
-  setAttr(tree, 'aria-label', list.title);
-  setHidden(tree, list.collapsed);
+  setAttr(tree, 'aria-label', section.title);
+  setHidden(tree, section.collapsed);
   reconcile(
     tree,
-    sections.map((section) => ({
-      key: `section:${list.kind}:${section.group ?? ''}`,
-      data: section,
-    })),
-    (section) => createSection(list, section),
-    (sectionNode, section) => patchSection(sectionNode, list, section, context),
-  );
-}
-
-function createSection(list: PanelListView, section: PanelSectionView): HTMLElement {
-  const node = el('div', 'section');
-  const header = el('div', 'section-header');
-  header.setAttribute('role', 'treeitem');
-  header.setAttribute('aria-level', '1');
-  const chevron = el('span', 'section-chevron');
-  chevron.setAttribute('aria-hidden', 'true');
-  header.appendChild(chevron);
-  header.appendChild(el('span', 'section-title'));
-  header.appendChild(el('span', 'section-count'));
-  if (section.group !== null && section.collapsible) {
-    header.dataset.key = `group:${list.kind}:${section.group}`;
-    const group = section.group;
-    header.addEventListener('click', () => {
-      post({
-        type: 'toggleGroup',
-        list: list.kind,
-        group,
-        collapsed: header.getAttribute('aria-expanded') === 'true',
-      });
-    });
-  }
-  node.appendChild(header);
-  node.appendChild(el('div', 'section-rows'));
-  return node;
-}
-
-function patchSection(
-  node: HTMLElement,
-  list: PanelListView,
-  section: PanelSectionView,
-  context: ListContext,
-): void {
-  const header = child(node, '.section-header');
-  setHidden(header, section.group === null);
-  setText(child(node, '.section-title'), section.title);
-  setText(child(node, '.section-count'), String(section.count));
-  setAttr(header, 'aria-label', `${section.title} (${section.count})`);
-  // A group that cannot be closed carries no chevron: an affordance that does nothing is worse
-  // than none, and those two groups are always open.
-  setText(
-    child(node, '.section-chevron'),
-    section.collapsible ? (section.collapsed ? SHUT : OPEN) : '',
-  );
-  setClass(header, section.collapsible ? 'section-header collapsible' : 'section-header');
-  if (section.collapsible) {
-    setAttr(header, 'aria-expanded', String(!section.collapsed));
-    setAttr(header, 'aria-selected', String(context.focusedKey === header.dataset.key));
-    setTabStop(header, context.focusedKey === header.dataset.key);
-  }
-  // A collapsed group contributes its header and nothing else — the same sequence the tree model
-  // walks, so the roles and the keyboard cannot disagree (R66).
-  const rows = section.collapsed ? [] : section.rows;
-  reconcile(
-    child(node, '.section-rows'),
-    rows.flatMap((row) => entriesOf(row)),
+    rows.flatMap((row) => entriesOf(row, accent)),
     (entry) => (entry.kind === 'row' ? createRow(entry.row) : createExpanded()),
     (element, entry) => {
-      if (entry.kind === 'row') patchRow(element, entry.row, context);
+      if (entry.kind === 'row') patchRow(element, entry.row, entry.accent, context);
       else patchExpanded(element, entry.row, context.focusedKey);
     },
   );
@@ -202,12 +137,15 @@ function patchSection(
 interface Entry {
   kind: 'row' | 'expanded';
   row: PanelRowView;
+  accent: string;
 }
 
 /** The row, then — only while it is open — the block it opens into, as its sibling. */
-function entriesOf(row: PanelRowView): { key: string; data: Entry }[] {
+function entriesOf(row: PanelRowView, accent: string): { key: string; data: Entry }[] {
   const key = rowKey(row);
-  const entries: { key: string; data: Entry }[] = [{ key, data: { kind: 'row', row } }];
-  if (row.expanded) entries.push({ key: expandedKey(key), data: { kind: 'expanded', row } });
+  const entries: { key: string; data: Entry }[] = [{ key, data: { kind: 'row', row, accent } }];
+  if (row.expanded) {
+    entries.push({ key: expandedKey(key), data: { kind: 'expanded', row, accent } });
+  }
   return entries;
 }

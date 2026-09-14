@@ -104,8 +104,8 @@ describe('MG-B8 buildWorkLists returns exactly the four lists', () => {
   });
 });
 
-describe('R13/R47 the row label', () => {
-  it('labels a parking-lot row repo#n — title even when it carries a ticket key', () => {
+describe('§2 the row identity', () => {
+  it('names a parking-lot row by its PR number even when it carries a ticket key', () => {
     const res = response();
     const item = itemOf(res, 'pr:acme/web#101');
     item.ticket = {
@@ -120,18 +120,21 @@ describe('R13/R47 the row label', () => {
     const row = lists({ response: res }).parkingLot.sections
       .flatMap((s) => s.rows)
       .find((r) => r.id === 'pr:acme/web#101');
-    expect(row?.label).toBe('acme/web#101 — Add the retry budget');
+    // The ticket key leads, the PR number follows — keys only, and never the repo path (§2 L1).
+    expect(row?.identity).toBe('HB-900 #101');
+    expect(row?.description).toBe('A ticket the PR names');
   });
 
   it('prefers the ticket summary elsewhere, and falls back to the bare key', () => {
     const res = response();
     const hb = (r: ItemsResponse) =>
       lists({ response: r }).myWork.sections[0].rows.find((row) => row.id === 'ticket:HB-627');
-    expect(hb(res)?.label).toBe('HB-627 — Caregiver inbox reshuffle');
+    expect(hb(res)?.identity).toBe('HB-627 #310');
+    expect(hb(res)?.description).toBe('Caregiver inbox reshuffle');
 
     const bare = response();
     itemOf(bare, 'ticket:HB-627').ticket!.summary = '';
-    expect(hb(bare)?.label).toBe('HB-627');
+    expect(hb(bare)?.description).toBe('HB-627 inbox reshuffle (web)');
   });
 
   it('falls back to repo#n for a null PR title and to the session title for a session item', () => {
@@ -141,8 +144,11 @@ describe('R13/R47 the row label', () => {
     const legacy = built.parkingLot.sections
       .flatMap((s) => s.rows)
       .find((r) => r.id === 'pr:acme/legacy#9');
-    expect(legacy?.label).toBe('acme/legacy#9');
-    expect(built.investigations.sections[0].rows[0].label).toBe('Investigate the nightly crash');
+    expect(legacy?.identity).toBe('#9');
+    expect(legacy?.description).toBe('');
+    expect(built.investigations.sections[0].rows[0].identity).toBe(
+      'Investigate the nightly crash',
+    );
   });
 });
 
@@ -151,16 +157,16 @@ describe('MG-B8 the row description', () => {
     const built = lists();
     const hb = built.myWork.sections[0].rows.find((r) => r.id === 'ticket:HB-627');
     if (hb === undefined) throw new Error('no HB-627 row');
-    expect(hb.badges).toEqual(['I❗', 'D🔄']);
+    expect(hb.badges).toEqual(['I!', 'D⟳']);
     expect(hb.chips).toEqual(['acme/web#310', 'acme/api#88']);
     // §2.2 rule 7: compact. "opened … ago" cost seven characters in a 300 px sidebar.
     expect(hb.age).toBe('6d');
     expect(hb.size).toBe('12 files +300/−80');
-    expect(hb.ci).toBe('🟢');
+    expect(hb.ci).toBe('●');
     // P10: the date is the point of the line — "reviewed" with no date cannot be acted on.
-    expect(hb.activity).toBe('👤 @dana reviewed (approved) 5h ago');
-    expect(hb.description).toContain('6d');
-    expect(hb.description).toContain('12 files +300/−80');
+    expect(hb.activity).toBe('@dana reviewed 5h');
+    expect(hb.meta.map((cell) => cell.text)).toContain('6d');
+    expect(hb.meta.map((cell) => cell.text)).toContain('12 files +300/−80');
   });
 
   it('badges a respond agent C and a claimed agent with the claim glyph', () => {
@@ -168,31 +174,28 @@ describe('MG-B8 the row description', () => {
     const respond = built.waitingForReview.sections[0].rows.find(
       (r) => r.id === 'pr:acme/web#200',
     );
-    expect(respond?.badges).toEqual(['C🔄']);
-    expect(built.investigations.sections[0].rows[0].badges).toEqual(['I👤']);
+    expect(respond?.badges).toEqual(['C⟳']);
+    expect(built.investigations.sections[0].rows[0].badges).toEqual(['I◉']);
   });
 
   it('summarises human activity as reviewed, commented or requested', () => {
     const built = lists();
     const someoneOnIt = built.parkingLot.sections.find((s) => s.group === 'someoneOnIt');
-    expect(someoneOnIt?.rows.map((r) => r.activity)).toEqual([
-      '👤 @dana reviewed (changes requested) 43h ago',
-    ]);
+    expect(someoneOnIt?.rows.map((r) => r.activity)).toEqual(['@dana reviewed 43h']);
     const untouched = built.parkingLot.sections.find((s) => s.group === 'untouched');
     expect(untouched?.rows[0].activity).toBe('');
     // R47.1, reversed in Phase 10: a review request is still SAID on the row, and it no longer
     // demotes it — #56's only signal is dana's request, and #56 is untouched.
-    expect(untouched?.rows.find((r) => r.id === 'pr:acme/api#56')?.activity).toBe(
-      '👤 @dana requested',
-    );
+    expect(untouched?.rows.find((r) => r.id === 'pr:acme/api#56')?.activity).toBe('@dana requested');
   });
 
   it('renders no draft marker and no no-human-review badge anywhere (R47)', () => {
     const built = lists();
     const all = WORK_LIST_KINDS.flatMap((kind) => built[kind].sections.flatMap((s) => s.rows));
     for (const row of all) {
-      expect(row.description).not.toMatch(/draft/i);
-      expect(row.description).not.toMatch(/no human/i);
+      const line = row.meta.map((cell) => cell.text).join(' ');
+      expect(line).not.toMatch(/draft/i);
+      expect(line).not.toMatch(/no human/i);
     }
   });
 });
@@ -205,8 +208,9 @@ describe('MG-12 defaults render as unknown', () => {
     expect(row?.age).toBe('—');
     expect(row?.size).toBe('—');
     expect(row?.ci).toBe('');
-    expect(row?.description).not.toContain('0 files');
-    expect(row?.description).not.toContain('opened today');
+    const line = row?.meta.map((cell) => cell.text).join(' ') ?? '';
+    expect(line).not.toContain('0 files');
+    expect(line).not.toContain('opened today');
   });
 
   it('sorts the row with no size last under smallestChange', () => {
@@ -476,11 +480,11 @@ describe('R48/MG-15 the children are the item parts', () => {
     const children = buildItemChildren(item);
     expect(children.map((c) => c.kind)).toEqual(['agent', 'agent', 'ticket', 'pr', 'pr']);
     expect(children.map((c) => c.label)).toEqual([
-      '🔍 Investigation · plan_ready',
-      '🔨 Development · developing',
-      '🎫 HB-627 — Caregiver inbox reshuffle (In Progress)',
-      '🔀 acme/web#310 — approved · 🟢',
-      '🔀 acme/api#88 — open · 🟡',
+      '∴ Investigation · plan_ready',
+      '◆ Development · developing',
+      '▣ HB-627 — Caregiver inbox reshuffle (In Progress)',
+      '◇ acme/web#310 — approved · ●',
+      '◇ acme/api#88 — open · ◐',
     ]);
   });
 
@@ -499,7 +503,7 @@ describe('R48/MG-15 the children are the item parts', () => {
     });
     const children = buildItemChildren(grown);
     expect(children).toHaveLength(6);
-    expect(children[2].label).toBe('💬 Respond · ready');
+    expect(children[2].label).toBe('❝ Respond · ready');
   });
 
   it('drops exactly one child when the ticket goes, and reports none for a bare item', () => {

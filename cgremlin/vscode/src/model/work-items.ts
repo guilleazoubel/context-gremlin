@@ -204,18 +204,42 @@ export const LIST_TITLES: Record<WorkListKind, string> = {
 };
 
 /**
- * P2: one mark per list, in the fixed-width column the row's twisty sits in, so the four headers
- * read as one vertical rhythm. A diamond is a PR: hollow means nobody has it, solid means it is
- * mine, and nested means it is mine with somebody else inside it. An investigation is not a PR at
- * all, so it gets the mark a conclusion gets. Unicode, never an icon font — `font-src 'none'`
- * (R38) would drop one silently.
+ * §5 — the panel's six sections, in the one order they are ever drawn in.
+ *
+ * The parking lot's three groups are PROMOTED here rather than nested: they answer three
+ * different questions (§1), and one colour and an 11 px grey title for all three was the "can't
+ * separate the sections" complaint. Membership is still the core's answer (D2) — this table only
+ * says which of `item.parkingLotGroup`'s values gets which header.
+ *
+ * The glyphs are unicode, never an icon font — `font-src 'none'` (R38) drops one silently. A
+ * diamond is a PR: hollow means nobody has it, nested means I am inside it, half-filled means
+ * somebody else is, and filled means it is my own work. An investigation gets the mark a
+ * conclusion gets, and a PR of mine that is out with reviewers gets a clock.
  */
-export const LIST_GLYPHS: Record<WorkListKind, string> = {
-  parkingLot: '◇',
-  myWork: '◆',
-  investigations: '∴',
-  waitingForReview: '◈',
-};
+export interface PanelSectionSpec {
+  /** `myWork`, or `parkingLot:someoneOnIt` for one of the promoted groups. */
+  key: string;
+  list: WorkListKind;
+  group: ParkingLotGroup | null;
+  title: string;
+  glyph: string;
+  /** Whether it starts closed. Only "someone is on it" does (R47). */
+  collapsed: boolean;
+}
+
+export const PANEL_SECTIONS: readonly PanelSectionSpec[] = [
+  { key: 'parkingLot:untouched', list: 'parkingLot', group: 'untouched', title: 'Parking lot', glyph: '◇', collapsed: false },
+  { key: 'parkingLot:reviewing', list: 'parkingLot', group: 'reviewing', title: 'Reviewing', glyph: '◈', collapsed: false },
+  { key: 'parkingLot:someoneOnIt', list: 'parkingLot', group: 'someoneOnIt', title: 'Someone is on it', glyph: '◐', collapsed: true },
+  { key: 'myWork', list: 'myWork', group: null, title: 'My dev work', glyph: '◆', collapsed: false },
+  { key: 'investigations', list: 'investigations', group: null, title: 'Investigations', glyph: '∴', collapsed: false },
+  { key: 'waitingForReview', list: 'waitingForReview', group: null, title: 'Waiting for review', glyph: '◷', collapsed: false },
+];
+
+/** The class the stylesheet colours: a key is `a:b`, and a class may not carry the colon. */
+export function sectionClassOf(key: string): string {
+  return `sec-${key.replace(':', '-')}`;
+}
 
 /**
  * The narrow slice of the editor's `globalState` this module needs (R64). The real `Host`
@@ -253,19 +277,11 @@ export function writeSort(store: SortStore, list: WorkListKind, sort: WorkSortKi
 // P2: which headers the user has closed
 // ---------------------------------------------------------------------------
 
-/** `parkingLot` for a whole list, `parkingLot:someoneOnIt` for one of its groups. */
+/** A section key (§5): `myWork`, or `parkingLot:someoneOnIt`. */
 export type CollapseKey = string;
 export type CollapseState = Record<CollapseKey, boolean>;
 
 export const COLLAPSE_STATE_KEY = 'cgremlin.panel.collapsed';
-
-export function listCollapseKey(list: WorkListKind): CollapseKey {
-  return list;
-}
-
-export function groupCollapseKey(list: WorkListKind, group: ParkingLotGroup): CollapseKey {
-  return `${list}:${group}`;
-}
 
 /**
  * A persisted value the panel did not write — a hand-edited `globalState`, or a shape from an
@@ -284,6 +300,32 @@ export function readCollapsed(store: SortStore): CollapseState {
 
 export function writeCollapsed(store: SortStore, state: CollapseState): void {
   store.setState(COLLAPSE_STATE_KEY, { ...state });
+}
+
+// ---------------------------------------------------------------------------
+// §6: which area the panel is narrowed to
+// ---------------------------------------------------------------------------
+
+/** `all`, or one of the six section keys. */
+export type PanelFocus = string;
+
+export const FOCUS_ALL = 'all';
+export const FOCUS_STATE_KEY = 'cgremlin.panel.focus';
+
+/**
+ * Read with the same defensive shape as `readSort`: a value this panel did not write — a
+ * hand-edited `globalState`, a section key from a build that named them differently — falls back
+ * to `all` rather than narrowing the panel to nothing and leaving the user with a blank column.
+ */
+export function readFocus(store: SortStore): PanelFocus {
+  const stored = store.getState<unknown>(FOCUS_STATE_KEY);
+  if (typeof stored !== 'string') return FOCUS_ALL;
+  if (stored === FOCUS_ALL) return FOCUS_ALL;
+  return PANEL_SECTIONS.some((section) => section.key === stored) ? stored : FOCUS_ALL;
+}
+
+export function writeFocus(store: SortStore, focus: PanelFocus): void {
+  store.setState(FOCUS_STATE_KEY, focus);
 }
 
 // ---------------------------------------------------------------------------
@@ -320,6 +362,7 @@ export interface WorkChild {
  * them out (the `·` separators are CSS, §2.3).
  */
 export type RowMetaKind =
+  | 'repo'
   | 'author'
   | 'age'
   | 'tier'
@@ -334,10 +377,13 @@ export type RowMetaKind =
 
 export interface RowMetaCell {
   kind: RowMetaKind;
-  /** Empty only for `ci`, which renders as a dot and says the rest in its title. */
+  /** Empty only for a passing CI, which is a green dot and needs no word (§3). */
   text: string;
-  /** The hover title — the full ISO date behind `12d`, the CI state behind the dot. */
-  title?: string;
+  /**
+   * The accessible name, for a cell whose text is not the whole story. **Never a tooltip**: the
+   * panel assigns no DOM `title` at all (§3), so this reaches the reader through `aria-label`.
+   */
+  label?: string;
   tone?: 'good' | 'warn' | 'bad';
 }
 
@@ -345,13 +391,16 @@ export interface WorkRow {
   id: WorkItemId;
   list: WorkListKind;
   item: WorkItem;
+  /** The accessible name for the whole row: its identity and its description, in that order. */
   label: string;
-  /** The dimmed second line, already joined — the accessible text behind `meta`. */
+  /** §2 L1 — KEYS only: `#4821`, `HB-627`, `HB-627 #4821`, or an investigation's own title. */
+  identity: string;
+  /** The same thing, one entry per key, because L1 renders one span per key (§8). */
+  identityKeys: string[];
+  /** §2 L2 — the ticket summary, else the PR title, else empty (the line is then not drawn). */
   description: string;
-  /** P0-3: the second line as cells. */
+  /** §2 L3 — the signals, repo tail first and every other token fixed-width. */
   meta: RowMetaCell[];
-  /** P1-7: the third line, for `myWork` — ticket status · PR state · agent phase. */
-  stateLine: RowMetaCell[];
   /** P1-6: `S` | `M` | `L` | `XL` | `—`. */
   tier: string;
   /** R47: the core's own answer, so "someone is on it" can be dimmed without re-deriving it. */
@@ -493,24 +542,21 @@ export function toRow(item: WorkItem, list: WorkListKind, now: number): WorkRow 
   const tier = tierOf(primary);
   const ci = ciDot(primary?.ci ?? null);
   const activity = humanActivitySummary(primary, now);
+  const identityKeys = identityKeysOf(item);
+  const identity = identityKeys.join(' ');
+  const description = descriptionOf(item);
   const badges = item.agents.map(badgeOf);
   const chips = item.prs.map((pr) => `${pr.repo}#${pr.number}`);
-  const meta = metaOf(item, list, { age, size, tier, openedIso, activity });
-  const stateLine = list === 'myWork' ? stateLineOf(item) : [];
-  // The `—` placeholders stay in the line: a row whose age and size took their R45 defaults
-  // must say it has none, never imply a zero (MG-12).
-  const description = meta
-    .map((cell) => cell.text)
-    .filter((part) => part !== '')
-    .join(' · ');
+  const meta = metaOf(item, list, { age, size, tier, activity, repo: repoTailOf(item) });
   return {
     id: item.id,
     list,
     item,
-    label: labelOf(item, list),
+    label: [identity, description].filter((part) => part !== '').join(' — '),
+    identity,
+    identityKeys,
     description,
     meta,
-    stateLine,
     tier,
     demoted: item.demoted,
     badges,
@@ -527,22 +573,41 @@ export function toRow(item: WorkItem, list: WorkListKind, now: number): WorkRow 
   };
 }
 
-/** R13, plus R47's one addition: a parking-lot row is always named after its PR. */
-export function labelOf(item: WorkItem, list: WorkListKind): string {
-  const primary = item.prs[0];
-  if (list === 'parkingLot' && primary !== undefined) return prLabel(primary);
-  if (item.ticket !== null) {
-    return item.ticket.summary === ''
-      ? item.ticket.key
-      : `${item.ticket.key} — ${item.ticket.summary}`;
-  }
-  if (primary !== undefined) return prLabel(primary);
-  return item.title;
+/**
+ * §2 L1 — the keys, and nothing else.
+ *
+ * `labelOf` used to build `grace-frontend#4821 — Fix pagination on the offer list`: fourteen
+ * identical characters of repo prefix on every row of the list, then the one thing that differed,
+ * then an ellipsis where the sidebar ran out. The prefix moves to L3 (as its last path segment
+ * alone) and the prose to L2, so what is left here is short enough that it never truncates.
+ *
+ * The one list with neither a ticket nor a PR is the investigations list, and there the session
+ * title IS the identifier — it is the only name that work has.
+ */
+export function identityOf(item: WorkItem): string {
+  return identityKeysOf(item).join(' ');
 }
 
-function prLabel(pr: WorkItemPr): string {
-  const name = `${pr.repo}#${pr.number}`;
-  return pr.title === null || pr.title === '' ? name : `${name} — ${pr.title}`;
+export function identityKeysOf(item: WorkItem): string[] {
+  const keys: string[] = [];
+  if (item.ticket !== null) keys.push(item.ticket.key);
+  // The FIRST PR only: a second `#88` on the same line is the other PR's number, which reads as
+  // part of the first one. Every PR is named in the block the row opens into (§4).
+  const primary = item.prs[0];
+  if (primary !== undefined) keys.push(`#${primary.number}`);
+  return keys.length === 0 ? [item.title] : keys;
+}
+
+/** §2 L2 — the prose, once. Empty means the line is not rendered, not that it is blank. */
+export function descriptionOf(item: WorkItem): string {
+  if (item.ticket !== null && item.ticket.summary !== '') return item.ticket.summary;
+  return item.prs[0]?.title ?? '';
+}
+
+/** §2 L3's first and only shrinkable token: `apfm/grace-frontend` reads as `grace-frontend`. */
+export function repoTailOf(item: WorkItem): string {
+  const repo = item.prs[0]?.repo ?? '';
+  return repo === '' ? '' : (repo.split('/').pop() ?? '');
 }
 
 const MODE_LETTER: Record<WorkAgentMode, string> = {
@@ -552,11 +617,12 @@ const MODE_LETTER: Record<WorkAgentMode, string> = {
   development: 'D',
 };
 
+/** The same geometric marks the parts use (`model/item-parts`), and for the same reason. */
 const MODE_GLYPH: Record<WorkAgentMode, string> = {
-  review: '🔎',
-  respond: '💬',
-  investigation: '🔍',
-  development: '🔨',
+  review: '◈',
+  respond: '❝',
+  investigation: '∴',
+  development: '◆',
 };
 
 const MODE_NAME: Record<WorkAgentMode, string> = {
@@ -568,9 +634,9 @@ const MODE_NAME: Record<WorkAgentMode, string> = {
 
 /** Claim, then a live run, then the gate — the precedence the tree used before the panel (R18). */
 export function agentGlyph(agent: WorkItemAgent): string {
-  if (agent.claimed) return '👤';
-  if (agent.running) return '🔄';
-  if (agent.needsYou) return '❗';
+  if (agent.claimed) return '◉';
+  if (agent.running) return '⟳';
+  if (agent.needsYou) return '!';
   return '';
 }
 
@@ -579,9 +645,9 @@ function badgeOf(agent: WorkItemAgent): string {
 }
 
 const CI_DOTS: Record<CiStatus, string> = {
-  success: '🟢',
-  pending: '🟡',
-  failure: '🔴',
+  success: '●',
+  pending: '◐',
+  failure: '✕',
   none: '',
 };
 
@@ -602,7 +668,7 @@ export function sizeOf(pr: WorkItemPr | undefined): string {
 /**
  * R47: who is already on it — **with the date**, which is the whole question that group asks.
  *
- * `👤 @DavidAPFM commented` cannot tell a comment from this morning from one from three weeks
+ * `@DavidAPFM commented` cannot tell a comment from this morning from one from three weeks
  * ago, so the age goes on the line. What the wire carries is `{ reviewedBy, commentedBy, lastAt }`
  * and ONE timestamp for the PR, not one per actor — so every interaction is dated by the same
  * `lastAt`, and none of them is dated by a clock invented here (MG-12).
@@ -661,77 +727,85 @@ export function humanActivitySummary(pr: WorkItemPr | undefined, now: number): s
   const who = reviewers.length > 0 ? reviewers : commenters;
   if (who.length === 0) {
     const requested = humans(pr.reviewRequests);
-    return requested.length > 0 ? `👤 @${requested[0]} requested` : '';
+    return requested.length > 0 ? `@${requested[0]} requested` : '';
   }
   const verb = reviewers.length > 0 ? 'reviewed' : 'commented';
-  const verdict = reviewers.length > 0 ? soleVerdict(pr, reviewers) : null;
-  const age = ago(pr.humanActivity?.lastAt ?? null, now);
-  return [
-    `👤 ${who.map((login) => `@${login}`).join(', ')}`,
-    verb,
-    verdict === null ? '' : `(${verdict})`,
-    age === '—' ? '' : age,
-  ]
+  const age = compactAge(pr.humanActivity?.lastAt ?? null, now);
+  // `@dana reviewed 43h` — no glyph, no parenthesised verdict, no `ago`. The verdict is the PR's
+  // state and belongs to the PR part of the submenu (§4); this line answers "who, and when".
+  return [who.map((login) => `@${login}`).join(', '), verb, age === '—' ? '' : age]
     .filter((part) => part !== '')
     .join(' ');
 }
 
 /**
- * P0-3: the second line as cells, per list, because each list answers a different question
- * (§1). The parking lot asks "should I pick this up?"; waiting-for-review asks "what landed?";
- * my work and investigations ask "where is it?".
+ * §2 L3 — the signals line, as one token per cell and NO separators.
+ *
+ * The `·`-joined sentence is gone: it was one of the two treatments that made ten rows look
+ * alike, and it was also what got ellipsised. The repo tail leads (it is the only shrinkable
+ * child), then the tokens each list needs, right-packed so the tier and the number line up down
+ * the column. Emoji prefixes go with the separators — except an agent's mode glyph, which is the
+ * one place a glyph is the name of a thing rather than decoration.
  */
 function metaOf(
   item: WorkItem,
   list: WorkListKind,
-  parts: { age: string; size: string; tier: string; openedIso: string | null; activity: string },
+  parts: { age: string; size: string; tier: string; activity: string; repo: string },
 ): RowMetaCell[] {
   const primary = item.prs[0];
   const cells: RowMetaCell[] = [];
-  const openedTitle = parts.openedIso === null ? undefined : { title: parts.openedIso };
 
   if (list === 'investigations') {
-    const agent = item.agents[0];
-    if (agent !== undefined) {
-      cells.push({ kind: 'agentPhase', text: `${MODE_GLYPH[agent.mode] ?? '•'} ${agent.phase}` });
-    }
-    cells.push({ kind: 'age', text: parts.age, ...openedTitle });
+    for (const agent of item.agents) cells.push(phaseCell(agent));
+    cells.push({ kind: 'age', text: parts.age });
     return cells;
   }
 
-  if (primary?.author !== null && primary?.author !== undefined) {
-    cells.push({ kind: 'author', text: `@${primary.author}` });
-  }
-  cells.push({ kind: 'age', text: parts.age, ...openedTitle });
-  cells.push({ kind: 'tier', text: parts.tier, title: parts.size === '—' ? undefined : parts.size });
-  if (list !== 'waitingForReview') cells.push({ kind: 'size', text: parts.size });
+  if (parts.repo !== '') cells.push({ kind: 'repo', text: parts.repo });
 
-  const ci = ciCell(primary?.ci ?? null);
-  if (ci !== null) cells.push(ci);
-
+  // The ONE thing each list's row answers (§1), in the slot the eye lands on after the repo.
   if (list === 'waitingForReview') {
     const landed = landedOf(primary);
     if (landed !== '') cells.push({ kind: 'landed', text: landed });
-  } else {
-    const decision = reviewText(primary?.reviewDecision ?? null);
-    if (decision !== null) cells.push({ kind: 'review', text: decision });
-    if (parts.activity !== '') cells.push({ kind: 'activity', text: parts.activity });
+  } else if (list === 'myWork') {
+    if (item.ticket !== null) cells.push({ kind: 'ticketStatus', text: item.ticket.status });
+    for (const agent of item.agents) cells.push(phaseCell(agent));
+  } else if (item.parkingLotGroup === 'reviewing') {
+    for (const agent of item.agents) cells.push(phaseCell(agent));
+  } else if (item.parkingLotGroup === 'someoneOnIt' && parts.activity !== '') {
+    cells.push({ kind: 'activity', text: parts.activity });
+  } else if (primary?.author !== null && primary?.author !== undefined) {
+    cells.push({ kind: 'author', text: `@${primary.author}` });
   }
+
+  cells.push({ kind: 'age', text: parts.age });
+  cells.push({ kind: 'tier', text: parts.tier });
+  // The `—` stays: a row whose size took its R45 default says it has none, never a zero (MG-12).
+  cells.push({ kind: 'size', text: parts.size });
+
+  const ci = ciCell(primary?.ci ?? null);
+  if (ci !== null) cells.push(ci);
   return cells;
 }
 
-const CI_TONE: Record<CiStatus, 'good' | 'warn' | 'bad' | null> = {
-  success: 'good',
-  pending: 'warn',
-  failure: 'bad',
+function phaseCell(agent: WorkItemAgent): RowMetaCell {
+  return { kind: 'agentPhase', text: `${MODE_GLYPH[agent.mode] ?? '•'} ${agent.phase}` };
+}
+
+const CI_CELLS: Record<CiStatus, RowMetaCell | null> = {
+  // A green dot needs no word; a red one does (§3). The dot alone was hover-only, which is the
+  // defect: the one build state worth acting on was the one the user could not see.
+  success: { kind: 'ci', text: '', tone: 'good', label: 'CI passing' },
+  pending: { kind: 'ci', text: 'CI pending', tone: 'warn', label: 'CI pending' },
+  failure: { kind: 'ci', text: 'CI failing', tone: 'bad', label: 'CI failing' },
   none: null,
 };
 
-/** §2.2 rule 9: a dot with a title, not an emoji — emoji size inconsistently in the sidebar. */
+/** §2.2 rule 9 amended by §3: a dot for green, words for everything the user must act on. */
 export function ciCell(ci: CiStatus | null): RowMetaCell | null {
   if (ci === null) return null;
-  const tone = CI_TONE[ci];
-  return tone === null ? null : { kind: 'ci', text: '', title: `CI: ${ci}`, tone };
+  const cell = CI_CELLS[ci] ?? null;
+  return cell === null ? null : { ...cell };
 }
 
 const REVIEW_TEXT: Record<string, string> = {
@@ -753,31 +827,10 @@ export function landedOf(pr: WorkItemPr | undefined): string {
   if (pr === undefined) return '';
   const who = pr.humanActivity?.reviewedBy[0] ?? pr.humanActivity?.commentedBy[0] ?? null;
   const by = who === null ? '' : `@${who} `;
-  if (pr.reviewDecision === 'CHANGES_REQUESTED') return `💬 ${by}requested changes`;
-  if (pr.reviewDecision === 'APPROVED') return `💬 ${by}approved`;
-  if (who !== null) return `💬 ${by}review arrived`;
+  if (pr.reviewDecision === 'CHANGES_REQUESTED') return `${by}requested changes`;
+  if (pr.reviewDecision === 'APPROVED') return `${by}approved`;
+  if (who !== null) return `${by}review arrived`;
   return '';
-}
-
-/**
- * P1-7: the my-work row reads as state rather than as a title — ticket status, then every PR's
- * state, then every agent's phase, so the row answers "where is it?" without expanding.
- */
-export function stateLineOf(item: WorkItem): RowMetaCell[] {
-  const cells: RowMetaCell[] = [];
-  if (item.ticket !== null) {
-    cells.push({ kind: 'ticketStatus', text: `🎫 ${item.ticket.status}` });
-  }
-  for (const pr of item.prs) {
-    cells.push({ kind: 'prState', text: `🔀 ${pr.repo}#${pr.number} ${prState(pr)}` });
-  }
-  for (const agent of item.agents) {
-    cells.push({
-      kind: 'agentPhase',
-      text: `${MODE_GLYPH[agent.mode] ?? '•'} ${agent.phase}`,
-    });
-  }
-  return cells;
 }
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -1002,7 +1055,7 @@ export function buildItemChildren(item: WorkItem): WorkChild[] {
     children.push({
       kind: 'ticket',
       id: `ticket:${ticket.key}`,
-      label: `🎫 ${ticket.key}${summary} (${ticket.status})`,
+      label: `▣ ${ticket.key}${summary} (${ticket.status})`,
       focus: { kind: 'ticket' },
       goTo: { kind: 'url', url: ticket.url },
       path: itemPathOf(`ticket:${ticket.key}`),
@@ -1013,7 +1066,7 @@ export function buildItemChildren(item: WorkItem): WorkChild[] {
     children.push({
       kind: 'pr',
       id: `pr:${pr.repo}#${pr.number}`,
-      label: `🔀 ${pr.repo}#${pr.number} — ${prState(pr)}${ci === '' ? '' : ` · ${ci}`}`,
+      label: `◇ ${pr.repo}#${pr.number} — ${prState(pr)}${ci === '' ? '' : ` · ${ci}`}`,
       focus: { kind: 'pr', repo: pr.repo, number: pr.number },
       goTo: { kind: 'url', url: pr.url },
       path: itemPathOf(`pr:${pr.repo}#${pr.number}`),

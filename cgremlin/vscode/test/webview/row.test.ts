@@ -5,11 +5,16 @@
  * every refresh loses `:hover` mid-click; a row whose height depends on hover moves the thing the
  * user was aiming at. Both are assertions about the mutation log, not about markup.
  */
+import fs from 'node:fs';
+import path from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createRow, patchRow, rowKey } from '../../src/webview/panel/row';
 import { setSink } from '../../src/webview/panel/channel';
 import { FakeDocument, type FakeElement } from '../support/fake-dom';
 import type { PanelRowView } from '../../src/model/panel-protocol';
+
+/** The section accent the row is rendered inside (§5). */
+const ACCENT = 'sec-parkingLot-untouched';
 
 let doc: FakeDocument;
 let posted: unknown[];
@@ -26,31 +31,31 @@ function rowView(over: Partial<PanelRowView> = {}): PanelRowView {
     hint: null,
     id: 'pr:acme/web#101',
     list: 'parkingLot',
-    label: 'acme/web#101 — Fix hydration on /communities',
-    description: '',
+    label: '#101 — Fix hydration on /communities',
+    identity: '#101',
+    identityKeys: ['#101'],
+    description: 'Fix hydration on /communities',
     badges: [],
     chips: [],
     age: '12d',
     size: '8 files +240/−31',
     ci: '',
     meta: [
+      { kind: 'repo', text: 'web' },
       { kind: 'author', text: '@jdoe' },
-      { kind: 'age', text: '12d', title: '2026-08-30T09:00:00.000Z' },
+      { kind: 'age', text: '12d' },
       { kind: 'tier', text: 'M' },
       { kind: 'size', text: '8 files +240/−31' },
-      { kind: 'ci', text: '', title: 'CI: success', tone: 'good' },
+      { kind: 'ci', text: '', tone: 'good', label: 'CI passing' },
     ],
-    stateLine: [],
     tier: 'M',
     demoted: false,
     needsYou: false,
     hasChildren: true,
     expanded: false,
     selected: false,
-    children: [],
-    lifecycle: [],
+    parts: [],
     changes: null,
-    people: [],
     actions: [
       { command: 'cgremlin.startReview', label: 'Start review', placement: 'primary' },
       { command: 'cgremlin.openPr', label: 'Open acme/web#101', placement: 'overflow' },
@@ -63,12 +68,10 @@ function rowView(over: Partial<PanelRowView> = {}): PanelRowView {
 function build(over: Partial<PanelRowView> = {}): FakeElement {
   const view = rowView(over);
   const node = createRow(view) as unknown as FakeElement;
-  patchRow(node as unknown as HTMLElement, view, { focusedKey: null });
+  patchRow(node as unknown as HTMLElement, view, ACCENT, { focusedKey: null });
   doc.clearLog();
   return node;
 }
-
-const textOf = (node: FakeElement, cls: string): string => node.byClass(cls)[0]?.textContent ?? '';
 
 /** Every `<button>` anywhere under the row — a walk, because the fake DOM has no selectors. */
 function buttonsIn(node: FakeElement): FakeElement[] {
@@ -81,51 +84,103 @@ function buttonsIn(node: FakeElement): FakeElement[] {
   return found;
 }
 
-describe('what the row says without being hovered', () => {
-  it('carries its title and every signal as its own cell', () => {
+describe('§2 — three lines, fixed order, fixed meaning', () => {
+  it('puts the keys on line one, one span each, and never the prose', () => {
+    const node = build({ identity: 'HB-627 #310', identityKeys: ['HB-627', '#310'] });
+    const keys = node.byClass('id-key');
+    expect(keys.map((key) => key.textContent)).toEqual(['HB-627', '#310']);
+  });
+
+  it('advertises on line one that the row opens, and which way it is', () => {
+    // Lost in Phase 10 with the old twisty: `aria-expanded` said the row opened and nothing on
+    // screen did. A collapsed row has to look like something that can be opened.
+    expect(build().byClass('row-twisty')[0].textContent).toBe('▸');
+    expect(build({ expanded: true }).byClass('row-twisty')[0].textContent).toBe('▾');
+    expect(build().byClass('row-twisty')[0].getAttribute('aria-hidden')).toBe('true');
+  });
+
+  it('puts the description on line two, as one text node', () => {
     const node = build();
-    expect(textOf(node, 'row-label')).toBe('acme/web#101 — Fix hydration on /communities');
-    const cells = node.byClass('row-meta')[0].children;
+    const desc = node.byClass('row-desc')[0];
+    expect(desc.textContent).toBe('Fix hydration on /communities');
+    expect(desc.hidden).toBe(false);
+  });
+
+  it('does not render line two as a blank gap when there is nothing to say', () => {
+    const node = build({ description: '' });
+    const desc = node.byClass('row-desc')[0];
+    expect(desc.textContent).toBe('');
+    expect(desc.hidden).toBe(true);
+  });
+
+  it('puts every signal on line three, as its own cell, repo first', () => {
+    const cells = build().byClass('row-signals')[0].children;
     expect(cells.map((cell) => cell.className)).toEqual([
+      'cell cell-repo',
       'cell cell-author',
       'cell cell-age',
       'cell cell-tier',
       'cell cell-size',
       'cell cell-ci tone-good',
     ]);
-    // The CI cell is a dot: it says its state in the title, because a coloured dot alone is not
-    // an accessible signal (§2.2 rule 9).
-    expect(cells[4].title).toBe('CI: success');
-    expect(cells[1].title).toBe('2026-08-30T09:00:00.000Z');
+    // The CI cell is a dot: it says its state in an aria-label, because a coloured dot alone is
+    // not an accessible signal — and because a tooltip is not a way of saying anything (§3).
+    expect(cells[5].getAttribute('aria-label')).toBe('CI passing');
+    expect(cells[2].getAttribute('aria-label')).toBeNull();
   });
 
   it('renders no buttons at all — a collapsed row is purely informational', () => {
-    // The user said the per-row popup "shows all the time and it is really annoying". So the
-    // gutter, its one primary verb and the `⋯` popover are gone: every verb lives in the block
-    // the row opens into, and the collapsed row is title, signals and state.
     const node = build();
     expect(buttonsIn(node)).toEqual([]);
     expect(node.byClass('row-gutter')).toEqual([]);
-    expect(node.byClass('row-primary')).toEqual([]);
-    expect(node.byClass('row-more')).toEqual([]);
-    expect(node.byClass('row-overflow')).toEqual([]);
-  });
-
-  it('keeps the third line as a slot, so a row that grows one does not change shape', () => {
-    expect(build().byClass('row-state')).toHaveLength(1);
   });
 
   it('marks needs-you, demoted and selected as classes, not as extra content', () => {
     const node = build({ needsYou: true, demoted: true, selected: true });
-    expect(node.className).toBe('row section-parkingLot needs-you demoted selected');
+    expect(node.className).toBe(`row ${ACCENT} needs-you demoted selected`);
     expect(node.getAttribute('aria-selected')).toBe('true');
   });
+});
+
+/**
+ * §2's truncation rule, which is a CSS rule and therefore asserted against the stylesheet: on
+ * every line EXACTLY ONE child may shrink, and every other child is `flex: 0 0 auto`. Two
+ * shrinkable children is how the old row ellipsised both the size and the age at 300 px.
+ */
+describe('§2 — one shrinkable child per line', () => {
+  const css = fs.readFileSync(path.resolve(__dirname, '../../media/panel.css'), 'utf8');
+
+  it('lets the repo GROW as well as shrink, so the right-hand cluster packs right', () => {
+    // `.row-signals > .cell { flex: 0 0 auto }` is specificity 0,2,0 and beat `.cell-repo`, so the
+    // repo could not shrink at all and the line overflowed at 300 px.
+    expect(css).toMatch(/\.row-signals > \.cell:not\(\.cell-repo\)\s*\{[^}]*flex:\s*0 0 auto/);
+    expect(css).toMatch(/\.cell-repo\s*\{[^}]*flex:\s*1 1 auto/);
+  });
+
+  it('hides the size token below a 380px container, and nothing else responds to width', () => {
+    expect(css).toMatch(/#cgremlin-panel\s*\{[^}]*container-type:\s*inline-size/);
+    expect(css).toMatch(/@container \(max-width: 380px\)\s*\{\s*\.cell-size\s*\{\s*display: none;?\s*\}/);
+    expect(css.match(/@container/g)).toHaveLength(1);
+  });
+
+  it('declares min-width:0 on the description and on the repo token, and on no other row part', () => {
+    const shrinkable = [...css.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^}]*)\}/g)]
+      .map(([, selector, body]) => [selector.trim(), body] as const)
+      .filter(([selector]) => /^\.(row|cell|id-key)/.test(selector))
+      .filter(([, body]) => /min-width:\s*0\s*;/.test(body))
+      .map(([selector]) => selector);
+    // `.id-keys` is a wrapper, not a token: it may shrink so that the line can, but nothing in
+    // it ever truncates (L1 is ≤14 characters by construction).
+    expect(shrinkable).toEqual(['.id-keys', '.row-desc', '.cell-repo']);
+  });
+
+
 });
 
 describe('what a patch does to a row that is already on screen', () => {
   it('writes nothing at all when the data is identical', () => {
     const node = build();
-    patchRow(node as unknown as HTMLElement, rowView(), { focusedKey: null });
+    patchRow(node as unknown as HTMLElement, rowView(), ACCENT, { focusedKey: null });
     expect(doc.log).toEqual([]);
     expect(doc.writes).toEqual([]);
   });
@@ -133,20 +188,21 @@ describe('what a patch does to a row that is already on screen', () => {
   it('writes only the cell that changed', () => {
     const node = build();
     const meta = rowView().meta;
-    meta[1] = { kind: 'age', text: '13d', title: '2026-08-30T09:00:00.000Z' };
-    patchRow(node as unknown as HTMLElement, rowView({ meta }), { focusedKey: null });
+    meta[2] = { kind: 'age', text: '13d' };
+    patchRow(node as unknown as HTMLElement, rowView({ meta }), ACCENT, { focusedKey: null });
     expect(doc.log).toEqual([{ kind: 'text', tag: 'SPAN', key: 'cell cell-age', detail: '13d' }]);
   });
 
-  it('turns the twisty and aria-expanded when the row opens, and nothing else', () => {
+  it('turns aria-expanded and the twisty when the row opens, and nothing else', () => {
     const node = build();
-    patchRow(node as unknown as HTMLElement, rowView({ expanded: true }), { focusedKey: null });
+    patchRow(node as unknown as HTMLElement, rowView({ expanded: true }), ACCENT, { focusedKey: null });
+    // The twisty is one character in a fixed-width box, so turning it moves no text (§7).
     expect(doc.log.map((m) => m.detail)).toEqual(['aria-expanded=true', '▾']);
   });
 
   it('moves the single tab stop without touching the row it left (R66)', () => {
     const node = build();
-    patchRow(node as unknown as HTMLElement, rowView(), { focusedKey: rowKey(rowView()) });
+    patchRow(node as unknown as HTMLElement, rowView(), ACCENT, { focusedKey: rowKey(rowView()) });
     expect(node.tabIndex).toBe(0);
     expect(doc.log).toEqual([
       { kind: 'prop', tag: 'DIV', key: 'row:parkingLot:pr:acme/web#101', detail: 'tabIndex=0' },
