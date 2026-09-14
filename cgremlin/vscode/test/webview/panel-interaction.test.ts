@@ -62,7 +62,7 @@ describe('§2.2 rule 4 — the order is frozen while the pointer is inside the l
     if (item?.ticket == null) throw new Error('fixture');
     item.ticket.status = 'In Review';
     panel.render(stateOf({ response: changed }));
-    expect(rowOf('row:myWork:ticket:HB-627').byClass('row-state')[0].textContent).toContain(
+    expect(rowOf('row:myWork:ticket:HB-627').byClass('row-meta')[0].textContent).toContain(
       'In Review',
     );
   });

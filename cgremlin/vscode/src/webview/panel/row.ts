@@ -41,7 +41,6 @@ export function createRow(row: PanelRowView): HTMLElement {
   title.appendChild(el('span', 'row-label'));
   main.appendChild(title);
   main.appendChild(el('div', 'row-meta'));
-  main.appendChild(el('div', 'row-state'));
   node.appendChild(main);
 
   node.addEventListener('click', () => {
@@ -68,7 +67,6 @@ export function patchRow(node: HTMLElement, row: PanelRowView, context: RowConte
   setText(child(node, '.twisty'), row.expanded ? '▾' : '▸');
   setText(child(node, '.row-label'), row.label);
   patchCells(child(node, '.row-meta'), row.meta);
-  patchCells(child(node, '.row-state'), row.stateLine);
 }
 
 /** `instanceof HTMLElement` deliberately not used: this code is also driven against a fake DOM. */

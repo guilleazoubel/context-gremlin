@@ -667,8 +667,9 @@ describe('MG-12 the panel half — defaults render as unknown', () => {
     expect(row?.age).toBe('—');
     expect(row?.size).toBe('—');
     expect(row?.ci).toBe('');
-    expect(row?.description).not.toContain('0 files');
-    expect(row?.description).toContain('—');
+    const line = row?.meta.map((cell) => cell.text).join(' ') ?? '';
+    expect(line).not.toContain('0 files');
+    expect(line).toContain('—');
   });
 });
 

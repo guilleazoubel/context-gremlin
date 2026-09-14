@@ -320,6 +320,7 @@ export interface WorkChild {
  * them out (the `·` separators are CSS, §2.3).
  */
 export type RowMetaKind =
+  | 'repo'
   | 'author'
   | 'age'
   | 'tier'
@@ -348,13 +349,14 @@ export interface WorkRow {
   id: WorkItemId;
   list: WorkListKind;
   item: WorkItem;
+  /** The accessible name for the whole row: its identity and its description, in that order. */
   label: string;
-  /** The dimmed second line, already joined — the accessible text behind `meta`. */
+  /** §2 L1 — KEYS only: `#4821`, `HB-627`, `HB-627 #4821`, or an investigation's own title. */
+  identity: string;
+  /** §2 L2 — the ticket summary, else the PR title, else empty (the line is then not drawn). */
   description: string;
-  /** P0-3: the second line as cells. */
+  /** §2 L3 — the signals, repo tail first and every other token fixed-width. */
   meta: RowMetaCell[];
-  /** P1-7: the third line, for `myWork` — ticket status · PR state · agent phase. */
-  stateLine: RowMetaCell[];
   /** P1-6: `S` | `M` | `L` | `XL` | `—`. */
   tier: string;
   /** R47: the core's own answer, so "someone is on it" can be dimmed without re-deriving it. */
@@ -496,24 +498,19 @@ export function toRow(item: WorkItem, list: WorkListKind, now: number): WorkRow 
   const tier = tierOf(primary);
   const ci = ciDot(primary?.ci ?? null);
   const activity = humanActivitySummary(primary, now);
+  const identity = identityOf(item);
+  const description = descriptionOf(item);
   const badges = item.agents.map(badgeOf);
   const chips = item.prs.map((pr) => `${pr.repo}#${pr.number}`);
-  const meta = metaOf(item, list, { age, size, tier, activity });
-  const stateLine = list === 'myWork' ? stateLineOf(item) : [];
-  // The `—` placeholders stay in the line: a row whose age and size took their R45 defaults
-  // must say it has none, never imply a zero (MG-12).
-  const description = meta
-    .map((cell) => cell.text)
-    .filter((part) => part !== '')
-    .join(' · ');
+  const meta = metaOf(item, list, { age, size, tier, activity, repo: repoTailOf(item) });
   return {
     id: item.id,
     list,
     item,
-    label: labelOf(item, list),
+    label: [identity, description].filter((part) => part !== '').join(' — '),
+    identity,
     description,
     meta,
-    stateLine,
     tier,
     demoted: item.demoted,
     badges,
@@ -530,22 +527,37 @@ export function toRow(item: WorkItem, list: WorkListKind, now: number): WorkRow 
   };
 }
 
-/** R13, plus R47's one addition: a parking-lot row is always named after its PR. */
-export function labelOf(item: WorkItem, list: WorkListKind): string {
+/**
+ * §2 L1 — the keys, and nothing else.
+ *
+ * `labelOf` used to build `grace-frontend#4821 — Fix pagination on the offer list`: fourteen
+ * identical characters of repo prefix on every row of the list, then the one thing that differed,
+ * then an ellipsis where the sidebar ran out. The prefix moves to L3 (as its last path segment
+ * alone) and the prose to L2, so what is left here is short enough that it never truncates.
+ *
+ * The one list with neither a ticket nor a PR is the investigations list, and there the session
+ * title IS the identifier — it is the only name that work has.
+ */
+export function identityOf(item: WorkItem): string {
+  const keys: string[] = [];
+  if (item.ticket !== null) keys.push(item.ticket.key);
+  // The FIRST PR only: a second `#88` on the same line is the other PR's number, which reads as
+  // part of the first one. Every PR is named in the block the row opens into (§4).
   const primary = item.prs[0];
-  if (list === 'parkingLot' && primary !== undefined) return prLabel(primary);
-  if (item.ticket !== null) {
-    return item.ticket.summary === ''
-      ? item.ticket.key
-      : `${item.ticket.key} — ${item.ticket.summary}`;
-  }
-  if (primary !== undefined) return prLabel(primary);
-  return item.title;
+  if (primary !== undefined) keys.push(`#${primary.number}`);
+  return keys.length === 0 ? item.title : keys.join(' ');
 }
 
-function prLabel(pr: WorkItemPr): string {
-  const name = `${pr.repo}#${pr.number}`;
-  return pr.title === null || pr.title === '' ? name : `${name} — ${pr.title}`;
+/** §2 L2 — the prose, once. Empty means the line is not rendered, not that it is blank. */
+export function descriptionOf(item: WorkItem): string {
+  if (item.ticket !== null && item.ticket.summary !== '') return item.ticket.summary;
+  return item.prs[0]?.title ?? '';
+}
+
+/** §2 L3's first and only shrinkable token: `apfm/grace-frontend` reads as `grace-frontend`. */
+export function repoTailOf(item: WorkItem): string {
+  const repo = item.prs[0]?.repo ?? '';
+  return repo === '' ? '' : (repo.split('/').pop() ?? '');
 }
 
 const MODE_LETTER: Record<WorkAgentMode, string> = {
@@ -664,62 +676,69 @@ export function humanActivitySummary(pr: WorkItemPr | undefined, now: number): s
   const who = reviewers.length > 0 ? reviewers : commenters;
   if (who.length === 0) {
     const requested = humans(pr.reviewRequests);
-    return requested.length > 0 ? `👤 @${requested[0]} requested` : '';
+    return requested.length > 0 ? `@${requested[0]} requested` : '';
   }
   const verb = reviewers.length > 0 ? 'reviewed' : 'commented';
-  const verdict = reviewers.length > 0 ? soleVerdict(pr, reviewers) : null;
-  const age = ago(pr.humanActivity?.lastAt ?? null, now);
-  return [
-    `👤 ${who.map((login) => `@${login}`).join(', ')}`,
-    verb,
-    verdict === null ? '' : `(${verdict})`,
-    age === '—' ? '' : age,
-  ]
+  const age = compactAge(pr.humanActivity?.lastAt ?? null, now);
+  // `@dana reviewed 43h` — no glyph, no parenthesised verdict, no `ago`. The verdict is the PR's
+  // state and belongs to the PR part of the submenu (§4); this line answers "who, and when".
+  return [who.map((login) => `@${login}`).join(', '), verb, age === '—' ? '' : age]
     .filter((part) => part !== '')
     .join(' ');
 }
 
 /**
- * P0-3: the second line as cells, per list, because each list answers a different question
- * (§1). The parking lot asks "should I pick this up?"; waiting-for-review asks "what landed?";
- * my work and investigations ask "where is it?".
+ * §2 L3 — the signals line, as one token per cell and NO separators.
+ *
+ * The `·`-joined sentence is gone: it was one of the two treatments that made ten rows look
+ * alike, and it was also what got ellipsised. The repo tail leads (it is the only shrinkable
+ * child), then the tokens each list needs, right-packed so the tier and the number line up down
+ * the column. Emoji prefixes go with the separators — except an agent's mode glyph, which is the
+ * one place a glyph is the name of a thing rather than decoration.
  */
 function metaOf(
   item: WorkItem,
   list: WorkListKind,
-  parts: { age: string; size: string; tier: string; activity: string },
+  parts: { age: string; size: string; tier: string; activity: string; repo: string },
 ): RowMetaCell[] {
   const primary = item.prs[0];
   const cells: RowMetaCell[] = [];
 
   if (list === 'investigations') {
-    const agent = item.agents[0];
-    if (agent !== undefined) {
-      cells.push({ kind: 'agentPhase', text: `${MODE_GLYPH[agent.mode] ?? '•'} ${agent.phase}` });
-    }
+    for (const agent of item.agents) cells.push(phaseCell(agent));
     cells.push({ kind: 'age', text: parts.age });
     return cells;
   }
 
-  if (primary?.author !== null && primary?.author !== undefined) {
-    cells.push({ kind: 'author', text: `@${primary.author}` });
-  }
-  cells.push({ kind: 'age', text: parts.age });
-  cells.push({ kind: 'tier', text: parts.tier });
-  if (list !== 'waitingForReview') cells.push({ kind: 'size', text: parts.size });
+  if (parts.repo !== '') cells.push({ kind: 'repo', text: parts.repo });
 
-  const ci = ciCell(primary?.ci ?? null);
-  if (ci !== null) cells.push(ci);
-
+  // The ONE thing each list's row answers (§1), in the slot the eye lands on after the repo.
   if (list === 'waitingForReview') {
     const landed = landedOf(primary);
     if (landed !== '') cells.push({ kind: 'landed', text: landed });
-  } else {
-    const decision = reviewText(primary?.reviewDecision ?? null);
-    if (decision !== null) cells.push({ kind: 'review', text: decision });
-    if (parts.activity !== '') cells.push({ kind: 'activity', text: parts.activity });
+  } else if (list === 'myWork') {
+    if (item.ticket !== null) cells.push({ kind: 'ticketStatus', text: item.ticket.status });
+    for (const agent of item.agents) cells.push(phaseCell(agent));
+  } else if (item.parkingLotGroup === 'reviewing') {
+    for (const agent of item.agents) cells.push(phaseCell(agent));
+  } else if (item.parkingLotGroup === 'someoneOnIt' && parts.activity !== '') {
+    cells.push({ kind: 'activity', text: parts.activity });
+  } else if (primary?.author !== null && primary?.author !== undefined) {
+    cells.push({ kind: 'author', text: `@${primary.author}` });
   }
+
+  cells.push({ kind: 'age', text: parts.age });
+  cells.push({ kind: 'tier', text: parts.tier });
+  // The `—` stays: a row whose size took its R45 default says it has none, never a zero (MG-12).
+  cells.push({ kind: 'size', text: parts.size });
+
+  const ci = ciCell(primary?.ci ?? null);
+  if (ci !== null) cells.push(ci);
   return cells;
+}
+
+function phaseCell(agent: WorkItemAgent): RowMetaCell {
+  return { kind: 'agentPhase', text: `${MODE_GLYPH[agent.mode] ?? '•'} ${agent.phase}` };
 }
 
 const CI_CELLS: Record<CiStatus, RowMetaCell | null> = {
@@ -757,31 +776,10 @@ export function landedOf(pr: WorkItemPr | undefined): string {
   if (pr === undefined) return '';
   const who = pr.humanActivity?.reviewedBy[0] ?? pr.humanActivity?.commentedBy[0] ?? null;
   const by = who === null ? '' : `@${who} `;
-  if (pr.reviewDecision === 'CHANGES_REQUESTED') return `💬 ${by}requested changes`;
-  if (pr.reviewDecision === 'APPROVED') return `💬 ${by}approved`;
-  if (who !== null) return `💬 ${by}review arrived`;
+  if (pr.reviewDecision === 'CHANGES_REQUESTED') return `${by}requested changes`;
+  if (pr.reviewDecision === 'APPROVED') return `${by}approved`;
+  if (who !== null) return `${by}review arrived`;
   return '';
-}
-
-/**
- * P1-7: the my-work row reads as state rather than as a title — ticket status, then every PR's
- * state, then every agent's phase, so the row answers "where is it?" without expanding.
- */
-export function stateLineOf(item: WorkItem): RowMetaCell[] {
-  const cells: RowMetaCell[] = [];
-  if (item.ticket !== null) {
-    cells.push({ kind: 'ticketStatus', text: `🎫 ${item.ticket.status}` });
-  }
-  for (const pr of item.prs) {
-    cells.push({ kind: 'prState', text: `🔀 ${pr.repo}#${pr.number} ${prState(pr)}` });
-  }
-  for (const agent of item.agents) {
-    cells.push({
-      kind: 'agentPhase',
-      text: `${MODE_GLYPH[agent.mode] ?? '•'} ${agent.phase}`,
-    });
-  }
-  return cells;
 }
 
 const HOUR_MS = 60 * 60 * 1000;

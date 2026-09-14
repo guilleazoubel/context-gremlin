@@ -26,7 +26,11 @@ export type { NeedsYouEntry } from './needs-you';
 export interface PanelRowView {
   id: string;
   list: WorkListKind;
+  /** The accessible name for the whole row. */
   label: string;
+  /** §2 L1 — keys only. */
+  identity: string;
+  /** §2 L2 — the prose, or empty when the line is not drawn at all. */
   description: string;
   badges: string[];
   chips: string[];
@@ -34,10 +38,8 @@ export interface PanelRowView {
   age: string;
   size: string;
   ci: string;
-  /** P0-3: the second line as cells, so the view lays them out instead of clipping a sentence. */
+  /** §2 L3 — the signals, as cells, so the view lays them out instead of clipping a sentence. */
   meta: RowMetaCell[];
-  /** P1-7: the third line, for `myWork`. Empty everywhere else. */
-  stateLine: RowMetaCell[];
   /** P1-6: `S` | `M` | `L` | `XL` | `—`. */
   tier: string;
   /** R47: "someone is on it" — the core's answer, rendered as a dimmed row. */

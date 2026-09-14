@@ -26,21 +26,22 @@ function rowView(over: Partial<PanelRowView> = {}): PanelRowView {
     hint: null,
     id: 'pr:acme/web#101',
     list: 'parkingLot',
-    label: 'acme/web#101 — Fix hydration on /communities',
-    description: '',
+    label: '#101 — Fix hydration on /communities',
+    identity: '#101',
+    description: 'Fix hydration on /communities',
     badges: [],
     chips: [],
     age: '12d',
     size: '8 files +240/−31',
     ci: '',
     meta: [
+      { kind: 'repo', text: 'web' },
       { kind: 'author', text: '@jdoe' },
       { kind: 'age', text: '12d' },
       { kind: 'tier', text: 'M' },
       { kind: 'size', text: '8 files +240/−31' },
       { kind: 'ci', text: '', tone: 'good', label: 'CI passing' },
     ],
-    stateLine: [],
     tier: 'M',
     demoted: false,
     needsYou: false,
@@ -84,9 +85,10 @@ function buttonsIn(node: FakeElement): FakeElement[] {
 describe('what the row says without being hovered', () => {
   it('carries its title and every signal as its own cell', () => {
     const node = build();
-    expect(textOf(node, 'row-label')).toBe('acme/web#101 — Fix hydration on /communities');
+    expect(textOf(node, 'row-label')).toBe('#101 — Fix hydration on /communities');
     const cells = node.byClass('row-meta')[0].children;
     expect(cells.map((cell) => cell.className)).toEqual([
+      'cell cell-repo',
       'cell cell-author',
       'cell cell-age',
       'cell cell-tier',
@@ -95,8 +97,8 @@ describe('what the row says without being hovered', () => {
     ]);
     // The CI cell is a dot: it says its state in an aria-label, because a coloured dot alone is
     // not an accessible signal — and because a tooltip is not a way of saying anything (§3).
-    expect(cells[4].getAttribute('aria-label')).toBe('CI passing');
-    expect(cells[1].getAttribute('aria-label')).toBeNull();
+    expect(cells[5].getAttribute('aria-label')).toBe('CI passing');
+    expect(cells[2].getAttribute('aria-label')).toBeNull();
   });
 
   it('renders no buttons at all — a collapsed row is purely informational', () => {
@@ -109,10 +111,6 @@ describe('what the row says without being hovered', () => {
     expect(node.byClass('row-primary')).toEqual([]);
     expect(node.byClass('row-more')).toEqual([]);
     expect(node.byClass('row-overflow')).toEqual([]);
-  });
-
-  it('keeps the third line as a slot, so a row that grows one does not change shape', () => {
-    expect(build().byClass('row-state')).toHaveLength(1);
   });
 
   it('marks needs-you, demoted and selected as classes, not as extra content', () => {
@@ -133,7 +131,7 @@ describe('what a patch does to a row that is already on screen', () => {
   it('writes only the cell that changed', () => {
     const node = build();
     const meta = rowView().meta;
-    meta[1] = { kind: 'age', text: '13d' };
+    meta[2] = { kind: 'age', text: '13d' };
     patchRow(node as unknown as HTMLElement, rowView({ meta }), { focusedKey: null });
     expect(doc.log).toEqual([{ kind: 'text', tag: 'SPAN', key: 'cell cell-age', detail: '13d' }]);
   });
