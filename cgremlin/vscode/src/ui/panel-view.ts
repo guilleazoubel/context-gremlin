@@ -575,6 +575,12 @@ export class PanelView implements WebviewViewProviderLike {
       case 'setFocus':
         this.focus = message.focus;
         writeFocus(this.deps.host, message.focus);
+        // Choosing an area is asking to SEE it, so a section that starts closed (R47's "someone
+        // is on it") opens rather than answering the choice with an empty header.
+        if (message.focus !== FOCUS_ALL && this.collapsed[message.focus] !== false) {
+          this.setCollapsed(message.focus, false);
+          return;
+        }
         this.render();
         return;
       case 'toggleRow':
@@ -596,6 +602,10 @@ export class PanelView implements WebviewViewProviderLike {
    * put a modal in front of the user — is even asked for.
    */
   private select(id: string): void {
+    // A row the user is being SENT to — from the needs-you strip, or from a command's reveal —
+    // must end up on screen. A filter that silently swallowed it would make the strip a dead end,
+    // so the focus widens rather than the selection disappearing (§6).
+    this.widenTo(id);
     this.selectedId = id;
     void this.deps.host.setState(SELECTED_STATE_KEY, id);
     // Clicking the row that is already open closes it: the accordion has a shut position, and
@@ -613,11 +623,21 @@ export class PanelView implements WebviewViewProviderLike {
    * so this stays what it says it is: the panel's own highlight and accordion.
    */
   reveal(id: string): void {
+    this.widenTo(id);
     this.selectedId = id;
     void this.deps.host.setState(SELECTED_STATE_KEY, id);
     this.setExpanded(id);
     this.render();
     this.refreshDetail();
+  }
+
+  /** Widens the panel back to all areas when `id` is not a row of the focused one (§6). */
+  private widenTo(id: string): void {
+    if (this.focus === FOCUS_ALL) return;
+    const focused = this.sections().find((section) => section.key === this.focus);
+    if (focused?.rows.some((row) => row.id === id) === true) return;
+    this.focus = FOCUS_ALL;
+    writeFocus(this.deps.host, FOCUS_ALL);
   }
 
   /** P10: the dismissal outlives the window, so it is written before the repaint. */

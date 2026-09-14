@@ -6,6 +6,8 @@
  * offers Open for a stage that never ran, and that a Start is only ever the verb the host put on
  * that part.
  */
+import fs from 'node:fs';
+import path from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { createExpanded, patchExpanded } from '../../src/webview/panel/expanded';
 import { setSink } from '../../src/webview/panel/channel';
@@ -263,5 +265,19 @@ describe('§4 nothing is said twice', () => {
     expect(node.byClass('people')).toEqual([]);
     expect(node.byClass('part-goto')).toEqual([]);
     expect(labels(node)).toHaveLength(5);
+  });
+});
+
+describe('§4 a part that opens nothing is not a pointer target', () => {
+  const css = fs.readFileSync(path.resolve(__dirname, '../../media/panel.css'), 'utf8');
+
+  it('marks a stage with no session as such, and drops the hand over it', () => {
+    const node = build();
+    expect(parts(node).map((p) => p.dataset.childId)).toEqual([
+      'agent:inv-1',
+      '',
+      'pr:acme/web#310',
+    ]);
+    expect(css).toMatch(/\.part\[data-child-id=''\]\s*\{[^}]*cursor:\s*default/);
   });
 });

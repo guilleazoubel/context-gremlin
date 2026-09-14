@@ -140,6 +140,38 @@ describe('§6 the focus control, as the host applies it', () => {
     expect(readFocus(host)).toBe('all');
   });
 
+  it('opens the section it is narrowed to, so the choice is never an empty header', () => {
+    const { view, state } = build(new FakeHost());
+    // "Someone is on it" starts closed (R47). Choosing it deliberately is asking to see it.
+    view.webview.emit({ type: 'setFocus', focus: 'parkingLot:someoneOnIt' });
+    expect(state().sections.map((section) => [section.key, section.collapsed, section.count])).toEqual(
+      [['parkingLot:someoneOnIt', false, 1]],
+    );
+  });
+
+  it('widens back to all areas when the user is sent to a row outside the focused one', () => {
+    const { view, state } = build(new FakeHost());
+    view.webview.emit({ type: 'setFocus', focus: 'myWork' });
+    // The needs-you strip is a shortcut INTO the panel: a row it names must end up on screen,
+    // and a filter that silently swallowed it would make the strip a dead end.
+    view.webview.emit({ type: 'selectRow', id: 'pr:acme/web#102', list: 'parkingLot' });
+    expect(state().focus).toBe('all');
+    expect(state().sections).toHaveLength(6);
+    expect(
+      state()
+        .sections.flatMap((section) => section.rows)
+        .filter((row) => row.selected)
+        .map((row) => row.id),
+    ).toEqual(['pr:acme/web#102']);
+  });
+
+  it('keeps the focus where it is when the selected row is already in it', () => {
+    const { view, state } = build(new FakeHost());
+    view.webview.emit({ type: 'setFocus', focus: 'myWork' });
+    view.webview.emit({ type: 'selectRow', id: 'ticket:HB-627', list: 'myWork' });
+    expect(state().focus).toBe('myWork');
+  });
+
   it('still says Nothing waiting for you where the one focused area is empty', () => {
     const host = new FakeHost();
     const { view, state } = build(host);

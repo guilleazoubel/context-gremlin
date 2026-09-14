@@ -553,6 +553,12 @@ body {
   cursor: pointer;
 }
 
+/* A stage that never ran has no session to open, so it is not a pointer target — its own Start
+ * button still is. A hand that changes shape over something that does nothing is a lie. */
+.part[data-child-id=''] {
+  cursor: default;
+}
+
 .part + .part {
   border-top: 1px solid var(--cg-divider);
 }
