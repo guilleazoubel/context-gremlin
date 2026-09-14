@@ -301,10 +301,14 @@ describe('an engine that is not one this extension can use', () => {
     expect(await h.ui.connect()).toBe(false);
     await h.ui.settled();
     expect(h.host.statusBarItems[0].text).toBe('$(warning) cgremlin: engine not usable');
-    const warnings = h.host.callsOf('showWarningMessage');
-    expect(warnings).toHaveLength(1);
-    expect(String(warnings[0].args[0])).toContain('not a cgremlin engine this extension can use');
-    expect(warnings[0].args[2]).toEqual(['Re-probe', 'Show log']);
+    // P10: the panel's trouble row carries the sentence and the fix; no popup is raised.
+    expect(h.host.callsOf('showWarningMessage')).toEqual([]);
+    expect(h.host.callsOf('showInformationMessage')).toEqual([]);
+    expect(String(h.state().trouble?.message)).toContain(
+      'not a cgremlin engine this extension can use',
+    );
+    // Its one button IS the re-probe: `cgremlin.engine.start` is `ensureRunning('user')`.
+    expect(h.state().trouble?.command).toBe('cgremlin.engine.start');
   });
 
   it('finding 2 — an engine with no /items says so, with a Restart, not an empty panel', async () => {

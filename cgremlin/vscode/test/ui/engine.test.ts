@@ -12,8 +12,6 @@ import {
   EngineSurface,
   NOT_NOW,
   OPEN_CONFIG,
-  OPEN_LOG,
-  RE_PROBE,
   RESTART,
   SHOW_LOG,
   STOP_ENGINE,
@@ -250,41 +248,37 @@ describe('a foreign server on the socket', () => {
     manager.calls.length = 0;
   });
 
-  it('explains which socket is held, offers a re-probe and the log, and changes nothing', async () => {
+  it('P10 — explains which socket is held in the channel, and raises no popup at all', async () => {
     manager.emit({ kind: 'foreign' });
     manager.emit({ kind: 'foreign' });
     await surface.settled();
 
-    const warnings = host.callsOf('showWarningMessage');
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0].args[0]).toBe(FOREIGN_TEXT);
-    expect(String(warnings[0].args[0])).toContain(FAKE_PATHS.socketPath);
-    expect(warnings[0].args[2]).toEqual([RE_PROBE, SHOW_LOG]);
+    // The panel's trouble row and the status bar already carry this sentence and offer the same
+    // two actions; a popup on top of them is the same fact three times, over what the user was
+    // doing and for something the user did not do.
+    expect(host.callsOf('showWarningMessage')).toEqual([]);
+    expect(host.callsOf('showInformationMessage')).toEqual([]);
+    expect(host.output.filter((line) => line.includes(FOREIGN_TEXT))).toHaveLength(1);
+    expect(host.output.some((line) => line.includes(FAKE_PATHS.socketPath))).toBe(true);
     expect(manager.calls).toEqual([]);
   });
 
-  it('re-probes when the user picks Re-probe', async () => {
-    host.messageAnswers = [RE_PROBE];
+  it('P10 — the way out is the panel row and the status bar, both fed by the published health', () => {
+    const seen: EngineStatus[] = [];
+    surface.onState((status) => seen.push(status));
     manager.emit({ kind: 'foreign' });
-    await surface.settled();
-    expect(manager.calls).toEqual(['ensureRunning:user']);
+    expect(seen.at(-1)).toEqual({ kind: 'foreign', socketPath: FAKE_PATHS.socketPath });
   });
 
-  it('shows the log when the user picks Show log', async () => {
-    host.messageAnswers = [SHOW_LOG, undefined];
-    manager.emit({ kind: 'foreign' });
-    await surface.settled();
-    expect(host.outputShown).toHaveLength(1);
-  });
-
-  it('warns again on every transition into foreign, however many times it happens', async () => {
+  it('says so again on every transition into foreign, however many times it happens', async () => {
     for (let episode = 0; episode < 3; episode += 1) {
       manager.emit({ kind: 'foreign' });
       manager.emit({ kind: 'foreign' });
       manager.emit({ kind: 'running', version: '0.0.1', pid: 10, adopted: true });
     }
     await surface.settled();
-    expect(host.callsOf('showWarningMessage')).toHaveLength(3);
+    expect(host.output.filter((line) => line.includes(FOREIGN_TEXT))).toHaveLength(3);
+    expect(host.callsOf('showWarningMessage')).toEqual([]);
   });
 
   it('reports its health as foreign, with the socket the config resolved', async () => {
@@ -318,19 +312,24 @@ describe('an engine that answers but is not one we can use (GET /config 404)', (
 
     expect(surface.health()).toEqual({ kind: 'foreign', socketPath: FAKE_PATHS.socketPath });
     expect(seen.at(-1)).toEqual({ kind: 'foreign', socketPath: FAKE_PATHS.socketPath });
-    const warnings = host.callsOf('showWarningMessage');
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0].args[0]).toBe(
-      troubleMessage({ kind: 'foreign', socketPath: FAKE_PATHS.socketPath }),
-    );
-    expect(warnings[0].args[2]).toEqual([RE_PROBE, SHOW_LOG]);
+    // P10: same surface as a foreign probe — which is now the panel row, not a popup.
+    expect(host.callsOf('showWarningMessage')).toEqual([]);
+    expect(
+      host.output.filter((line) =>
+        line.includes(troubleMessage({ kind: 'foreign', socketPath: FAKE_PATHS.socketPath })),
+      ),
+    ).toHaveLength(1);
   });
 
-  it('warns once, not once per failed connect attempt', async () => {
+  it('says it once, not once per failed connect attempt', async () => {
     surface.reportUnusable();
     surface.reportUnusable();
     await surface.settled();
-    expect(host.callsOf('showWarningMessage')).toHaveLength(1);
+    expect(
+      host.output.filter((line) =>
+        line.includes(troubleMessage({ kind: 'foreign', socketPath: FAKE_PATHS.socketPath })),
+      ),
+    ).toHaveLength(1);
   });
 
   it('is forgotten as soon as the manager reports a state of its own', async () => {
@@ -381,11 +380,11 @@ describe('the engine commands', () => {
     expect(manager.countOf('stop')).toBe(0);
   });
 
-  it('shows the channel and offers the log path the engine derived (MG-C6)', async () => {
-    host.messageAnswers = [OPEN_LOG];
+  it('shows the channel and names the log path the engine derived, in it (MG-C6, P10)', async () => {
     await host.invoke('cgremlin.engine.showLog');
     expect(host.outputShown).toHaveLength(1);
-    expect(host.callsOf('openTextDocument').map((c) => c.args[0])).toEqual([LOG]);
+    expect(host.output.filter((line) => line.includes(LOG))).toHaveLength(1);
+    expect(host.callsOf('showInformationMessage')).toEqual([]);
   });
 });
 

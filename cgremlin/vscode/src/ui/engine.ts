@@ -76,7 +76,6 @@ export const RESTART = 'Restart engine';
 export const NOT_NOW = 'Not now';
 export const OPEN_CONFIG = 'Open core.json';
 export const STOP_ENGINE = 'Stop the engine';
-export const OPEN_LOG = 'Open the log file';
 // The two actions an unusable engine offers are the package's shared wording, re-exported here
 // because every caller of this surface already imports its action labels from it.
 export { RE_PROBE, SHOW_LOG };
@@ -162,7 +161,7 @@ export class EngineSurface {
     this.deps.host.appendOutput(
       'cgremlin engine: something answers the socket but does not speak this engine\u2019s API.',
     );
-    if (previous !== 'foreign') this.pending.track(this.warnForeign(status));
+    if (previous !== 'foreign') this.reportForeign(status);
   }
 
   private socketPath(): string | null {
@@ -185,8 +184,8 @@ export class EngineSurface {
       host.registerCommand('cgremlin.engine.restart', async () => {
         await this.deps.manager.restart('user');
       }),
-      host.registerCommand('cgremlin.engine.showLog', async () => {
-        await this.showLog();
+      host.registerCommand('cgremlin.engine.showLog', () => {
+        this.showLog();
       }),
     ];
   }
@@ -434,7 +433,7 @@ export class EngineSurface {
     // Edge-triggered, and every edge: entering `foreign` again after the socket was usable is
     // news again, and a socket that has been foreign all along is not.
     if (state.kind === 'foreign' && previous !== 'foreign') {
-      this.pending.track(this.warnForeign(status));
+      this.reportForeign(status);
     }
     // The way out of the explanatory row: the probe adopted a usable engine, so the panel goes
     // back to being a panel — which it can only do once it has refetched.
@@ -467,19 +466,20 @@ export class EngineSurface {
       SHOW_LOG,
     );
     if (answer === RESTART) await manager.restart('user');
-    else if (answer === SHOW_LOG) await this.showLog();
+    else if (answer === SHOW_LOG) this.showLog();
   }
 
-  /** The same sentence the panel's row and the status bar's tooltip show, plus its two actions. */
-  private async warnForeign(status: EngineHealth): Promise<void> {
-    const answer = await this.deps.host.showWarningMessage(
-      troubleMessage({ kind: 'foreign', socketPath: status.socketPath ?? null }),
-      undefined,
-      RE_PROBE,
-      SHOW_LOG,
+  /**
+   * P10: the panel's trouble row already carries this exact sentence and a button that IS the
+   * re-probe (`cgremlin.engine.start` is `ensureRunning('user')`); `ui/wiring.ts` pushes it on
+   * every engine state, and the status bar carries the same in its text and its tooltip. A popup
+   * on top of that is the same fact three times, raised over whatever the user was doing and for
+   * something the user did not do — so the channel gets the line and the panel does the talking.
+   */
+  private reportForeign(status: EngineHealth): void {
+    this.deps.host.appendOutput(
+      `cgremlin engine: ${troubleMessage({ kind: 'foreign', socketPath: status.socketPath ?? null })}`,
     );
-    if (answer === RE_PROBE) await this.reprobe();
-    else if (answer === SHOW_LOG) await this.showLog();
   }
 
   /** R16/R21: the engine is shared by every window, and stopping it cancels what is running. */
@@ -500,13 +500,14 @@ export class EngineSurface {
     await manager.stop('user');
   }
 
-  private async showLog(): Promise<void> {
+  private showLog(): void {
     const { host } = this.deps;
     host.showOutput();
     const logPath = this.resolved?.engineLogPath;
     if (logPath === undefined) return;
-    const answer = await host.showInformationMessage(`The engine logs to ${logPath}.`, undefined, OPEN_LOG);
-    if (answer === OPEN_LOG) await host.openTextDocument(logPath);
+    // P10: the channel the line above just revealed is where the path belongs — the user asked to
+    // see the log, and answering that with a popup is a second thing to dismiss, not an answer.
+    host.appendOutput(`cgremlin engine: the engine logs to ${logPath}.`);
   }
 
   /**

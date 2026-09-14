@@ -317,11 +317,9 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
       }
       // R23: a PR that already has a review session answers 200 `created: false` — the caller's
       // intent was satisfied, so this reveals the existing item instead of reporting an error.
+      // P10: and it does so without a popup — the tab this opens IS the answer.
       if (createdFlag(result.body) === false) {
-        void host.showInformationMessage(
-          `${url} already has a review session ('${session}').`,
-          undefined,
-        );
+        host.log(`cgremlin: ${url} already has a review session ('${session}').`);
       }
       coordinator.schedule();
       await openSession(deps, session);
