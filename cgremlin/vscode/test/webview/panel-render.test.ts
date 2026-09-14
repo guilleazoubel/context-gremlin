@@ -248,13 +248,32 @@ describe('§7 the separation, as the stylesheet declares it', () => {
     expect(css).not.toMatch(/:hover[^{]*\{[^}]*display:/);
   });
 
-  it('marks the selected row with a ground and a heavier first line, and no new box', () => {
+  it('marks the selected row with a ground and nothing else, so nothing reflows', () => {
     expect(css).toMatch(
       /\.row\.selected\s*\{[^}]*background:\s*var\(--vscode-list-inactiveSelectionBackground\)/,
     );
-    expect(css).toMatch(/\.row\.selected \.row-id\s*\{[^}]*font-weight:\s*700/);
+    // Identity is the line being scanned, so it is 700 on EVERY row: re-weighting it on select
+    // or on needs-you re-flowed the line under the pointer mid-click.
+    expect(css).toMatch(/\.row-id\s*\{[^}]*font-weight:\s*700/);
+    expect(css).not.toMatch(/\.row\.selected \.row-id/);
+    expect(css).not.toMatch(/\.row\.needs-you \.row-id/);
     // No cards, no radius on rows, no shadows (§7) — the one inset shadow is needs-you's bar.
     expect(css).not.toMatch(/\.row\s*\{[^}]*border-radius/);
+  });
+
+  it('sets the description under the identity by colour, not by weight', () => {
+    expect(css).toMatch(
+      /\.row-desc\s*\{[^}]*color:\s*color-mix\(in srgb, var\(--vscode-foreground\) 80%, transparent\)/,
+    );
+  });
+
+  it('says "CI pending" in a colour that passes contrast on a light theme', () => {
+    // `--vscode-charts-yellow` is about 2:1 on Light+, which is unreadable for a word (it was
+    // fine for an 8px dot and is not fine for text).
+    expect(css).toMatch(
+      /\.cell-ci\.tone-warn\s*\{[^}]*color:\s*var\(--vscode-editorWarning-foreground\)/,
+    );
+    expect(css).not.toMatch(/\.cell-ci\.tone-warn\s*\{[^}]*charts-yellow/);
   });
 
   it('pads a row 10px on both axes, so three lines are about 68px', () => {

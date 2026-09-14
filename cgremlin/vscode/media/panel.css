@@ -47,12 +47,18 @@ body {
    * twice, because a theme that defines no chart colours must still draw a rule.
    */
   --cg-chart-fallback: var(--vscode-charts-foreground, var(--vscode-descriptionForeground));
-  --cg-sec-parkingLot-untouched: var(--vscode-charts-blue, var(--cg-chart-fallback));
-  --cg-sec-parkingLot-reviewing: var(--vscode-charts-purple, var(--cg-chart-fallback));
+  /*
+   * Each hue is mixed 78% with the theme's own foreground. Raw, two of the six — yellow and
+   * green — sit under 3:1 against a light sidebar, and a rule nobody can see is not a section
+   * marker; the mix darkens them on a light theme and lightens them on a dark one, because the
+   * foreground is whatever that theme's text is.
+   */
+  --cg-sec-parkingLot-untouched: color-mix(in srgb, var(--vscode-charts-blue, var(--cg-chart-fallback)) 78%, var(--vscode-foreground));
+  --cg-sec-parkingLot-reviewing: color-mix(in srgb, var(--vscode-charts-purple, var(--cg-chart-fallback)) 78%, var(--vscode-foreground));
   --cg-sec-parkingLot-someoneOnIt: var(--cg-chart-fallback);
-  --cg-sec-myWork: var(--vscode-charts-green, var(--cg-chart-fallback));
-  --cg-sec-investigations: var(--vscode-charts-orange, var(--cg-chart-fallback));
-  --cg-sec-waitingForReview: var(--vscode-charts-yellow, var(--cg-chart-fallback));
+  --cg-sec-myWork: color-mix(in srgb, var(--vscode-charts-green, var(--cg-chart-fallback)) 78%, var(--vscode-foreground));
+  --cg-sec-investigations: color-mix(in srgb, var(--vscode-charts-orange, var(--cg-chart-fallback)) 78%, var(--vscode-foreground));
+  --cg-sec-waitingForReview: color-mix(in srgb, var(--vscode-charts-yellow, var(--cg-chart-fallback)) 78%, var(--vscode-foreground));
 }
 
 /*
@@ -369,11 +375,6 @@ body {
   background: var(--vscode-list-inactiveSelectionBackground);
 }
 
-/* The selected row says so twice: the ground, and one step of weight on the line being scanned. */
-.row.selected .row-id {
-  font-weight: 700;
-}
-
 .row.demoted {
   opacity: 0.65;
 }
@@ -385,11 +386,6 @@ body {
  */
 .row.needs-you {
   box-shadow: inset 3px 0 0 var(--cg-accent);
-}
-
-/* Line one is already 600 (see `.row-id`), so needs-you goes one step further. */
-.row.needs-you .row-id {
-  font-weight: 700;
 }
 
 /* The rare verbs, on one line at the foot of the open block — never a popover. */
@@ -410,7 +406,9 @@ body {
   align-items: baseline;
   gap: 6px;
   font-size: var(--vscode-font-size, 13px);
-  font-weight: 600;
+  /* Unconditionally 700: identity is the line being scanned, and re-weighting it on select or on
+   * needs-you re-flowed the very line the pointer was over. */
+  font-weight: 700;
   line-height: 1.3;
 }
 
@@ -440,7 +438,9 @@ body {
   font-size: 12px;
   font-weight: 400;
   line-height: 1.35;
-  color: var(--vscode-foreground);
+  /* One step under the identity, by COLOUR rather than by weight: nothing about a row's type
+   * changes when its state does, so no state can reflow it. */
+  color: color-mix(in srgb, var(--vscode-foreground) 80%, transparent);
   /* The one shrinkable child of line two. */
   min-width: 0;
   overflow: hidden;
@@ -505,8 +505,9 @@ body {
   background: var(--vscode-charts-green);
 }
 
+/* A word needs contrast a dot does not: `--vscode-charts-yellow` is about 2:1 on Light+. */
 .cell-ci.tone-warn {
-  color: var(--vscode-charts-yellow);
+  color: var(--vscode-editorWarning-foreground);
 }
 
 .cell-ci.tone-bad {
