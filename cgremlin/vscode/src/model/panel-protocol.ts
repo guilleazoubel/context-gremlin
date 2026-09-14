@@ -122,6 +122,11 @@ export interface PanelSectionView {
   collapsed: boolean;
   sort: WorkSortKind;
   sorts: WorkSortKind[];
+  /**
+   * Whether THIS section draws the list's sort control. The parking lot's three sections share
+   * one sort, so one of them draws it — three identical controls is the clutter being removed.
+   */
+  showsSort: boolean;
   rows: PanelRowView[];
 }
 

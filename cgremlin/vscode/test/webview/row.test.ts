@@ -87,9 +87,16 @@ function buttonsIn(node: FakeElement): FakeElement[] {
 describe('§2 — three lines, fixed order, fixed meaning', () => {
   it('puts the keys on line one, one span each, and never the prose', () => {
     const node = build({ identity: 'HB-627 #310', identityKeys: ['HB-627', '#310'] });
-    const keys = node.byClass('row-id')[0].children;
-    expect(keys.map((key) => key.className)).toEqual(['id-key', 'id-key']);
+    const keys = node.byClass('id-key');
     expect(keys.map((key) => key.textContent)).toEqual(['HB-627', '#310']);
+  });
+
+  it('advertises on line one that the row opens, and which way it is', () => {
+    // Lost in Phase 10 with the old twisty: `aria-expanded` said the row opened and nothing on
+    // screen did. A collapsed row has to look like something that can be opened.
+    expect(build().byClass('row-twisty')[0].textContent).toBe('▸');
+    expect(build({ expanded: true }).byClass('row-twisty')[0].textContent).toBe('▾');
+    expect(build().byClass('row-twisty')[0].getAttribute('aria-hidden')).toBe('true');
   });
 
   it('puts the description on line two, as one text node', () => {
@@ -126,7 +133,6 @@ describe('§2 — three lines, fixed order, fixed meaning', () => {
     const node = build();
     expect(buttonsIn(node)).toEqual([]);
     expect(node.byClass('row-gutter')).toEqual([]);
-    expect(node.byClass('twisty')).toEqual([]);
   });
 
   it('marks needs-you, demoted and selected as classes, not as extra content', () => {
@@ -144,18 +150,31 @@ describe('§2 — three lines, fixed order, fixed meaning', () => {
 describe('§2 — one shrinkable child per line', () => {
   const css = fs.readFileSync(path.resolve(__dirname, '../../media/panel.css'), 'utf8');
 
+  it('lets the repo GROW as well as shrink, so the right-hand cluster packs right', () => {
+    // `.row-signals > .cell { flex: 0 0 auto }` is specificity 0,2,0 and beat `.cell-repo`, so the
+    // repo could not shrink at all and the line overflowed at 300 px.
+    expect(css).toMatch(/\.row-signals > \.cell:not\(\.cell-repo\)\s*\{[^}]*flex:\s*0 0 auto/);
+    expect(css).toMatch(/\.cell-repo\s*\{[^}]*flex:\s*1 1 auto/);
+  });
+
+  it('hides the size token below a 380px container, and nothing else responds to width', () => {
+    expect(css).toMatch(/#cgremlin-panel\s*\{[^}]*container-type:\s*inline-size/);
+    expect(css).toMatch(/@container \(max-width: 380px\)\s*\{\s*\.cell-size\s*\{\s*display: none;?\s*\}/);
+    expect(css.match(/@container/g)).toHaveLength(1);
+  });
+
   it('declares min-width:0 on the description and on the repo token, and on no other row part', () => {
-    const shrinkable = [...css.matchAll(/([^{}]+)\{([^}]*)\}/g)]
+    const shrinkable = [...css.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{([^}]*)\}/g)]
       .map(([, selector, body]) => [selector.trim(), body] as const)
       .filter(([selector]) => /^\.(row|cell|id-key)/.test(selector))
       .filter(([, body]) => /min-width:\s*0\s*;/.test(body))
       .map(([selector]) => selector);
-    expect(shrinkable).toEqual(['.row-desc', '.cell-repo']);
+    // `.id-keys` is a wrapper, not a token: it may shrink so that the line can, but nothing in
+    // it ever truncates (L1 is ≤14 characters by construction).
+    expect(shrinkable).toEqual(['.id-keys', '.row-desc', '.cell-repo']);
   });
 
-  it('pins every other cell, so the right-hand cluster lines up down the column', () => {
-    expect(css).toMatch(/\.row-signals > \.cell\s*\{[^}]*flex:\s*0 0 auto/);
-  });
+
 });
 
 describe('what a patch does to a row that is already on screen', () => {
@@ -174,11 +193,11 @@ describe('what a patch does to a row that is already on screen', () => {
     expect(doc.log).toEqual([{ kind: 'text', tag: 'SPAN', key: 'cell cell-age', detail: '13d' }]);
   });
 
-  it('turns aria-expanded when the row opens, and changes nothing else about the row', () => {
+  it('turns aria-expanded and the twisty when the row opens, and nothing else', () => {
     const node = build();
     patchRow(node as unknown as HTMLElement, rowView({ expanded: true }), ACCENT, { focusedKey: null });
-    // No twisty to turn: what opens is a sibling block, and the row keeps its exact shape (§7).
-    expect(doc.log.map((m) => m.detail)).toEqual(['aria-expanded=true']);
+    // The twisty is one character in a fixed-width box, so turning it moves no text (§7).
+    expect(doc.log.map((m) => m.detail)).toEqual(['aria-expanded=true', '▾']);
   });
 
   it('moves the single tab stop without touching the row it left (R66)', () => {

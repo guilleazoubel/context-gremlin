@@ -143,3 +143,43 @@ describe('§5 the keyboard', () => {
     expect(last?.dataset.key).not.toContain('pr:acme/api#55');
   });
 });
+
+/**
+ * The sort chips sat beside the title on the same line, and at 300 px they squeezed `Parking lot`
+ * down to `Par…` — the header being the one thing that must stay readable. They move to a line of
+ * their own, and the parking lot's three sections share ONE control, because they share one sort.
+ */
+describe('§5 the sort control', () => {
+  it('renders once per list, on the first section of it', () => {
+    panel.render(stateOf());
+    const withSorts = dom.root
+      .byClass('section')
+      .filter((node) => node.byClass('sort').length > 0)
+      .map((node) => node.dataset.section);
+    expect(withSorts).toEqual([
+      'parkingLot:untouched',
+      'myWork',
+      'investigations',
+      'waitingForReview',
+    ]);
+  });
+
+  it('sits under the header rather than beside the title', () => {
+    panel.render(stateOf());
+    const section = sectionNode('parkingLot:untouched');
+    expect(section.children.map((node) => node.className)).toEqual([
+      'section-bar',
+      'sorts',
+      'section-empty',
+      'tree',
+    ]);
+    expect(one(section, 'section-bar').byClass('sort')).toEqual([]);
+  });
+
+  it('still sorts the whole list from that one control', () => {
+    panel.render(stateOf());
+    dom.posted.length = 0;
+    sectionNode('parkingLot:untouched').byClass('sort')[2].emit('click');
+    expect(dom.posted).toEqual([{ type: 'setSort', list: 'parkingLot', sort: 'smallestChange' }]);
+  });
+});

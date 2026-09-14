@@ -22,7 +22,7 @@ const TIMEOUT = 30_000;
 /** `buildWorkLists` flattened into §5's six sections, exactly as `PanelView.state()` does it. */
 function sectionsOf(response: ItemsResponse): PanelSectionView[] {
   const built = buildWorkLists({ response });
-  return PANEL_SECTIONS.map((spec) => {
+  return PANEL_SECTIONS.map((spec, index) => {
     const list = built[spec.list];
     const source = list.sections.find((section) => section.group === spec.group);
     const rows = (source?.rows ?? []).map((row) => ({
@@ -44,6 +44,7 @@ function sectionsOf(response: ItemsResponse): PanelSectionView[] {
       collapsed: spec.collapsed,
       sort: list.sort,
       sorts: [...list.sorts],
+      showsSort: PANEL_SECTIONS.findIndex((other) => other.list === spec.list) === index,
       rows,
     };
   }) as unknown as PanelSectionView[];

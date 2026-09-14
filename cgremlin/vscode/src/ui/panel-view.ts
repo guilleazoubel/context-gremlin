@@ -358,7 +358,7 @@ export class PanelView implements WebviewViewProviderLike {
       sorts: this.sorts,
       now: this.deps.now?.(),
     });
-    return PANEL_SECTIONS.map((spec) => {
+    return PANEL_SECTIONS.map((spec, index) => {
       const list = built[spec.list];
       const source = list.sections.find((section) => section.group === spec.group);
       const rows = (source?.rows ?? []).map((row) => this.rowView(row));
@@ -374,6 +374,9 @@ export class PanelView implements WebviewViewProviderLike {
         collapsed: this.collapsed[spec.key] ?? spec.collapsed,
         sort: list.sort,
         sorts: [...list.sorts],
+        // One sort control per LIST, on the first section of it (the parking lot's three share
+        // one sort, and three copies of one control is noise).
+        showsSort: PANEL_SECTIONS.findIndex((other) => other.list === spec.list) === index,
         rows,
       };
     });

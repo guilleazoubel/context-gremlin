@@ -64,11 +64,13 @@ export function createSection(section: PanelSectionView, context: SectionContext
   header.appendChild(el('span', 'section-title'));
   header.appendChild(el('span', 'section-count'));
   bar.appendChild(header);
+  node.appendChild(bar);
 
+  // A line of its own: beside the title, the chips squeezed `Parking lot` to `Par…` at 300 px,
+  // and the header is the one thing in a section that must stay readable.
   const sorts = el('div', 'sorts');
   sorts.setAttribute('role', 'group');
-  bar.appendChild(sorts);
-  node.appendChild(bar);
+  node.appendChild(sorts);
 
   node.appendChild(el('div', 'section-empty', NOTHING));
 
@@ -98,10 +100,11 @@ export function patchSection(
 
   const sorts = child(node, '.sorts');
   setAttr(sorts, 'aria-label', `Sort ${section.title}`);
-  setHidden(sorts, section.collapsed);
+  const hasSorts = section.showsSort && !section.collapsed;
+  setHidden(sorts, !hasSorts);
   reconcile(
     sorts,
-    section.collapsed ? [] : section.sorts.map((sort) => ({ key: sort, data: sort })),
+    hasSorts ? section.sorts.map((sort) => ({ key: sort, data: sort })) : [],
     (sort) =>
       button({
         className: 'sort',

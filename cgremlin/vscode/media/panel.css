@@ -12,6 +12,20 @@
  *  - one accent in the entire panel, and it means "this needs you" (§2.2 rule 10).
  */
 
+/*
+ * §8's one responsive rule. The panel is the container, so the query answers the SIDEBAR's width
+ * rather than the window's — the same panel is 300 px docked and 500 px pulled out.
+ */
+#cgremlin-panel {
+  container-type: inline-size;
+}
+
+@container (max-width: 380px) {
+  .cell-size {
+    display: none;
+  }
+}
+
 body {
   margin: 0;
   padding: 0;
@@ -213,7 +227,6 @@ body {
 .section-bar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 6px;
   position: sticky;
   top: 0;
@@ -280,10 +293,13 @@ body {
   text-align: center;
 }
 
+/* A line of its own, under the header it belongs to: beside the title it squeezed `Parking lot`
+ * to `Par…` at 300 px, and there is exactly one of these per list. */
 .sorts {
   display: flex;
-  flex: 0 0 auto;
+  flex-wrap: wrap;
   gap: 2px;
+  padding: 2px 10px 4px;
 }
 
 .sort {
@@ -398,6 +414,21 @@ body {
   line-height: 1.3;
 }
 
+.row-twisty {
+  flex: 0 0 auto;
+  width: 1em;
+  color: var(--vscode-descriptionForeground);
+  font-size: 10px;
+  font-weight: 400;
+}
+
+.id-keys {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
 /* L1 never truncates: it is at most a ticket key and a PR number by construction (§2). */
 .id-key {
   flex: 0 0 auto;
@@ -428,16 +459,24 @@ body {
   line-height: 1.4;
 }
 
-/* Every token is pinned; only the repo may shrink, so the right-hand cluster stays aligned. */
-.row-signals > .cell {
+/*
+ * Every token but the repo is pinned — and the `:not()` is load-bearing: `.row-signals > .cell`
+ * is specificity 0,2,0 and beat `.cell-repo`'s 0,1,0, so the repo could not shrink at all and the
+ * line overflowed at 300 px.
+ */
+.row-signals > .cell:not(.cell-repo) {
   flex: 0 0 auto;
   white-space: nowrap;
 }
 
+/* It GROWS as well as shrinks, which is what right-packs the cluster: the age, the tier and the
+ * size line up down the column instead of chasing a ragged repo name. */
 .cell-repo {
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .cell-age,

@@ -32,7 +32,7 @@ export interface StateOptions {
 export function stateOf(over: StateOptions = {}): PanelState {
   const response = over.response ?? itemsResponse();
   const built = buildWorkLists({ response, now: NOW });
-  const sections: PanelSectionView[] = PANEL_SECTIONS.map((spec) => {
+  const sections: PanelSectionView[] = PANEL_SECTIONS.map((spec, index) => {
     const list = built[spec.list];
     const source = list.sections.find((section) => section.group === spec.group);
     const rows = (source?.rows ?? []).map((row) => {
@@ -73,6 +73,7 @@ export function stateOf(over: StateOptions = {}): PanelState {
       collapsed: over.collapsed?.[spec.key] ?? spec.collapsed,
       sort: list.sort,
       sorts: [...list.sorts],
+      showsSort: PANEL_SECTIONS.findIndex((other) => other.list === spec.list) === index,
       rows,
     };
   });

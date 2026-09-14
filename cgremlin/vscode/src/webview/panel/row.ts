@@ -38,7 +38,14 @@ export function createRow(row: PanelRowView): HTMLElement {
   // Three lines, fixed order, fixed meaning (§2): the keys, the prose, the signals. No twisty:
   // the row's state is said by the block it opens into, and a chevron on every line of a 300 px
   // sidebar is a column of punctuation.
-  node.appendChild(el('div', 'row-id'));
+  const id = el('div', 'row-id');
+  // The disclosure, back on screen: `aria-expanded` said the row opened and nothing visible did.
+  // One character in a fixed-width box, so turning it moves no text (§7).
+  const twisty = el('span', 'row-twisty');
+  twisty.setAttribute('aria-hidden', 'true');
+  id.appendChild(twisty);
+  id.appendChild(el('div', 'id-keys'));
+  node.appendChild(id);
   node.appendChild(el('div', 'row-desc'));
   node.appendChild(el('div', 'row-signals'));
 
@@ -69,7 +76,8 @@ export function patchRow(
   setAttr(node, 'aria-expanded', String(row.expanded));
 
   setAttr(node, 'aria-label', row.label);
-  patchKeys(child(node, '.row-id'), row.identityKeys);
+  setText(child(node, '.row-twisty'), row.expanded ? '▾' : '▸');
+  patchKeys(child(node, '.id-keys'), row.identityKeys);
   const desc = child(node, '.row-desc');
   setText(desc, row.description);
   // An empty description is not a blank line: the row is two lines tall and says so (§2).
