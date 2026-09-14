@@ -877,3 +877,72 @@ describe('serve — human-turn claims are cleared at boot (R20)', () => {
     }
   });
 });
+
+/**
+ * R-shutdown: an engine that can refuse a stop.
+ *
+ * A SIGTERM cannot be refused, so the only window that could ever be told "no" was none — and two
+ * windows on two builds therefore signalled each other's engines for ever. `POST /shutdown` is the
+ * same graceful `close()` the signal path performs, behind a decision the engine itself makes.
+ */
+describe('serve — POST /shutdown', () => {
+  const ask = (over: Record<string, unknown> = {}) => ({
+    requesterBuildTime: '2030-01-01T00:00:00.000Z',
+    requesterBuildId: 'a-newer-window',
+    reason: 'restart',
+    ...over,
+  });
+
+  it('accepts a newer requester and performs the same close SIGTERM performs', async () => {
+    const lines: string[] = [];
+    const handle = await serve(testConfig(), testAdapters(), { log: (l) => lines.push(l) });
+    try {
+      const res = await requestOn(handle.socketPath, 'POST', '/shutdown', ask());
+      expect(res).toEqual({ status: 202, body: { accepted: true } });
+      // The very things `close()` owns: the socket file and R22's lock are gone, and the process
+      // signal handlers it registered are unregistered.
+      await vi.waitFor(async () => {
+        await expect(stat(handle.socketPath)).rejects.toThrow();
+      });
+      expect(existsSync(path.join(dir, 'engine.json'))).toBe(false);
+      expect(lines.some((l) => l.includes('shutdown.accepted'))).toBe(true);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it('refuses a requester that cannot prove it is newer, and keeps serving', async () => {
+    const handle = await serve(testConfig(), testAdapters(), { log: () => {} });
+    try {
+      const res = await requestOn(handle.socketPath, 'POST', '/shutdown', ask({ requesterBuildTime: null }));
+      expect(res.status).toBe(409);
+      expect(res.body).toMatchObject({ accepted: false, engineBuildTime: null });
+      await new Promise((r) => setTimeout(r, 20));
+      expect(await requestOn(handle.socketPath, 'GET', '/sessions')).toEqual({
+        status: 200,
+        body: { sessions: [] },
+      });
+      expect(existsSync(path.join(dir, 'engine.json'))).toBe(true);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it("honours a person's stop from a window with no build time at all", async () => {
+    const handle = await serve(testConfig(), testAdapters(), { log: () => {} });
+    try {
+      const res = await requestOn(
+        handle.socketPath,
+        'POST',
+        '/shutdown',
+        ask({ requesterBuildTime: null, reason: 'user' }),
+      );
+      expect(res.status).toBe(202);
+      await vi.waitFor(async () => {
+        await expect(stat(handle.socketPath)).rejects.toThrow();
+      });
+    } finally {
+      await handle.close();
+    }
+  });
+});
