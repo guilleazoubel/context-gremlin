@@ -80,9 +80,15 @@ const REVIEW_TRANSITIONS: Record<ReviewPhase, readonly ReviewPhase[]> = {
 
 // R51: a new review arriving sends a `ready` respond session back to
 // `addressing`, which is why `ready` is not terminal.
+//
+// `closed` is reachable from EVERY non-terminal phase for the same reason
+// `dismissed` is on the review table: a merge on GitHub is a fact regardless
+// of our local phase. The live defect was a respond session stuck at
+// `addressing` on a PR that had merged three days earlier, keeping the whole
+// item looking like work in flight.
 const RESPOND_TRANSITIONS: Record<RespondPhase, readonly RespondPhase[]> = {
-  triaging: ['addressing', 'abandoned'],
-  addressing: ['ready', 'abandoned'],
+  triaging: ['addressing', 'closed', 'abandoned'],
+  addressing: ['ready', 'closed', 'abandoned'],
   ready: ['addressing', 'closed', 'abandoned'],
   closed: [],
   abandoned: [],

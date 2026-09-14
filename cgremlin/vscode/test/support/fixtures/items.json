@@ -47,7 +47,7 @@
       ],
       "demoted": true,
       "parkingLotGroup": "someoneOnIt",
-      "title": "acme/api#55 — Split the scheduler",
+      "title": "acme/api#55 \u2014 Split the scheduler",
       "prs": [
         {
           "repo": "acme/api",
@@ -79,7 +79,8 @@
           "labels": [
             "infra"
           ],
-          "sizeTier": "XL"
+          "sizeTier": "XL",
+          "state": "open"
         }
       ],
       "ticket": null,
@@ -104,7 +105,7 @@
       ],
       "demoted": false,
       "parkingLotGroup": "untouched",
-      "title": "acme/api#56 — Retire the v1 endpoint",
+      "title": "acme/api#56 \u2014 Retire the v1 endpoint",
       "prs": [
         {
           "repo": "acme/api",
@@ -132,7 +133,8 @@
           "deletions": 900,
           "ci": "none",
           "labels": [],
-          "sizeTier": "L"
+          "sizeTier": "L",
+          "state": "open"
         }
       ],
       "ticket": null,
@@ -158,7 +160,7 @@
       ],
       "demoted": false,
       "parkingLotGroup": null,
-      "title": "acme/api#77 — Split the ingest worker",
+      "title": "acme/api#77 \u2014 Split the ingest worker",
       "prs": [
         {
           "repo": "acme/api",
@@ -184,7 +186,8 @@
           "deletions": 20,
           "ci": "success",
           "labels": [],
-          "sizeTier": "M"
+          "sizeTier": "M",
+          "state": "open"
         }
       ],
       "ticket": null,
@@ -198,7 +201,8 @@
           "claimed": false,
           "primaryArtifact": null,
           "worktreePath": "/tmp/cgremlin-fixture/worktrees/respond-acme-api-77",
-          "ref": "session:respond-acme-api-77"
+          "ref": "session:respond-acme-api-77",
+          "repo": "acme/api"
         },
         {
           "sessionId": "dev-acme-api-77",
@@ -209,7 +213,8 @@
           "claimed": false,
           "primaryArtifact": "NOTES.md",
           "worktreePath": "/tmp/cgremlin-fixture/worktrees/dev-acme-api-77",
-          "ref": "session:dev-acme-api-77"
+          "ref": "session:dev-acme-api-77",
+          "repo": "acme/api"
         }
       ],
       "needsYou": false,
@@ -234,7 +239,7 @@
       ],
       "demoted": false,
       "parkingLotGroup": "untouched",
-      "title": "acme/legacy#9 — Bump the toolchain",
+      "title": "acme/legacy#9 \u2014 Bump the toolchain",
       "prs": [
         {
           "repo": "acme/legacy",
@@ -256,7 +261,8 @@
           "deletions": null,
           "ci": null,
           "labels": null,
-          "sizeTier": null
+          "sizeTier": null,
+          "state": "open"
         }
       ],
       "ticket": null,
@@ -281,7 +287,7 @@
       ],
       "demoted": false,
       "parkingLotGroup": "untouched",
-      "title": "acme/web#101 — Add the retry budget",
+      "title": "acme/web#101 \u2014 Add the retry budget",
       "prs": [
         {
           "repo": "acme/web",
@@ -309,7 +315,8 @@
           "labels": [
             "backend"
           ],
-          "sizeTier": "M"
+          "sizeTier": "M",
+          "state": "open"
         }
       ],
       "ticket": null,
@@ -334,7 +341,7 @@
       ],
       "demoted": false,
       "parkingLotGroup": "reviewing",
-      "title": "acme/web#102 — Drop the legacy shim",
+      "title": "acme/web#102 \u2014 Drop the legacy shim",
       "prs": [
         {
           "repo": "acme/web",
@@ -360,7 +367,8 @@
           "deletions": 400,
           "ci": "failure",
           "labels": [],
-          "sizeTier": "L"
+          "sizeTier": "L",
+          "state": "open"
         }
       ],
       "ticket": null,
@@ -374,7 +382,8 @@
           "claimed": false,
           "primaryArtifact": "REVIEW.md",
           "worktreePath": "/tmp/cgremlin-fixture/worktrees/pr-acme-web-102",
-          "ref": "session:pr-acme-web-102"
+          "ref": "session:pr-acme-web-102",
+          "repo": "acme/web"
         }
       ],
       "needsYou": true,
@@ -401,7 +410,7 @@
       ],
       "demoted": false,
       "parkingLotGroup": null,
-      "title": "acme/web#200 — Tighten the socket timeout",
+      "title": "acme/web#200 \u2014 Tighten the socket timeout",
       "prs": [
         {
           "repo": "acme/web",
@@ -429,7 +438,8 @@
           "deletions": 12,
           "ci": "success",
           "labels": [],
-          "sizeTier": "M"
+          "sizeTier": "M",
+          "state": "open"
         }
       ],
       "ticket": null,
@@ -443,7 +453,8 @@
           "claimed": false,
           "primaryArtifact": null,
           "worktreePath": "/tmp/cgremlin-fixture/worktrees/respond-acme-web-200",
-          "ref": "session:respond-acme-web-200"
+          "ref": "session:respond-acme-web-200",
+          "repo": "acme/web"
         }
       ],
       "needsYou": true,
@@ -483,7 +494,8 @@
           "claimed": true,
           "primaryArtifact": "FINDINGS.md",
           "worktreePath": "/tmp/cgremlin-fixture/worktrees/inv-stacktrace-1",
-          "ref": "session:inv-stacktrace-1"
+          "ref": "session:inv-stacktrace-1",
+          "repo": null
         }
       ],
       "needsYou": false,
@@ -507,7 +519,7 @@
       ],
       "demoted": false,
       "parkingLotGroup": null,
-      "title": "HB-627 — Caregiver inbox reshuffle",
+      "title": "HB-627 \u2014 Caregiver inbox reshuffle",
       "prs": [
         {
           "repo": "acme/web",
@@ -535,7 +547,8 @@
           "deletions": 80,
           "ci": "success",
           "labels": [],
-          "sizeTier": "L"
+          "sizeTier": "L",
+          "state": "open"
         },
         {
           "repo": "acme/api",
@@ -561,7 +574,8 @@
           "deletions": 4,
           "ci": "pending",
           "labels": [],
-          "sizeTier": "S"
+          "sizeTier": "S",
+          "state": "open"
         }
       ],
       "ticket": {
@@ -583,7 +597,8 @@
           "claimed": false,
           "primaryArtifact": "PLAN.md",
           "worktreePath": "/tmp/cgremlin-fixture/worktrees/inv-hb-627",
-          "ref": "session:inv-hb-627"
+          "ref": "session:inv-hb-627",
+          "repo": "acme/web"
         },
         {
           "sessionId": "dev-hb-627",
@@ -594,7 +609,8 @@
           "claimed": false,
           "primaryArtifact": "NOTES.md",
           "worktreePath": "/tmp/cgremlin-fixture/worktrees/dev-hb-627",
-          "ref": "session:dev-hb-627"
+          "ref": "session:dev-hb-627",
+          "repo": "acme/web"
         }
       ],
       "needsYou": true,

@@ -20,6 +20,7 @@
 import {
   agentChildId,
   chatTargetOfAgents,
+  isLandedPr,
   WORK_LIST_KINDS,
   type WorkItem,
   type WorkListKind,
@@ -53,6 +54,8 @@ export interface ActionAgent {
   phase: string;
   running: boolean;
   claimed: boolean;
+  /** Panel-local: a start in flight. It counts for "this stage has begun" and for nothing else. */
+  pending?: boolean;
 }
 
 export interface ActionPr {
@@ -60,6 +63,17 @@ export interface ActionPr {
   number: number;
   isMine: boolean | null;
   isDraft: boolean | null;
+  /**
+   * The PR's own state — the wire's `WorkItemPr.state`, or the display
+   * wording the Item tab already carries (see `isLandedPr`). Optional, so an
+   * engine older than the pr-state contract behaves exactly as it did.
+   */
+  state?: string | null;
+}
+
+/** Every PR on the item has merged or closed — the end of the forward-only ladder. */
+function allLanded(facts: ActionFacts): boolean {
+  return facts.prs.length > 0 && facts.prs.every((pr) => isLandedPr(pr));
 }
 
 export interface ActionFacts {
@@ -94,8 +108,15 @@ export function furthestStage(facts: ActionFacts): StageReach {
   return reach < 0 ? 'none' : STAGE_ORDER[reach];
 }
 
-/** Forward only: the stage after the furthest one reached, and never an earlier one. */
+/**
+ * Forward only: the stage after the furthest one reached, and never an earlier one.
+ *
+ * Merged and closed are TERMINAL in this table. A PR that has landed is not a
+ * change waiting for a review; offering `Start review` on it was the live
+ * defect (`aplaceformom/grace#2180`, merged, still offering to review itself).
+ */
 export function nextStages(facts: ActionFacts): StageKind[] {
+  if (allLanded(facts)) return [];
   switch (furthestStage(facts)) {
     case 'none':
       // Nothing has happened yet, so both entry points are legitimate; the caller decides which
@@ -129,7 +150,12 @@ export function rowActions(facts: ActionFacts, list: WorkListKind): RowAction[] 
 
   if (list === 'parkingLot') {
     // A teammate's PR. Reviewing it is the only verb that belongs here at all.
-    if (pr !== undefined && pr.isMine !== true && !facts.agents.some((a) => a.mode === 'review')) {
+    if (
+      pr !== undefined &&
+      pr.isMine !== true &&
+      !isLandedPr(pr) &&
+      !facts.agents.some((a) => a.mode === 'review')
+    ) {
       push({ command: 'cgremlin.startReview', label: 'Start review' }, 'primary');
     }
     if (chatAction !== null) push(chatAction, 'inline');
@@ -140,6 +166,8 @@ export function rowActions(facts: ActionFacts, list: WorkListKind): RowAction[] 
       pr !== undefined &&
       pr.isMine === true &&
       pr.isDraft === false &&
+      // Nothing to address: the merge took every comment in with it.
+      !isLandedPr(pr) &&
       !facts.agents.some((a) => a.mode === 'respond');
     if (respondable) {
       push({ command: 'cgremlin.addressReview', label: 'Address review comments' }, 'primary');

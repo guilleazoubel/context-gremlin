@@ -294,6 +294,8 @@ describe('groupWorkItems: list membership (R47–R50, MG-2)', () => {
       ci: null,
       labels: null,
       sizeTier: null,
+      // Unknown, NOT open: the pr-state leg has not resolved this one.
+      state: null,
     });
   });
 

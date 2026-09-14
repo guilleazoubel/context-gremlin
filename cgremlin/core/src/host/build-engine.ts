@@ -18,6 +18,7 @@ import { JiraRestSource } from '../jira/jira-rest-source';
 import { JiraScanner } from '../jira/jira-scanner';
 import { JiraStore, TicketDetailCache } from '../jira/jira-store';
 import { ReviewThreadScanner, ReviewThreadStore, threadCacheKey, type ReviewThreadCache } from '../gh/review-threads';
+import { PrStateResolver, PrStateStore } from '../gh/pr-state';
 import { RespondSessionFactory } from '../pipeline/respond-session-factory';
 import { PR_VIEW_FIELDS, failingChecks, parsePrView } from '../gh/pr-view';
 import type { JiraSource } from '../jira/jira-source';
@@ -315,6 +316,15 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     scanBudgetMs: config.reviewThreads.scanBudgetMs,
     now: adapters.now,
   });
+  // The pr-state leg: what happened to a PR that a session names and the
+  // open-PR inventory no longer has. One `gh pr view` per unknown PR, once
+  // ever (a merged/closed state is final and never re-fetched).
+  const prStateResolver = new PrStateResolver({
+    gh: adapters.gh,
+    store: new PrStateStore(adapters.fs, config.prStatesCachePath!),
+    projectKeys: config.jira?.projectKeys ?? [],
+    now: adapters.now,
+  });
   const scanner = new InventoryScanner({
     gh: adapters.gh,
     store,
@@ -332,6 +342,7 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     now: adapters.now,
     jira: jiraScanner,
     threads: threadScanner,
+    prStates: prStateResolver,
   });
 
   // The attention model: one adapter per source (R18), an ack store of its
@@ -369,6 +380,7 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     inventory: inventoryStore,
     jira: jiraScanner,
     threads: threadScanner,
+    prStates: prStateResolver,
     dismissals: new DismissStore(adapters.fs, config.dismissalsPath!),
     events,
     now: adapters.now,

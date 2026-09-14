@@ -4,10 +4,25 @@ import { describe, expect, it } from 'vitest';
 import { createHarness, flush, SESSIONS_DIR, WORKTREES_DIR } from '../support/pipeline-harness';
 import { FakeGhRunner } from '../support/fake-gh-runner';
 import { mapPrView } from '../../src/gh/pr-view';
-import { planReconciliation, ReconciliationTick } from '../../src/discovery/reconciliation';
+import {
+  planPrSessionReconciliation,
+  planReconciliation,
+  ReconciliationTick,
+} from '../../src/discovery/reconciliation';
 import { SessionStore } from '../../src/engine/session-store';
-import { migrateV1ToV2, type ReviewSession, type Session } from '../../src/schema/session';
-import type { DevelopmentPhase, InvestigationPhase, ReviewPhase } from '../../src/schema/pipeline';
+import {
+  migrateV1ToV2,
+  type InvestigationSession,
+  type RespondSession,
+  type ReviewSession,
+  type Session,
+} from '../../src/schema/session';
+import type {
+  DevelopmentPhase,
+  InvestigationPhase,
+  RespondPhase,
+  ReviewPhase,
+} from '../../src/schema/pipeline';
 
 const fixturesDir = path.join(__dirname, '../fixtures/gh');
 const NOW = new Date('2026-09-10T12:00:00.000Z');
@@ -544,5 +559,146 @@ describe('R20 — a claim that races in AFTER planning is skipped, not errored',
     expect(report.skipped).toEqual([]);
     expect(report.errors).toHaveLength(1);
     expect(report.errors[0]).toMatchObject({ where: review.id });
+  });
+});
+
+/**
+ * The other half of "merging ended this" (live case: the respond session
+ * `respond-grace-2180-20260911-040030`, phase `addressing`, still open on
+ * `aplaceformom/grace#2180` three days after it merged).
+ *
+ * A respond session is created STANDALONE — `parentSessionId: null`, its own
+ * pipelineId — so it is neither a review nor a review's lineage parent, and
+ * the review-only loop never looked at it. The stale session kept the whole
+ * work item reading as live work.
+ */
+function respondSession(stageStatus: RespondPhase, id = 'respond-app-5-x'): Session {
+  return {
+    schemaVersion: 2,
+    id,
+    mode: 'respond',
+    createdAt: '2026-09-01T00:00:00.000Z',
+    workspace: { repoUrl: 'git@github.com:acme/app.git' },
+    lineage: { pipelineId: id, parentSessionId: null, ticket: 'HB-1489', selfReview: false },
+    agent: null,
+    lastRun: null,
+    pr: prOf('acme/app', 5),
+    stageStatus,
+  };
+}
+
+describe('planPrSessionReconciliation', () => {
+  it('a respond session on a MERGED pr goes to its terminal phase, with the reason', () => {
+    const { actions, skipped } = planPrSessionReconciliation({
+      session: respondSession('addressing') as RespondSession,
+      view: view({ state: 'MERGED' }),
+    });
+    expect(actions).toEqual([
+      { type: 'transition', sessionId: 'respond-app-5-x', to: 'closed', reason: 'PR merged' },
+    ]);
+    expect(skipped).toEqual([]);
+  });
+
+  it('reaches `closed` from EVERY non-terminal respond phase — a merge is a fact, not a step', () => {
+    for (const from of ['triaging', 'addressing', 'ready'] as const) {
+      const { actions, skipped } = planPrSessionReconciliation({
+        session: respondSession(from) as RespondSession,
+        view: view({ state: 'MERGED' }),
+      });
+      expect(skipped).toEqual([]);
+      expect(actions[0]).toMatchObject({ to: 'closed' });
+    }
+  });
+
+  it('a respond session on a pr CLOSED without merging is abandoned, not closed', () => {
+    const { actions } = planPrSessionReconciliation({
+      session: respondSession('addressing') as RespondSession,
+      view: view({ state: 'CLOSED' }),
+    });
+    expect(actions).toEqual([
+      {
+        type: 'transition',
+        sessionId: 'respond-app-5-x',
+        to: 'abandoned',
+        reason: 'PR closed without merging',
+      },
+    ]);
+  });
+
+  it('an INVESTIGATION whose pr merged is left alone, and the report says why', () => {
+    const session = investigationSession('inv-1', 'planning') as InvestigationSession;
+    const { actions, skipped } = planPrSessionReconciliation({
+      session,
+      view: view({ state: 'MERGED' }),
+    });
+    expect(actions).toEqual([]);
+    expect(skipped).toEqual([
+      {
+        sessionId: 'inv-1',
+        to: 'none',
+        why: "PR merged, but an investigation is not ended by its PR — left at 'planning'",
+      },
+    ]);
+  });
+
+  it('an OPEN pr proposes nothing at all for either mode', () => {
+    expect(
+      planPrSessionReconciliation({
+        session: respondSession('addressing') as RespondSession,
+        view: view({ state: 'OPEN' }),
+      }),
+    ).toEqual({ actions: [], skipped: [] });
+  });
+});
+
+describe('ReconciliationTick over respond sessions', () => {
+  it('closes the stale respond session on the merged pr and applies the transition', async () => {
+    const { h, gh, lock } = tickHarness();
+    await h.store.save(respondSession('addressing'));
+    gh.queueResponse({ stdout: viewJson({ state: 'MERGED' }) });
+
+    const tick = new ReconciliationTick({
+      gh, store: h.store, pipeline: h.service, events: h.events, lock, now: () => NOW,
+    });
+    const report = await tick.run();
+
+    expect(report.errors).toEqual([]);
+    expect(report.actions).toEqual([
+      { type: 'transition', sessionId: 'respond-app-5-x', to: 'closed', reason: 'PR merged' },
+    ]);
+    expect(report.reconciled).toBe(1);
+    expect((await h.store.load('respond-app-5-x')).stageStatus).toBe('closed');
+  });
+
+  it('never calls gh at all for a respond session that is already terminal', async () => {
+    const { h, gh, lock } = tickHarness();
+    await h.store.save(respondSession('closed'));
+    const tick = new ReconciliationTick({
+      gh, store: h.store, pipeline: h.service, events: h.events, lock, now: () => NOW,
+    });
+    const report = await tick.run();
+    expect(gh.calls).toEqual([]);
+    expect(report.reconciled).toBe(0);
+  });
+
+  it('leaves an investigation on a merged pr exactly where it is, as a skipped entry', async () => {
+    const { h, gh, lock } = tickHarness();
+    await h.store.save(investigationSession('inv-1', 'planning'));
+    gh.queueResponse({ stdout: viewJson({ state: 'MERGED' }) });
+
+    const tick = new ReconciliationTick({
+      gh, store: h.store, pipeline: h.service, events: h.events, lock, now: () => NOW,
+    });
+    const report = await tick.run();
+
+    expect(report.actions).toEqual([]);
+    expect(report.skipped).toEqual([
+      {
+        sessionId: 'inv-1',
+        to: 'none',
+        why: "PR merged, but an investigation is not ended by its PR — left at 'planning'",
+      },
+    ]);
+    expect((await h.store.load('inv-1')).stageStatus).toBe('planning');
   });
 });

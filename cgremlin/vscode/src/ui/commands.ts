@@ -194,7 +194,19 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
       // told, because a review of one's own PR is otherwise 409 `OwnPrError` (R42).
       const selfReview = item.prs[0]?.isMine === true;
       const body = selfReview ? { mode: 'review', selfReview: true } : { mode: 'review' };
-      if (surface(await send(() => client.startAgent(path, body)))) coordinator.schedule();
+      // Optimistic BEFORE the request, so the row says `running` while the
+      // engine is still answering — and cleared if it refuses.
+      panel.setPendingStart(item.id, 'review');
+      if (!surface(await send(() => client.startAgent(path, body)))) {
+        panel.clearPendingStart(item.id);
+        return;
+      }
+      coordinator.schedule();
+      // The defect this answers: the engine DID start the review (session
+      // created, queued -> reviewing, run.started) and the row silently left
+      // the group the user was looking at, with nothing saying so. A start
+      // that worked ends with the row on screen, open, in its new section.
+      panel.reveal(item.id);
     }),
 
     /**
@@ -215,8 +227,13 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
       }
       const path = itemPathOf(`pr:${pr.repo}#${pr.number}`);
       if (path === null) return;
-      if (!surface(await send(() => client.startAgent(path, { mode: 'respond' })))) return;
+      panel.setPendingStart(item.id, 'respond');
+      if (!surface(await send(() => client.startAgent(path, { mode: 'respond' })))) {
+        panel.clearPendingStart(item.id);
+        return;
+      }
       coordinator.schedule();
+      panel.reveal(item.id);
       await openTab(deps, path);
     }),
 
@@ -477,12 +494,14 @@ async function startFromItem(
   }
   const repoUrl = await repoUrlFor(deps, item, mode);
   if (repoUrl === undefined) return;
+  panel.setPendingStart(item.id, mode);
   let result: HttpResult;
   try {
     result = await withEngineRetry(reviveOf(deps), () =>
       client.startAgent(path, { mode, repoUrl }),
     );
   } catch (err: unknown) {
+    panel.clearPendingStart(item.id);
     // A dead socket rejects rather than answering, and a command that rejects fails where nobody
     // is looking — which is the whole complaint this path exists to answer. By here the engine
     // has already been asked for once, with the trigger a person's click earns.
@@ -493,6 +512,7 @@ async function startFromItem(
     return;
   }
   if (result.status < 200 || result.status >= 300) {
+    panel.clearPendingStart(item.id);
     void host.showWarningMessage(engineErrorText(result.body), undefined);
     return;
   }

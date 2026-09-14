@@ -612,6 +612,25 @@ body {
   color: var(--vscode-charts-red);
 }
 
+/*
+ * The landed marker. It is present because the user asked to SEE that the code
+ * is in while the ticket is still open — and muted, because it is context, not
+ * something to act on. The row it sits on has already sunk below live work.
+ */
+.cell-prState.tone-muted {
+  opacity: 0.7;
+}
+
+/*
+ * The running marker. It is a WORD next to the stage name, because the defect
+ * it answers is a user who clicked Start review and could not tell that
+ * anything had begun — and the one accent the panel owns is what says
+ * "this is live".
+ */
+.cell-running.tone-active {
+  color: var(--cg-accent);
+}
+
 /* --- the buttons, which now live only in the block a row opens into ------ */
 
 .part-action,
@@ -694,6 +713,12 @@ body {
 /* The one accent again: a stage that is waiting for the user says so in the colour that means it. */
 .part[data-state='needsYou'] .part-state {
   color: var(--cg-accent);
+}
+
+/* A PR that merged or closed: still listed, still openable, but visibly done. */
+.part[data-state='merged'],
+.part[data-state='closed'] {
+  opacity: 0.7;
 }
 
 .part-actions {
