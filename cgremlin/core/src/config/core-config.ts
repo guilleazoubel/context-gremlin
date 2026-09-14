@@ -136,6 +136,8 @@ export const CoreConfigSchema = z.object({
     .default({ scanBudgetMs: 20_000 }),
   /** R52, derived: <stateDir>/review-threads.json. */
   reviewThreadsCachePath: z.string().optional(),
+  /** The pr-state leg's cache, derived: <stateDir>/pr-states.json. */
+  prStatesCachePath: z.string().optional(),
   // D2: when true the parking lot drops the watchAuthors filter. The isMine
   // exclusion is never dropped.
   showAllRepoPrs: z.boolean().default(false),
@@ -173,6 +175,7 @@ export function resolveCoreConfig(raw: unknown, home: string): CoreConfig {
     // mode ARCHITECTURE.md:528-534 documents.
     jiraCachePath: expandOrDerive(parsed.jiraCachePath, 'jira.json'),
     reviewThreadsCachePath: expandOrDerive(parsed.reviewThreadsCachePath, 'review-threads.json'),
+    prStatesCachePath: expandOrDerive(parsed.prStatesCachePath, 'pr-states.json'),
     // R37: `baseUrl` is injectable and falls back to `siteUrl`; `siteUrl`
     // stays separately readable, because every browse URL comes from it.
     ...(parsed.jira !== undefined
@@ -349,6 +352,7 @@ const DERIVED_PATH_SUFFIXES: Record<string, string> = {
   engineLogPath: 'engine.log',
   jiraCachePath: 'jira.json',
   reviewThreadsCachePath: 'review-threads.json',
+  prStatesCachePath: 'pr-states.json',
 };
 
 export async function writeCoreConfig(

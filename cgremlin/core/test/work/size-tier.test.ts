@@ -32,6 +32,7 @@ function pr(changedFiles: number | null, additions: number | null, deletions: nu
     ci: null,
     labels: null,
     sizeTier: null,
+    state: null,
   };
 }
 

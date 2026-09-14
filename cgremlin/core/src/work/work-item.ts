@@ -2,6 +2,7 @@ import type { AttentionItem } from '../attention/attention-service';
 import type { ItemRef } from '../attention/item-ref';
 import { ATTENTION_REASONS, NEEDS_YOU_REASONS, type AttentionReason } from '../attention/attention';
 import type { CiStatus } from '../gh/pr-view';
+import { isLandedState, prStateKey, type PrState, type PrStateCache, type PrStateEntry } from '../gh/pr-state';
 import type { Inventory, InventoryEntry, TeamActivity } from '../inventory/inventory';
 import type { JiraScanReport } from '../jira/jira-store';
 import type { SessionMode } from '../schema/session';
@@ -61,6 +62,16 @@ export interface WorkItemPr {
   labels: string[] | null;
   /** Workshop phase 10 §2.1: pure arithmetic on `changedFiles`/`additions`/`deletions`, null when either is null. */
   sizeTier: SizeTier | null;
+  /**
+   * What the PR IS — `open`/`draft` from the open-PR inventory, `merged`/
+   * `closed` from the pr-state cache. `null` means genuinely unknown (the
+   * PR is not in the inventory and the leg has not resolved it yet), NEVER
+   * "open": an unknown state must not read as live work.
+   *
+   * Additive on the wire, and a client older than this contract simply does
+   * not read it.
+   */
+  state: PrState | null;
 }
 
 export interface WorkItemTicket {
@@ -75,6 +86,14 @@ export interface WorkItemTicket {
 
 export interface WorkItemAgent {
   sessionId: string;
+  /**
+   * The session's own repo slug (`owner/name`), so a ticket-led row with no
+   * PR still says which repo the work is in. Taken from the attention item's
+   * `repoOrContext`, which is the session's `workspace.repoUrl` — never
+   * parsed back out of a worktree path. `null` only where the source has no
+   * repo at all.
+   */
+  repo: string | null;
   mode: SessionMode;
   phase: string;
   running: boolean;
@@ -126,6 +145,12 @@ export interface GroupWorkItemsInput {
   botLogins?: readonly string[];
   /** Optional: lets a ticket seeded by R28 (never seen by the JQL) still carry a browse URL. */
   jiraSiteUrl?: string;
+  /**
+   * The pr-state leg's cache. It answers two questions the open-PR inventory
+   * cannot: what happened to a PR that left it, and which ticket that PR
+   * named. It DECORATES items and never creates one — see step 3b.
+   */
+  prStates?: PrStateCache;
 }
 
 const MODE_RANK: Record<string, number> = { review: 0, respond: 1, investigation: 2, development: 3 };
@@ -169,18 +194,26 @@ function prFromEntry(e: InventoryEntry): WorkItemPr {
     ci: e.ci,
     labels: e.labels,
     sizeTier: sizeTierOf({ changedFiles: e.changedFiles, additions: e.additions, deletions: e.deletions }),
+    // The inventory lists `--state open` only, so every row in it is open;
+    // draftness is the one distinction it carries.
+    state: e.isDraft ? 'draft' : 'open',
   };
 }
 
 /** R25's nullability half: the PR left the open-PR inventory but its agent keeps the item alive. */
-function prFromAgentLinks(repo: string, number: number, url: string | null): WorkItemPr {
+function prFromAgentLinks(
+  repo: string,
+  number: number,
+  url: string | null,
+  cached: PrStateEntry | undefined,
+): WorkItemPr {
   return {
     repo,
     number,
-    url: url ?? `https://github.com/${repo}/pull/${number}`,
-    title: null,
+    url: cached?.url ?? url ?? `https://github.com/${repo}/pull/${number}`,
+    title: cached?.title ?? null,
     author: null,
-    branch: null,
+    branch: cached?.branch ?? null,
     isDraft: null,
     isMine: null,
     reviewDecision: null,
@@ -195,8 +228,16 @@ function prFromAgentLinks(repo: string, number: number, url: string | null): Wor
     ci: null,
     labels: null,
     sizeTier: null,
+    state: cached?.state ?? null,
   };
 }
+
+/** The same shape, for a landed PR that no live session names any more — the cache is all that is left of it. */
+function prFromCache(repo: string, number: number, cached: PrStateEntry): WorkItemPr {
+  return prFromAgentLinks(repo, number, cached.url, cached);
+}
+
+const PR_CACHE_KEY = /^(.+)#(\d+)$/;
 
 interface Candidate {
   id: WorkItemId;
@@ -215,6 +256,15 @@ export function groupWorkItems(input: GroupWorkItemsInput): WorkItem[] {
   const meLower = input.me.toLowerCase();
   const bots = input.botLogins ?? [];
   const jiraMe = input.jira?.me ?? null;
+
+  const prStates: PrStateCache = input.prStates ?? {};
+  /**
+   * The ticket a PR names when the INVENTORY no longer does. R29's filter is
+   * already applied at fetch time for the cache (the resolver is given the
+   * same `projectKeys`), so this only has to honour "linking disabled".
+   */
+  const cachedTicketKeyOf = (repo: string, number: number): string | undefined =>
+    input.projectKeys.length === 0 ? undefined : prStates[prStateKey(repo, number)]?.ticketKeys[0];
 
   const byId = new Map<WorkItemId, Candidate>();
   const candidateOfPr = new Map<string, Candidate>();
@@ -302,6 +352,15 @@ export function groupWorkItems(input: GroupWorkItemsInput): WorkItem[] {
     const key = keyOfEntry(e);
     if (key !== undefined && e.isMine) mineTicketKeys.add(key);
   }
+  // A PR a session of ours names is by definition work of ours, so the ticket
+  // its title carries is mine too — this is what keeps `HB-1489 #2180` ONE
+  // row after the PR merged and left the inventory with its `ticketKeys`.
+  for (const item of input.items) {
+    const { prRepo, prNumber } = item.links;
+    if (prRepo === null || prNumber === null) continue;
+    const key = cachedTicketKeyOf(prRepo, prNumber);
+    if (key !== undefined) mineTicketKeys.add(key);
+  }
 
   // ---- steps 1-2: a candidate per inventory entry, merged into its ticket -
   for (const e of input.inventory?.entries ?? []) {
@@ -325,8 +384,24 @@ export function groupWorkItems(input: GroupWorkItemsInput): WorkItem[] {
         // R25: a merged or closed PR still under review. The item stays
         // kind 'pr' and does NOT silently become a session item under the
         // user — its id must not change.
-        cand = candidate(workItemIdOf({ kind: 'pr', repo: prRepo, number: prNumber }));
-        cand.prs.push(prFromAgentLinks(prRepo, prNumber, prUrl));
+        //
+        // R28's other half: the PR↔ticket link ALSO comes from the session's
+        // own `lineage.ticket` and from the pr-state cache (parsed out of the
+        // PR title at fetch time). Without it a merged PR renders as a PR row
+        // with no ticket, which is the "it doesn't show the jira ticket" bug:
+        // the inventory row that carried `ticketKeys` left with the PR.
+        // The CACHE first, and on its own merits: its `ticketKeys` were
+        // parsed from the PR's branch and title exactly as the inventory
+        // parses an open PR's, so a merged PR keeps its ticket with no
+        // dependence on a session at all. The session's `lineage.ticket` is
+        // an additive second source, for a PR the leg has not resolved yet.
+        const key =
+          cachedTicketKeyOf(prRepo, prNumber) ?? filteredTicket(ticket, input.projectKeys) ?? null;
+        cand =
+          key !== null && mineTicketKeys.has(key)
+            ? ticketCandidate(key)
+            : candidate(workItemIdOf({ kind: 'pr', repo: prRepo, number: prNumber }));
+        cand.prs.push(prFromAgentLinks(prRepo, prNumber, prUrl, prStates[prStateKey(prRepo, prNumber)]));
         candidateOfPr.set(prKeyOf(prRepo, prNumber), cand);
       }
     } else {
@@ -335,6 +410,7 @@ export function groupWorkItems(input: GroupWorkItemsInput): WorkItem[] {
     }
     cand.agents.push({
       sessionId: item.id,
+      repo: item.repoOrContext === '' ? null : item.repoOrContext,
       mode: item.mode,
       phase: item.stageStatus ?? '',
       running: item.running,
@@ -346,6 +422,25 @@ export function groupWorkItems(input: GroupWorkItemsInput): WorkItem[] {
     });
     cand.contributors.push(item);
     cand.sessionTitle ??= item.title;
+  }
+
+  // ---- step 3b: the cache DECORATES; it never creates an item -----------
+  // A landed PR whose session has ENDED has no attention item of its own and
+  // no inventory row, so nothing above would ever mention it. It is attached
+  // to its ticket's item when that item already exists — and only then: a
+  // cache that could seed candidates would resurrect every PR ever merged,
+  // and "an item whose only reason to exist was the merged PR leaves every
+  // list" is exactly the behaviour the user asked for.
+  for (const [key, cached] of Object.entries(prStates)) {
+    if (!isLandedState(cached.state)) continue;
+    if (candidateOfPr.has(key)) continue;
+    const match = PR_CACHE_KEY.exec(key);
+    if (match === null) continue;
+    const ticketKey = input.projectKeys.length === 0 ? undefined : cached.ticketKeys[0];
+    const cand = ticketKey === undefined ? undefined : candidateOfTicket.get(ticketKey);
+    if (cand === undefined) continue;
+    cand.prs.push(prFromCache(match[1], Number(match[2]), cached));
+    candidateOfPr.set(key, cand);
   }
 
   // An AttentionItem with `mode === null` — the `source: 'pr'` row the
@@ -425,8 +520,29 @@ function finish(cand: Candidate, ctx: FinishContext): WorkItem {
   };
 }
 
-/** R47: `open(pr)` is `isDraft !== true` (R57), NOT `=== false` — an unknown draft state is treated as not-a-draft. */
-const open = (pr: WorkItemPr): boolean => pr.isDraft !== true;
+/**
+ * R47: `open(pr)` is `isDraft !== true` (R57), NOT `=== false` — an unknown
+ * draft state is treated as not-a-draft.
+ *
+ * Plus the state test: a MERGED or CLOSED PR is not open work. A `null`
+ * state (the leg has not resolved it yet) is deliberately NOT landed — an
+ * unresolved PR keeps behaving exactly as it did before this field existed.
+ */
+const open = (pr: WorkItemPr): boolean => pr.isDraft !== true && !isLandedState(pr.state);
+
+/**
+ * "The code is in." An item every one of whose PRs has merged or closed —
+ * the ticket may well still be live, which is why this SINKS a row rather
+ * than hiding it.
+ */
+export function isLanded(item: WorkItem): boolean {
+  return item.prs.length > 0 && item.prs.every((pr) => isLandedState(pr.state));
+}
+
+/** The one secondary key every list order carries, ahead of its own: landed work sits below live work. */
+function byLanded(a: WorkItem, b: WorkItem): number {
+  return Number(isLanded(a)) - Number(isLanded(b));
+}
 
 /**
  * R47.1 REVERSED (gh#2125, coordinator ruling): a pending review request —
@@ -573,16 +689,18 @@ const GROUP_ORDER: readonly ParkingLotGroup[] = ['reviewing', 'untouched', 'some
  * the extension may re-sort with the user's selection, which is presentation.
  */
 function byCreatedAtAscending(a: WorkItem, b: WorkItem): number {
-  return compareNullableAsc(createdAtOf(a), createdAtOf(b)) || a.id.localeCompare(b.id);
+  return byLanded(a, b) || compareNullableAsc(createdAtOf(a), createdAtOf(b)) || a.id.localeCompare(b.id);
 }
 
 function byNeedsYouThenRecent(a: WorkItem, b: WorkItem): number {
+  const landed = byLanded(a, b);
+  if (landed !== 0) return landed;
   if (a.needsYou !== b.needsYou) return a.needsYou ? -1 : 1;
   return compareNullableDesc(recencyOf(a), recencyOf(b)) || a.id.localeCompare(b.id);
 }
 
 function byRecency(a: WorkItem, b: WorkItem): number {
-  return compareNullableDesc(recencyOf(a), recencyOf(b)) || a.id.localeCompare(b.id);
+  return byLanded(a, b) || compareNullableDesc(recencyOf(a), recencyOf(b)) || a.id.localeCompare(b.id);
 }
 
 /** The per-list id arrays the wire carries (spec §4.3), derived from the SAME `lists`/`parkingLotGroup` the items carry. */
@@ -608,7 +726,15 @@ export function workListsOf(items: readonly WorkItem[]): WorkLists {
       .filter((i) => i.parkingLotGroup === name)
       // The parking lot's sort is applied WITHIN each group and never across
       // them; inside 'reviewing', a review that wants me outranks an old one.
-      .sort((a, b) => (name === 'reviewing' && a.needsYou !== b.needsYou ? (a.needsYou ? -1 : 1) : byCreatedAtAscending(a, b)))
+      .sort(
+        (a, b) =>
+          byLanded(a, b) ||
+          (name === 'reviewing' && a.needsYou !== b.needsYou
+            ? a.needsYou
+              ? -1
+              : 1
+            : byCreatedAtAscending(a, b)),
+      )
       .map((i) => i.id);
   return {
     parkingLot: { reviewing: group('reviewing'), untouched: group('untouched'), someoneOnIt: group('someoneOnIt') },

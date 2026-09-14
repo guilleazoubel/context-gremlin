@@ -16,6 +16,7 @@ import { buildEntries, groupInventory, type Inventory, type InventoryEntry, type
 import type { Session } from '../schema/session';
 import type { JiraScanReport } from '../jira/jira-store';
 import type { ReviewThreadCache, ThreadScanCandidate, ThreadScanReport } from '../gh/review-threads';
+import type { PrStateCandidate, PrStateScanReport } from '../gh/pr-state';
 
 export interface InventoryScannerDeps {
   gh: GhRunner;
@@ -54,6 +55,20 @@ export interface InventoryScannerDeps {
     inFlight(): Promise<void> | null;
     lastReport(): ThreadScanReport;
     cached(): Promise<ReviewThreadCache>;
+  };
+  /**
+   * The pr-state leg, on the SAME R34 discipline as the other two: after
+   * `inventory.updated`, not awaited, single-flight, budgeted, drained by
+   * `stop()`. It exists because `gh pr list --state open` is the only thing
+   * this scanner asks GitHub, so a PR that merged simply leaves the
+   * inventory and nothing downstream can tell "merged" from "never seen".
+   * Its candidates are exactly the PRs a session names that the open-PR
+   * inventory does NOT have.
+   */
+  prStates?: {
+    run(candidates: readonly PrStateCandidate[]): Promise<void>;
+    inFlight(): Promise<void> | null;
+    lastReport(): PrStateScanReport;
   };
 }
 
@@ -230,6 +245,9 @@ export class InventoryScanner implements Tickable<ScanReport> {
       }));
       void this.deps.threads.run(candidates).catch(() => undefined);
     }
+    if (this.deps.prStates !== undefined && this.deps.prStates.inFlight() === null) {
+      void this.deps.prStates.run(unknownPrsOf(sessions, entries)).catch(() => undefined);
+    }
     return report;
   }
 
@@ -237,5 +255,32 @@ export class InventoryScanner implements Tickable<ScanReport> {
   async stop(): Promise<void> {
     await this.deps.jira?.inFlight()?.catch(() => undefined);
     await this.deps.threads?.inFlight()?.catch(() => undefined);
+    await this.deps.prStates?.inFlight()?.catch(() => undefined);
   }
+}
+
+/**
+ * Every PR a session names that this scan's open-PR listing does not carry —
+ * merged, closed, or in a repo outside `config.repos`. TERMINAL sessions are
+ * deliberately included: a respond session that reconciliation just closed
+ * because its PR merged is exactly the session whose PR the panel still has
+ * to describe, and dropping it here would make the row go blank the moment
+ * the session ended.
+ */
+function unknownPrsOf(
+  sessions: readonly Session[],
+  entries: readonly InventoryEntry[],
+): PrStateCandidate[] {
+  const known = new Set(entries.map((e) => `${e.repo}#${e.number}`));
+  const out: PrStateCandidate[] = [];
+  const seen = new Set<string>();
+  for (const session of sessions) {
+    const pr = session.pr;
+    if (pr === null) continue;
+    const key = `${pr.repo}#${pr.number}`;
+    if (known.has(key) || seen.has(key)) continue;
+    seen.add(key);
+    out.push({ repo: pr.repo, number: pr.number });
+  }
+  return out;
 }

@@ -5,6 +5,7 @@ import type { JiraScanReport, TicketSourceKind } from '../jira/jira-store';
 import { dismissalFor, type DismissStore } from '../attention/dismiss-store';
 import { groupWorkItems, workListsOf, type WorkItem, type WorkLists } from './work-item';
 import type { WorkItemId } from './work-item-id';
+import type { PrStateCache } from '../gh/pr-state';
 
 export interface WorkItemServiceDeps {
   /**
@@ -19,6 +20,8 @@ export interface WorkItemServiceDeps {
   jira: { lastReport(): Promise<JiraScanReport> };
   /** R52 — filled in by the review-thread leg; `{ error: null }` until it has run. */
   threads?: { lastReport(): { scannedAt: string | null; error: string | null; fetched: number } };
+  /** The pr-state leg's cache — what a PR that left the open-PR inventory actually became. One tick behind by construction (R34). */
+  prStates?: { cached(): Promise<PrStateCache> };
   /** Per-item "not interesting now", shared by every window (`<stateDir>/dismissals.json`). */
   dismissals: DismissStore;
   events: EngineEvents;
@@ -69,7 +72,9 @@ function deltaFieldsOf(item: WorkItem): Record<string, string> {
     agents: JSON.stringify(
       item.agents.map((a) => [a.sessionId, a.mode, a.phase, a.running, a.needsYou, a.claimed]),
     ),
-    prs: JSON.stringify(item.prs.map((p) => [p.repo, p.number, p.updatedAt, p.reviewDecision, p.ci, p.isDraft])),
+    prs: JSON.stringify(
+      item.prs.map((p) => [p.repo, p.number, p.updatedAt, p.reviewDecision, p.ci, p.isDraft, p.state]),
+    ),
     ticket: JSON.stringify(item.ticket === null ? null : [item.ticket.key, item.ticket.status, item.ticket.updatedAt]),
     dismissed: String(item.dismissed),
   };
@@ -83,12 +88,13 @@ export class WorkItemService {
   constructor(private readonly deps: WorkItemServiceDeps) {}
 
   async list(): Promise<WorkItemListing> {
-    const [attention, inventory, jira] = await Promise.all([
+    const [attention, inventory, jira, prStates] = await Promise.all([
       // R27: the PRE-dedupe list, so a work item can see whether the PR is a
       // draft, who requested review, and whether a human has reviewed it.
       this.deps.attention.list({ all: true, dedupe: false }),
       this.deps.inventory.load().catch(() => null),
       this.deps.jira.lastReport(),
+      this.deps.prStates?.cached().catch(() => ({})) ?? Promise.resolve({}),
     ]);
     const items = groupWorkItems({
       items: attention.items,
@@ -98,6 +104,7 @@ export class WorkItemService {
       watchAuthors: this.deps.config.watchAuthors,
       showAllRepoPrs: this.deps.config.showAllRepoPrs,
       projectKeys: this.deps.config.projectKeys,
+      prStates,
       ...(this.deps.config.botLogins !== undefined ? { botLogins: this.deps.config.botLogins } : {}),
       ...(this.deps.config.jiraSiteUrl !== undefined ? { jiraSiteUrl: this.deps.config.jiraSiteUrl } : {}),
     });

@@ -3,8 +3,15 @@ import { PR_VIEW_FIELDS, mapPrView, parsePrView } from '../gh/pr-view';
 import type { SessionStore } from '../engine/session-store';
 import type { EngineEvents } from '../engine/events';
 import type { PipelineService } from '../pipeline/pipeline-service';
-import type { ReviewSession, Session } from '../schema/session';
-import { canTransition, type DevelopmentPhase, type ReviewPhase } from '../schema/pipeline';
+import type { InvestigationSession, RespondSession, ReviewSession, Session } from '../schema/session';
+import type { SessionMode } from '../schema/session-mode';
+import {
+  canTransition,
+  type DevelopmentPhase,
+  type InvestigationPhase,
+  type RespondPhase,
+  type ReviewPhase,
+} from '../schema/pipeline';
 import { TERMINAL_PHASES_BY_MODE } from '../workspace/workspace-in-use';
 import { awaitRunStart } from '../pipeline/run-start';
 import { HumanTurnInProgressError, isClaimed } from '../pipeline/pipeline-service';
@@ -45,16 +52,23 @@ const MERGE_ELIGIBLE_DEVELOPMENT_PHASES: readonly DevelopmentPhase[] = ['active'
 /** One string for both claim-skip sites (planning and the apply loop), so the two cannot drift. */
 const CLAIMED_SKIP_REASON = 'conversation claimed by a human turn';
 
-function canApplyTransition(mode: 'review' | 'development', from: string, to: string): boolean {
-  return mode === 'review'
-    ? canTransition('review', from as ReviewPhase, to as ReviewPhase)
-    : canTransition('development', from as DevelopmentPhase, to as DevelopmentPhase);
+function canApplyTransition(mode: SessionMode, from: string, to: string): boolean {
+  switch (mode) {
+    case 'review':
+      return canTransition('review', from as ReviewPhase, to as ReviewPhase);
+    case 'development':
+      return canTransition('development', from as DevelopmentPhase, to as DevelopmentPhase);
+    case 'respond':
+      return canTransition('respond', from as RespondPhase, to as RespondPhase);
+    case 'investigation':
+      return canTransition('investigation', from as InvestigationPhase, to as InvestigationPhase);
+  }
 }
 
 function proposeTransition(
   actions: ReconcileAction[],
   skipped: SkippedTransition[],
-  mode: 'review' | 'development',
+  mode: SessionMode,
   sessionId: string,
   from: string,
   to: string,
@@ -119,6 +133,56 @@ export function planReconciliation(input: PlanReconciliationInput): PlanReconcil
     }
   }
 
+  return { actions, skipped };
+}
+
+/** A session that owns a PR without being a review of it: `respond` and `investigation` (R51). */
+export type PrBearingSession = RespondSession | InvestigationSession;
+
+export interface PlanPrSessionReconciliationInput {
+  session: PrBearingSession;
+  view: ReturnType<typeof mapPrView>;
+}
+
+/**
+ * The other half of "merging ended this".
+ *
+ * `planReconciliation` only ever sees a session that is a REVIEW or the
+ * review's lineage parent. A `respond` session is neither: it is created
+ * standalone (`parentSessionId: null`), so when its PR merged nothing in
+ * this module ever looked at it, and the stale session kept the whole work
+ * item reading as live work — the live case
+ * `respond-grace-2180-20260911-040030`, still at `addressing` on a PR merged
+ * three days earlier.
+ *
+ * An `investigation` is deliberately LEFT ALONE and reported as skipped: an
+ * investigation is a question, and a merge answers the change, not the
+ * question. Its two terminal phases both mean something else
+ * (`promoted_to_development` is a lineage act; `abandoned` says the question
+ * was dropped), so ending it on a merge would be inventing a verdict.
+ */
+export function planPrSessionReconciliation(
+  input: PlanPrSessionReconciliationInput,
+): PlanReconciliationResult {
+  const { session, view } = input;
+  const actions: ReconcileAction[] = [];
+  const skipped: SkippedTransition[] = [];
+  if (view.state !== 'MERGED' && view.state !== 'CLOSED') return { actions, skipped };
+
+  const reason = view.state === 'MERGED' ? 'PR merged' : 'PR closed without merging';
+  if (session.mode === 'investigation') {
+    skipped.push({
+      sessionId: session.id,
+      to: 'none',
+      why: `${reason}, but an investigation is not ended by its PR — left at '${session.stageStatus}'`,
+    });
+    return { actions, skipped };
+  }
+  // R51's own terminals: a merge CLOSES the respond session (every comment it
+  // was answering went in with the merge); a close without a merge abandons
+  // it, exactly as it does the development session that opened the PR.
+  const to = view.state === 'MERGED' ? 'closed' : 'abandoned';
+  proposeTransition(actions, skipped, 'respond', session.id, session.stageStatus, to, reason);
   return { actions, skipped };
 }
 
@@ -247,6 +311,60 @@ export class ReconciliationTick {
       }
     }
 
+    await this.runPrBearingSessions(sessions, report);
     return report;
+  }
+
+  /**
+   * The `respond`/`investigation` leg, on the review loop's discipline
+   * exactly: one `gh pr view` per non-terminal PR-bearing session, planned
+   * under the per-session lock against freshly loaded state, applied
+   * unlocked through `PipelineService` (which takes the same lock itself —
+   * KeyedLock is not re-entrant).
+   */
+  private async runPrBearingSessions(sessions: readonly Session[], report: TickReport): Promise<void> {
+    const candidates = sessions.filter(
+      (s): s is PrBearingSession =>
+        (s.mode === 'respond' || s.mode === 'investigation') &&
+        !TERMINAL_PHASES_BY_MODE[s.mode].has(s.stageStatus) &&
+        s.pr !== null,
+    );
+
+    for (const candidate of candidates) {
+      try {
+        const planned = await this.deps.lock.withLock(candidate.id, async () => {
+          const fresh = await this.deps.store.load(candidate.id);
+          if (
+            (fresh.mode !== 'respond' && fresh.mode !== 'investigation') ||
+            TERMINAL_PHASES_BY_MODE[fresh.mode].has(fresh.stageStatus) ||
+            fresh.pr === null
+          ) {
+            return null;
+          }
+          const pr = fresh.pr;
+          const { stdout } = await this.deps.gh.run([
+            'pr', 'view', String(pr.number), '--repo', pr.repo, '--json', PR_VIEW_FIELDS,
+          ]);
+          const view = mapPrView(pr.repo, parsePrView(stdout));
+          return { mode: fresh.mode, ...planPrSessionReconciliation({ session: fresh, view }) };
+        });
+        if (planned === null) continue;
+        report.actions.push(...planned.actions);
+        report.skipped.push(...planned.skipped);
+        report.reconciled += 1;
+
+        for (const action of planned.actions) {
+          if (action.type !== 'transition') continue;
+          if (TERMINAL_PHASES_BY_MODE[planned.mode].has(action.to)) {
+            // Same reason as above: never leave an agent running against a
+            // session whose worktree is about to be reclaimable.
+            await this.deps.pipeline.stop(action.sessionId);
+          }
+          await this.deps.pipeline.transition(action.sessionId, action.to);
+        }
+      } catch (err) {
+        report.errors.push({ where: candidate.id, error: errorMessage(err) });
+      }
+    }
   }
 }
