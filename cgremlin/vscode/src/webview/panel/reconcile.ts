@@ -50,10 +50,6 @@ export function setTabStop(node: HTMLElement, focused: boolean): void {
   if (node.tabIndex !== value) node.tabIndex = value;
 }
 
-export function setTitle(node: HTMLElement, title: string): void {
-  if (node.title !== title) node.title = title;
-}
-
 /**
  * §2.2 rule 1: `hidden`, never `display`. A block that enters the flow when it appears
  * changes the row's height, which is the layout shift P0-4 is about.

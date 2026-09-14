@@ -334,10 +334,13 @@ export type RowMetaKind =
 
 export interface RowMetaCell {
   kind: RowMetaKind;
-  /** Empty only for `ci`, which renders as a dot and says the rest in its title. */
+  /** Empty only for a passing CI, which is a green dot and needs no word (§3). */
   text: string;
-  /** The hover title — the full ISO date behind `12d`, the CI state behind the dot. */
-  title?: string;
+  /**
+   * The accessible name, for a cell whose text is not the whole story. **Never a tooltip**: the
+   * panel assigns no DOM `title` at all (§3), so this reaches the reader through `aria-label`.
+   */
+  label?: string;
   tone?: 'good' | 'warn' | 'bad';
 }
 
@@ -495,7 +498,7 @@ export function toRow(item: WorkItem, list: WorkListKind, now: number): WorkRow 
   const activity = humanActivitySummary(primary, now);
   const badges = item.agents.map(badgeOf);
   const chips = item.prs.map((pr) => `${pr.repo}#${pr.number}`);
-  const meta = metaOf(item, list, { age, size, tier, openedIso, activity });
+  const meta = metaOf(item, list, { age, size, tier, activity });
   const stateLine = list === 'myWork' ? stateLineOf(item) : [];
   // The `—` placeholders stay in the line: a row whose age and size took their R45 defaults
   // must say it has none, never imply a zero (MG-12).
@@ -684,26 +687,25 @@ export function humanActivitySummary(pr: WorkItemPr | undefined, now: number): s
 function metaOf(
   item: WorkItem,
   list: WorkListKind,
-  parts: { age: string; size: string; tier: string; openedIso: string | null; activity: string },
+  parts: { age: string; size: string; tier: string; activity: string },
 ): RowMetaCell[] {
   const primary = item.prs[0];
   const cells: RowMetaCell[] = [];
-  const openedTitle = parts.openedIso === null ? undefined : { title: parts.openedIso };
 
   if (list === 'investigations') {
     const agent = item.agents[0];
     if (agent !== undefined) {
       cells.push({ kind: 'agentPhase', text: `${MODE_GLYPH[agent.mode] ?? '•'} ${agent.phase}` });
     }
-    cells.push({ kind: 'age', text: parts.age, ...openedTitle });
+    cells.push({ kind: 'age', text: parts.age });
     return cells;
   }
 
   if (primary?.author !== null && primary?.author !== undefined) {
     cells.push({ kind: 'author', text: `@${primary.author}` });
   }
-  cells.push({ kind: 'age', text: parts.age, ...openedTitle });
-  cells.push({ kind: 'tier', text: parts.tier, title: parts.size === '—' ? undefined : parts.size });
+  cells.push({ kind: 'age', text: parts.age });
+  cells.push({ kind: 'tier', text: parts.tier });
   if (list !== 'waitingForReview') cells.push({ kind: 'size', text: parts.size });
 
   const ci = ciCell(primary?.ci ?? null);
@@ -720,18 +722,20 @@ function metaOf(
   return cells;
 }
 
-const CI_TONE: Record<CiStatus, 'good' | 'warn' | 'bad' | null> = {
-  success: 'good',
-  pending: 'warn',
-  failure: 'bad',
+const CI_CELLS: Record<CiStatus, RowMetaCell | null> = {
+  // A green dot needs no word; a red one does (§3). The dot alone was hover-only, which is the
+  // defect: the one build state worth acting on was the one the user could not see.
+  success: { kind: 'ci', text: '', tone: 'good', label: 'CI passing' },
+  pending: { kind: 'ci', text: 'CI pending', tone: 'warn', label: 'CI pending' },
+  failure: { kind: 'ci', text: 'CI failing', tone: 'bad', label: 'CI failing' },
   none: null,
 };
 
-/** §2.2 rule 9: a dot with a title, not an emoji — emoji size inconsistently in the sidebar. */
+/** §2.2 rule 9 amended by §3: a dot for green, words for everything the user must act on. */
 export function ciCell(ci: CiStatus | null): RowMetaCell | null {
   if (ci === null) return null;
-  const tone = CI_TONE[ci];
-  return tone === null ? null : { kind: 'ci', text: '', title: `CI: ${ci}`, tone };
+  const cell = CI_CELLS[ci] ?? null;
+  return cell === null ? null : { ...cell };
 }
 
 const REVIEW_TEXT: Record<string, string> = {

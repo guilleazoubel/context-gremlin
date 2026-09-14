@@ -13,7 +13,6 @@ import {
   setHidden,
   setTabStop,
   setText,
-  setTitle,
 } from '../../src/webview/panel/reconcile';
 import { FakeDocument, type FakeElement } from '../support/fake-dom';
 
@@ -49,12 +48,11 @@ describe('the setters refuse a write that changes nothing', () => {
       setClass(parent as unknown as HTMLElement, 'row needs-you');
       setAttr(parent as unknown as HTMLElement, 'aria-level', '1');
       setTabStop(parent as unknown as HTMLElement, true);
-      setTitle(parent as unknown as HTMLElement, '2026-09-01T00:00:00Z');
       setHidden(parent as unknown as HTMLElement, true);
     }
-    expect(doc.log.map((m) => m.kind)).toEqual(['text', 'class', 'attr', 'prop', 'prop', 'prop']);
-    // Six writes, not twelve: the second pass through the loop assigned nothing at all.
-    expect(doc.writes).toHaveLength(6);
+    expect(doc.log.map((m) => m.kind)).toEqual(['text', 'class', 'attr', 'prop', 'prop']);
+    // Five writes, not ten: the second pass through the loop assigned nothing at all.
+    expect(doc.writes).toHaveLength(5);
   });
 
   it('removes an attribute only when it is there', () => {

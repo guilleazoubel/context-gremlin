@@ -35,10 +35,10 @@ function rowView(over: Partial<PanelRowView> = {}): PanelRowView {
     ci: '',
     meta: [
       { kind: 'author', text: '@jdoe' },
-      { kind: 'age', text: '12d', title: '2026-08-30T09:00:00.000Z' },
+      { kind: 'age', text: '12d' },
       { kind: 'tier', text: 'M' },
       { kind: 'size', text: '8 files +240/−31' },
-      { kind: 'ci', text: '', title: 'CI: success', tone: 'good' },
+      { kind: 'ci', text: '', tone: 'good', label: 'CI passing' },
     ],
     stateLine: [],
     tier: 'M',
@@ -93,10 +93,10 @@ describe('what the row says without being hovered', () => {
       'cell cell-size',
       'cell cell-ci tone-good',
     ]);
-    // The CI cell is a dot: it says its state in the title, because a coloured dot alone is not
-    // an accessible signal (§2.2 rule 9).
-    expect(cells[4].title).toBe('CI: success');
-    expect(cells[1].title).toBe('2026-08-30T09:00:00.000Z');
+    // The CI cell is a dot: it says its state in an aria-label, because a coloured dot alone is
+    // not an accessible signal — and because a tooltip is not a way of saying anything (§3).
+    expect(cells[4].getAttribute('aria-label')).toBe('CI passing');
+    expect(cells[1].getAttribute('aria-label')).toBeNull();
   });
 
   it('renders no buttons at all — a collapsed row is purely informational', () => {
@@ -133,7 +133,7 @@ describe('what a patch does to a row that is already on screen', () => {
   it('writes only the cell that changed', () => {
     const node = build();
     const meta = rowView().meta;
-    meta[1] = { kind: 'age', text: '13d', title: '2026-08-30T09:00:00.000Z' };
+    meta[1] = { kind: 'age', text: '13d' };
     patchRow(node as unknown as HTMLElement, rowView({ meta }), { focusedKey: null });
     expect(doc.log).toEqual([{ kind: 'text', tag: 'SPAN', key: 'cell cell-age', detail: '13d' }]);
   });

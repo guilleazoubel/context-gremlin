@@ -123,7 +123,7 @@ describe('P0-3 the parking-lot signals line', () => {
     expect(texts(row.meta).slice(0, 4)).toEqual(['@jane', '12d', 'M', '7 files +120/−30']);
     const ci = row.meta.find((c) => c.kind === 'ci');
     expect(ci?.tone).toBe('good');
-    expect(ci?.title).toContain('success');
+    expect(ci?.label).toBe('CI passing');
     expect(row.meta.find((c) => c.kind === 'review')?.text).toBe('review required');
   });
 
