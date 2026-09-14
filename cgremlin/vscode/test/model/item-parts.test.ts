@@ -69,6 +69,16 @@ describe('§4 — which parts a row has', () => {
     expect(parts.map((part) => part.kind)).toEqual(['review', 'pr']);
   });
 
+  it('gives a PR of mine a Review part exactly where Address review comments is offered', () => {
+    const parts = partsOf('ticket:HB-627', 'waitingForReview');
+    const review = parts.find((part) => part.kind === 'review');
+    expect(review?.actions.map((action) => action.label)).toEqual(['Address review comments']);
+    // …and no Review part at all where the list offers nothing to do with one: #200 already has
+    // a respond agent triaging, so there is no second respond run to start.
+    expect(partsOf('pr:acme/web#200', 'waitingForReview').find((p) => p.kind === 'review')?.actions)
+      .toEqual([]);
+  });
+
   it('gives an investigation no Review part — there is no PR to review', () => {
     const parts = partsOf('session:inv-stacktrace-1', 'investigations');
     expect(parts.map((part) => part.kind)).toEqual(['investigation', 'development']);

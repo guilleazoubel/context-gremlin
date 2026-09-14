@@ -476,7 +476,7 @@ describe('R66/R54 the panel is an accessible tree, and the keys are the tree mod
     // rendered under each of them — and §4 gives it a different set in each, because the two
     // lists ask different questions of the same item.
     const children = seen.filter((n) => n.kind === 'child');
-    expect(children.length).toBe(10);
+    expect(children.length).toBe(11);
     expect(children.every((n) => n.level === 2)).toBe(true);
   });
 

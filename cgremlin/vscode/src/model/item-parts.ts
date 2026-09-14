@@ -70,7 +70,9 @@ export function itemParts(input: ItemPartsInput): ItemPart[] {
   const parts: ItemPart[] = [];
 
   for (const slot of input.slots) {
-    if (!showsStage(slot.stage, item, list, allowed, slot.sessionId !== null)) continue;
+    if (!showsStage(slot.stage, item, list, allowed, slot.sessionId !== null, input.actions)) {
+      continue;
+    }
     parts.push(stagePart(slot, input));
   }
 
@@ -116,6 +118,7 @@ function showsStage(
   list: WorkListKind,
   allowed: ReadonlySet<StageKind>,
   ran: boolean,
+  actions: readonly RowAction[],
 ): boolean {
   const mine = list === 'myWork' || list === 'investigations';
   if (stage === 'investigation') {
@@ -132,7 +135,15 @@ function showsStage(
   }
   if (list === 'parkingLot') return true;
   if (list === 'investigations') return false;
-  if (list === 'waitingForReview') return ran || item.agents.some((a) => a.mode === 'respond');
+  if (list === 'waitingForReview') {
+    // My PR, out with reviewers: the Review part is where "answer the review" lives, so it is
+    // drawn exactly where that verb — or the agent that already answered — exists (§4).
+    return (
+      ran ||
+      item.agents.some((a) => a.mode === 'respond') ||
+      actions.some((action) => action.command === 'cgremlin.addressReview')
+    );
+  }
   return ran || allowed.has('review');
 }
 
@@ -152,6 +163,10 @@ function stagePart(slot: LifecycleSlot, input: ItemPartsInput): ItemPart {
   // refuses is exactly the engine error P0-2 is about.
   if (slot.next) {
     actions.push(...find(input.actions, START_COMMAND[slot.stage], undefined, null));
+  }
+  // The one verb that is not a Start and not a Chat: answering a review that has landed (§4).
+  if (slot.stage === 'review' && input.list === 'waitingForReview') {
+    actions.push(...find(input.actions, 'cgremlin.addressReview', undefined, null));
   }
   return {
     key: slot.stage,
