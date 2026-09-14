@@ -115,7 +115,7 @@ describe('what the row says without being hovered', () => {
 
   it('marks needs-you, demoted and selected as classes, not as extra content', () => {
     const node = build({ needsYou: true, demoted: true, selected: true });
-    expect(node.className).toBe('row needs-you demoted selected');
+    expect(node.className).toBe('row section-parkingLot needs-you demoted selected');
     expect(node.getAttribute('aria-selected')).toBe('true');
   });
 });

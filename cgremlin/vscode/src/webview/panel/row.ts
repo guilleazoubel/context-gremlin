@@ -54,7 +54,9 @@ export function patchRow(node: HTMLElement, row: PanelRowView, context: RowConte
   node.dataset.id = row.id;
   node.dataset.list = row.list;
   const key = rowKey(row);
-  const classes = ['row'];
+  // The list is a CLASS rather than a data attribute, because it is what the accent selects on
+  // and every other row state is a class too.
+  const classes = ['row', `section-${row.list}`];
   if (row.needsYou) classes.push('needs-you');
   if (row.demoted) classes.push('demoted');
   if (row.selected) classes.push('selected');

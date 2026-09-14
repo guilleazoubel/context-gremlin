@@ -25,6 +25,54 @@ body {
 :root {
   --cg-divider: color-mix(in srgb, var(--vscode-panel-border) 40%, transparent);
   --cg-accent: var(--vscode-notificationsWarningIcon-foreground);
+
+  /*
+   * One colour per list. They are the editor's own chart tokens, so every theme — light, dark,
+   * high contrast — supplies its own four, and nothing here is a hex code. They say WHICH list a
+   * row belongs to and nothing else; the panel still has exactly one accent that means "this
+   * needs you", and it is `--cg-accent` on a different surface (see `.row.needs-you`).
+   */
+  --cg-section-parkingLot: var(--vscode-charts-purple);
+  --cg-section-myWork: var(--vscode-charts-blue);
+  --cg-section-investigations: var(--vscode-charts-orange);
+  --cg-section-waitingForReview: var(--vscode-charts-green);
+}
+
+.list-header[data-section='parkingLot'] .list-glyph,
+.list-header[data-section='parkingLot'] .list-title {
+  color: var(--cg-section-parkingLot);
+}
+
+.list-header[data-section='myWork'] .list-glyph,
+.list-header[data-section='myWork'] .list-title {
+  color: var(--cg-section-myWork);
+}
+
+.list-header[data-section='investigations'] .list-glyph,
+.list-header[data-section='investigations'] .list-title {
+  color: var(--cg-section-investigations);
+}
+
+.list-header[data-section='waitingForReview'] .list-glyph,
+.list-header[data-section='waitingForReview'] .list-title {
+  color: var(--cg-section-waitingForReview);
+}
+
+/* The same colour as a hairline down the rows, so a row read alone still says which list it is. */
+.row.section-parkingLot {
+  border-left-color: var(--cg-section-parkingLot);
+}
+
+.row.section-myWork {
+  border-left-color: var(--cg-section-myWork);
+}
+
+.row.section-investigations {
+  border-left-color: var(--cg-section-investigations);
+}
+
+.row.section-waitingForReview {
+  border-left-color: var(--cg-section-waitingForReview);
 }
 
 /* --- the needs-you strip (P3) ------------------------------------------ */
@@ -255,6 +303,9 @@ body {
 .row {
   display: block;
   padding: 8px 10px;
+  /* Reserved on every row, coloured per list: a border that appeared with the accent would move
+   * the text sideways between one list and the next. */
+  border-left: 2px solid transparent;
   border-bottom: 1px solid var(--cg-divider);
   cursor: pointer;
 }
@@ -272,13 +323,18 @@ body {
   opacity: 0.65;
 }
 
-/* §2.2 rule 10: one accent, as a 2 px bar that takes no space. */
+/*
+ * §2.2 rule 10: one accent, as a 2 px bar that takes no space. It is drawn INSIDE the border box,
+ * so it sits beside the section's hairline rather than replacing it — a needs-you row in the
+ * parking lot says both things at once, and neither is mistaken for the other.
+ */
 .row.needs-you {
   box-shadow: inset 2px 0 0 var(--cg-accent);
 }
 
+/* Every title is already 600 (see `.row-label`), so needs-you goes one step further. */
 .row.needs-you .row-label {
-  font-weight: 600;
+  font-weight: 700;
 }
 
 .row-main {
@@ -293,11 +349,16 @@ body {
   margin-top: 8px;
 }
 
+/*
+ * The title is the line being scanned, so it is set a notch above the editor's own size and at
+ * 600 — and the signals under it stay at 11 px and muted. That gap is the hierarchy; without it
+ * three lines of the same weight make the user read all three to find the one he wanted.
+ */
 .row-title {
   display: flex;
   align-items: baseline;
   gap: 6px;
-  font-size: 13px;
+  font-size: calc(var(--vscode-font-size, 13px) * 1.08);
   line-height: 1.35;
 }
 
@@ -310,6 +371,7 @@ body {
 
 .row-label {
   flex: 1 1 auto;
+  font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

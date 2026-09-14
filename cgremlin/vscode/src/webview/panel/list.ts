@@ -51,6 +51,9 @@ export function createList(list: PanelListView, context: ListContext): HTMLEleme
   node.dataset.kind = list.kind;
 
   const header = el('div', 'list-header');
+  // Which list this is, said on the node the stylesheet colours. The four lists look alike from
+  // two feet away, and two feet away is where the sidebar is read.
+  header.dataset.section = list.kind;
   const toggle = button({
     className: 'list-toggle',
     label: '',

@@ -174,3 +174,38 @@ describe('P0-4 the tree roles survive reconciliation (R66)', () => {
     ]);
   });
 });
+
+/**
+ * Four lists in one 300 px column look alike from two feet away, and the user reads them from two
+ * feet away. So each one carries a colour of its own — on its header's glyph and title, and as a
+ * thin line down the left edge of its rows — and the row's title is set a notch larger and bolder
+ * than the signals under it, because the title is the thing being scanned.
+ */
+describe('the section accents', () => {
+  it('names the section on every list header, so the stylesheet can colour it', () => {
+    panel.render(stateOf());
+    const headers = dom.root.byClass('list-header');
+    expect(headers.map((node) => node.dataset.section)).toEqual([
+      'parkingLot',
+      'myWork',
+      'investigations',
+      'waitingForReview',
+    ]);
+  });
+
+  it('names it on every row too, as a class, so the accent reaches the row edge', () => {
+    panel.render(stateOf());
+    const row = rowNodes().find((n) => n.dataset.key === 'row:parkingLot:pr:acme/web#101');
+    expect(row?.className.split(' ')).toContain('section-parkingLot');
+    for (const node of rowNodes()) {
+      const section = (node.dataset.key ?? '').split(':')[1];
+      expect(node.className.split(' ')).toContain(`section-${section}`);
+    }
+  });
+
+  it('keeps the section class out of the way of the state classes', () => {
+    panel.render(stateOf({ selected: 'pr:acme/web#102' }));
+    const row = rowNodes().find((n) => n.dataset.key === 'row:parkingLot:pr:acme/web#102');
+    expect(row?.className).toBe('row section-parkingLot needs-you selected');
+  });
+});

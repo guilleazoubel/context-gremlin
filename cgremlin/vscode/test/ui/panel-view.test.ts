@@ -690,3 +690,52 @@ describe('R48 the children are clickable, with two actions', () => {
     expect(h.children).toEqual([['ticket:HB-627', 'pr:acme/web#310']]);
   });
 });
+
+/**
+ * The accents, as a golden list of the theme tokens they are built from.
+ *
+ * The point is the TOKEN NAMES: a typo in `--vscode-charts-purpel` is a colour that silently
+ * resolves to nothing, which is exactly the bug a stylesheet cannot report. So they are written
+ * down once here, and the four `--cg-section-*` properties are read back out of the file.
+ */
+describe('the per-section accents', () => {
+  const css = fs.readFileSync(path.join(root, 'media/panel.css'), 'utf8');
+
+  const ACCENTS: Record<string, string> = {
+    parkingLot: '--vscode-charts-purple',
+    myWork: '--vscode-charts-blue',
+    investigations: '--vscode-charts-orange',
+    waitingForReview: '--vscode-charts-green',
+  };
+
+  it('defines one custom property per list, from the token it is meant to be', () => {
+    const found: Record<string, string> = {};
+    for (const [, list, token] of css.matchAll(
+      /--cg-section-(\w+):\s*var\((--vscode-[\w-]+)\)/g,
+    )) {
+      found[list] = token;
+    }
+    expect(found).toEqual(ACCENTS);
+  });
+
+  it('spends each one on that list’s header and on its rows’ left edge', () => {
+    for (const list of Object.keys(ACCENTS)) {
+      expect(css).toContain(`.list-header[data-section='${list}']`);
+      expect(css).toContain(`.row.section-${list}`);
+      expect(css).toContain(`var(--cg-section-${list})`);
+    }
+  });
+
+  it('keeps needs-you on a surface of its own, so the two accents never read as one', () => {
+    // The section line is the row's BORDER; needs-you is an inset bar drawn inside it, in the one
+    // accent the panel has. Different boxes, so a needs-you row in the parking lot says both.
+    expect(css).toMatch(/\.row\s*\{[^}]*border-left:\s*2px solid transparent/);
+    expect(css).toMatch(/\.row\.needs-you\s*\{[^}]*box-shadow:\s*inset 2px 0 0 var\(--cg-accent\)/);
+  });
+
+  it('sets the title a notch above the editor size and the signals below it', () => {
+    expect(css).toMatch(/\.row-title\s*\{[^}]*font-size:\s*calc\(var\(--vscode-font-size[^)]*\)[^}]*\}/);
+    expect(css).toMatch(/\.row-label\s*\{[^}]*font-weight:\s*600/);
+    expect(css).toMatch(/\.row-meta,\n\.row-state\s*\{[^}]*font-size:\s*11px/);
+  });
+});
