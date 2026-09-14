@@ -146,8 +146,6 @@ export interface ItemsResponse {
   /** The ids of the dismissed items, newest dismissal first — not in `lists`, but still in `items`. */
   dismissed: WorkItemId[];
   items: WorkItem[];
-  /** Item 2: the dismissed ids, newest first. Absent on an engine that predates the contract. */
-  dismissed: WorkItemId[];
   ticketSource: TicketSource;
   threadSource: ThreadSource;
 }
