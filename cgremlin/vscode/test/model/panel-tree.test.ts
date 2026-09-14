@@ -8,7 +8,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { freezeOrder, paintedOrderOf } from '../../src/model/panel-tree';
-import type { PanelListView, PanelRowView, PanelState } from '../../src/model/panel-protocol';
+import type { PanelRowView, PanelSectionView, PanelState } from '../../src/model/panel-protocol';
 import type { ParkingLotGroup, WorkListKind } from '../../src/model/work-items';
 
 /** Only the id and the label matter to ordering, so the rest of the row view is not invented. */
@@ -20,11 +20,18 @@ function stateOf(
   sections: { group: ParkingLotGroup | null; rows: PanelRowView[] }[],
   kind: WorkListKind = 'parkingLot',
 ): PanelState {
-  const list = {
-    kind,
-    sections: sections.map((section) => ({ ...section, count: section.rows.length })),
-  } as unknown as PanelListView;
-  return { lists: [list], needsYou: [], banner: null, trouble: null, notice: null, connected: true };
+  const views = sections.map(
+    (section) =>
+      ({
+        key: section.group === null ? kind : `${kind}:${section.group}`,
+        list: kind,
+        group: section.group,
+        count: section.rows.length,
+        collapsed: false,
+        rows: section.rows,
+      }) as unknown as PanelSectionView,
+  );
+  return { sections: views, needsYou: [], banner: null, trouble: null, notice: null, connected: true };
 }
 
 describe('freezing the painted order (§2.2 rule 4)', () => {
@@ -51,7 +58,7 @@ describe('freezing the painted order (§2.2 rule 4)', () => {
       { group: 'untouched', rows: [row('b', 'b reviewing'), row('a', 'a reviewing')] },
     ]);
     const frozen = freezeOrder(next, painted);
-    expect(frozen.lists[0].sections[0].rows.map((r) => r.label)).toEqual([
+    expect(frozen.sections[0].rows.map((r) => r.label)).toEqual([
       'a reviewing',
       'b reviewing',
     ]);
@@ -71,20 +78,20 @@ describe('freezing the painted order (§2.2 rule 4)', () => {
       { group: 'untouched', rows: [row('a')] },
       { group: 'reviewing', rows: [row('z'), row('y')] },
     ]);
-    expect(freezeOrder(next, painted).lists[0].sections[1].rows.map((r) => r.id)).toEqual([
+    expect(freezeOrder(next, painted).sections[1].rows.map((r) => r.id)).toEqual([
       'z',
       'y',
     ]);
   });
 
-  it('keys a groupless list apart from the parking lot, so the two never freeze each other', () => {
+  it('keys a groupless section apart from the parking lot, so the two never freeze each other', () => {
     const painted = paintedOrderOf(stateOf([{ group: null, rows: [row('a'), row('b')] }], 'myWork'));
-    expect([...painted.keys()]).toEqual(['myWork:']);
+    expect([...painted.keys()]).toEqual(['myWork']);
     const next = stateOf([{ group: null, rows: [row('b'), row('a')] }], 'parkingLot');
     expect(frozenIds(freezeOrder(next, painted))).toEqual(['b', 'a']);
   });
 });
 
 function frozenIds(state: PanelState): string[] {
-  return state.lists[0].sections[0].rows.map((r) => r.id);
+  return state.sections[0].rows.map((r) => r.id);
 }

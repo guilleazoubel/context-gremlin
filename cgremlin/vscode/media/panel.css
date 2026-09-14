@@ -27,52 +27,47 @@ body {
   --cg-accent: var(--vscode-notificationsWarningIcon-foreground);
 
   /*
-   * One colour per list. They are the editor's own chart tokens, so every theme — light, dark,
-   * high contrast — supplies its own four, and nothing here is a hex code. They say WHICH list a
-   * row belongs to and nothing else; the panel still has exactly one accent that means "this
-   * needs you", and it is `--cg-accent` on a different surface (see `.row.needs-you`).
+   * §5 — one colour per SECTION, six of them, and they are the editor's own chart tokens so every
+   * theme supplies its own. `--vscode-charts-red` is deliberately absent: it is reserved for a
+   * failing build, and a section that borrowed it would read as an alarm. Every token falls back
+   * twice, because a theme that defines no chart colours must still draw a rule.
    */
-  --cg-section-parkingLot: var(--vscode-charts-purple);
-  --cg-section-myWork: var(--vscode-charts-blue);
-  --cg-section-investigations: var(--vscode-charts-orange);
-  --cg-section-waitingForReview: var(--vscode-charts-green);
+  --cg-chart-fallback: var(--vscode-charts-foreground, var(--vscode-descriptionForeground));
+  --cg-sec-parkingLot-untouched: var(--vscode-charts-blue, var(--cg-chart-fallback));
+  --cg-sec-parkingLot-reviewing: var(--vscode-charts-purple, var(--cg-chart-fallback));
+  --cg-sec-parkingLot-someoneOnIt: var(--cg-chart-fallback);
+  --cg-sec-myWork: var(--vscode-charts-green, var(--cg-chart-fallback));
+  --cg-sec-investigations: var(--vscode-charts-orange, var(--cg-chart-fallback));
+  --cg-sec-waitingForReview: var(--vscode-charts-yellow, var(--cg-chart-fallback));
 }
 
-.list-header[data-section='parkingLot'] .list-glyph,
-.list-header[data-section='parkingLot'] .list-title {
-  color: var(--cg-section-parkingLot);
+/*
+ * Each section names its own colour once, as a local custom property, and every part that carries
+ * it — the header's rule and glyph, the count badge, the rule down each row — reads `--cg-section`
+ * rather than repeating the token six times over.
+ */
+.sec-parkingLot-untouched {
+  --cg-section: var(--cg-sec-parkingLot-untouched);
 }
 
-.list-header[data-section='myWork'] .list-glyph,
-.list-header[data-section='myWork'] .list-title {
-  color: var(--cg-section-myWork);
+.sec-parkingLot-reviewing {
+  --cg-section: var(--cg-sec-parkingLot-reviewing);
 }
 
-.list-header[data-section='investigations'] .list-glyph,
-.list-header[data-section='investigations'] .list-title {
-  color: var(--cg-section-investigations);
+.sec-parkingLot-someoneOnIt {
+  --cg-section: var(--cg-sec-parkingLot-someoneOnIt);
 }
 
-.list-header[data-section='waitingForReview'] .list-glyph,
-.list-header[data-section='waitingForReview'] .list-title {
-  color: var(--cg-section-waitingForReview);
+.sec-myWork {
+  --cg-section: var(--cg-sec-myWork);
 }
 
-/* The same colour as a hairline down the rows, so a row read alone still says which list it is. */
-.row.section-parkingLot {
-  border-left-color: var(--cg-section-parkingLot);
+.sec-investigations {
+  --cg-section: var(--cg-sec-investigations);
 }
 
-.row.section-myWork {
-  border-left-color: var(--cg-section-myWork);
-}
-
-.row.section-investigations {
-  border-left-color: var(--cg-section-investigations);
-}
-
-.row.section-waitingForReview {
-  border-left-color: var(--cg-section-waitingForReview);
+.sec-waitingForReview {
+  --cg-section: var(--cg-sec-waitingForReview);
 }
 
 /* --- the needs-you strip (P3) ------------------------------------------ */
@@ -176,55 +171,54 @@ body {
   font-size: 11px;
 }
 
-/* --- the two header levels (P2) ---------------------------------------- */
+/* --- the one header level (§5) ------------------------------------------ */
 
 /*
- * Four lists in a 300 px sidebar need a rhythm, not a ruler. Both header levels are disclosures,
- * and they are told apart by WEIGHT and GROUND rather than by size: the list header sits on the
- * editor's own section-header ground at 600, the group header is bare at 400. Both stick, the
- * list above the group, so scrolling the parking lot never loses which list you are in.
- *
- * The chevron and the list glyph share the 14 px column the row's twisty occupies, so every line
- * in the panel — header, group, row — starts on the same vertical.
+ * Six sections in a 300 px sidebar need a rhythm, and §5 gives them one: a single sticky header
+ * level, sentence case, set well above the row text so the eye can skip a whole section without
+ * reading it. The header TEXT stays on the editor's own section-header colour — yellow and green
+ * titles fail contrast on a light theme — and the section's colour goes on the 3 px rule, the
+ * glyph and the count badge instead.
  */
 
-.list + .list {
-  margin-top: 12px;
+.section + .section {
+  margin-top: 16px;
 }
 
-.list-header {
+.section-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 6px;
   position: sticky;
   top: 0;
   z-index: 3;
-  padding: 0 6px 0 0;
+  padding-right: 6px;
   background: var(--vscode-sideBarSectionHeader-background, var(--vscode-sideBar-background));
-  border-top: 1px solid var(--vscode-sideBarSectionHeader-border, var(--cg-divider));
-  border-bottom: 1px solid var(--vscode-sideBarSectionHeader-border, var(--cg-divider));
 }
 
-.list-toggle {
+.section-header {
   display: flex;
   flex: 1 1 auto;
   align-items: center;
   gap: 6px;
-  min-height: 24px;
   min-width: 0;
-  padding: 5px 4px 5px 10px;
+  padding: 10px 4px 10px 10px;
   border: 0;
+  border-left: 3px solid var(--cg-section, transparent);
   background: transparent;
   color: var(--vscode-sideBarSectionHeader-foreground, var(--vscode-foreground));
   font-family: inherit;
-  font-size: 11px;
-  font-weight: 600;
+  font-size: calc(var(--vscode-font-size, 13px) * 1.15);
+  font-weight: 700;
   text-align: left;
   cursor: pointer;
 }
 
-.list-chevron,
+.section-header:hover {
+  background: var(--vscode-list-hoverBackground);
+}
+
 .section-chevron {
   flex: 0 0 auto;
   width: 1em;
@@ -233,29 +227,28 @@ body {
   font-weight: 400;
 }
 
-.list-glyph {
+.section-glyph {
   flex: 0 0 auto;
   width: 1em;
-  color: var(--vscode-descriptionForeground);
+  color: var(--cg-section, var(--vscode-descriptionForeground));
   font-size: 11px;
   text-align: center;
 }
 
-.list-title {
+.section-title {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 /* The count is the answer to "is there anything for me here", so it reads as a value. */
-.list-count,
 .section-count {
   flex: 0 0 auto;
   min-width: 16px;
   padding: 0 5px;
   border-radius: 8px;
-  background: var(--vscode-badge-background);
-  color: var(--vscode-badge-foreground);
+  background: color-mix(in srgb, var(--cg-section, transparent) 22%, transparent);
+  color: var(--vscode-foreground);
   font-size: 10px;
   font-weight: 400;
   font-variant-numeric: tabular-nums;
@@ -270,7 +263,7 @@ body {
 
 .sort {
   min-height: 24px;
-  padding: 4px 8px;
+  padding: 4px 6px;
   border: 1px solid transparent;
   border-radius: 3px;
   background: transparent;
@@ -285,41 +278,9 @@ body {
   border-color: var(--cg-divider);
 }
 
-.section + .section {
-  margin-top: 2px;
-}
-
-.section-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  position: sticky;
-  top: 27px;
-  z-index: 2;
-  padding: 5px 10px;
-  background: var(--vscode-sideBar-background);
-  color: var(--vscode-descriptionForeground);
-  font-size: 11px;
-}
-
-.section-header.collapsible {
-  cursor: pointer;
-}
-
-.section-header.collapsible:hover {
-  background: var(--vscode-list-hoverBackground);
-}
-
-.section-title {
-  flex: 1 1 auto;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-/* An empty list is an answer, so it is written down rather than left as a gap. */
-.list-empty {
-  padding: 8px 10px 8px 26px;
+/* An empty section is an answer, so it is written down rather than left as a gap. */
+.section-empty {
+  padding: 6px 10px 6px 26px;
   color: var(--vscode-descriptionForeground);
   font-size: 11px;
 }
@@ -329,9 +290,9 @@ body {
 .row {
   display: block;
   padding: 8px 10px;
-  /* Reserved on every row, coloured per list: a border that appeared with the accent would move
-   * the text sideways between one list and the next. */
-  border-left: 2px solid transparent;
+  /* The section's rule, on every row of it (§5). Reserved even where there is no colour, so a
+   * border that appeared with the accent could never move the text sideways. */
+  border-left: 3px solid var(--cg-section, transparent);
   border-bottom: 1px solid var(--cg-divider);
   cursor: pointer;
 }
@@ -350,12 +311,12 @@ body {
 }
 
 /*
- * §2.2 rule 10: one accent, as a 2 px bar that takes no space. It is drawn INSIDE the border box,
- * so it sits beside the section's hairline rather than replacing it — a needs-you row in the
- * parking lot says both things at once, and neither is mistaken for the other.
+ * §7: one accent, as a 3 px bar that takes no space. It is drawn INSIDE the border box, OVER the
+ * section's own rule rather than beside it — a needs-you row says the louder thing, and the text
+ * never moves sideways between one state and the next.
  */
 .row.needs-you {
-  box-shadow: inset 2px 0 0 var(--cg-accent);
+  box-shadow: inset 3px 0 0 var(--cg-accent);
 }
 
 /* Line one is already 600 (see `.row-id`), so needs-you goes one step further. */
@@ -613,9 +574,8 @@ body {
 
 .row:focus-visible,
 .part:focus-visible,
-.list-toggle:focus-visible,
-.attention-item:focus-visible,
 .section-header:focus-visible,
+.attention-item:focus-visible,
 .sort:focus-visible,
 .row-action:focus-visible,
 .slot-open:focus-visible,

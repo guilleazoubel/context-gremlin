@@ -13,6 +13,9 @@ import { setSink } from '../../src/webview/panel/channel';
 import { FakeDocument, type FakeElement } from '../support/fake-dom';
 import type { PanelRowView } from '../../src/model/panel-protocol';
 
+/** The section accent the row is rendered inside (§5). */
+const ACCENT = 'sec-parkingLot-untouched';
+
 let doc: FakeDocument;
 let posted: unknown[];
 
@@ -67,7 +70,7 @@ function rowView(over: Partial<PanelRowView> = {}): PanelRowView {
 function build(over: Partial<PanelRowView> = {}): FakeElement {
   const view = rowView(over);
   const node = createRow(view) as unknown as FakeElement;
-  patchRow(node as unknown as HTMLElement, view, { focusedKey: null });
+  patchRow(node as unknown as HTMLElement, view, ACCENT, { focusedKey: null });
   doc.clearLog();
   return node;
 }
@@ -130,7 +133,7 @@ describe('§2 — three lines, fixed order, fixed meaning', () => {
 
   it('marks needs-you, demoted and selected as classes, not as extra content', () => {
     const node = build({ needsYou: true, demoted: true, selected: true });
-    expect(node.className).toBe('row section-parkingLot needs-you demoted selected');
+    expect(node.className).toBe(`row ${ACCENT} needs-you demoted selected`);
     expect(node.getAttribute('aria-selected')).toBe('true');
   });
 });
@@ -160,7 +163,7 @@ describe('§2 — one shrinkable child per line', () => {
 describe('what a patch does to a row that is already on screen', () => {
   it('writes nothing at all when the data is identical', () => {
     const node = build();
-    patchRow(node as unknown as HTMLElement, rowView(), { focusedKey: null });
+    patchRow(node as unknown as HTMLElement, rowView(), ACCENT, { focusedKey: null });
     expect(doc.log).toEqual([]);
     expect(doc.writes).toEqual([]);
   });
@@ -169,20 +172,20 @@ describe('what a patch does to a row that is already on screen', () => {
     const node = build();
     const meta = rowView().meta;
     meta[2] = { kind: 'age', text: '13d' };
-    patchRow(node as unknown as HTMLElement, rowView({ meta }), { focusedKey: null });
+    patchRow(node as unknown as HTMLElement, rowView({ meta }), ACCENT, { focusedKey: null });
     expect(doc.log).toEqual([{ kind: 'text', tag: 'SPAN', key: 'cell cell-age', detail: '13d' }]);
   });
 
   it('turns aria-expanded when the row opens, and changes nothing else about the row', () => {
     const node = build();
-    patchRow(node as unknown as HTMLElement, rowView({ expanded: true }), { focusedKey: null });
+    patchRow(node as unknown as HTMLElement, rowView({ expanded: true }), ACCENT, { focusedKey: null });
     // No twisty to turn: what opens is a sibling block, and the row keeps its exact shape (§7).
     expect(doc.log.map((m) => m.detail)).toEqual(['aria-expanded=true']);
   });
 
   it('moves the single tab stop without touching the row it left (R66)', () => {
     const node = build();
-    patchRow(node as unknown as HTMLElement, rowView(), { focusedKey: rowKey(rowView()) });
+    patchRow(node as unknown as HTMLElement, rowView(), ACCENT, { focusedKey: rowKey(rowView()) });
     expect(node.tabIndex).toBe(0);
     expect(doc.log).toEqual([
       { kind: 'prop', tag: 'DIV', key: 'row:parkingLot:pr:acme/web#101', detail: 'tabIndex=0' },

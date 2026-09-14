@@ -115,9 +115,9 @@ describe.skipIf(!coreIsBuilt())('integration: starting work from a ticket-only r
 
   function rowOf(list: string, id: string): PanelRowView {
     const state = lastRender<PanelState>(panelView);
-    const found = state.lists
-      .find((candidate) => candidate.kind === list)
-      ?.sections.flatMap((section) => section.rows)
+    const found = state.sections
+      .filter((candidate) => candidate.list === list)
+      .flatMap((section) => section.rows)
       .find((row) => row.id === id);
     if (found === undefined) throw new Error(`no ${list} row '${id}' in the panel`);
     return found;

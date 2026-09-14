@@ -611,34 +611,30 @@ describe.skipIf(!coreIsBuilt())('integration: the extension against a real engin
       await ui.dispose();
     }, TIMEOUT);
 
-    it('renders the four lists, in the core order, into the panel webview (R47, R54)', () => {
+    it('renders the six sections, in §5 order, into the panel webview (R47, R54)', () => {
       const state = lastRender<PanelState>(panelView);
       expect(state.connected).toBe(true);
       expect(state.trouble).toBeNull();
       expect(state.banner).toBeNull();
       // P1: the header counts the rows the tree paints. Five are in the parking lot, one of them
       // inside the "someone is on it" group that starts collapsed — counted on its own header.
-      expect(state.lists.map((list) => [list.kind, list.count])).toEqual([
-        ['parkingLot', 4],
-        ['myWork', 5],
-        ['investigations', 1],
-        ['waitingForReview', 2],
+      expect(state.sections.map((section) => [section.key, section.count, section.collapsed])).toEqual([
+        ['parkingLot:untouched', 3, false],
+        ['parkingLot:reviewing', 1, false],
+        // Only "someone is on it" starts closed (R47). One row, because R47.1 reversed: a review
+        // request is shown on the row and never demotes it.
+        ['parkingLot:someoneOnIt', 1, true],
+        ['myWork', 5, false],
+        ['investigations', 1, false],
+        ['waitingForReview', 2, false],
       ]);
-      const parking = state.lists[0];
-      expect(parking.sections.map((section) => [section.title, section.count, section.collapsed])).toEqual([
-        ['Reviewing', 1, false],
-        ['Untouched', 3, false],
-        // Only "someone is on it" collapses, and it starts collapsed (R47). One row, because
-        // R47.1 reversed: a review request is shown on the row and never demotes it.
-        ['Someone is on it', 1, true],
-      ]);
-      expect(parking.sections[0].rows[0].label).toContain('fake/repo#3');
+      const untouched = state.sections[0];
+      expect(state.sections[1].rows[0].identity).toBe('#3');
       // MG-12 has nothing to hide behind here: every fixture PR carries age and size.
-      expect(parking.sections[1].rows.map((row) => row.age)).not.toContain('—');
-      expect(parking.sections[1].rows.map((row) => row.size)).not.toContain('0 files');
+      expect(untouched.rows.map((row) => row.age)).not.toContain('—');
+      expect(untouched.rows.map((row) => row.size)).not.toContain('0 files');
       // The merged row is the one with children (MG-15: agents + ticket + prs, nothing else).
-      const myWork = state.lists[1];
-      const merged = myWork.sections[0].rows.find((row) => row.id === 'ticket:APP-9');
+      const merged = state.sections[3].rows.find((row) => row.id === 'ticket:APP-9');
       expect(merged?.hasChildren).toBe(true);
       expect(merged?.chips).toEqual(['fake/repo#10']);
     });
@@ -672,8 +668,8 @@ describe.skipIf(!coreIsBuilt())('integration: the extension against a real engin
      */
     it('a click on a waitingForReview row creates, starts and then offers Chat', async () => {
       const before = lastRender<PanelState>(panelView);
-      const waiting = before.lists[3];
-      const row = waiting.sections[0].rows.find((candidate) => candidate.id === 'pr:fake/repo#5');
+      const waiting = before.sections[5];
+      const row = waiting.rows.find((candidate) => candidate.id === 'pr:fake/repo#5');
       expect(row).toBeDefined();
       // The row offers "Address review comments" and NO Chat: its only agent-to-be does not
       // exist yet, so there is nothing to talk to.
@@ -726,7 +722,7 @@ describe.skipIf(!coreIsBuilt())('integration: the extension against a real engin
       // …and only now does the row offer Chat, naming that agent (R50).
       await ui.coordinator.refreshNow();
       const after = lastRender<PanelState>(panelView);
-      const lit = after.lists[3].sections[0].rows.find((candidate) => candidate.id === 'pr:fake/repo#5');
+      const lit = after.sections[5].rows.find((candidate) => candidate.id === 'pr:fake/repo#5');
       const chat = lit?.actions.find((action) => action.command === 'cgremlin.chat');
       expect(chat?.childId).toBe(`agent:${id}`);
     }, TIMEOUT);

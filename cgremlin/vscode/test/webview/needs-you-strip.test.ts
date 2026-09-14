@@ -79,7 +79,7 @@ describe('P3 the needs-you strip', () => {
   it('survives a trouble state, because what wants the user is still true', () => {
     panel.render({
       ...withStrip(),
-      lists: [],
+      sections: [],
       trouble: { message: 'The engine is not one this extension can use.', command: 'cgremlin.engine.start', actionLabel: 'Start the engine' },
     });
     expect(items().length).toBe(2);

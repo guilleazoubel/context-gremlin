@@ -11,47 +11,42 @@
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import path from 'node:path';
-import {
-  buildWorkLists,
-  visibleRowCount,
-  LIST_GLYPHS,
-  type ItemsResponse,
-} from '../../src/model/work-items';
+import { buildWorkLists, PANEL_SECTIONS, type ItemsResponse } from '../../src/model/work-items';
 import { panelTreeNodes } from '../../src/model/panel-tree';
-import type { PanelListView, PanelState } from '../../src/model/panel-protocol';
+import type { PanelSectionView, PanelState } from '../../src/model/panel-protocol';
 import { coreIsBuilt, startEngineViaManager, waitUntil, type CoreHarness } from '../support/core-harness';
 
 const FIXTURES = path.join(__dirname, '..', 'support', 'fake-gh-parking-lot');
 const TIMEOUT = 30_000;
 
-/** `buildWorkLists` as the panel posts it — counts and rows, nothing else this file needs. */
-function listsOf(response: ItemsResponse): PanelListView[] {
+/** `buildWorkLists` flattened into §5's six sections, exactly as `PanelView.state()` does it. */
+function sectionsOf(response: ItemsResponse): PanelSectionView[] {
   const built = buildWorkLists({ response });
-  return Object.values(built).map((list) => ({
-    kind: list.kind,
-    title: list.title,
-    glyph: LIST_GLYPHS[list.kind],
-    collapsed: false,
-    count: list.count,
-    sort: list.sort,
-    sorts: [...list.sorts],
-    sections: list.sections.map((section) => ({
-      group: section.group,
-      title: section.title,
-      count: section.count,
-      collapsible: section.collapsible,
-      collapsed: section.collapsed,
-      rows: section.rows.map((row) => ({
-        ...row,
-        children: [],
-        lifecycle: [],
-        changes: null,
-        actions: [],
-        expanded: false,
-        selected: false,
-      })),
-    })),
-  })) as unknown as PanelListView[];
+  return PANEL_SECTIONS.map((spec) => {
+    const list = built[spec.list];
+    const source = list.sections.find((section) => section.group === spec.group);
+    const rows = (source?.rows ?? []).map((row) => ({
+      ...row,
+      children: [],
+      lifecycle: [],
+      changes: null,
+      actions: [],
+      expanded: false,
+      selected: false,
+    }));
+    return {
+      key: spec.key,
+      list: spec.list,
+      group: spec.group,
+      title: spec.title,
+      glyph: spec.glyph,
+      count: rows.length,
+      collapsed: spec.collapsed,
+      sort: list.sort,
+      sorts: [...list.sorts],
+      rows,
+    };
+  }) as unknown as PanelSectionView[];
 }
 
 /** The rows the tree really paints — the same walk the webview reconciles (R66). */
@@ -86,28 +81,20 @@ describe.skipIf(!coreIsBuilt())('integration: P1 — the parking lot renders wha
   });
 
   it('never counts a row the tree does not paint', () => {
-    const lists = listsOf(response);
-    const state = { lists, banner: null, trouble: null, connected: true } as PanelState;
-    const parkingLot = lists.find((list) => list.kind === 'parkingLot');
-    if (parkingLot === undefined) throw new Error('no parking lot');
-    const hidden = parkingLot.sections.find((section) => section.group === 'someoneOnIt');
-    // The group the panel collapses by default carries its OWN count, on its own header.
-    expect([hidden?.collapsed, hidden?.count]).toEqual([true, 11]);
-    expect(paintedRows(state)).toBe(parkingLot.count);
-    // …and the eleven are not in that number, which is the whole of the user's complaint.
-    expect(parkingLot.count).toBeLessThan(11);
+    const sections = sectionsOf(response);
+    const state = { sections, banner: null, trouble: null, connected: true } as PanelState;
+    const someone = sections.find((section) => section.key === 'parkingLot:someoneOnIt');
+    // The section the panel collapses by default carries its OWN count, on its own header — and
+    // nothing above it claims those eleven any more, because nothing is above it (§5).
+    expect([someone?.collapsed, someone?.count]).toEqual([true, 11]);
+    expect(paintedRows(state)).toBe(0);
+    const untouched = sections.find((section) => section.key === 'parkingLot:untouched');
+    expect(untouched?.count).toBe(0);
   });
 
-  it('counts every row once the groups are expanded', () => {
-    const lists = listsOf(response);
-    for (const list of lists) {
-      for (const section of list.sections) section.collapsed = false;
-      list.count = visibleRowCount(list.sections);
-    }
-    const state = { lists, banner: null, trouble: null, connected: true } as PanelState;
-    const parkingLot = lists.find((list) => list.kind === 'parkingLot');
-    if (parkingLot === undefined) throw new Error('no parking lot');
-    expect(parkingLot.count).toBeGreaterThanOrEqual(11);
-    expect(paintedRows(state)).toBe(parkingLot.count);
+  it('paints every row once the section is opened', () => {
+    const sections = sectionsOf(response).map((section) => ({ ...section, collapsed: false }));
+    const state = { sections, banner: null, trouble: null, connected: true } as PanelState;
+    expect(paintedRows(state)).toBe(11);
   });
 });

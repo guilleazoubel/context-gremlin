@@ -101,15 +101,15 @@ describe('§4 — one click is one message', () => {
     ]);
   });
 
-  it('collapses a group from its header', () => {
+  it('opens a section from its header', () => {
     panel.render(stateOf());
     dom.posted.length = 0;
-    const header = dom.root
-      .byClass('section-header')
-      .find((node) => node.dataset.key === 'group:parkingLot:someoneOnIt');
-    header?.emit('click');
+    const section = dom.root
+      .byClass('section')
+      .find((node) => node.dataset.section === 'parkingLot:someoneOnIt');
+    section?.byClass('section-header')[0].emit('click');
     expect(dom.posted).toEqual([
-      { type: 'toggleGroup', list: 'parkingLot', group: 'someoneOnIt', collapsed: false },
+      { type: 'toggleSection', key: 'parkingLot:someoneOnIt', collapsed: false },
     ]);
   });
 
@@ -140,8 +140,9 @@ describe('R66 — the keys do what the mouse does', () => {
     dom.document.emit('keydown', { key: 'Home' });
     dom.posted.length = 0;
     dom.document.emit('keydown', { key: 'Enter' });
+    // Home lands on the first row of the first section, which §5 puts at the parking lot.
     expect(dom.posted).toEqual([
-      { type: 'selectRow', id: 'pr:acme/web#102', list: 'parkingLot' },
+      { type: 'selectRow', id: 'pr:acme/web#101', list: 'parkingLot' },
     ]);
   });
 

@@ -12,7 +12,7 @@ describe('R54 parsePanelMessage', () => {
     { type: 'openItem', id: 'pr:acme/web#101' },
     { type: 'openChild', id: 'ticket:HB-627', childId: 'pr:acme/web#310' },
     { type: 'setSort', list: 'parkingLot', sort: 'smallestChange' },
-    { type: 'toggleGroup', list: 'parkingLot', group: 'someoneOnIt', collapsed: false },
+    { type: 'toggleSection', key: 'parkingLot:someoneOnIt', collapsed: false },
     { type: 'toggleRow', id: 'ticket:HB-627', expanded: true },
     { type: 'command', command: 'cgremlin.ack', id: 'pr:acme/web#101' },
     { type: 'command', command: 'cgremlin.openChildTarget', id: 'x', childId: 'pr:acme/web#310' },

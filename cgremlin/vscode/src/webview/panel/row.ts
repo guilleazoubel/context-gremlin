@@ -48,13 +48,18 @@ export function createRow(row: PanelRowView): HTMLElement {
   return node;
 }
 
-export function patchRow(node: HTMLElement, row: PanelRowView, context: RowContext): void {
+export function patchRow(
+  node: HTMLElement,
+  row: PanelRowView,
+  accent: string,
+  context: RowContext,
+): void {
   node.dataset.id = row.id;
   node.dataset.list = row.list;
   const key = rowKey(row);
-  // The list is a CLASS rather than a data attribute, because it is what the accent selects on
-  // and every other row state is a class too.
-  const classes = ['row', `section-${row.list}`];
+  // The section is a CLASS rather than a data attribute, because it is what the accent selects
+  // on and every other row state is a class too (§5).
+  const classes = ['row', accent];
   if (row.needsYou) classes.push('needs-you');
   if (row.demoted) classes.push('demoted');
   if (row.selected) classes.push('selected');

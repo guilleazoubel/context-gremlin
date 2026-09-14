@@ -12,6 +12,7 @@ import type { NeedsYouEntry } from './needs-you';
 import type { ActionPlacement, StageKind } from './row-actions';
 import type { HumanInteraction } from './work-items';
 import {
+  PANEL_SECTIONS,
   SORT_OPTIONS,
   WORK_LIST_KINDS,
   type ParkingLotGroup,
@@ -113,27 +114,25 @@ export interface PanelActionView {
   placement: ActionPlacement;
 }
 
+/**
+ * §5 — one of the panel's six sections. There is no list level above it any more: the parking
+ * lot's three groups are sections of their own, so the panel has ONE header level and one sticky
+ * offset. `list` is still here because a sort and every row action are rules about the list.
+ */
 export interface PanelSectionView {
+  /** `myWork`, or `parkingLot:someoneOnIt` (§5). Also the collapse key the host persists. */
+  key: string;
+  list: WorkListKind;
   group: ParkingLotGroup | null;
   title: string;
-  count: number;
-  collapsible: boolean;
-  collapsed: boolean;
-  rows: PanelRowView[];
-}
-
-export interface PanelListView {
-  kind: WorkListKind;
-  title: string;
-  /** P2: the list's own mark, in the fixed-width column the row's twisty sits in. */
+  /** The section's own mark, coloured with its own token. */
   glyph: string;
-  /** P2: the rows the tree paints right now — never the ones a closed group holds (P1). */
+  /** How many rows it holds — which is what the user expands the header to see. */
   count: number;
-  /** P2: whether the user has closed the whole list. Persisted in the host's state (R64). */
   collapsed: boolean;
   sort: WorkSortKind;
   sorts: WorkSortKind[];
-  sections: PanelSectionView[];
+  rows: PanelRowView[];
 }
 
 /**
@@ -149,7 +148,7 @@ export interface PanelNoticeView {
 }
 
 export interface PanelState {
-  lists: PanelListView[];
+  sections: PanelSectionView[];
   /** P3: what wants the user, as a strip at the top of the panel instead of a toast. */
   needsYou: NeedsYouEntry[];
   /** A stale ticket or thread source, or the Jira auth failure (R35). */
@@ -181,14 +180,11 @@ export type PanelToHost =
   | { type: 'openItem'; id: string }
   | { type: 'openChild'; id: string; childId: string }
   | { type: 'setSort'; list: WorkListKind; sort: WorkSortKind }
-  | { type: 'toggleGroup'; list: WorkListKind; group: ParkingLotGroup; collapsed: boolean }
-  | { type: 'toggleList'; list: WorkListKind; collapsed: boolean }
+  | { type: 'toggleSection'; key: string; collapsed: boolean }
   | { type: 'toggleRow'; id: string; expanded: boolean }
   /** P10's "Not now": remembered in the host's global state, not in the webview. */
   | { type: 'dismissNotice' }
   | { type: 'command'; command: string; id: string; childId?: string };
-
-const GROUPS: readonly ParkingLotGroup[] = ['reviewing', 'untouched', 'someoneOnIt'];
 
 function record(value: unknown): Record<string, unknown> | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
@@ -239,20 +235,14 @@ export function parsePanelMessage(raw: unknown): PanelToHost | null {
       }
       return { type: 'setSort', list, sort: sort as WorkSortKind };
     }
-    case 'toggleGroup': {
-      const list = listKind(message.list);
-      const group = message.group;
+    case 'toggleSection': {
+      // Only a key the panel itself draws (§5) — a hand-crafted key would write a collapse state
+      // for a section that does not exist.
+      const key = message.key;
       const collapsed = message.collapsed;
-      if (list === null || typeof group !== 'string' || typeof collapsed !== 'boolean') return null;
-      if (!(GROUPS as readonly string[]).includes(group)) return null;
-      return { type: 'toggleGroup', list, group: group as ParkingLotGroup, collapsed };
-    }
-    case 'toggleList': {
-      const list = listKind(message.list);
-      const collapsed = message.collapsed;
-      return list === null || typeof collapsed !== 'boolean'
-        ? null
-        : { type: 'toggleList', list, collapsed };
+      if (typeof key !== 'string' || typeof collapsed !== 'boolean') return null;
+      if (!PANEL_SECTIONS.some((section) => section.key === key)) return null;
+      return { type: 'toggleSection', key, collapsed };
     }
     case 'toggleRow': {
       const id = text(message.id);

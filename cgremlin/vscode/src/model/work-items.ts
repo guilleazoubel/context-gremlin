@@ -204,18 +204,42 @@ export const LIST_TITLES: Record<WorkListKind, string> = {
 };
 
 /**
- * P2: one mark per list, in the fixed-width column the row's twisty sits in, so the four headers
- * read as one vertical rhythm. A diamond is a PR: hollow means nobody has it, solid means it is
- * mine, and nested means it is mine with somebody else inside it. An investigation is not a PR at
- * all, so it gets the mark a conclusion gets. Unicode, never an icon font — `font-src 'none'`
- * (R38) would drop one silently.
+ * §5 — the panel's six sections, in the one order they are ever drawn in.
+ *
+ * The parking lot's three groups are PROMOTED here rather than nested: they answer three
+ * different questions (§1), and one colour and an 11 px grey title for all three was the "can't
+ * separate the sections" complaint. Membership is still the core's answer (D2) — this table only
+ * says which of `item.parkingLotGroup`'s values gets which header.
+ *
+ * The glyphs are unicode, never an icon font — `font-src 'none'` (R38) drops one silently. A
+ * diamond is a PR: hollow means nobody has it, nested means I am inside it, half-filled means
+ * somebody else is, and filled means it is my own work. An investigation gets the mark a
+ * conclusion gets, and a PR of mine that is out with reviewers gets a clock.
  */
-export const LIST_GLYPHS: Record<WorkListKind, string> = {
-  parkingLot: '◇',
-  myWork: '◆',
-  investigations: '∴',
-  waitingForReview: '◈',
-};
+export interface PanelSectionSpec {
+  /** `myWork`, or `parkingLot:someoneOnIt` for one of the promoted groups. */
+  key: string;
+  list: WorkListKind;
+  group: ParkingLotGroup | null;
+  title: string;
+  glyph: string;
+  /** Whether it starts closed. Only "someone is on it" does (R47). */
+  collapsed: boolean;
+}
+
+export const PANEL_SECTIONS: readonly PanelSectionSpec[] = [
+  { key: 'parkingLot:untouched', list: 'parkingLot', group: 'untouched', title: 'Parking lot', glyph: '◇', collapsed: false },
+  { key: 'parkingLot:reviewing', list: 'parkingLot', group: 'reviewing', title: 'Reviewing', glyph: '◈', collapsed: false },
+  { key: 'parkingLot:someoneOnIt', list: 'parkingLot', group: 'someoneOnIt', title: 'Someone is on it', glyph: '◐', collapsed: true },
+  { key: 'myWork', list: 'myWork', group: null, title: 'My dev work', glyph: '◆', collapsed: false },
+  { key: 'investigations', list: 'investigations', group: null, title: 'Investigations', glyph: '∴', collapsed: false },
+  { key: 'waitingForReview', list: 'waitingForReview', group: null, title: 'Waiting for review', glyph: '◷', collapsed: false },
+];
+
+/** The class the stylesheet colours: a key is `a:b`, and a class may not carry the colon. */
+export function sectionClassOf(key: string): string {
+  return `sec-${key.replace(':', '-')}`;
+}
 
 /**
  * The narrow slice of the editor's `globalState` this module needs (R64). The real `Host`
@@ -253,19 +277,11 @@ export function writeSort(store: SortStore, list: WorkListKind, sort: WorkSortKi
 // P2: which headers the user has closed
 // ---------------------------------------------------------------------------
 
-/** `parkingLot` for a whole list, `parkingLot:someoneOnIt` for one of its groups. */
+/** A section key (§5): `myWork`, or `parkingLot:someoneOnIt`. */
 export type CollapseKey = string;
 export type CollapseState = Record<CollapseKey, boolean>;
 
 export const COLLAPSE_STATE_KEY = 'cgremlin.panel.collapsed';
-
-export function listCollapseKey(list: WorkListKind): CollapseKey {
-  return list;
-}
-
-export function groupCollapseKey(list: WorkListKind, group: ParkingLotGroup): CollapseKey {
-  return `${list}:${group}`;
-}
 
 /**
  * A persisted value the panel did not write — a hand-edited `globalState`, or a shape from an

@@ -20,21 +20,17 @@ import { itemActionFacts, rowActions, type StageKind } from '../model/row-action
 import {
   buildItemChildren,
   buildWorkLists,
-  groupCollapseKey,
   humanInteractions,
-  listCollapseKey,
   readCollapsed,
   readSort,
   readSorts,
   ticketBanner,
-  visibleRowCount,
   writeCollapsed,
   writeSort,
   COLLAPSE_STATE_KEY,
-  LIST_GLYPHS,
+  PANEL_SECTIONS,
   type CollapseState,
   type ItemsResponse,
-  type ParkingLotGroup,
   type WorkChild,
   type WorkItem,
   type WorkListKind,
@@ -47,8 +43,8 @@ import {
   type PanelActionView,
   type PanelChangesView,
   type PanelChildView,
-  type PanelListView,
   type PanelRowView,
+  type PanelSectionView,
   type PanelSlotView,
   type PanelState,
   type PanelNoticeView,
@@ -143,7 +139,7 @@ export class PanelView implements WebviewViewProviderLike {
   private detailSignature: string | null = null;
   /** An engine frame named the open row, or one of its sessions, since the last read. */
   private detailStale = false;
-  /** P2: `parkingLot` for a whole list, `parkingLot:someoneOnIt` for one of its groups. */
+  /** §5: which of the six sections the user has closed, by section key. */
   private collapsed: CollapseState;
   /** The swap asked for the managed workspace and could not do it itself (P10). */
   private offerManaged = false;
@@ -305,7 +301,7 @@ export class PanelView implements WebviewViewProviderLike {
   state(): PanelState {
     const trouble = this.troubleView();
     return {
-      lists: trouble === null ? this.lists() : [],
+      sections: trouble === null ? this.sections() : [],
       // P3: the strip survives a trouble state — what wants the user is still true while the
       // engine is explaining itself, and it is the one thing worth carrying across.
       needsYou: needsYouEntries(this.items()),
@@ -345,48 +341,37 @@ export class PanelView implements WebviewViewProviderLike {
 
   // --- internals -----------------------------------------------------------
 
-  private lists(): PanelListView[] {
+  /**
+   * §5 — the six sections, flat. `buildWorkLists` still answers per list (membership is the
+   * core's, D2); this walks `PANEL_SECTIONS` and takes each one's rows out of the list it belongs
+   * to, so the parking lot's three groups arrive as sections without the core knowing.
+   */
+  private sections(): PanelSectionView[] {
     if (this.response === null) return [];
     const built = buildWorkLists({
       response: this.response,
       sorts: this.sorts,
       now: this.deps.now?.(),
     });
-    return (Object.keys(built) as WorkListKind[]).map((kind) => {
-      const list = built[kind];
-      const sections = list.sections.map((section) => ({
-        group: section.group,
-        title: section.title,
-        count: section.count,
-        collapsible: section.collapsible,
-        collapsed: this.groupCollapsed(kind, section.group, section.collapsed),
-        rows: section.rows.map((row) => this.rowView(row)),
-      }));
-      const shut = this.collapsed[listCollapseKey(kind)] ?? false;
+    return PANEL_SECTIONS.map((spec) => {
+      const list = built[spec.list];
+      const source = list.sections.find((section) => section.group === spec.group);
+      const rows = (source?.rows ?? []).map((row) => this.rowView(row));
       return {
-        kind,
-        title: list.title,
-        glyph: LIST_GLYPHS[kind],
-        // P1: the USER's collapse state, not the default one, decides what the header may claim.
-        // A CLOSED list still says how much is behind it — that is why it was worth closing.
-        count: shut
-          ? sections.reduce((total, section) => total + section.rows.length, 0)
-          : visibleRowCount(sections),
-        collapsed: shut,
+        key: spec.key,
+        list: spec.list,
+        group: spec.group,
+        title: spec.title,
+        glyph: spec.glyph,
+        // What the header claims is what the section holds — the count IS the reason to open it,
+        // and there is no second level underneath it left to hide anything (P1).
+        count: rows.length,
+        collapsed: this.collapsed[spec.key] ?? spec.collapsed,
         sort: list.sort,
         sorts: [...list.sorts],
-        sections,
+        rows,
       };
     });
-  }
-
-  private groupCollapsed(
-    list: WorkListKind,
-    group: ParkingLotGroup | null,
-    fallback: boolean,
-  ): boolean {
-    if (group === null) return false;
-    return this.collapsed[groupCollapseKey(list, group)] ?? fallback;
   }
 
   /** One write per toggle, so the next window opens on the panel the user left behind (R64). */
@@ -583,11 +568,8 @@ export class PanelView implements WebviewViewProviderLike {
         writeSort(this.deps.host, message.list, message.sort);
         this.render();
         return;
-      case 'toggleGroup':
-        this.setCollapsed(groupCollapseKey(message.list, message.group), message.collapsed);
-        return;
-      case 'toggleList':
-        this.setCollapsed(listCollapseKey(message.list), message.collapsed);
+      case 'toggleSection':
+        this.setCollapsed(message.key, message.collapsed);
         return;
       case 'toggleRow':
         // The keyboard's way of opening a row, and it reads the detail for the same reason a

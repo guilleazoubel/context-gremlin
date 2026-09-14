@@ -204,9 +204,9 @@ describe.skipIf(!coreIsBuilt())('integration: the Phase 10 panel flows against a
   /** The row as the panel would paint it, in whichever of its lists is asked for. */
   function rowOf(list: string, id: string): PanelRowView {
     const state = lastRender<PanelState>(panelView);
-    const found = state.lists
-      .find((candidate) => candidate.kind === list)
-      ?.sections.flatMap((section) => section.rows)
+    const found = state.sections
+      .filter((candidate) => candidate.list === list)
+      .flatMap((section) => section.rows)
       .find((row) => row.id === id);
     if (found === undefined) throw new Error(`no ${list} row '${id}' in the panel`);
     return found;

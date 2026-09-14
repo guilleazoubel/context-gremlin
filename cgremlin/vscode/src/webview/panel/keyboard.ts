@@ -33,15 +33,6 @@ export function onKeyDown(key: string, ports: KeyboardPorts): boolean {
     post({ type: 'toggleRow', id: intent.id, expanded: intent.expanded });
     return true;
   }
-  if (intent.kind === 'toggleGroup') {
-    post({
-      type: 'toggleGroup',
-      list: intent.list,
-      group: intent.group,
-      collapsed: intent.collapsed,
-    });
-    return true;
-  }
   return activate(intent.node);
 }
 
@@ -53,10 +44,6 @@ function activate(node: PanelTreeNode): boolean {
   }
   if (node.kind === 'child' && node.id !== null && node.rowId !== null) {
     post({ type: 'openChild', id: node.rowId, childId: node.id });
-    return true;
-  }
-  if (node.kind === 'group' && node.group !== null) {
-    post({ type: 'toggleGroup', list: node.list, group: node.group, collapsed: node.expanded });
     return true;
   }
   return false;

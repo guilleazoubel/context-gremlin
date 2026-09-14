@@ -66,7 +66,7 @@ function build(host: FakeHost = new FakeHost()): Built {
     state,
     row: (id) =>
       state()
-        .lists.flatMap((list) => list.sections.flatMap((section) => section.rows))
+        .sections.flatMap((section) => section.rows)
         .find((row) => row.id === id),
     click: (id) => view.webview.emit({ type: 'selectRow', id, list: 'myWork' }),
   };

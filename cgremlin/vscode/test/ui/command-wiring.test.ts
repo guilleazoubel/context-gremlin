@@ -97,7 +97,7 @@ async function harness(opts: { handler?: StubHandler; socketPath?: string } = {}
     return render.state;
   };
   const rows = (): PanelRowView[] =>
-    state().lists.flatMap((list) => list.sections.flatMap((section) => section.rows));
+    state().sections.flatMap((section) => section.rows);
   return {
     host,
     server,
@@ -243,13 +243,13 @@ describe('R24 one refresh, one request', () => {
     expect(paths(h, second)).toEqual(['GET /items']);
   });
 
-  it('renders the four lists from that one response', async () => {
+  it('renders the six sections from that one response', async () => {
     const h = await connected();
-    // P1: a header counts what the tree paints. The fixture's parking lot holds five, one of
-    // which is in the "someone is on it" group the panel collapses by default — and that one is
-    // counted on that group's own header instead.
-    expect(h.state().lists.map((l) => `${l.kind}:${l.count}`)).toEqual([
-      'parkingLot:4',
+    // §5: every section counts what it holds, and there is no level above it left to over-claim.
+    expect(h.state().sections.map((s) => `${s.key}:${s.count}`)).toEqual([
+      'parkingLot:untouched:3',
+      'parkingLot:reviewing:1',
+      'parkingLot:someoneOnIt:1',
       'myWork:3',
       'investigations:1',
       'waitingForReview:3',
@@ -263,7 +263,7 @@ describe('an engine that is not one this extension can use', () => {
   it('replaces the lists with one explanation of what happened', async () => {
     const h = await connected();
     h.engine.emit(FOREIGN);
-    expect(h.state().lists).toEqual([]);
+    expect(h.state().sections).toEqual([]);
     expect(h.state().trouble?.message).toContain('not a cgremlin engine this extension can use');
     expect(h.state().trouble?.message).toContain('cgremlin: Start the engine');
     expect(h.state().trouble?.command).toBe('cgremlin.engine.start');
@@ -287,9 +287,9 @@ describe('an engine that is not one this extension can use', () => {
   it('gives the four lists back the moment a usable engine is adopted', async () => {
     const h = await connected();
     h.engine.emit(FOREIGN);
-    expect(h.state().lists).toEqual([]);
+    expect(h.state().sections).toEqual([]);
     h.engine.emit({ kind: 'running', version: '0.0.1', pid: 10, adopted: true });
-    expect(h.state().lists).toHaveLength(4);
+    expect(h.state().sections).toHaveLength(6);
     expect(h.host.statusBarItems[0].warning).toBe(false);
   });
 
@@ -317,7 +317,7 @@ describe('an engine that is not one this extension can use', () => {
         req.path === '/items' ? { status: 404, body: { error: 'not found' } } : undefined,
     });
     expect(await h.ui.connect()).toBe(true);
-    expect(h.state().lists).toHaveLength(0);
+    expect(h.state().sections).toHaveLength(0);
     expect(h.state().trouble?.message).toBe(
       'The engine is older than this extension (no /items). Restart the engine to load the ' +
         'bundled version.',
@@ -348,7 +348,7 @@ describe('an engine that is not one this extension can use', () => {
           : undefined,
     });
     expect(await h.ui.connect()).toBe(true);
-    expect(h.state().lists).toHaveLength(0);
+    expect(h.state().sections).toHaveLength(0);
     expect(h.state().trouble?.message).toContain('the work model exploded');
     expect(h.state().trouble?.command).toBe('cgremlin.engine.showLog');
     expect(h.host.statusBarItems[0].warning).toBe(true);
@@ -372,7 +372,7 @@ describe('an engine that is not one this extension can use', () => {
           : undefined,
     });
     expect(await h.ui.connect()).toBe(true);
-    expect(h.state().lists).toHaveLength(4);
+    expect(h.state().sections).toHaveLength(6);
     expect(h.state().trouble).toBeNull();
     expect(h.state().banner).toMatchObject({ kind: 'auth' });
     expect(h.host.statusBarItems[0].text).toBe('$(warning) cgremlin: jira rejected the token');
@@ -391,7 +391,7 @@ describe('an engine that is not one this extension can use', () => {
     broken = false;
     await h.ui.coordinator.refreshNow();
     expect(h.state().trouble).toBeNull();
-    expect(h.state().lists).toHaveLength(4);
+    expect(h.state().sections).toHaveLength(6);
     expect(h.host.statusBarItems[0].warning).toBe(false);
   });
 });
@@ -907,9 +907,9 @@ describe('R50/R56/R42 the respond click records one run start and zero claim att
     const h = await connected();
     // P0-2: the verb belongs to the waiting-for-review row. The same item's `myWork` row is a
     // different question ("what is the state of the thing I'm building?") and a different rule.
-    const row = h.state().lists
-      .find((list) => list.kind === 'waitingForReview')
-      ?.sections.flatMap((section) => section.rows)
+    const row = h.state().sections
+      .filter((section) => section.list === 'waitingForReview')
+      .flatMap((section) => section.rows)
       .find((candidate) => candidate.id === MY_PR_ITEM);
     const actions = (row?.actions ?? []).map((a) => a.command);
     // #200 already has a respond agent, still triaging: no second respond run, and no Chat
@@ -917,9 +917,9 @@ describe('R50/R56/R42 the respond click records one run start and zero claim att
     expect(actions).not.toContain('cgremlin.addressReview');
     expect(actions).not.toContain('cgremlin.chat');
 
-    const hb = h.state().lists
-      .find((list) => list.kind === 'waitingForReview')
-      ?.sections.flatMap((section) => section.rows)
+    const hb = h.state().sections
+      .filter((section) => section.list === 'waitingForReview')
+      .flatMap((section) => section.rows)
       .find((candidate) => candidate.id === HB_ITEM);
     expect((hb?.actions ?? []).map((a) => a.command)).toContain('cgremlin.addressReview');
   });

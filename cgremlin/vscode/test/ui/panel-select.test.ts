@@ -79,7 +79,7 @@ function build(
     state,
     row: (id) =>
       state()
-        .lists.flatMap((list) => list.sections.flatMap((section) => section.rows))
+        .sections.flatMap((section) => section.rows)
         .find((row) => row.id === id),
     renders: () =>
       view.webview.posted.filter((m) => (m as { type?: string }).type === 'render').length,
