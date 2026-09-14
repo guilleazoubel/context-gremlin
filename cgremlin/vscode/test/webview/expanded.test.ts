@@ -52,6 +52,7 @@ const OPEN = (childId: string): PanelActionView => ({
 function rowView(over: Partial<PanelRowView> = {}): PanelRowView {
   return {
     hint: null,
+    detailNotice: null,
     id: 'ticket:HB-627',
     list: 'myWork',
     label: 'HB-627 — Convert the tour scheduler to RSC',
@@ -279,5 +280,27 @@ describe('§4 a part that opens nothing is not a pointer target', () => {
       'pr:acme/web#310',
     ]);
     expect(css).toMatch(/\.part\[data-child-id=''\]\s*\{[^}]*cursor:\s*default/);
+  });
+});
+
+/**
+ * The engine died while the panel was open. The parts on screen came out of the snapshot and are
+ * still true; what is not true is "this is current". One line says so, inside the row the user
+ * opened — never a popup, because the user did not do anything wrong and there is nothing to
+ * dismiss.
+ */
+describe('an expanded row with no engine behind it', () => {
+  const OFFLINE = 'Engine offline — showing what was last loaded';
+
+  it('draws the line under the hint, with the parts still there', () => {
+    const node = build({ detailNotice: OFFLINE });
+    const line = node.byClass('expanded-offline')[0];
+    expect(line?.textContent).toBe(OFFLINE);
+    expect(line?.hidden).toBe(false);
+    expect(parts(node)).not.toHaveLength(0);
+  });
+
+  it('draws nothing at all while the engine is answering', () => {
+    expect(build().byClass('expanded-offline')[0]?.hidden).toBe(true);
   });
 });

@@ -186,8 +186,18 @@ body {
 }
 
 .trouble {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
   padding: 10px;
   color: var(--vscode-errorForeground);
+}
+
+/* The sentence takes the whole first line; the two buttons sit under it. */
+.trouble-message {
+  flex: 1 0 100%;
+  margin: 0;
 }
 
 /*
@@ -214,6 +224,17 @@ body {
   padding: 2px 0 6px;
   color: var(--vscode-descriptionForeground);
   font-size: 11px;
+}
+
+/*
+ * P11 — the engine went away while this row was open. Everything under it came out of the last
+ * snapshot and still opens, so this reads as a note rather than an alert.
+ */
+.expanded-offline {
+  padding: 2px 0 6px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+  font-style: italic;
 }
 
 /* --- the one header level (§5) ------------------------------------------ */
@@ -520,7 +541,8 @@ body {
 .row-action,
 .notice-open,
 .notice-dismiss,
-.trouble-action {
+.trouble-action,
+.trouble-second {
   min-height: 24px;
   padding: 4px 8px;
   border: 1px solid var(--cg-divider);

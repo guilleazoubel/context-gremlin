@@ -126,6 +126,12 @@ function entriesOf(next: PanelState): { key: string; data: Entry }[] {
   }
   if (next.trouble !== null) {
     entries.push({ key: 'trouble', data: { kind: 'trouble', state: next } });
+    // It replaces the lists only when there are none: an engine that died did not delete the
+    // work, and the rows the host is still holding open and their external links (P11).
+    if (next.sections.length === 0) return entries;
+    next.sections.forEach((section, index) =>
+      entries.push({ key: `section:${section.key}`, data: { kind: 'section', index, state: next } }),
+    );
     return entries;
   }
   if (next.banner !== null) {
@@ -161,6 +167,9 @@ function create(entry: Entry, context: SectionContext): HTMLElement {
   if (entry.kind === 'notice') return createNotice();
   const node = el('div', 'trouble');
   node.appendChild(el('p', 'trouble-message'));
+  // The primary act — starting the engine, or reloading a window that is behind it. The second
+  // button is the log: worth offering, never worth being the only offer (the incident's row said
+  // "show log" and nothing else, which explains a dead engine without ending one).
   node.appendChild(
     button({
       className: 'trouble-action',
@@ -168,6 +177,17 @@ function create(entry: Entry, context: SectionContext): HTMLElement {
       message: () => ({
         type: 'command',
         command: node.dataset.command ?? '',
+        id: 'engine',
+      }),
+    }),
+  );
+  node.appendChild(
+    button({
+      className: 'trouble-second',
+      label: '',
+      message: () => ({
+        type: 'command',
+        command: node.dataset.second ?? '',
         id: 'engine',
       }),
     }),
@@ -198,10 +218,14 @@ function patch(node: HTMLElement, entry: Entry, context: SectionContext): void {
     return;
   }
   const trouble = entry.state.trouble;
+  const second = trouble?.secondary ?? null;
   node.dataset.command = trouble?.command ?? '';
+  node.dataset.second = second?.command ?? '';
   setText(node.children[0] as HTMLElement, trouble?.message ?? '');
   setText(node.children[1] as HTMLElement, trouble?.actionLabel ?? '');
   setHidden(node.children[1] as HTMLElement, trouble === null);
+  setText(node.children[2] as HTMLElement, second?.actionLabel ?? '');
+  setHidden(node.children[2] as HTMLElement, second === null);
 }
 
 /**

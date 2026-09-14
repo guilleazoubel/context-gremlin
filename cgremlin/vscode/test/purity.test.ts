@@ -141,6 +141,7 @@ describe('MG-B1 the editor API has exactly two entry points', () => {
     const ui = allSourceFiles(path.join(root, 'src/ui')).map((f) => path.basename(f)).sort();
     expect(ui).toEqual([
       'commands.ts',
+      'engine-retry.ts',
       'engine.ts',
       'host.ts',
       'item-tab.ts',

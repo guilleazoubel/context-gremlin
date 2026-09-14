@@ -441,13 +441,19 @@ describe('R35/Phase 8 the banners', () => {
     expect(h.state().banner?.message).toContain('cgremlin-core config check-jira');
   });
 
-  it('replaces the lists entirely while the engine is one we cannot use', () => {
+  it('replaces EMPTY lists with one explanation, and keeps the ones it has', () => {
     const h = build();
     h.ready();
+    h.panel.setItems(null);
     h.panel.setTrouble({ kind: 'foreign', socketPath: '/tmp/engine.sock' });
     expect(h.state().trouble?.message).toContain('not a cgremlin engine this extension can use');
     expect(h.state().trouble?.command).toBe('cgremlin.engine.start');
     expect(h.state().sections).toEqual([]);
+    // P11: a snapshot the panel already has is not deleted by the engine going away. Its rows
+    // still expand, and the links in them never needed an engine to open.
+    h.panel.setItems(response());
+    expect(h.state().trouble).not.toBeNull();
+    expect(h.state().sections).toHaveLength(6);
     h.panel.setTrouble(null);
     expect(h.state().sections).toHaveLength(6);
   });

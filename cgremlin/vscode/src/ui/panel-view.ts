@@ -56,6 +56,7 @@ import {
   troubleActionLabel,
   troubleCommand,
   troubleMessage,
+  troubleSecondary,
   type EngineTrouble,
   type SourceTrouble,
 } from '../model/engine-trouble';
@@ -100,6 +101,13 @@ export interface ExpandedDetail {
   /** The latest artifact time per session id, for a slot's `done · 2h`. */
   artifactAt: Record<string, string | null>;
   changes: SessionChanges | null;
+  /**
+   * P11: the read found no engine on the socket. The row still opens — everything it shows comes
+   * out of the snapshot — and the block carries one line saying the detail is the last one that
+   * loaded. Any OTHER failure (a 404 from an engine with no such route) is not this: it paints
+   * `—` and says nothing, exactly as it always did.
+   */
+  offline?: boolean;
 }
 
 export const SELECTED_STATE_KEY = 'cgremlin.panel.selected';
@@ -115,6 +123,8 @@ export const WORKSPACE_NOTICE_DISMISSED_KEY = 'cgremlin.panel.workspaceNoticeDis
 export const OPEN_MANAGED_COMMAND = 'cgremlin.openManagedWorkspace';
 export const MANAGED_WORKSPACE_HINT =
   'Open the cgremlin workspace to follow the code in the editor';
+/** P11: the one line an expanded row gains when there is no engine to re-read it from. */
+export const OFFLINE_DETAIL = 'Engine offline — showing what was last loaded';
 const OPEN_MANAGED_LABEL = 'Open';
 const DISMISS_LABEL = 'Not now';
 
@@ -300,7 +310,11 @@ export class PanelView implements WebviewViewProviderLike {
 
   state(): PanelState {
     const trouble = this.troubleView();
-    const sections = trouble === null ? this.sections() : [];
+    const all = this.sections();
+    // P11: a trouble row REPLACES the lists only when there are no lists to replace. An engine
+    // that died did not delete the work — the last snapshot is still true, its rows still expand
+    // from it, and the external links in them (a PR, a Jira page) never needed an engine at all.
+    const sections = trouble === null || all.some((section) => section.rows.length > 0) ? all : [];
     return {
       // §6: the control lists every area with its count; the panel paints only the focused one,
       // so the keyboard cannot reach a row that is not on screen.
@@ -326,6 +340,7 @@ export class PanelView implements WebviewViewProviderLike {
         message: troubleMessage(this.trouble),
         command: troubleCommand(this.trouble),
         actionLabel: troubleActionLabel(this.trouble),
+        secondary: troubleSecondary(this.trouble),
       };
     }
     if (this.sourceTrouble !== null) {
@@ -333,6 +348,7 @@ export class PanelView implements WebviewViewProviderLike {
         message: this.sourceTrouble.message,
         command: this.sourceTrouble.command,
         actionLabel: this.sourceTrouble.actionLabel,
+        secondary: null,
       };
     }
     return null;
@@ -419,6 +435,7 @@ export class PanelView implements WebviewViewProviderLike {
       actions,
       // The notice again, where the user is actually looking — the open row, and only it.
       hint: expanded && this.noticeView() !== null ? MANAGED_WORKSPACE_HINT : null,
+      detailNotice: expanded && this.detailOf(row.id)?.offline === true ? OFFLINE_DETAIL : null,
     };
   }
 
@@ -429,7 +446,7 @@ export class PanelView implements WebviewViewProviderLike {
    * refuses (P0-2).
    */
   private partsOf(row: WorkRow, actions: PanelActionView[]): PanelPartView[] {
-    const detail = this.detail?.id === row.id ? this.detail.detail : null;
+    const detail = this.detailOf(row.id);
     const facts = itemActionFacts(row.item);
     return itemParts({
       item: row.item,
@@ -445,9 +462,14 @@ export class PanelView implements WebviewViewProviderLike {
     });
   }
 
+  /** The detail held for `id`, or `null` — the one place the id guard is written. */
+  private detailOf(id: string): ExpandedDetail | null {
+    return this.detail?.id === id ? this.detail.detail : null;
+  }
+
   /** `—` until the engine has answered, and `—` forever on an engine that has no such route. */
   private changesView(id: string): PanelChangesView {
-    const changes = this.detail?.id === id ? this.detail.detail.changes : null;
+    const changes = this.detailOf(id)?.changes ?? null;
     return {
       committed: changeSummary(changes?.committed),
       workingTree: changeSummary(changes?.workingTree),
@@ -469,7 +491,13 @@ export class PanelView implements WebviewViewProviderLike {
     void load(item)
       .then((detail) => {
         if (this.expandedId !== id || detail === null) return;
-        this.detail = { id, detail };
+        // P11: a read that found no engine keeps what was last loaded rather than blanking the
+        // row — "showing what was last loaded" has to be true of the row as well as of the line.
+        const previous = this.detailOf(id);
+        this.detail = {
+          id,
+          detail: detail.offline && previous !== null ? { ...previous, offline: true } : detail,
+        };
         this.render();
       })
       .catch((err: unknown) => {

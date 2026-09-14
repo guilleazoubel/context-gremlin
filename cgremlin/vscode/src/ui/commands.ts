@@ -12,6 +12,7 @@
  */
 import { engineErrorText, type CoreClient, type HttpResult } from '../core-client';
 import { refreshBlockedMessage } from '../model/engine-trouble';
+import { withEngineRetry, type EngineRevival } from './engine-retry';
 import {
   agentOfChildId,
   chatTargetOf,
@@ -75,7 +76,7 @@ export interface CommandDeps {
 }
 
 export function registerCommands(deps: CommandDeps): DisposableLike[] {
-  const { host, client, coordinator, panel, itemTab, chat } = deps;
+  const { host, client, coordinator, panel, chat } = deps;
 
   const idOf = (arg: unknown): string | null => (typeof arg === 'string' && arg !== '' ? arg : null);
 
@@ -93,7 +94,15 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
     return item;
   };
 
-  const surface = (result: HttpResult): boolean => {
+  /**
+   * One engine request from a user command: sent, and — when the socket has gone — sent again
+   * after a user-triggered start (`ui/engine-retry`). `null` means both attempts failed, and the
+   * sentence has already been shown.
+   */
+  const send = (work: () => Promise<HttpResult>): Promise<HttpResult | null> => sendTo(deps, work);
+
+  const surface = (result: HttpResult | null): boolean => {
+    if (result === null) return false;
     if (result.status >= 200 && result.status < 300) return true;
     void host.showWarningMessage(engineErrorText(result.body), undefined);
     return false;
@@ -117,7 +126,7 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
       void host.showWarningMessage('That item has no session to act on.', undefined);
       return;
     }
-    if (surface(await call(id))) coordinator.schedule();
+    if (surface(await send(() => call(id)))) coordinator.schedule();
   };
 
   const openItem = async (arg: unknown, focus?: ItemFocus): Promise<void> => {
@@ -125,7 +134,7 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
     if (item === null) return;
     const path = itemPathOf(item.id);
     if (path === null) return;
-    await itemTab.open(path, focus);
+    await openTab(deps, path, focus);
   };
 
   return [
@@ -149,7 +158,7 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
       if (item === null || childId === null) return;
       const child = panel.childOf(item.id, childId);
       if (child === undefined || child.path === null) return;
-      await itemTab.open(child.path, child.focus);
+      await openTab(deps, child.path, child.focus);
     }),
 
     host.registerCommand('cgremlin.chat', async (arg, childArg) => {
@@ -183,7 +192,7 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
       // told, because a review of one's own PR is otherwise 409 `OwnPrError` (R42).
       const selfReview = item.prs[0]?.isMine === true;
       const body = selfReview ? { mode: 'review', selfReview: true } : { mode: 'review' };
-      if (surface(await client.startAgent(path, body))) coordinator.schedule();
+      if (surface(await send(() => client.startAgent(path, body)))) coordinator.schedule();
     }),
 
     /**
@@ -204,9 +213,9 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
       }
       const path = itemPathOf(`pr:${pr.repo}#${pr.number}`);
       if (path === null) return;
-      if (!surface(await client.startAgent(path, { mode: 'respond' }))) return;
+      if (!surface(await send(() => client.startAgent(path, { mode: 'respond' })))) return;
       coordinator.schedule();
-      await itemTab.open(path);
+      await openTab(deps, path);
     }),
 
     host.registerCommand('cgremlin.startInvestigation', (arg) =>
@@ -247,7 +256,7 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
       if (item === null) return;
       const path = itemPathOf(item.id);
       if (path === null) return;
-      if (surface(await client.ackItem(path))) coordinator.schedule();
+      if (surface(await send(() => client.ackItem(path)))) coordinator.schedule();
     }),
 
     host.registerCommand('cgremlin.refreshInventory', async () => {
@@ -260,7 +269,7 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
         await deps.engine?.reprobe();
         return;
       }
-      if (surface(await client.scan())) coordinator.schedule();
+      if (surface(await send(() => client.scan()))) coordinator.schedule();
     }),
 
     host.registerCommand('cgremlin.newInvestigation', async () => {
@@ -277,12 +286,14 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
       });
       if (drive === undefined) return;
 
-      const result = await client.createInvestigation({
-        repoUrl: repoUrlOf(repo),
-        ticket,
-        intent: intent === INTENTS[1] ? 'development' : 'investigate_only',
-        driveToCompletion: drive === DRIVE[1],
-      });
+      const result = await send(() =>
+        client.createInvestigation({
+          repoUrl: repoUrlOf(repo),
+          ticket,
+          intent: intent === INTENTS[1] ? 'development' : 'investigate_only',
+          driveToCompletion: drive === DRIVE[1],
+        }),
+      );
       await createdThenRun(deps, result, 'findings');
     }),
 
@@ -291,7 +302,9 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
       if (repo === undefined) return;
       const ticket = await askTicket(host);
       if (ticket === undefined) return;
-      const result = await client.createDevelopment({ repoUrl: repoUrlOf(repo), ticket });
+      const result = await send(() =>
+        client.createDevelopment({ repoUrl: repoUrlOf(repo), ticket }),
+      );
       await createdThenRun(deps, result, 'develop');
     }),
 
@@ -304,7 +317,8 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
         validateInput: (value) => validatePrUrl(value),
       });
       if (url === undefined) return;
-      const result = await client.createReviewFromUrl(url);
+      const result = await send(() => client.createReviewFromUrl(url));
+      if (result === null) return;
       if (result.status < 200 || result.status >= 300) {
         // 409 (own PR), 400 (unparseable) — the url stays in the text so it can be corrected.
         void host.showWarningMessage(`${engineErrorText(result.body)} (${url})`, undefined);
@@ -325,6 +339,37 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
       await openSession(deps, session);
     }),
   ];
+}
+
+/** How a user command asks for the engine: `ensureRunning('user')`, through the engine surface. */
+function reviveOf(deps: CommandDeps): EngineRevival {
+  const engine = deps.engine;
+  return engine === undefined ? undefined : () => engine.reprobe();
+}
+
+function messageOf(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * One engine request from a user command, with the one retry a click earns. `null` means both
+ * attempts found no engine at all, and the engine's own wording has already been shown.
+ */
+async function sendTo(
+  deps: CommandDeps,
+  work: () => Promise<HttpResult>,
+): Promise<HttpResult | null> {
+  try {
+    return await withEngineRetry(reviveOf(deps), work);
+  } catch (err: unknown) {
+    void deps.host.showWarningMessage(messageOf(err), undefined);
+    return null;
+  }
+}
+
+/** The Item tab's own fetch gets the same treatment: the tab is a user command's destination. */
+async function openTab(deps: CommandDeps, path: string, focus?: ItemFocus): Promise<void> {
+  await deps.itemTab.open(path, focus, reviveOf(deps));
 }
 
 /**
@@ -357,10 +402,13 @@ async function startFromItem(
   if (repoUrl === undefined) return;
   let result: HttpResult;
   try {
-    result = await client.startAgent(path, { mode, repoUrl });
+    result = await withEngineRetry(reviveOf(deps), () =>
+      client.startAgent(path, { mode, repoUrl }),
+    );
   } catch (err: unknown) {
     // A dead socket rejects rather than answering, and a command that rejects fails where nobody
-    // is looking — which is the whole complaint this path exists to answer.
+    // is looking — which is the whole complaint this path exists to answer. By here the engine
+    // has already been asked for once, with the trigger a person's click earns.
     void host.showWarningMessage(
       `Could not start the ${mode}: ${err instanceof Error ? err.message : String(err)}`,
       undefined,
@@ -377,7 +425,7 @@ async function startFromItem(
   // R56's answer to "nothing happened": the row this click was about is selected and open, so the
   // slot that just went `running` is on screen, and the tab swaps the workspace to its worktree.
   panel.reveal(item.id);
-  await deps.itemTab.open(path);
+  await openTab(deps, path);
 }
 
 /** Where an item's chosen repo is remembered — for a ticket row, one entry per ticket key. */
@@ -438,10 +486,11 @@ function repoUrlOf(slug: string): string {
 /** Create, then one explicit run, then open. Nothing is started that was not asked for. */
 async function createdThenRun(
   deps: CommandDeps,
-  result: HttpResult,
+  result: HttpResult | null,
   stage: string,
 ): Promise<void> {
   const { host, client, coordinator } = deps;
+  if (result === null) return;
   if (result.status < 200 || result.status >= 300) {
     void host.showWarningMessage(engineErrorText(result.body), undefined);
     return;
@@ -451,8 +500,8 @@ async function createdThenRun(
     void host.showWarningMessage('The engine created a session but did not describe it.', undefined);
     return;
   }
-  const run = await client.run(session, stage);
-  if (run.status < 200 || run.status >= 300) {
+  const run = await sendTo(deps, () => client.run(session, stage));
+  if (run !== null && (run.status < 200 || run.status >= 300)) {
     void host.showWarningMessage(engineErrorText(run.body), undefined);
   }
   coordinator.schedule();
@@ -462,7 +511,7 @@ async function createdThenRun(
 /** A just-created session has no `WorkItem` yet, so it is opened at its own `session/` path. */
 async function openSession(deps: CommandDeps, sessionId: string): Promise<void> {
   const path = itemPathOf(`session:${sessionId}`);
-  if (path !== null) await deps.itemTab.open(path);
+  if (path !== null) await openTab(deps, path);
 }
 
 /** `{ session: { id } }` — every creation route answers this shape. */

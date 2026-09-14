@@ -70,6 +70,12 @@ export interface PanelRowView {
    * the toast again, in ink.
    */
   hint: string | null;
+  /**
+   * One line inside the expanded block when its detail could not be read because there is no
+   * engine: the parts and the links above it came out of the last snapshot and still work, and
+   * saying so beats both a popup and a silently stale row. `null` the rest of the time.
+   */
+  detailNotice: string | null;
 }
 
 /** One part of an expanded row (§4). Built by `model/item-parts`. */
@@ -163,7 +169,16 @@ export interface PanelState {
    * Something that replaces the lists entirely and says what to do about it: an engine this
    * extension cannot use (Phase 8), or an engine whose `/items` the extension cannot read.
    */
-  trouble: { message: string; command: string; actionLabel: string } | null;
+  trouble: {
+    message: string;
+    command: string;
+    actionLabel: string;
+    /**
+     * The second, quieter offer — the log, beside a Start that is the actual way out. Absent or
+     * `null` when the trouble has only one thing to offer.
+     */
+    secondary?: { command: string; actionLabel: string } | null;
+  } | null;
   /** P10: the dismissible offer to open the managed workspace. `null` once it is not owed. */
   notice: PanelNoticeView | null;
   connected: boolean;

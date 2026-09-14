@@ -29,6 +29,7 @@ beforeEach(() => {
 function rowView(over: Partial<PanelRowView> = {}): PanelRowView {
   return {
     hint: null,
+    detailNotice: null,
     id: 'pr:acme/web#101',
     list: 'parkingLot',
     label: '#101 — Fix hydration on /communities',

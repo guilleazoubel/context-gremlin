@@ -10,7 +10,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CoreClient } from '../../src/core-client';
+import { CoreClient, EngineNotRunningError, type HttpResult } from '../../src/core-client';
+import type { EngineState, Trigger } from '../../src/engine/manager';
 import { createUi, type Ui } from '../../src/ui/wiring';
 import { validatePrUrl, validateTicket } from '../../src/ui/commands';
 import { heartbeatIntervalMs } from '../../src/ui/terminal';
@@ -54,12 +55,21 @@ interface Harness {
   toPanel(message: unknown): void;
 }
 
-async function harness(opts: { handler?: StubHandler; socketPath?: string } = {}): Promise<Harness> {
+interface HarnessOptions {
+  handler?: StubHandler;
+  socketPath?: string;
+  /** A client that can be made to answer "no engine at all", for the revival tests. */
+  client?: (socketPath: string) => CoreClient;
+  /** A manager that reacts to a `'user'` start, for the revival tests. */
+  engine?: () => FakeEngineManager;
+}
+
+async function harness(opts: HarnessOptions = {}): Promise<Harness> {
   const server = await startStubServer({ handler: opts.handler });
   servers.push(server);
   const host = new FakeHost();
   const level = { value: 'needs-you-only' as NotificationLevel };
-  const engine = new FakeEngineManager();
+  const engine = opts.engine?.() ?? new FakeEngineManager();
   engine.current = { kind: 'running', version: '0.0.1', pid: 10, adopted: false };
   const surface = new EngineSurface({
     host,
@@ -74,7 +84,9 @@ async function harness(opts: { handler?: StubHandler; socketPath?: string } = {}
   });
   const ui = createUi({
     host,
-    client: new CoreClient(opts.socketPath ?? server.socketPath),
+    client: (opts.client ?? ((p: string) => new CoreClient(p)))(
+      opts.socketPath ?? server.socketPath,
+    ),
     notificationLevel: () => level.value,
     engine: surface,
     coalesceMs: 5,
@@ -118,7 +130,7 @@ async function harness(opts: { handler?: StubHandler; socketPath?: string } = {}
   };
 }
 
-async function connected(opts: { handler?: StubHandler } = {}): Promise<Harness> {
+async function connected(opts: HarnessOptions = {}): Promise<Harness> {
   const h = await harness(opts);
   expect(await h.ui.connect()).toBe(true);
   return h;
@@ -260,20 +272,32 @@ describe('R24 one refresh, one request', () => {
 describe('an engine that is not one this extension can use', () => {
   const FOREIGN = { kind: 'foreign' } as const;
 
-  it('replaces the lists with one explanation of what happened', async () => {
+  it('explains what happened, above whatever it had already listed', async () => {
     const h = await connected();
     h.engine.emit(FOREIGN);
-    expect(h.state().sections).toEqual([]);
     expect(h.state().trouble?.message).toContain('not a cgremlin engine this extension can use');
     expect(h.state().trouble?.message).toContain('cgremlin: Start the engine');
     expect(h.state().trouble?.command).toBe('cgremlin.engine.start');
   });
 
-  it('shows the failure and a way to the log when the engine failed', async () => {
+  it('shows the failure, offers a start first and keeps the log beside it', async () => {
     const h = await connected();
     h.engine.emit({ kind: 'failed', reason: 'the engine exited with code 1', logTail: [] });
     expect(h.state().trouble?.message).toContain('the engine exited with code 1');
-    expect(h.state().trouble?.command).toBe('cgremlin.engine.showLog');
+    expect(h.state().trouble?.command).toBe('cgremlin.engine.start');
+    expect(h.state().trouble?.secondary).toEqual({
+      command: 'cgremlin.engine.showLog',
+      actionLabel: 'Show log',
+    });
+  });
+
+  /** With no engine at all, the panel owes the user one click that brings it back. */
+  it('offers a start when the engine is simply not running', async () => {
+    const h = await connected();
+    h.engine.emit({ kind: 'stopped' });
+    expect(h.state().trouble?.message).toContain('is not running');
+    expect(h.state().trouble?.command).toBe('cgremlin.engine.start');
+    expect(h.state().trouble?.actionLabel).toBe('Start the engine');
   });
 
   it('warns in the status bar, in the engine warning colour', async () => {
@@ -284,11 +308,12 @@ describe('an engine that is not one this extension can use', () => {
     expect(h.host.statusBarItems[0].warning).toBe(true);
   });
 
-  it('gives the four lists back the moment a usable engine is adopted', async () => {
+  it('clears the explanation the moment a usable engine is adopted', async () => {
     const h = await connected();
     h.engine.emit(FOREIGN);
-    expect(h.state().sections).toEqual([]);
+    expect(h.state().trouble).not.toBeNull();
     h.engine.emit({ kind: 'running', version: '0.0.1', pid: 10, adopted: true });
+    expect(h.state().trouble).toBeNull();
     expect(h.state().sections).toHaveLength(6);
     expect(h.host.statusBarItems[0].warning).toBe(false);
   });
@@ -419,7 +444,9 @@ describe('Refresh while the engine is not running', () => {
     await h.host.invoke('cgremlin.refreshInventory');
     await h.ui.settled();
     expect(h.since(mark)).toEqual([]);
-    expect(String(h.host.callsOf('showInformationMessage')[0].args[0])).toContain('stopped');
+    expect(String(h.host.callsOf('showInformationMessage')[0].args[0])).toContain(
+      'is not running',
+    );
   });
 
   it('scans as it always did when the engine is running', async () => {
@@ -1123,6 +1150,149 @@ describe('MG-B2 needs-you never pops (host half)', () => {
     h.ui.notifications.apply([], h.ui.coordinator.items(), 'off');
     await h.ui.settled();
     expect(h.host.callsOf('showInformationMessage')).toEqual([]);
+    expect(h.host.callsOf('showWarningMessage')).toEqual([]);
+  });
+});
+
+/**
+ * The live incident: an old window SIGTERM'd the engine until the respawn backoff was spent, and
+ * the engine stayed dead. Nothing in the extension retried, so every click answered with
+ * "cgremlin engine is not running" and the only cure was reloading the window.
+ *
+ * A person clicking is a person asking for the engine, so a user command that finds the socket
+ * empty asks for a start — `'user'`, which bypasses the backoff — and sends its request again.
+ */
+describe('a user command revives a dead engine', () => {
+  /** A client whose socket has gone away, exactly as `CoreClient` reports that. */
+  class DeadSocketClient extends CoreClient {
+    offline = false;
+
+    override request(method: string, path: string, body?: unknown): Promise<HttpResult> {
+      if (this.offline) {
+        return Promise.reject(new EngineNotRunningError('/tmp/cgremlin-fixture/engine.sock'));
+      }
+      return super.request(method, path, body);
+    }
+  }
+
+  /** The manager as the incident left it: dead, and only a `'user'` ask starts it again. */
+  class RevivableEngine extends FakeEngineManager {
+    onUserStart: (() => void) | null = null;
+
+    override async ensureRunning(trigger: Trigger = 'auto'): Promise<EngineState> {
+      const state = await super.ensureRunning(trigger);
+      if (trigger === 'user') this.onUserStart?.();
+      return state;
+    }
+  }
+
+  async function dead(): Promise<{ h: Harness; client: DeadSocketClient }> {
+    let client!: DeadSocketClient;
+    const h = await connected({
+      client: (socketPath) => (client = new DeadSocketClient(socketPath)),
+      engine: () => new RevivableEngine(),
+    });
+    (h.engine as RevivableEngine).onUserStart = () => {
+      client.offline = false;
+    };
+    client.offline = true;
+    return { h, client };
+  }
+
+  it('asks for a user start and retries the request once, saying nothing at all', async () => {
+    const { h } = await dead();
+    const mark = h.mark();
+
+    await h.host.invoke('cgremlin.ack', HB_ITEM);
+
+    expect(h.engine.calls).toContain('ensureRunning:user');
+    expect(paths(h, mark)).toEqual(['POST /items/ticket/HB-627/ack']);
+    expect(h.host.callsOf('showWarningMessage')).toEqual([]);
+  });
+
+  it('opens the item tab after the revival rather than reporting the dead socket', async () => {
+    const { h } = await dead();
+
+    await h.host.invoke('cgremlin.openItem', HB_ITEM);
+
+    expect(h.engine.calls).toContain('ensureRunning:user');
+    expect(h.host.callsOf('showWarningMessage')).toEqual([]);
+    expect(h.ui.itemTab.itemId()).toBe(HB_ITEM);
+  });
+
+  it('surfaces the engine\'s own wording only when the second attempt fails too', async () => {
+    const { h } = await dead();
+    (h.engine as RevivableEngine).onUserStart = null;
+
+    await h.host.invoke('cgremlin.ack', HB_ITEM);
+
+    expect(h.engine.calls).toContain('ensureRunning:user');
+    expect(String(h.host.callsOf('showWarningMessage')[0]?.args[0])).toContain(
+      'cgremlin engine is not running',
+    );
+  });
+});
+
+/**
+ * The other half of the incident: with the engine dead, clicking a row answered with the socket
+ * error rather than with the row. Everything the submenu needs — the item's parts, its PR and
+ * ticket links — is already in the snapshot the panel is holding, and opening a Jira page needs
+ * no engine at all. So the lists stay, the row still expands, and the only new thing on screen is
+ * one line saying the detail is the last one that loaded.
+ */
+describe('the panel degrades to its snapshot when the engine goes', () => {
+  const OFFLINE_LINE = 'Engine offline — showing what was last loaded';
+
+  async function stopped(): Promise<Harness> {
+    let client!: CoreClient;
+    const h = await connected({
+      client: (socketPath) => {
+        client = new (class extends CoreClient {
+          override request(method: string, path: string, body?: unknown): Promise<HttpResult> {
+            return this.dead
+              ? Promise.reject(new EngineNotRunningError(socketPath))
+              : super.request(method, path, body);
+          }
+          dead = false;
+        })(socketPath);
+        return client;
+      },
+    });
+    (client as CoreClient & { dead: boolean }).dead = true;
+    h.engine.emit({ kind: 'stopped' });
+    return h;
+  }
+
+  it('keeps the lists it already has under the trouble row', async () => {
+    const h = await stopped();
+    expect(h.state().trouble?.command).toBe('cgremlin.engine.start');
+    expect(h.rows().length).toBeGreaterThan(0);
+  });
+
+  it('still expands a row, from the snapshot, and says so in one line', async () => {
+    const h = await stopped();
+    h.toPanel({ type: 'selectRow', id: HB_ITEM, list: 'myWork' });
+    await settleDetail();
+
+    const row = h.rowOf(HB_ITEM);
+    expect(row.expanded).toBe(true);
+    expect(row.parts.length).toBeGreaterThan(0);
+    expect(row.detailNotice).toBe(OFFLINE_LINE);
+    // A line in the row the user opened, and not a popup over whatever they were doing.
+    expect(h.host.callsOf('showWarningMessage')).toEqual([]);
+  });
+
+  it('opens the ticket and the pull request with no engine at all', async () => {
+    const h = await stopped();
+    h.toPanel({ type: 'selectRow', id: HB_ITEM, list: 'myWork' });
+    await settleDetail();
+
+    await h.host.invoke('cgremlin.openTicket', HB_ITEM);
+    await h.host.invoke('cgremlin.openPr', HB_ITEM);
+    expect(h.host.callsOf('openExternal').map((c) => c.args[0])).toEqual([
+      'https://aplaceformom.atlassian.net/browse/HB-627',
+      'https://github.com/acme/web/pull/310',
+    ]);
     expect(h.host.callsOf('showWarningMessage')).toEqual([]);
   });
 });

@@ -27,6 +27,9 @@ export function createExpanded(): HTMLElement {
   // P10: the panel's notice, repeated where the user is actually reading. Text only — the notice
   // itself carries the buttons, and two Opens for one offer is the clutter this all replaces.
   node.appendChild(el('div', 'expanded-hint'));
+  // The engine went away while this row was open. Everything below is the snapshot's, and still
+  // opens; this line is the only thing that changes about the row (P11).
+  node.appendChild(el('div', 'expanded-offline'));
 
   const parts = el('div', 'parts');
   parts.setAttribute('role', 'group');
@@ -57,6 +60,9 @@ export function patchExpanded(node: HTMLElement, row: PanelRowView, focusedKey: 
   const hint = child(node, '.expanded-hint');
   setText(hint, row.hint ?? '');
   setHidden(hint, row.hint === null);
+  const offline = child(node, '.expanded-offline');
+  setText(offline, row.detailNotice ?? '');
+  setHidden(offline, row.detailNotice === null);
   patchParts(child(node, '.parts'), node, row, focusedKey);
   // `—` whenever the engine has not answered — the row never shows a fabricated zero (MG-12).
   setText(child(node, '.committed-value'), row.changes?.committed ?? '—');
