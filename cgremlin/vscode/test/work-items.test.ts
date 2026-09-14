@@ -145,7 +145,10 @@ describe('§2 the row identity', () => {
       .flatMap((s) => s.rows)
       .find((r) => r.id === 'pr:acme/legacy#9');
     expect(legacy?.identity).toBe('#9');
-    expect(legacy?.description).toBe('');
+    // Item 1: L2 is never empty while anything is known. A PR whose title the wire did not carry
+    // still has the core's own `WorkItem.title`, and its prose half names the work — what is NOT
+    // taken is the `acme/legacy#9 — ` head, which is the identity L1 already draws.
+    expect(legacy?.description).toBe('Bump the toolchain');
     expect(built.investigations.sections[0].rows[0].identity).toBe(
       'Investigate the nightly crash',
     );

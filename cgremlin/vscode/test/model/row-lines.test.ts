@@ -120,14 +120,16 @@ describe('task 2 — the three builders on their own', () => {
     expect(repoTailOf((rows().get('investigations/session:inv-stacktrace-1') as WorkRow).item)).toBe('');
   });
 
-  it('falls back from the ticket summary to the PR title to nothing', () => {
+  it('falls back from the ticket summary to the PR title to the item’s own prose', () => {
     const hb = rows().get('myWork/ticket:HB-627') as WorkRow;
     const bare = JSON.parse(JSON.stringify(hb.item)) as WorkRow['item'];
     if (bare.ticket !== null) bare.ticket.summary = '';
     expect(descriptionOf(bare)).toBe('HB-627 inbox reshuffle (web)');
     expect(identityOf(bare)).toBe('HB-627 #310');
     bare.prs = [];
-    expect(descriptionOf(bare)).toBe('');
+    // Item 1: dropping the PRs does not empty L2 — the core's own title still names the work,
+    // minus the `HB-627 — ` head that L1 already draws.
+    expect(descriptionOf(bare)).toBe('Caregiver inbox reshuffle');
     expect(identityOf(bare)).toBe('HB-627');
   });
 });
