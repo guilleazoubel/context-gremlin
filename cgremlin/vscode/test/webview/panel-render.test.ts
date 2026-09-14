@@ -103,7 +103,6 @@ describe('P0-4 keyed reconciliation', () => {
     for (let at = 0; at < 50; at += 1) panel.render(stateOf({ expanded: 'ticket:HB-627' }));
     expect(rowNodes().find((n) => n.dataset.key === 'row:myWork:ticket:HB-627')).toBe(row);
     expect(dom.document.activeElement).toBe(focusedBefore);
-    expect(dom.root.byClass('slot').length).toBeGreaterThan(0);
     expect(dom.root.byClass('part').length).toBeGreaterThan(0);
   });
 });

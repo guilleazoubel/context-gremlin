@@ -57,17 +57,18 @@ export function panelTreeNodes(state: PanelState): PanelTreeNode[] {
         group: section.group,
       });
       if (!row.expanded) continue;
-      for (const child of row.children) {
+      for (const part of row.parts) {
         nodes.push({
-          key: `child:${row.id}:${child.id}`,
+          key: `part:${row.id}:${part.key}`,
           kind: 'child',
           list: section.list,
           level: 2,
-          label: child.label,
+          label: `${part.name} ${part.stateText}`,
           expandable: false,
           expanded: false,
           rowId: row.id,
-          id: child.id,
+          // A stage that never ran opens nothing, so activating it does nothing (§4).
+          id: part.childId,
           group: section.group,
         });
       }

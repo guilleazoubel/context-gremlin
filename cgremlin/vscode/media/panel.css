@@ -424,10 +424,7 @@ body {
 
 /* --- the buttons, which now live only in the block a row opens into ------ */
 
-.slot-open,
-.slot-chat,
-.slot-start,
-.part-goto,
+.part-action,
 .row-action,
 .notice-open,
 .notice-dismiss,
@@ -453,78 +450,59 @@ body {
 }
 
 /*
- * The one drawn structure in the panel, and it is earned: the three stages ARE a sequence, so a
- * spine down their glyphs says so without a word of copy.
+ * §4 — the parts, as one list. The old three-slot spine is gone with the three fixed slots it
+ * drew: the parts a row has are now a variable sequence, and a spine down a variable sequence
+ * would be decoration rather than structure.
  */
-.slots {
-  position: relative;
-  padding-left: 14px;
-}
-
-.slots::before {
-  content: '';
-  position: absolute;
-  left: 4px;
-  top: 10px;
-  bottom: 10px;
-  width: 1px;
-  background: var(--cg-divider);
-}
-
-.slot {
+.part {
   display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 0;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 6px 0;
+  cursor: pointer;
 }
 
-.glyph {
+.part + .part {
+  border-top: 1px solid var(--cg-divider);
+}
+
+.part-glyph {
   flex: 0 0 auto;
   width: 14px;
   font-size: 11px;
-  line-height: 1;
+  line-height: 1.5;
   text-align: center;
 }
 
-.slot-text {
+.part-text {
   flex: 1 1 auto;
   min-width: 0;
 }
 
-.slot-title {
+.part-name {
   font-size: 12px;
+  color: var(--vscode-foreground);
 }
 
-.slot-state {
+.part-state,
+.part-detail {
   color: var(--vscode-descriptionForeground);
   font-size: 11px;
-}
-
-.slot[data-state='needsYou'] .slot-state {
-  color: var(--cg-accent);
-}
-
-.slot-actions {
-  display: flex;
-  flex: 0 0 auto;
-  gap: 2px;
-}
-
-.part {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-  padding: 4px 0;
-  color: var(--vscode-descriptionForeground);
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.part-label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* The one accent again: a stage that is waiting for the user says so in the colour that means it. */
+.part[data-state='needsYou'] .part-state {
+  color: var(--cg-accent);
+}
+
+.part-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 2px;
 }
 
 .changes {
@@ -553,23 +531,6 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
-/*
- * Who has already been on the PR. Muted and small: it is evidence for a decision, not the
- * decision — the row's own line already carries the strongest one.
- */
-.people {
-  margin-top: 6px;
-  color: var(--vscode-descriptionForeground);
-  font-size: 11px;
-  line-height: 1.6;
-}
-
-.person {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 /* --- focus and motion --------------------------------------------------- */
 
 .row:focus-visible,
@@ -578,10 +539,7 @@ body {
 .attention-item:focus-visible,
 .sort:focus-visible,
 .row-action:focus-visible,
-.slot-open:focus-visible,
-.slot-chat:focus-visible,
-.slot-start:focus-visible,
-.part-goto:focus-visible {
+.part-action:focus-visible {
   outline: 1px solid var(--vscode-focusBorder);
   outline-offset: -1px;
 }

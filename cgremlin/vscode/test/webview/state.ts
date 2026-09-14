@@ -6,19 +6,10 @@
  * panel never receives.
  */
 import { itemActionFacts, rowActions } from '../../src/model/row-actions';
+import { itemParts } from '../../src/model/item-parts';
 import { lifecycleSlots } from '../../src/model/lifecycle';
-import {
-  buildItemChildren,
-  humanInteractions,
-  buildWorkLists,
-  PANEL_SECTIONS,
-  type ItemsResponse,
-} from '../../src/model/work-items';
-import type {
-  PanelSectionView,
-  PanelSlotView,
-  PanelState,
-} from '../../src/model/panel-protocol';
+import { buildWorkLists, PANEL_SECTIONS, type ItemsResponse } from '../../src/model/work-items';
+import type { PanelSectionView, PanelState } from '../../src/model/panel-protocol';
 import itemsFixture from '../support/fixtures/items.json';
 
 export const NOW = Date.parse('2026-09-10T12:00:00.000Z');
@@ -26,12 +17,6 @@ export const NOW = Date.parse('2026-09-10T12:00:00.000Z');
 export function itemsResponse(): ItemsResponse {
   return JSON.parse(JSON.stringify(itemsFixture)) as ItemsResponse;
 }
-
-const START_COMMAND: Record<string, string> = {
-  investigation: 'cgremlin.startInvestigation',
-  development: 'cgremlin.startDevelopment',
-  review: 'cgremlin.startReview',
-};
 
 export interface StateOptions {
   expanded?: string;
@@ -70,19 +55,8 @@ export function stateOf(over: StateOptions = {}): PanelState {
         hasChildren: true,
         expanded,
         selected: over.selected === row.id,
-        children: expanded
-          ? buildItemChildren(row.item)
-              .filter((child) => child.kind !== 'agent')
-              .map((child) => ({
-                id: child.id,
-                kind: child.kind,
-                label: child.label,
-                goToLabel: 'Open',
-              }))
-          : [],
-        lifecycle: expanded ? slotsOf(row.item, actions) : [],
+        parts: expanded ? partsOf(row.item, row.list, actions) : [],
         changes: expanded ? (over.changes ?? { committed: '—', workingTree: '—' }) : null,
-        people: expanded ? humanInteractions(row.item.prs[0], NOW) : [],
         actions,
         hint: null,
       };
@@ -103,21 +77,17 @@ export function stateOf(over: StateOptions = {}): PanelState {
   return { sections, needsYou: [], banner: null, trouble: null, notice: null, connected: true };
 }
 
-function slotsOf(
+function partsOf(
   item: Parameters<typeof itemActionFacts>[0],
+  list: Parameters<typeof rowActions>[1],
   actions: ReturnType<typeof rowActions>,
-): PanelSlotView[] {
-  return lifecycleSlots({ agents: item.agents, facts: itemActionFacts(item), now: NOW }).map(
-    (slot) => ({
-      stage: slot.stage,
-      title: slot.title,
-      glyph: slot.glyph,
-      state: slot.state,
-      stateText: slot.stateText,
-      sessionId: slot.sessionId,
-      start: slot.next
-        ? (actions.find((action) => action.command === START_COMMAND[slot.stage]) ?? null)
-        : null,
-    }),
-  );
+) {
+  const facts = itemActionFacts(item);
+  return itemParts({
+    item,
+    list,
+    slots: lifecycleSlots({ agents: item.agents, facts, now: NOW }),
+    actions,
+    now: NOW,
+  });
 }

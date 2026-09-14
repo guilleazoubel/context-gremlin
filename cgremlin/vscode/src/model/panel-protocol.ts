@@ -7,10 +7,8 @@
  *
  * Pure module — no editor API (MG-B1).
  */
-import type { SlotState } from './lifecycle';
 import type { NeedsYouEntry } from './needs-you';
-import type { ActionPlacement, StageKind } from './row-actions';
-import type { HumanInteraction } from './work-items';
+import type { ActionPlacement } from './row-actions';
 import {
   PANEL_SECTIONS,
   SORT_OPTIONS,
@@ -56,18 +54,13 @@ export interface PanelRowView {
    * the selection that says which worktree the workspace currently holds.
    */
   selected: boolean;
-  /** The PARTS — the ticket and the PRs. The agents are the lifecycle slots instead. */
-  children: PanelChildView[];
-  /** Investigation → Development → Review. Empty unless the row is expanded. */
-  lifecycle: PanelSlotView[];
+  /**
+   * §4 — the item's own parts, in a fixed order, each with its own state and its own buttons.
+   * Empty unless the row is expanded. What replaced "three lifecycle slots + parts + people".
+   */
+  parts: PanelPartView[];
   /** "Changes so far", or `null` until the engine has answered — the row then paints `—`. */
   changes: PanelChangesView | null;
-  /**
-   * Who has already been on the PR — the evidence behind "someone is on it". Empty unless the
-   * row is expanded. Every entry is dated by the ONE timestamp the wire carries, so they share
-   * an age rather than pretending to per-actor clocks (`model/work-items`).
-   */
-  people: HumanInteraction[];
   /** The row's own actions, already decided by the host (which ones apply is not the view's job). */
   actions: PanelActionView[];
   /**
@@ -78,31 +71,27 @@ export interface PanelRowView {
   hint: string | null;
 }
 
-/** One lifecycle slot of an expanded row (§4, amended). Built by `model/lifecycle`. */
-export interface PanelSlotView {
-  stage: StageKind;
-  title: string;
+/** One part of an expanded row (§4). Built by `model/item-parts`. */
+export interface PanelPartView {
+  /** `investigation` | `development` | `review` | `ticket:<KEY>` | `pr:<repo>#<n>` (§8). */
+  key: string;
+  kind: string;
+  name: string;
   glyph: string;
-  state: SlotState;
+  /** The lifecycle state, for the stylesheet. Empty for a ticket or a PR. */
+  state: string;
   stateText: string;
-  /** The stage's session — what Open and Chat address. `null` when the stage never ran. */
-  sessionId: string | null;
-  /** The forward-only Start for this stage, when the rule allows one here. */
-  start: PanelActionView | null;
+  /** A second line, where the part has one. */
+  detail: string;
+  /** What `openChild` addresses, `null` for a stage that never ran. */
+  childId: string | null;
+  actions: PanelActionView[];
 }
 
 export interface PanelChangesView {
   /** Already rendered — `8 files +240/−31`, or `—` (MG-12). */
   committed: string;
   workingTree: string;
-}
-
-export interface PanelChildView {
-  id: string;
-  kind: 'agent' | 'ticket' | 'pr';
-  label: string;
-  /** The secondary action's wording — "Open on GitHub", "Open in Jira", "Resume". */
-  goToLabel: string;
 }
 
 export interface PanelActionView {

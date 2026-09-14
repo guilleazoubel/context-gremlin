@@ -233,17 +233,18 @@ describe('what an expanded row asks the engine for', () => {
     expect(h.loaded).toEqual(['ticket:HB-627']);
   });
 
-  it('offers, in the slots, exactly the Start the row’s own rule allows (§4)', () => {
+  it('offers, in the parts, exactly the Start the row’s own rule allows (§4)', () => {
     const h = build();
     click(h, 'ticket:HB-627');
-    const slots = h.row('ticket:HB-627')?.lifecycle ?? [];
-    expect(slots.map((slot) => slot.start?.command ?? null)).toEqual([
-      null,
-      null,
-      'cgremlin.startReview',
-    ]);
+    const parts = h.row('ticket:HB-627')?.parts ?? [];
+    const starts = parts.map(
+      (part) =>
+        part.actions.find((action) => action.command.startsWith('cgremlin.start'))?.command ?? null,
+    );
+    expect(starts.slice(0, 3)).toEqual([null, null, 'cgremlin.startReview']);
     // HB-627's PRs are the user's own, so the review the core would accept is a self-review.
-    expect(slots[2].start?.label).toBe('Start self-review');
+    const review = parts.find((part) => part.key === 'review');
+    expect(review?.actions.map((action) => action.label)).toContain('Start self-review');
   });
 });
 

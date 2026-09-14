@@ -16,11 +16,11 @@
 import crypto from 'node:crypto';
 import { changeSummary, type SessionChanges } from '../model/changes';
 import { detailSignatureOf, lifecycleSlots } from '../model/lifecycle';
-import { itemActionFacts, rowActions, type StageKind } from '../model/row-actions';
+import { itemParts } from '../model/item-parts';
+import { itemActionFacts, rowActions } from '../model/row-actions';
 import {
   buildItemChildren,
   buildWorkLists,
-  humanInteractions,
   readCollapsed,
   readSort,
   readSorts,
@@ -42,10 +42,9 @@ import {
   type HostToPanel,
   type PanelActionView,
   type PanelChangesView,
-  type PanelChildView,
+  type PanelPartView,
   type PanelRowView,
   type PanelSectionView,
-  type PanelSlotView,
   type PanelState,
   type PanelNoticeView,
 } from '../model/panel-protocol';
@@ -114,12 +113,6 @@ export const MANAGED_WORKSPACE_HINT =
   'Open the cgremlin workspace to follow the code in the editor';
 const OPEN_MANAGED_LABEL = 'Open';
 const DISMISS_LABEL = 'Not now';
-
-const START_COMMAND: Record<StageKind, string> = {
-  investigation: 'cgremlin.startInvestigation',
-  development: 'cgremlin.startDevelopment',
-  review: 'cgremlin.startReview',
-};
 
 export class PanelView implements WebviewViewProviderLike {
   private view: WebviewViewLike | null = null;
@@ -405,15 +398,9 @@ export class PanelView implements WebviewViewProviderLike {
       hasChildren: true,
       expanded,
       selected: this.selectedId === row.id,
-      // The PARTS. The agents are the lifecycle slots instead, so they are not listed twice.
-      children: expanded
-        ? buildItemChildren(row.item)
-            .filter((child) => child.kind !== 'agent')
-            .map(childView)
-        : [],
-      lifecycle: expanded ? this.slotsOf(row, actions) : [],
+      // §4: the item's OWN parts, each already carrying only the buttons the list allows.
+      parts: expanded ? this.partsOf(row, actions) : [],
       changes: expanded ? this.changesView(row.id) : null,
-      people: expanded ? humanInteractions(row.item.prs[0], this.deps.now?.() ?? Date.now()) : [],
       actions,
       // The notice again, where the user is actually looking — the open row, and only it.
       hint: expanded && this.noticeView() !== null ? MANAGED_WORKSPACE_HINT : null,
@@ -421,27 +408,26 @@ export class PanelView implements WebviewViewProviderLike {
   }
 
   /**
-   * The lifecycle slots, each carrying the Start the forward-only rule allows — taken from the
-   * row's OWN actions, so a slot can never offer a verb the row's button refuses (P0-2).
+   * §4's parts. The lifecycle slots still say the state wording (`model/lifecycle`), and
+   * `itemParts` decides which of them belong on THIS row in THIS list and hands each one the
+   * buttons the row's own actions already allow — so a part can never offer a verb the row
+   * refuses (P0-2).
    */
-  private slotsOf(row: WorkRow, actions: PanelActionView[]): PanelSlotView[] {
+  private partsOf(row: WorkRow, actions: PanelActionView[]): PanelPartView[] {
     const detail = this.detail?.id === row.id ? this.detail.detail : null;
-    return lifecycleSlots({
-      agents: row.item.agents,
-      facts: itemActionFacts(row.item),
-      artifactAt: detail?.artifactAt,
+    const facts = itemActionFacts(row.item);
+    return itemParts({
+      item: row.item,
+      list: row.list,
+      slots: lifecycleSlots({
+        agents: row.item.agents,
+        facts,
+        artifactAt: detail?.artifactAt,
+        now: this.deps.now?.(),
+      }),
+      actions,
       now: this.deps.now?.(),
-    }).map((slot) => ({
-      stage: slot.stage,
-      title: slot.title,
-      glyph: slot.glyph,
-      state: slot.state,
-      stateText: slot.stateText,
-      sessionId: slot.sessionId,
-      start: slot.next
-        ? (actions.find((action) => action.command === START_COMMAND[slot.stage]) ?? null)
-        : null,
-    }));
+    });
   }
 
   /** `—` until the engine has answered, and `—` forever on an engine that has no such route. */
@@ -638,21 +624,6 @@ export class PanelView implements WebviewViewProviderLike {
   }
 }
 
-const GO_TO_LABEL: Record<WorkChild['kind'], string> = {
-  agent: 'Resume',
-  ticket: 'Open in Jira',
-  pr: 'Open on GitHub',
-};
-
-function childView(child: WorkChild): PanelChildView {
-  return {
-    id: child.id,
-    kind: child.kind,
-    label: child.label,
-    goToLabel: GO_TO_LABEL[child.kind],
-  };
-}
-
 /**
  * The row's actions (R42, R50, R51, R26) — **which ones apply is a rule about the list**, so it
  * is asked of the one shared module (`model/row-actions`) rather than decided twice. The Item
@@ -660,5 +631,9 @@ function childView(child: WorkChild): PanelChildView {
  * the tab cannot disagree about what a click would do.
  */
 export function actionsFor(item: WorkItem, list: WorkListKind): PanelActionView[] {
-  return rowActions(itemActionFacts(item), list);
+  // §4: `Ack` renders only while something needs you AND you have not already said so. The rule
+  // table cannot see the acknowledgement, so the one field it lacks is applied here.
+  return rowActions(itemActionFacts(item), list).filter(
+    (action) => action.command !== 'cgremlin.ack' || !item.attention.acked,
+  );
 }

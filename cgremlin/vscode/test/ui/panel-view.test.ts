@@ -289,13 +289,15 @@ describe('R54 the messages the panel acts on', () => {
     expect(hb()?.hasChildren).toBe(true);
     h.view.webview.emit({ type: 'toggleRow', id: 'ticket:HB-627', expanded: true });
     expect(hb()?.expanded).toBe(true);
-    // The PARTS only. The agents are the three lifecycle slots instead, so a session is never
-    // listed twice in one expanded row (§4, amended).
-    expect(hb()?.children.map((c) => c.kind)).toEqual(['ticket', 'pr', 'pr']);
-    expect(hb()?.lifecycle.map((slot) => slot.stage)).toEqual([
+    // §4: the item's own parts, each once — the stages it has reached, then the ticket, then a
+    // row per PR. No session is named twice in one expanded row.
+    expect(hb()?.parts.map((part) => part.key)).toEqual([
       'investigation',
       'development',
       'review',
+      'ticket:HB-627',
+      'pr:acme/web#310',
+      'pr:acme/api#88',
     ]);
     h.panel.setItems(response());
     expect(hb()?.expanded).toBe(true);
@@ -470,10 +472,11 @@ describe('R66/R54 the panel is an accessible tree, and the keys are the tree mod
     // parts and nothing else — the browser owns the header's own Enter and Space.
     expect(seen.every((n) => n.kind === 'row' || n.kind === 'child')).toBe(true);
     expect(seen.filter((n) => n.kind === 'row').every((n) => n.level === 1)).toBe(true);
-    // HB-627 is legitimately in two lists (`myWork` and `waitingForReview`), so its three parts
-    // are rendered under each of them.
+    // HB-627 is legitimately in two lists (`myWork` and `waitingForReview`), so its parts are
+    // rendered under each of them — and §4 gives it a different set in each, because the two
+    // lists ask different questions of the same item.
     const children = seen.filter((n) => n.kind === 'child');
-    expect(children.length).toBe(6);
+    expect(children.length).toBe(10);
     expect(children.every((n) => n.level === 2)).toBe(true);
   });
 
@@ -628,7 +631,7 @@ describe('R54 the look', () => {
   });
 
   it('gives every hit target at least 24 px (§2.2 rule 2)', () => {
-    for (const selector of ['.row-action', '.slot-start', '.slot-open', '.part-goto']) {
+    for (const selector of ['.row-action', '.part-action', '.sort']) {
       expect(css).toContain(selector);
     }
     expect(css.match(/min-height:\s*24px/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
@@ -652,8 +655,8 @@ describe('MG-12 the panel half — defaults render as unknown', () => {
   });
 });
 
-describe('R48 the children are clickable, with two actions', () => {
-  it('gives each child its Info click and its Go-to label', () => {
+describe('R48 the parts are clickable, with two actions', () => {
+  it('gives each part its Open and its browser action', () => {
     const h = build();
     h.ready();
     h.view.webview.emit({ type: 'toggleRow', id: 'ticket:HB-627', expanded: true });
@@ -661,11 +664,11 @@ describe('R48 the children are clickable, with two actions', () => {
       .state()
       .sections.flatMap((s) => s.rows)
       .find((r) => r.id === 'ticket:HB-627');
-    expect(row?.children.map((c) => c.goToLabel)).toEqual([
-      'Open in Jira',
-      'Open on GitHub',
-      'Open on GitHub',
-    ]);
+    expect(
+      row?.parts
+        .filter((part) => part.kind === 'ticket' || part.kind === 'pr')
+        .map((part) => part.actions.map((action) => action.label).join('/')),
+    ).toEqual(['Open/Open in Jira', 'Open/Open on GitHub', 'Open/Open on GitHub']);
     h.view.webview.emit({ type: 'openChild', id: 'ticket:HB-627', childId: 'pr:acme/web#310' });
     expect(h.children).toEqual([['ticket:HB-627', 'pr:acme/web#310']]);
   });

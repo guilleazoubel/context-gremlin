@@ -90,7 +90,8 @@ describe('§4 — one click is one message', () => {
   it('posts the verb alone when the click was on a button in the open block', () => {
     panel.render(stateOf({ expanded: 'pr:acme/web#101' }));
     dom.posted.length = 0;
-    dom.root.byClass('row-action')[0].emit('click');
+    const pr = dom.root.byClass('part').find((node) => (node.dataset.key ?? '').endsWith('#101'));
+    pr?.byClass('part-action')[1].emit('click');
     expect(dom.posted).toEqual([
       {
         type: 'command',
@@ -159,10 +160,19 @@ describe('R66 — the keys do what the mouse does', () => {
   it('opens a part from the keyboard once its row is open', () => {
     panel.render(stateOf({ expanded: 'ticket:HB-627' }));
     dom.document.emit('keydown', { key: 'Home' });
-    for (let at = 0; at < 40; at += 1) dom.document.emit('keydown', { key: 'ArrowDown' });
+    // Down to the first part that has something to open. A stage that never ran has no session
+    // behind it, so the arrows still land on it and <kbd>Enter</kbd> deliberately does nothing.
+    let focused = dom.root.findAll((node) => node.tabIndex === 0)[0];
+    for (let at = 0; at < 60 && (focused?.dataset.childId ?? '') === ''; at += 1) {
+      dom.document.emit('keydown', { key: 'ArrowDown' });
+      focused = dom.root.findAll((node) => node.tabIndex === 0)[0];
+    }
+    expect(focused?.dataset.key).toContain('part:');
     dom.posted.length = 0;
     dom.document.emit('keydown', { key: 'Enter' });
-    expect(dom.posted).toHaveLength(1);
+    expect(dom.posted).toEqual([
+      { type: 'openChild', id: 'ticket:HB-627', childId: focused?.dataset.childId },
+    ]);
   });
 
   it('puts the caret back where it was, and never takes it from somewhere else', () => {

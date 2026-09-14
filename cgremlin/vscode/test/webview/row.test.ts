@@ -54,10 +54,8 @@ function rowView(over: Partial<PanelRowView> = {}): PanelRowView {
     hasChildren: true,
     expanded: false,
     selected: false,
-    children: [],
-    lifecycle: [],
+    parts: [],
     changes: null,
-    people: [],
     actions: [
       { command: 'cgremlin.startReview', label: 'Start review', placement: 'primary' },
       { command: 'cgremlin.openPr', label: 'Open acme/web#101', placement: 'overflow' },
