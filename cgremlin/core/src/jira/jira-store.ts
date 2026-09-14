@@ -10,6 +10,14 @@ export interface JiraScanReport {
   /** R37 — the accountId from `whoami()`, resolved once per scan. `myWork` compares against it. */
   me: string | null;
   issues: JiraIssueSummary[];
+  /**
+   * R28 — the summaries of keys the JQL never returned, fetched one by one
+   * because a PR or a session named them. Present only when there are any,
+   * so a report with nothing seeded keeps the shape it always had. They are
+   * NOT candidates of their own: `groupWorkItems` iterates `issues` to make
+   * ticket items and reads these only to describe a row that already exists.
+   */
+  seeded?: JiraIssueSummary[];
   error: string | null;
   kind: TicketSourceKind;
 }
@@ -28,6 +36,7 @@ const JiraScanReportSchema = z.object({
   scannedAt: z.string(),
   me: z.string().nullable(),
   issues: z.array(JiraIssueSummarySchema),
+  seeded: z.array(JiraIssueSummarySchema).optional(),
   error: z.string().nullable(),
   kind: z.enum(['notConfigured', 'auth', 'unavailable', 'ok']),
 });

@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { WorkItemService } from '../../src/work/work-item-service';
 import { AttentionService, PrSourceAdapter, SessionSourceAdapter } from '../../src/attention/attention-service';
 import { AckStore } from '../../src/attention/ack-store';
+import { DismissStore } from '../../src/attention/dismiss-store';
 import { InventoryStore } from '../../src/inventory/inventory-store';
 import { createHarness, SESSIONS_DIR } from '../support/pipeline-harness';
 import { KeyedLock } from '../../src/api/keyed-lock';
@@ -104,6 +105,7 @@ async function makeFixture(entries: InventoryEntry[], jira: JiraScanReport = EMP
     attention,
     inventory: inventoryStore,
     jira: { lastReport: async () => jira },
+    dismissals: new DismissStore(h.fs, '/state/dismissals.json'),
     events: h.events,
     config: { me: 'me-user', watchAuthors: ['bob'], showAllRepoPrs: false, projectKeys: ['HB'] },
   });

@@ -101,6 +101,15 @@ export interface WorkItem {
   ticket: WorkItemTicket | null;
   agents: WorkItemAgent[];
   needsYou: boolean;
+  /**
+   * "I don't care about this one right now" — persisted per item in the
+   * state dir by `DismissStore` and applied by `WorkItemService`, never
+   * derived here (`groupWorkItems` stays pure). A dismissed item is in NO
+   * list, but it is still in `items`, so a client can render "show
+   * dismissed" without a refetch.
+   */
+  dismissed: boolean;
+  dismissedAt: string | null;
   attention: { reasons: AttentionReason[]; since: string; acked: boolean; refs: ItemRef[] };
 }
 
@@ -231,7 +240,12 @@ export function groupWorkItems(input: GroupWorkItemsInput): WorkItem[] {
   const ticketCandidate = (key: string): Candidate => {
     const existing = candidateOfTicket.get(key);
     if (existing !== undefined) return existing;
-    const issue = input.jira?.issues.find((i) => i.key === key) ?? null;
+    // R28's second half: a key the JQL never returned may still have been
+    // fetched individually into `seeded`. It describes the row and NOTHING
+    // else — step 1 makes candidates out of `issues` alone, so a stale
+    // seeded key can never invent a ticket item.
+    const issue =
+      input.jira?.issues.find((i) => i.key === key) ?? input.jira?.seeded?.find((i) => i.key === key) ?? null;
     // R28: a candidate seeded from the LINK carries the key alone, and the
     // tab fills the rest on demand. Seeding from the snapshot only would let
     // an item's id flip the moment Jira goes down or a ticket leaves the JQL.
@@ -403,6 +417,10 @@ function finish(cand: Candidate, ctx: FinishContext): WorkItem {
       cand.contributors.some(
         (c) => c.mode === null && c.attention.needsAttention && c.attention.reasons.some((r) => NEEDS_YOU_REASONS.includes(r)),
       ),
+    // Overlaid by WorkItemService from the dismissal store; the grouping
+    // itself has no I/O and therefore no opinion about it.
+    dismissed: false,
+    dismissedAt: null,
     attention: { reasons, since: sinceCandidates[0] ?? '', acked, refs },
   };
 }

@@ -29,6 +29,7 @@ import { NodeSessionWatcher } from '../fs/node-session-watcher';
 import type { SessionWatcher } from '../fs/session-watcher';
 import { EnvironmentService } from '../env/environment-service';
 import { AckStore } from '../attention/ack-store';
+import { DismissStore } from '../attention/dismiss-store';
 import { WorkItemService } from '../work/work-item-service';
 import {
   AttentionService,
@@ -274,10 +275,33 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     snapshot: () => jiraScanner.lastReport(),
     now: adapters.now,
   });
+  const jiraProjectKeys = config.jira?.projectKeys ?? [];
+  /**
+   * R28 — every ticket key a PR branch or a session's lineage named, so the
+   * scanner can fetch a summary for the ones the JQL never returned. Both
+   * reads are unlocked and tolerant: a corrupt inventory or an unreadable
+   * session simply seeds fewer keys, and the scan carries on.
+   */
+  const seededTicketKeys = async (): Promise<string[]> => {
+    if (jiraProjectKeys.length === 0) return [];
+    const keys = new Set<string>();
+    const inventory = await inventoryStore.load().catch(() => null);
+    // Already filtered by projectKeys at scan time (R29).
+    for (const entry of inventory?.entries ?? []) for (const key of entry.ticketKeys) keys.add(key);
+    // A session's lineage was written UNFILTERED, so it is filtered here.
+    const sessions = await store.list().catch(() => []);
+    for (const session of sessions) {
+      const ticket = session.lineage.ticket;
+      const project = ticket === null ? null : /^([A-Z][A-Z0-9]+)-\d+$/.exec(ticket)?.[1] ?? null;
+      if (ticket !== null && project !== null && jiraProjectKeys.includes(project)) keys.add(ticket);
+    }
+    return [...keys];
+  };
   const jiraScanner = new JiraScanner({
     source: jiraSource,
     store: new JiraStore(adapters.fs, config.jiraCachePath!),
     jql: config.jira?.jql ?? '',
+    seededKeys: seededTicketKeys,
     scanBudgetMs: config.jira?.scanBudgetMs ?? 20_000,
     ...(config.jira?.maxResults !== undefined ? { maxResults: config.jira.maxResults } : {}),
     now: adapters.now,
@@ -345,7 +369,9 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     inventory: inventoryStore,
     jira: jiraScanner,
     threads: threadScanner,
+    dismissals: new DismissStore(adapters.fs, config.dismissalsPath!),
     events,
+    now: adapters.now,
     config: {
       me: config.me,
       watchAuthors: config.watchAuthors,

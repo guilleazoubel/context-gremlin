@@ -2,6 +2,7 @@ import type { AttentionItem } from '../attention/attention-service';
 import type { EngineEvents } from '../engine/events';
 import type { Inventory } from '../inventory/inventory';
 import type { JiraScanReport, TicketSourceKind } from '../jira/jira-store';
+import { dismissalFor, type DismissStore } from '../attention/dismiss-store';
 import { groupWorkItems, workListsOf, type WorkItem, type WorkLists } from './work-item';
 import type { WorkItemId } from './work-item-id';
 
@@ -18,7 +19,13 @@ export interface WorkItemServiceDeps {
   jira: { lastReport(): Promise<JiraScanReport> };
   /** R52 — filled in by the review-thread leg; `{ error: null }` until it has run. */
   threads?: { lastReport(): { scannedAt: string | null; error: string | null; fetched: number } };
+  /** Per-item "not interesting now", shared by every window (`<stateDir>/dismissals.json`). */
+  dismissals: DismissStore;
   events: EngineEvents;
+  /** The clock a dismissal is stamped with. */
+  now?: () => Date;
+  /** One line per auto-undismissal. Defaults to `console.warn`, which the engine log captures. */
+  log?: (line: string) => void;
   config: {
     me: string;
     watchAuthors: readonly string[];
@@ -32,6 +39,12 @@ export interface WorkItemServiceDeps {
 export interface WorkItemListing {
   evaluatedAt: string;
   lists: WorkLists;
+  /**
+   * The ids of the dismissed items, newest dismissal first. They are NOT in
+   * `lists`, but they ARE in `items` — so "show dismissed" is a client-side
+   * toggle with no refetch.
+   */
+  dismissed: WorkItemId[];
   items: WorkItem[];
   ticketSource: { kind: TicketSourceKind; error: string | null; scannedAt: string };
   threadSource: { error: string | null; scannedAt: string | null };
@@ -58,6 +71,7 @@ function deltaFieldsOf(item: WorkItem): Record<string, string> {
     ),
     prs: JSON.stringify(item.prs.map((p) => [p.repo, p.number, p.updatedAt, p.reviewDecision, p.ci, p.isDraft])),
     ticket: JSON.stringify(item.ticket === null ? null : [item.ticket.key, item.ticket.status, item.ticket.updatedAt]),
+    dismissed: String(item.dismissed),
   };
 }
 
@@ -87,19 +101,102 @@ export class WorkItemService {
       ...(this.deps.config.botLogins !== undefined ? { botLogins: this.deps.config.botLogins } : {}),
       ...(this.deps.config.jiraSiteUrl !== undefined ? { jiraSiteUrl: this.deps.config.jiraSiteUrl } : {}),
     });
+    const dismissed = await this.applyDismissals(items);
     const threads = this.deps.threads?.lastReport() ?? { scannedAt: null, error: null, fetched: 0 };
     return {
       evaluatedAt: attention.evaluatedAt,
-      lists: workListsOf(items),
+      // A dismissed item is in no list at all; it stays in `items` so the
+      // client can show it on demand.
+      lists: workListsOf(items.filter((item) => !item.dismissed)),
+      dismissed,
       items,
       ticketSource: { kind: jira.kind, error: jira.error, scannedAt: jira.scannedAt },
       threadSource: { error: threads.error, scannedAt: threads.scannedAt },
     };
   }
 
+  /**
+   * Marks the item "not interesting now". Idempotent, and keyed by the id
+   * AND by every ref the item carries right now, so the dismissal follows
+   * the item when its id changes shape (a PR later linked to a ticket).
+   * Returns null for an unknown item.
+   */
+  async dismiss(id: WorkItemId): Promise<WorkItem | null> {
+    const item = (await this.list()).items.find((i) => i.id === id);
+    if (item === undefined) return null;
+    if (item.dismissed) return item;
+    await this.deps.dismissals.put(id, {
+      dismissedAt: this.nowIso(),
+      refs: [...item.attention.refs],
+    });
+    return this.afterDismissalChange(id);
+  }
+
+  /** The inverse, idempotent, and it clears the entry WHEREVER it is keyed. */
+  async undismiss(id: WorkItemId): Promise<WorkItem | null> {
+    const item = (await this.list()).items.find((i) => i.id === id);
+    if (item === undefined) return null;
+    if (!item.dismissed) return item;
+    const match = dismissalFor(await this.deps.dismissals.load(), id, item.attention.refs);
+    await this.deps.dismissals.remove([match?.key ?? id]);
+    return this.afterDismissalChange(id);
+  }
+
   /** By the item's OWN id. Path-shaped lookups (R65) resolve through `list()` in the API layer. */
   async get(id: WorkItemId): Promise<WorkItem | null> {
     return (await this.list()).items.find((item) => item.id === id) ?? null;
+  }
+
+  private nowIso(): string {
+    return (this.deps.now ?? (() => new Date()))().toISOString();
+  }
+
+  /**
+   * One `item.changed` with exactly `['dismissed']`, emitted here rather
+   * than left to `recompute()`: a dismissal is a deliberate act on ONE item,
+   * and the client must see it whether or not the service is subscribed.
+   * `lastDelta` is primed with the new state so the next recompute does not
+   * report the same change twice.
+   */
+  private async afterDismissalChange(id: WorkItemId): Promise<WorkItem | null> {
+    const refreshed = (await this.list()).items.find((i) => i.id === id) ?? null;
+    if (refreshed === null) return null;
+    this.lastDelta.set(id, deltaFieldsOf(refreshed));
+    this.deps.events.emit('item.changed', { id, kind: refreshed.kind, changedFields: ['dismissed'] });
+    return refreshed;
+  }
+
+  /**
+   * Overlays the persisted dismissals onto the freshly grouped items, and
+   * AUTO-UNDISMISSES anything that now needs me: a dismissal means "not
+   * interesting now", never "hide a thing that needs me".
+   */
+  private async applyDismissals(items: WorkItem[]): Promise<WorkItemId[]> {
+    const dismissals = await this.deps.dismissals.load();
+    if (Object.keys(dismissals).length === 0) return [];
+    const log = this.deps.log ?? ((line: string) => console.warn(line));
+    const stale: WorkItemId[] = [];
+    const found: Array<{ id: WorkItemId; at: string }> = [];
+    for (const item of items) {
+      const match = dismissalFor(dismissals, item.id, item.attention.refs);
+      if (match === null) continue;
+      if (item.needsYou) {
+        stale.push(match.key);
+        log(`work-item ${item.id}: auto-undismissed — it now needs you (${item.attention.reasons.join(',')})`);
+        continue;
+      }
+      item.dismissed = true;
+      item.dismissedAt = match.entry.dismissedAt;
+      found.push({ id: item.id, at: match.entry.dismissedAt });
+    }
+    // Deliberately NOT pruned against the live items: an item can leave the
+    // inventory for a scan (a PR briefly out of the window) and come back,
+    // and losing the dismissal there would be the user's hidden row
+    // reappearing for no reason they can see.
+    if (stale.length > 0) await this.deps.dismissals.remove(stale);
+    return found
+      .sort((a, b) => (a.at === b.at ? a.id.localeCompare(b.id) : a.at < b.at ? 1 : -1))
+      .map((f) => f.id);
   }
 
   start(): void {

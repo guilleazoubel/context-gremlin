@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createApiServer } from '../../src/api/server';
 import { AckStore } from '../../src/attention/ack-store';
+import { DismissStore } from '../../src/attention/dismiss-store';
 import { AttentionService, PrSourceAdapter, SessionSourceAdapter } from '../../src/attention/attention-service';
 import { WorkItemService } from '../../src/work/work-item-service';
 import { createInventoryHarness, type InventoryHarness } from '../support/inventory-harness';
@@ -105,6 +106,8 @@ async function start(opts: { withWorkItems?: boolean } = {}): Promise<void> {
     jira: { lastReport: async () => jira },
     threads: { lastReport: () => threadReport },
     events: ih.h.events,
+    dismissals: new DismissStore(ih.h.fs, '/state/dismissals.json'),
+    now: () => NOW,
     config: { me: 'me-user', watchAuthors: ['bob'], showAllRepoPrs: false, projectKeys: ['HB'] },
   });
   server = createApiServer({
@@ -671,5 +674,58 @@ describe('POST /items/pr/:o/:r/:n/agents { mode: respond } (R51, R56, MG-8 amend
     const created = await request('POST', '/items/pr/acme/app/11/agents', { mode: 'respond' });
     const res = await request('POST', `/sessions/${created.body.session.id}/run`, { stage: 'respond' });
     expect(res.status).not.toBe(400);
+  });
+});
+
+describe('POST /items/<path>/dismiss and /undismiss', () => {
+  it('dismiss is 200 { item }, drops the item from the lists, and keeps it in items', async () => {
+    await start();
+    await scan([prFixture(10, 'bob')]);
+    const res = await request('POST', '/items/pr/acme/app/10/dismiss');
+    expect(res.status).toBe(200);
+    expect(Object.keys(res.body)).toEqual(['item']);
+    expect(res.body.item).toMatchObject({ id: 'pr:acme/app#10', dismissed: true, dismissedAt: NOW.toISOString() });
+
+    const listed = await request('GET', '/items');
+    expect(listed.body.lists.parkingLot.untouched).toEqual([]);
+    expect(listed.body.items.map((i: Json) => i.id)).toEqual(['pr:acme/app#10']);
+    expect(listed.body.dismissed).toEqual(['pr:acme/app#10']);
+  });
+
+  it('both routes are idempotent and undismiss puts the item back', async () => {
+    await start();
+    await scan([prFixture(10, 'bob')]);
+    await request('POST', '/items/pr/acme/app/10/dismiss');
+    expect((await request('POST', '/items/pr/acme/app/10/dismiss')).status).toBe(200);
+    const un = await request('POST', '/items/pr/acme/app/10/undismiss');
+    expect(un.status).toBe(200);
+    expect(un.body.item).toMatchObject({ dismissed: false, dismissedAt: null });
+    expect((await request('POST', '/items/pr/acme/app/10/undismiss')).status).toBe(200);
+    const listed = await request('GET', '/items');
+    expect(listed.body.lists.parkingLot.untouched).toEqual(['pr:acme/app#10']);
+    expect(listed.body.dismissed).toEqual([]);
+  });
+
+  it('every path shape is accepted and an unknown item is 404', async () => {
+    jira = {
+      ...jira,
+      issues: [
+        {
+          key: 'HB-900',
+          summary: 'ticket only',
+          status: 'To Do',
+          statusCategory: 'new',
+          assignee: '712020:me',
+          updated: '2026-09-09T00:00:00.000Z',
+          url: 'https://example.atlassian.net/browse/HB-900',
+        },
+      ],
+    };
+    await start();
+    await scan([]);
+    expect((await request('POST', '/items/ticket/HB-900/dismiss')).status).toBe(200);
+    expect((await request('POST', '/items/ticket/HB-900/undismiss')).status).toBe(200);
+    expect((await request('POST', '/items/pr/acme/app/404/dismiss')).status).toBe(404);
+    expect((await request('POST', '/items/session/nope/undismiss')).status).toBe(404);
   });
 });
