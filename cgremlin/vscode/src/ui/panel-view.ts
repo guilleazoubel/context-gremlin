@@ -51,6 +51,7 @@ import {
   type PanelRowView,
   type PanelSlotView,
   type PanelState,
+  type PanelNoticeView,
 } from '../model/panel-protocol';
 import {
   troubleActionLabel,
@@ -106,6 +107,17 @@ export const SELECTED_STATE_KEY = 'cgremlin.panel.selected';
 /** P2: which headers the user has closed, lists and parking-lot groups alike (R64). */
 export const COLLAPSED_STATE_KEY = COLLAPSE_STATE_KEY;
 export const EXPANDED_STATE_KEY = 'cgremlin.panel.expanded';
+/**
+ * P10: "Not now", remembered for good. The offer to open the managed workspace used to be a popup
+ * on every row click; the notice that replaces it is dismissed once, in the host's global state,
+ * and only `cgremlin.openManagedWorkspace` brings it back — the user asking for it again.
+ */
+export const WORKSPACE_NOTICE_DISMISSED_KEY = 'cgremlin.panel.workspaceNoticeDismissed';
+export const OPEN_MANAGED_COMMAND = 'cgremlin.openManagedWorkspace';
+export const MANAGED_WORKSPACE_HINT =
+  'Open the cgremlin workspace to follow the code in the editor';
+const OPEN_MANAGED_LABEL = 'Open';
+const DISMISS_LABEL = 'Not now';
 
 const START_COMMAND: Record<StageKind, string> = {
   investigation: 'cgremlin.startInvestigation',
@@ -133,6 +145,9 @@ export class PanelView implements WebviewViewProviderLike {
   private detailStale = false;
   /** P2: `parkingLot` for a whole list, `parkingLot:someoneOnIt` for one of its groups. */
   private collapsed: CollapseState;
+  /** The swap asked for the managed workspace and could not do it itself (P10). */
+  private offerManaged = false;
+  private noticeDismissed: boolean;
   private sorts: Record<WorkListKind, WorkSortKind>;
   /** §3.3: `setConnected` + `setItems` + `setSourceTrouble` in one refresh are ONE post. */
   private batchDepth = 0;
@@ -144,6 +159,33 @@ export class PanelView implements WebviewViewProviderLike {
     this.collapsed = readCollapsed(deps.host);
     this.selectedId = deps.host.getState<string>(SELECTED_STATE_KEY) ?? null;
     this.expandedId = deps.host.getState<string>(EXPANDED_STATE_KEY) ?? null;
+    this.noticeDismissed = deps.host.getState<boolean>(WORKSPACE_NOTICE_DISMISSED_KEY) === true;
+  }
+
+  /** The swap's report: this window is not the managed workspace, so the notice is owed. */
+  setWorkspaceOffer(offer: boolean): void {
+    if (this.offerManaged === offer) return;
+    this.offerManaged = offer;
+    this.render();
+  }
+
+  /** The command ran, so the user has said what "Not now" once said the opposite of. */
+  clearWorkspaceNoticeDismissal(): void {
+    if (!this.noticeDismissed) return;
+    this.noticeDismissed = false;
+    void this.deps.host.setState(WORKSPACE_NOTICE_DISMISSED_KEY, false);
+    this.render();
+  }
+
+  /** Shown at most once per window, and never again after a "Not now" (P10). */
+  private noticeView(): PanelNoticeView | null {
+    if (!this.offerManaged || this.noticeDismissed) return null;
+    return {
+      message: MANAGED_WORKSPACE_HINT,
+      actionLabel: OPEN_MANAGED_LABEL,
+      command: OPEN_MANAGED_COMMAND,
+      dismissLabel: DISMISS_LABEL,
+    };
   }
 
   /**
@@ -272,6 +314,7 @@ export class PanelView implements WebviewViewProviderLike {
           ? null
           : ticketBanner(this.response.ticketSource, this.response.threadSource),
       trouble,
+      notice: this.noticeView(),
       connected: this.connected,
     };
   }
@@ -386,6 +429,8 @@ export class PanelView implements WebviewViewProviderLike {
       changes: expanded ? this.changesView(row.id) : null,
       people: expanded ? humanInteractions(row.item.prs[0], this.deps.now?.() ?? Date.now()) : [],
       actions,
+      // The notice again, where the user is actually looking — the open row, and only it.
+      hint: expanded && this.noticeView() !== null ? MANAGED_WORKSPACE_HINT : null,
     };
   }
 
@@ -523,6 +568,9 @@ export class PanelView implements WebviewViewProviderLike {
       case 'selectRow':
         this.select(message.id);
         return;
+      case 'dismissNotice':
+        this.dismissNotice();
+        return;
       case 'openItem':
         await this.deps.onOpenItem(message.id);
         return;
@@ -581,6 +629,14 @@ export class PanelView implements WebviewViewProviderLike {
     this.setExpanded(id);
     this.render();
     this.refreshDetail();
+  }
+
+  /** P10: the dismissal outlives the window, so it is written before the repaint. */
+  private dismissNotice(): void {
+    if (this.noticeDismissed) return;
+    this.noticeDismissed = true;
+    void this.deps.host.setState(WORKSPACE_NOTICE_DISMISSED_KEY, true);
+    this.render();
   }
 
   private setExpanded(id: string | null): void {

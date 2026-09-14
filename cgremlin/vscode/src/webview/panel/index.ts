@@ -107,6 +107,7 @@ type Entry =
   | { kind: 'trouble'; state: PanelState }
   | { kind: 'strip'; state: PanelState }
   | { kind: 'banner'; text: string; tone: string }
+  | { kind: 'notice'; state: PanelState }
   | { kind: 'list'; index: number; state: PanelState };
 
 function entriesOf(next: PanelState): { key: string; data: Entry }[] {
@@ -126,6 +127,11 @@ function entriesOf(next: PanelState): { key: string; data: Entry }[] {
       data: { kind: 'banner', text: next.banner.message, tone: next.banner.kind },
     });
   }
+  // P10: the offer to open the managed workspace, where the popup used to be. Below the banner
+  // and above the lists — it is an offer, not an interruption.
+  if (next.notice !== null) {
+    entries.push({ key: 'notice', data: { kind: 'notice', state: next } });
+  }
   if (!next.connected) {
     entries.push({
       key: 'offline',
@@ -142,6 +148,7 @@ function create(entry: Entry, context: ListContext): HTMLElement {
   if (entry.kind === 'list') return createList(entry.state.lists[entry.index], context);
   if (entry.kind === 'strip') return createStrip();
   if (entry.kind === 'banner') return el('div', 'banner');
+  if (entry.kind === 'notice') return createNotice();
   const node = el('div', 'trouble');
   node.appendChild(el('p', 'trouble-message'));
   node.appendChild(
@@ -172,11 +179,52 @@ function patch(node: HTMLElement, entry: Entry, context: ListContext): void {
     setText(node, entry.text);
     return;
   }
+  if (entry.kind === 'notice') {
+    patchNotice(node, entry.state);
+    return;
+  }
   const trouble = entry.state.trouble;
   node.dataset.command = trouble?.command ?? '';
   setText(node.children[0] as HTMLElement, trouble?.message ?? '');
   setText(node.children[1] as HTMLElement, trouble?.actionLabel ?? '');
   setHidden(node.children[1] as HTMLElement, trouble === null);
+}
+
+/**
+ * One line, one action, one way out. "Not now" posts back to the host rather than hiding the node
+ * here: the dismissal has to outlive this webview, and only the host can write global state.
+ */
+function createNotice(): HTMLElement {
+  const node = el('div', 'notice');
+  node.setAttribute('role', 'note');
+  node.appendChild(el('span', 'notice-text'));
+  node.appendChild(
+    button({
+      className: 'notice-open',
+      label: '',
+      message: () => ({
+        type: 'command',
+        command: node.dataset.command ?? '',
+        id: 'workspace',
+      }),
+    }),
+  );
+  node.appendChild(
+    button({
+      className: 'notice-dismiss',
+      label: '',
+      message: () => ({ type: 'dismissNotice' }),
+    }),
+  );
+  return node;
+}
+
+function patchNotice(node: HTMLElement, state: PanelState): void {
+  const notice = state.notice;
+  node.dataset.command = notice?.command ?? '';
+  setText(node.children[0] as HTMLElement, notice?.message ?? '');
+  setText(node.children[1] as HTMLElement, notice?.actionLabel ?? '');
+  setText(node.children[2] as HTMLElement, notice?.dismissLabel ?? '');
 }
 
 function onPointer(inside: boolean): void {

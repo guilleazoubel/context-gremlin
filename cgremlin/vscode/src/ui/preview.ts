@@ -6,7 +6,11 @@
  * place: the plan, the dirty-editor modal, and the single `updateWorkspaceFolders` call.
  */
 import path from 'node:path';
-import { managedWorkspaceContent, planWorkspaceAction } from '../model/workspace-file';
+import {
+  emptyManagedWorkspaceContent,
+  managedWorkspaceContent,
+  planWorkspaceAction,
+} from '../model/workspace-file';
 import type { CoreConfigView } from '../model/items';
 import type { Host } from './host';
 
@@ -21,6 +25,12 @@ export function managedWorkspacePath(stateDir: string): string {
 export interface WorktreeSwapperDeps {
   host: Host;
   config: () => CoreConfigView | null;
+  /**
+   * P10: the window is not the managed workspace, so this click could not swap anything. It used
+   * to raise a popup — on EVERY row click — and now it arms the panel's one-line notice instead.
+   * The open itself is never performed here: it reloads the window, so only the user asks for it.
+   */
+  onOfferManaged?: () => void;
 }
 
 export class WorktreeSwapper {
@@ -34,8 +44,26 @@ export class WorktreeSwapper {
    * behind it.
    */
   private queue: Promise<void> = Promise.resolve();
+  /** The managed file the last offer planned, so the command can open exactly that one. */
+  private offered: { managedPath: string; bootstrap: string } | null = null;
 
   constructor(private readonly deps: WorktreeSwapperDeps) {}
+
+  /**
+   * `cgremlin.openManagedWorkspace`: the user asking for the reload directly. It always opens —
+   * a dismissed notice is not a refusal of a command the user has just run — and it writes the
+   * managed file first when there is none, because `vscode.openFolder` needs a file to open.
+   */
+  async openManagedWorkspace(): Promise<void> {
+    const { host } = this.deps;
+    const config = this.deps.config();
+    const managedPath = this.offered?.managedPath ?? (config === null ? null : managedWorkspacePath(config.stateDir));
+    if (managedPath === null) return;
+    if (!host.fileExists(managedPath)) {
+      host.writeFile(managedPath, this.offered?.bootstrap ?? emptyManagedWorkspaceContent());
+    }
+    await host.executeCommand('vscode.openFolder', host.fileUri(managedPath));
+  }
 
   /** No-ops when there is no config yet, or when the worktree is already the only folder. */
   swapTo(id: string, worktreePath: string): Promise<void> {
@@ -51,17 +79,27 @@ export class WorktreeSwapper {
     if (myGeneration !== this.generation) return;
     const config = this.deps.config();
     if (config === null) return;
-    await applyWorkspace(this.deps.host, id, worktreePath, config, () => myGeneration === this.generation);
+    const offered = await applyWorkspace(
+      this.deps.host,
+      id,
+      worktreePath,
+      config,
+      () => myGeneration === this.generation,
+    );
+    if (offered === null) return;
+    this.offered = offered;
+    this.deps.onOfferManaged?.();
   }
 }
 
+/** Returns the managed file the caller should offer, or `null` when nothing is owed. */
 async function applyWorkspace(
   host: Host,
   id: string,
   worktreePath: string,
   config: CoreConfigView,
   isCurrent: () => boolean,
-): Promise<void> {
+): Promise<{ managedPath: string; bootstrap: string } | null> {
   const plan = planWorkspaceAction({
     workspaceFile: host.workspaceFile(),
     folders: host.workspaceFolders(),
@@ -69,7 +107,7 @@ async function applyWorkspace(
     managedPath: managedWorkspacePath(config.stateDir),
     dirtyPaths: host.dirtyPaths(),
   });
-  if (plan.kind === 'noop') return;
+  if (plan.kind === 'noop') return null;
 
   if (plan.kind === 'swap') {
     if (plan.requiresConfirm) {
@@ -82,36 +120,24 @@ async function applyWorkspace(
       );
       // A newer click landed while this one waited on the user: its answer, whatever it was, is
       // for a plan nothing acts on any more (the "dismiss/ignore the older one's result" half).
-      if (!isCurrent()) return;
-      if (answer !== SWITCH_ANYWAY) return;
+      if (!isCurrent()) return null;
+      if (answer !== SWITCH_ANYWAY) return null;
     }
     host.updateWorkspaceFolders(0, plan.removeCount, {
       uri: host.fileUri(plan.uri),
       name: path.basename(plan.uri),
     });
-    if (plan.removeCount > 0) {
-      void host.showInformationMessage(
-        `Opened '${id}'. VS Code closed the editors of the worktree it replaced.`,
-        undefined,
-      );
-    }
-    return;
+    // P10: no toast for the replacement. The status bar already names the session whose worktree
+    // is open, which is the only fact the old message carried.
+    return null;
   }
 
-  // offer-open-managed: opening a workspace file reloads the window, the one unavoidable
-  // restart, so it is offered and never forced.
+  // offer-open-managed: opening a workspace file reloads the window, the one unavoidable restart,
+  // so it is offered — in the PANEL, at most once, never as a popup on every click (P10).
   if (!host.fileExists(plan.managedPath)) {
     host.writeFile(plan.managedPath, plan.bootstrap);
   }
-  const answer = await host.showInformationMessage(
-    `cgremlin keeps one worktree open in ${MANAGED_WORKSPACE_NAME}. Open it? (This reloads the window.)`,
-    undefined,
-    OPEN_MANAGED,
-  );
-  if (!isCurrent()) return;
-  if (answer === OPEN_MANAGED) {
-    await host.executeCommand('vscode.openFolder', host.fileUri(plan.managedPath));
-  }
+  return { managedPath: plan.managedPath, bootstrap: plan.bootstrap };
 }
 
 /** Exported for the bootstrap the CLI-less first run needs; the plan lives in `model/`. */

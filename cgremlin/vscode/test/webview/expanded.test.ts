@@ -36,6 +36,7 @@ function slot(over: Partial<PanelSlotView> & { stage: PanelSlotView['stage'] }):
 
 function rowView(over: Partial<PanelRowView> = {}): PanelRowView {
   return {
+    hint: null,
     id: 'ticket:HB-627',
     list: 'myWork',
     label: 'HB-627 — Convert the tour scheduler to RSC',

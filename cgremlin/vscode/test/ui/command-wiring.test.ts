@@ -301,10 +301,14 @@ describe('an engine that is not one this extension can use', () => {
     expect(await h.ui.connect()).toBe(false);
     await h.ui.settled();
     expect(h.host.statusBarItems[0].text).toBe('$(warning) cgremlin: engine not usable');
-    const warnings = h.host.callsOf('showWarningMessage');
-    expect(warnings).toHaveLength(1);
-    expect(String(warnings[0].args[0])).toContain('not a cgremlin engine this extension can use');
-    expect(warnings[0].args[2]).toEqual(['Re-probe', 'Show log']);
+    // P10: the panel's trouble row carries the sentence and the fix; no popup is raised.
+    expect(h.host.callsOf('showWarningMessage')).toEqual([]);
+    expect(h.host.callsOf('showInformationMessage')).toEqual([]);
+    expect(String(h.state().trouble?.message)).toContain(
+      'not a cgremlin engine this extension can use',
+    );
+    // Its one button IS the re-probe: `cgremlin.engine.start` is `ensureRunning('user')`.
+    expect(h.state().trouble?.command).toBe('cgremlin.engine.start');
   });
 
   it('finding 2 — an engine with no /items says so, with a Restart, not an empty panel', async () => {
@@ -547,22 +551,55 @@ describe('MG-B5 one-worktree-folder-at-a-time (host half)', () => {
 });
 
 describe('MG-B3 no-extension-host-restart (host half)', () => {
-  it('writes the managed file once and opens it only after the user consents', async () => {
+  it('writes the managed file and offers it in the PANEL — a row click raises no popup', async () => {
     const h = await connected();
     h.host.workspaceFilePath = undefined;
-    h.host.messageAnswers = ['Open the cgremlin workspace'];
-    await h.host.invoke('cgremlin.openItem', REVIEW_ITEM);
+    h.toPanel({ type: 'selectRow', id: REVIEW_ITEM, list: 'myWork' });
+    await h.ui.settled();
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    // The complaint, as an assertion: clicking a row while this window is not the managed
+    // workspace says nothing out loud at all.
+    expect(h.host.callsOf('showInformationMessage')).toEqual([]);
     expect(h.host.callsOf('writeFile').map((c) => c.args[0])).toEqual([MANAGED]);
     expect(JSON.parse(h.host.files.get(MANAGED) as string).folders).toHaveLength(1);
     expect(h.host.callsOf('updateWorkspaceFolders')).toEqual([]);
+    expect(
+      h.host.callsOf('executeCommand').filter((c) => c.args[0] === 'vscode.openFolder'),
+    ).toEqual([]);
+    // The offer is in the panel instead, and the expanded row repeats it inline.
+    expect(h.state().notice).toMatchObject({ command: 'cgremlin.openManagedWorkspace' });
+    expect(h.rowOf(REVIEW_ITEM).hint).toBe(h.state().notice?.message);
+
+    // A second click still says nothing, and does not rewrite a managed file already there.
+    h.toPanel({ type: 'selectRow', id: REVIEW_ITEM, list: 'myWork' });
+    await h.ui.settled();
+    expect(h.host.callsOf('showInformationMessage')).toEqual([]);
+    expect(h.host.callsOf('writeFile')).toHaveLength(1);
+  });
+
+  it('opens the managed workspace when the command asks, ignoring an earlier "Not now"', async () => {
+    const h = await connected();
+    h.host.workspaceFilePath = undefined;
+    h.toPanel({ type: 'selectRow', id: REVIEW_ITEM, list: 'myWork' });
+    await h.ui.settled();
+    h.toPanel({ type: 'dismissNotice' });
+    expect(h.state().notice).toBeNull();
+
+    await h.host.invoke('cgremlin.openManagedWorkspace');
     const opens = h.host.callsOf('executeCommand').filter((c) => c.args[0] === 'vscode.openFolder');
     expect(opens).toHaveLength(1);
     expect((opens[0].args[1] as { fsPath: string }).fsPath).toBe(MANAGED);
+  });
 
-    // A second open does not rewrite a managed file that is already there.
-    h.host.messageAnswers = [undefined];
+  it('swaps the worktree without a word once the managed workspace IS the window', async () => {
+    const h = await connected();
+    h.host.workspaceFilePath = MANAGED;
+    h.host.folders = [`${STATE_DIR}/worktrees/some-other`];
+    h.host.dirty = [];
     await h.host.invoke('cgremlin.openItem', REVIEW_ITEM);
-    expect(h.host.callsOf('writeFile')).toHaveLength(1);
+    expect(h.host.callsOf('updateWorkspaceFolders')).toHaveLength(1);
+    expect(h.host.callsOf('showInformationMessage')).toEqual([]);
   });
 });
 

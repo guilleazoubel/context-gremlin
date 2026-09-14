@@ -150,6 +150,32 @@ body {
   color: var(--vscode-errorForeground);
 }
 
+/*
+ * P10 — the offer that used to be a popup. It reads as a banner with two small buttons, not as an
+ * alert: nothing is wrong, there is simply somewhere better to be. One line, and it wraps rather
+ * than clipping in a 300 px sidebar.
+ */
+.notice {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--cg-divider);
+  font-size: 11px;
+}
+
+.notice-text {
+  flex: 1 1 140px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.expanded-hint {
+  padding: 2px 0 6px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+}
+
 /* --- the two header levels (P2) ---------------------------------------- */
 
 /*
@@ -443,6 +469,8 @@ body {
 .slot-start,
 .part-goto,
 .row-action,
+.notice-open,
+.notice-dismiss,
 .trouble-action {
   min-height: 24px;
   padding: 4px 8px;

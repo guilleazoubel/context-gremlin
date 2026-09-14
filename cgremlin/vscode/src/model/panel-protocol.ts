@@ -65,6 +65,12 @@ export interface PanelRowView {
   people: HumanInteraction[];
   /** The row's own actions, already decided by the host (which ones apply is not the view's job). */
   actions: PanelActionView[];
+  /**
+   * P10: the panel's one-line notice, repeated where the user is actually looking. Non-null only
+   * on the EXPANDED row, and only while the notice itself stands — a hint on every line would be
+   * the toast again, in ink.
+   */
+  hint: string | null;
 }
 
 /** One lifecycle slot of an expanded row (§4, amended). Built by `model/lifecycle`. */
@@ -126,6 +132,18 @@ export interface PanelListView {
   sections: PanelSectionView[];
 }
 
+/**
+ * P10: what used to be a popup on every row click — the offer to open the managed workspace.
+ * One line, one action, one "Not now" that the host remembers for good.
+ */
+export interface PanelNoticeView {
+  message: string;
+  /** The affirmative action's wording, and the command it runs. */
+  actionLabel: string;
+  command: string;
+  dismissLabel: string;
+}
+
 export interface PanelState {
   lists: PanelListView[];
   /** P3: what wants the user, as a strip at the top of the panel instead of a toast. */
@@ -137,6 +155,8 @@ export interface PanelState {
    * extension cannot use (Phase 8), or an engine whose `/items` the extension cannot read.
    */
   trouble: { message: string; command: string; actionLabel: string } | null;
+  /** P10: the dismissible offer to open the managed workspace. `null` once it is not owed. */
+  notice: PanelNoticeView | null;
   connected: boolean;
 }
 
@@ -160,6 +180,8 @@ export type PanelToHost =
   | { type: 'toggleGroup'; list: WorkListKind; group: ParkingLotGroup; collapsed: boolean }
   | { type: 'toggleList'; list: WorkListKind; collapsed: boolean }
   | { type: 'toggleRow'; id: string; expanded: boolean }
+  /** P10's "Not now": remembered in the host's global state, not in the webview. */
+  | { type: 'dismissNotice' }
   | { type: 'command'; command: string; id: string; childId?: string };
 
 const GROUPS: readonly ParkingLotGroup[] = ['reviewing', 'untouched', 'someoneOnIt'];
@@ -186,6 +208,8 @@ export function parsePanelMessage(raw: unknown): PanelToHost | null {
   switch (message.type) {
     case 'ready':
       return { type: 'ready' };
+    case 'dismissNotice':
+      return { type: 'dismissNotice' };
     case 'selectRow': {
       const id = text(message.id);
       const list = listKind(message.list);
