@@ -69,6 +69,11 @@ export interface WorkItemListing {
   threadSource: { error: string | null; scannedAt: string | null };
 }
 
+/** Phase 16 — how `qaIdentityOf` writes a build-keyed identity. */
+const QA_BUILD_PREFIX = 'qa:';
+/** The outcomes that mean a verification actually ran against that build. */
+const QA_RAN_OUTCOMES = new Set(['started', 'ready', 'not_ready', 'failed']);
+
 /**
  * What a delta is measured on — the state a client renders. Deliberately NOT
  * the whole item: `item.changed` carries `{ id, kind, changedFields? }` and
@@ -93,6 +98,11 @@ function deltaFieldsOf(item: WorkItem): Record<string, string> {
     ),
     ticket: JSON.stringify(item.ticket === null ? null : [item.ticket.key, item.ticket.status, item.ticket.updatedAt]),
     dismissed: String(item.dismissed),
+    // Phase 16 — a new QA build is a real change to the row: it is what turns
+    // `awaiting qa deploy` into a verdict, and what a re-verification is keyed
+    // on. Without it the row would keep its last words until something else
+    // moved.
+    qaDeploy: JSON.stringify(item.qaDeploy),
   };
 }
 
@@ -247,10 +257,22 @@ export class WorkItemService {
     const state = await this.deps.qaTrigger.load();
     for (const item of items) {
       if (item.ticket === null) continue;
-      if (item.agents.some((a) => a.mode === 'qa')) continue;
       const attempts = state.tickets[item.ticket.key]?.attempts ?? [];
       const last = attempts.at(-1);
       if (last === undefined) continue;
+      // Phase 16 — which BUILD the last record is about. It is overlaid
+      // whether or not a session exists: "merged, not deployed yet" and
+      // "verified against build X" are both facts about the build, and a
+      // session says nothing about either.
+      const sha = last.identity.startsWith(QA_BUILD_PREFIX)
+        ? last.identity.slice(QA_BUILD_PREFIX.length)
+        : null;
+      if (sha !== null && last.outcome === 'awaiting-deploy') {
+        item.qaDeploy = { state: 'awaiting', sha };
+      } else if (sha !== null && QA_RAN_OUTCOMES.has(last.outcome)) {
+        item.qaDeploy = { state: 'verified', sha };
+      }
+      if (item.agents.some((a) => a.mode === 'qa')) continue;
       if (last.outcome !== 'create-failed' && last.outcome !== 'unreachable') continue;
       item.qaAttempt = { outcome: last.outcome, at: last.reservedAt };
     }

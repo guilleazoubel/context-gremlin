@@ -211,6 +211,53 @@ describe('Gap 2 — abandoned QA verification attempts', () => {
     const item = (await service.list()).items.find((i) => i.id === 'ticket:HB-1')!;
     expect(item.qaAttempt ?? null).toBeNull();
   });
+
+  /**
+   * Phase 16 — merged is not deployed, and the row has to be able to say so.
+   * The trigger store is the one source: its last record for the ticket is
+   * either the build we are WAITING on or the build we VERIFIED against.
+   */
+  function triggerWithBuild(outcome: string, identity: string): QaTriggerStub {
+    return {
+      load: async () => ({
+        ok: true,
+        tickets: {
+          'HB-1': {
+            lastStatus: 'UAT',
+            lastObservedAt: '2026-09-10T09:00:00.000Z',
+            ordinal: 1,
+            attempts: [
+              {
+                key: 'HB-1', identity, ordinal: 1, attempt: 1,
+                reservedAt: '2026-09-10T09:00:00.000Z', sessionId: null, outcome,
+              },
+            ],
+          },
+        },
+      }),
+    } as QaTriggerStub;
+  }
+
+  const BUILD = '088ce5e07db734834e4948ad3365f4155cd1ae4e';
+
+  it('says the change is awaiting a qa deploy, naming the build QA is serving', async () => {
+    const { service } = await makeFixture([], TICKET_JIRA, triggerWithBuild('awaiting-deploy', `qa:${BUILD}`));
+    const item = (await service.list()).items.find((i) => i.id === 'ticket:HB-1')!;
+    expect(item.qaDeploy).toEqual({ state: 'awaiting', sha: BUILD });
+  });
+
+  it('says which build a verification ran against, even though a QA session exists', async () => {
+    const { h, service } = await makeFixture([], TICKET_JIRA, triggerWithBuild('started', `qa:${BUILD}`));
+    await h.store.save(qaSession('qa-1', 'HB-1'));
+    const item = (await service.list()).items.find((i) => i.id === 'ticket:HB-1')!;
+    expect(item.qaDeploy).toEqual({ state: 'verified', sha: BUILD });
+  });
+
+  it('is null for a repo whose QA names no build — the merge-keyed fallback', async () => {
+    const { service } = await makeFixture([], TICKET_JIRA, triggerWithBuild('started', 'acme/app#1@abc123'));
+    const item = (await service.list()).items.find((i) => i.id === 'ticket:HB-1')!;
+    expect(item.qaDeploy).toBeNull();
+  });
 });
 
 describe('MG-1 work-items-never-lock-a-session', () => {

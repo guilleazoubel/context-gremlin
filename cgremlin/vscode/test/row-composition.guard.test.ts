@@ -53,7 +53,7 @@ describe('no module outside the composer builds a PR label of its own', () => {
  * (`'blocked'` is deliberately NOT matched: it is an attention reason and a respond phase that
  * both predate Phase 15, and the QA row reaches it through `qaStateText` alone.)
  */
-const QA_TOKEN = /⛋|'not ready'|"not ready"/;
+const QA_TOKEN = /⛋|'not ready'|"not ready"|awaiting qa deploy/;
 
 describe('no module outside the composer spells a QA state', () => {
   it('has exactly one file containing the QA glyph or its re-worded phases', () => {

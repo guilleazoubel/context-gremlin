@@ -320,3 +320,46 @@ describe('Phase 16 §4 — Verify in QA again', () => {
     expect(qa?.actions.map((a) => a.label)).toEqual(['Open', 'Chat', 'Verify in QA again', 'Ask about QA']);
   });
 });
+
+/**
+ * Phase 16 item 5 — the row says which side of the deploy the change is on.
+ *
+ * The defect, in the user's words: "how do you know it? it is only when we cut
+ * a new qa version." A merged change the QA build does not contain yet must
+ * never read like a verification that passed.
+ */
+describe('Phase 16 §5 — merged, but not in QA yet', () => {
+  const BUILD = '088ce5e07db734834e4948ad3365f4155cd1ae4e';
+
+  it('reads "awaiting qa deploy", muted, on the collapsed row', () => {
+    const cells = meta(item({ qaDeploy: { state: 'awaiting', sha: BUILD } }));
+    const token = cells.find((c) => c.kind === 'qaDeploy');
+    expect(token?.text).toBe('awaiting qa deploy');
+    expect(token?.tone).toBe('muted');
+  });
+
+  it('names the build once a verification has run against it', () => {
+    const cells = meta(
+      item({
+        qaDeploy: { state: 'verified', sha: BUILD },
+        agents: [qaAgent({ phase: 'ready', running: false })],
+      }),
+    );
+    expect(cells.find((c) => c.kind === 'agentPhase')?.text).toBe('⛋ ready');
+    expect(cells.find((c) => c.kind === 'qaDeploy')?.text).toBe('build 088ce5e');
+  });
+
+  it('says nothing at all where QA names no build', () => {
+    expect(meta(item()).some((c) => c.kind === 'qaDeploy')).toBe(false);
+  });
+
+  it('the expanded QA part says the same words, from the same composer', () => {
+    const it_ = item({ qaDeploy: { state: 'awaiting', sha: BUILD } });
+    const f = itemActionFacts(it_, QA_REPOS);
+    const parts = itemParts({
+      item: it_, list: 'myWork', slots: lifecycleSlots({ agents: it_.agents, facts: f, now: NOW }),
+      actions: rowActions(f, 'myWork'), now: NOW, qaRepos: QA_REPOS,
+    });
+    expect(parts.find((p) => p.kind === 'qa')?.stateText).toBe('awaiting qa deploy');
+  });
+});

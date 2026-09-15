@@ -200,6 +200,21 @@ export function qaStateText(phase: string, verdict: QaVerdict | null = null): st
   return QA_STATE_TEXT[phase] ?? phase;
 }
 
+/**
+ * Phase 16 — the words for which BUILD the change is measured against, said
+ * HERE and nowhere else (the guard test enforces it), so the collapsed row and
+ * the expanded QA part cannot disagree about "not in QA yet".
+ *
+ * The defect this closes: merging is not deploying. A change that has merged
+ * but is not in the build QA is serving has been verified by nobody, and a row
+ * that stays silent about that reads exactly like one that passed.
+ */
+export const QA_AWAITING_DEPLOY = 'awaiting qa deploy';
+
+export function qaDeployText(deploy: { state: 'awaiting' | 'verified'; sha: string }): string {
+  return deploy.state === 'awaiting' ? QA_AWAITING_DEPLOY : `build ${deploy.sha.slice(0, 7)}`;
+}
+
 /** Claim, then a live run, then the gate — the precedence the tree used before the panel (R18). */
 export function agentGlyph(agent: WorkItemAgent): string {
   if (agent.claimed) return '◉';
@@ -373,6 +388,9 @@ export function rowMetaCells(
   // Gap 2 — an abandoned auto-verify attempt, muted, wherever the item sits: the core has
   // already decided it applies (a real QA session, if any, supersedes it there).
   if (item.qaAttempt != null) cells.push(qaAttemptCell(item.qaAttempt));
+  // Phase 16 — which side of the deploy this change is on. Muted in both
+  // states: it is context for the verdict beside it, never the verdict.
+  if (item.qaDeploy != null) cells.push(qaDeployCell(item.qaDeploy));
 
   cells.push({ kind: 'age', text: parts.age });
   cells.push({ kind: 'tier', text: parts.tier });
@@ -395,6 +413,18 @@ function qaAttemptCell(attempt: NonNullable<WorkItem['qaAttempt']>): RowMetaCell
     kind: 'qaAttempt',
     text: QA_ATTEMPT_TEXT[attempt.outcome],
     label: `automatic QA verification did not start — ${QA_ATTEMPT_TEXT[attempt.outcome]}`,
+    tone: 'muted',
+  };
+}
+
+function qaDeployCell(deploy: { state: 'awaiting' | 'verified'; sha: string }): RowMetaCell {
+  return {
+    kind: 'qaDeploy',
+    text: qaDeployText(deploy),
+    label:
+      deploy.state === 'awaiting'
+        ? `merged, but the build QA is serving (${deploy.sha.slice(0, 7)}) does not contain this change yet`
+        : `verified against build ${deploy.sha.slice(0, 7)}`,
     tone: 'muted',
   };
 }
