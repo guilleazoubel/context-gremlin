@@ -18,7 +18,7 @@
 export type WorkItemKind = 'pr' | 'ticket' | 'pr+ticket' | 'session';
 export type WorkListKind = 'parkingLot' | 'myWork' | 'investigations' | 'waitingForReview';
 export type ParkingLotGroup = 'reviewing' | 'untouched' | 'someoneOnIt';
-export type WorkAgentMode = 'review' | 'investigation' | 'development' | 'respond';
+export type WorkAgentMode = 'review' | 'investigation' | 'development' | 'respond' | 'qa';
 export type CiStatus = 'success' | 'pending' | 'failure' | 'none';
 export type SizeTier = 'S' | 'M' | 'L' | 'XL';
 
@@ -681,6 +681,7 @@ export function toRow(item: WorkItem, list: WorkListKind, now: number): WorkRow 
 // ---------------------------------------------------------------------------
 export {
   MODE_GLYPH,
+  MODE_LETTER,
   MODE_NAME,
   agentBadge,
   agentGlyph,
@@ -697,6 +698,7 @@ export {
   landedOf,
   prLabel,
   prRefOf,
+  qaStateText,
   repoTailOf,
   rowMetaCells,
   sizeOf,
@@ -738,6 +740,15 @@ function order(rows: WorkRow[], sort: WorkSortKind, group: ParkingLotGroup | nul
 type EffectiveSort = WorkSortKind | 'needsYouThenOldest';
 
 function compare(a: WorkRow, b: WorkRow, sort: EffectiveSort): number {
+  // R72 (Phase 15) — in `needsYouThenRecent` ONLY, `needsYou` is asked BEFORE the landed/live
+  // split, mirroring the core's own `byNeedsYouThenRecent`. A not-ready QA verdict sits on
+  // merged work by definition, and sinking it under everything still in flight is exactly the
+  // row the user would never see. The same minimal rule also lifts a landed `run_failed` or
+  // `comments_ready` row, which is right; every other sort keeps landed work at the bottom.
+  if (sort === 'needsYouThenRecent') {
+    const first = byNeedsYou(a, b);
+    if (first !== 0) return first;
+  }
   // Ahead of every selected sort, and a KEY rather than a filter: landed work
   // stays on the list (its ticket may still be live) but never above work
   // that has not landed.

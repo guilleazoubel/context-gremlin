@@ -104,6 +104,12 @@ export interface PanelViewDeps {
   loadExpanded?: (item: WorkItem) => Promise<ExpandedDetail | null>;
   nonce?: () => string;
   now?: () => number;
+  /**
+   * Phase 15 §8: the repos with a `qa.url` (`model/items.qaReposOf` over `GET /config`). A
+   * thunk, because the config resolves after the panel is constructed — and an empty answer
+   * simply means the two QA verbs are not offered yet.
+   */
+  qaRepos?: () => readonly string[];
 }
 
 /** The extra the detail routes carry for the ONE expanded row (§4, amended). */
@@ -556,7 +562,7 @@ export class PanelView implements WebviewViewProviderLike {
   private rowView(row: WorkRow): PanelRowView {
     const expanded = this.expandedId === row.id;
     const dismissed = this.dismissedFor(row.item);
-    const actions = actionsFor(row.item, row.list, dismissed);
+    const actions = actionsFor(row.item, row.list, dismissed, this.deps.qaRepos?.() ?? []);
     // Item 1: the user's own title wins over everything derived, and the row says so — in the
     // accessible name here, and as a mark beside L2 in the webview.
     const own = readTitle(this.deps.host, row.item);
@@ -603,10 +609,12 @@ export class PanelView implements WebviewViewProviderLike {
    */
   private partsOf(row: WorkRow, actions: PanelActionView[]): PanelPartView[] {
     const detail = this.detailOf(row.id);
-    const facts = itemActionFacts(row.item);
+    const qaRepos = this.deps.qaRepos?.() ?? [];
+    const facts = itemActionFacts(row.item, qaRepos);
     return itemParts({
       item: row.item,
       list: row.list,
+      qaRepos,
       slots: lifecycleSlots({
         agents: row.item.agents,
         facts,
@@ -898,6 +906,7 @@ export function actionsFor(
   item: WorkItem,
   list: WorkListKind,
   dismissed = isDismissed(item),
+  qaRepos: readonly string[] = [],
 ): PanelActionView[] {
   // Item 2: a row the user has put aside offers exactly one verb — stop putting it aside. Every
   // other verb would start work on something he has just said he does not care about.
@@ -906,7 +915,7 @@ export function actionsFor(
   }
   // §4: `Ack` renders only while something needs you AND you have not already said so. The rule
   // table cannot see the acknowledgement, so the one field it lacks is applied here.
-  const actions = rowActions(itemActionFacts(item), list).filter(
+  const actions = rowActions(itemActionFacts(item, qaRepos), list).filter(
     (action) => action.command !== 'cgremlin.ack' || !item.attention.acked,
   );
   // Item 1: naming a row is never a rule about a list, which is why it is added here rather than

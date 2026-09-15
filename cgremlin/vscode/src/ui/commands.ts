@@ -132,6 +132,32 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
     if (surface(await send(() => call(id)))) coordinator.schedule();
   };
 
+  /**
+   * §8's two verbs address the item through its MERGED PR's own path — `pr:<slug>#<n>` is the
+   * key the API route locks on and the key the automatic leg reserves under (E2/E9). A row with
+   * no PR cannot reach QA at all (the core refuses it), and says so rather than sending a call
+   * it knows would 400.
+   */
+  const qaPathOf = (arg: unknown): string | null => {
+    const item = needsItem(arg);
+    if (item === null) return null;
+    const pr = item.prs[0];
+    if (pr === undefined) {
+      void host.showWarningMessage(
+        `'${item.title}' has no merged pull request to verify in QA.`,
+        undefined,
+      );
+      return null;
+    }
+    return itemPathOf(prRefOf(pr));
+  };
+
+  /** The session a `{start:false}` create answered with, or `null` if the body says none. */
+  const sessionIdOf = (body: unknown): string | null => {
+    const id = (body as { session?: { id?: unknown } } | undefined)?.session?.id;
+    return typeof id === 'string' && id !== '' ? id : null;
+  };
+
   const openItem = async (arg: unknown, focus?: ItemFocus): Promise<void> => {
     const item = needsItem(arg);
     if (item === null) return;
@@ -236,6 +262,45 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
       coordinator.schedule();
       panel.reveal(item.id);
       await openTab(deps, path);
+    }),
+
+    /**
+     * Phase 15 §3 entry 1 — `Verify in QA`. One POST creates the QA session AND starts its run,
+     * exactly as `Address review comments` does: the click IS the explicit ask, and anything
+     * else hands the user an empty session and a second button. The item is addressed by its
+     * merged PR's own path, because that is the lock key the automatic leg takes (E2/E9), so a
+     * click and a tick can never both create.
+     */
+    host.registerCommand('cgremlin.verifyInQa', async (arg) => {
+      const path = qaPathOf(arg);
+      if (path === null) return;
+      const item = itemOf(arg) as WorkItem;
+      panel.setPendingStart(item.id, 'qa');
+      if (!surface(await send(() => client.startAgent(path, { mode: 'qa' })))) {
+        panel.clearPendingStart(item.id);
+        return;
+      }
+      coordinator.schedule();
+      panel.reveal(item.id);
+    }),
+
+    /**
+     * Entry 2 — `Ask about QA` (R73). The session is created and its brief composed, but nothing
+     * runs: the user just has questions. `chatTargetOfAgents` admits a qa agent from `queued`
+     * onwards, so the conversation opens on the session this very response names.
+     */
+    host.registerCommand('cgremlin.askQa', async (arg) => {
+      const path = qaPathOf(arg);
+      if (path === null) return;
+      const result = await send(() => client.startAgent(path, { mode: 'qa', start: false }));
+      if (!surface(result)) return;
+      coordinator.schedule();
+      const id = sessionIdOf(result?.body);
+      if (id === null) {
+        void host.showWarningMessage('The engine created no QA session to talk to.', undefined);
+        return;
+      }
+      await chat.open(id);
     }),
 
     /**

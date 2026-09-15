@@ -43,3 +43,27 @@ describe('no module outside the composer builds a PR label of its own', () => {
     expect(text).toContain('no second place may compose a line');
   });
 });
+
+/**
+ * Phase 15 §8 — the same rule, applied to the QA verification token.
+ *
+ * `⛋ not ready` is one line built out of a mode glyph and a re-worded phase. The cheapest way
+ * for the collapsed row and the expanded part to start disagreeing about what a verification is
+ * doing is for the second one to spell the words itself, so nothing outside the composer may.
+ * (`'blocked'` is deliberately NOT matched: it is an attention reason and a respond phase that
+ * both predate Phase 15, and the QA row reaches it through `qaStateText` alone.)
+ */
+const QA_TOKEN = /⛋|'not ready'|"not ready"/;
+
+describe('no module outside the composer spells a QA state', () => {
+  it('has exactly one file containing the QA glyph or its re-worded phases', () => {
+    const offenders = sources(SRC).filter(
+      (file) => file !== COMPOSER && QA_TOKEN.test(readFileSync(file, 'utf8')),
+    );
+    expect(offenders.map((f) => path.relative(SRC, f))).toEqual([]);
+  });
+
+  it('the composer really is where they live', () => {
+    expect(QA_TOKEN.test(readFileSync(COMPOSER, 'utf8'))).toBe(true);
+  });
+});

@@ -14,12 +14,20 @@
  *
  * Pure module — no editor API (MG-B1).
  */
-import { prLabel, prRefOf } from './row-composition';
+import { MODE_GLYPH, MODE_NAME, prLabel, prRefOf, qaStateText } from './row-composition';
 import type { LifecycleSlot } from './lifecycle';
 import { chatTargetOfAgents, isLandedPr, prState, sizeOf, type WorkItem, type WorkListKind } from './work-items';
-import { nextStages, type ActionFacts, type RowAction, type StageKind } from './row-actions';
+import {
+  canVerifyInQa,
+  liveQaAgent,
+  nextStages,
+  type ActionAgent,
+  type ActionFacts,
+  type RowAction,
+  type StageKind,
+} from './row-actions';
 
-export type PartKind = StageKind | 'ticket' | 'pr';
+export type PartKind = StageKind | 'qa' | 'ticket' | 'pr';
 
 export interface ItemPart {
   /** `investigation` | `development` | `review` | `ticket:<KEY>` | `pr:<repo>#<n>` (§8). */
@@ -58,6 +66,8 @@ const START_COMMAND: Record<StageKind, string> = {
 export interface ItemPartsInput {
   item: WorkItem;
   list: WorkListKind;
+  /** §8's gate needs the repos that have a `qa.url`; absent means no QA part and no QA verb. */
+  qaRepos?: readonly string[];
   /** Already built by `lifecycleSlots`, so the state wording is said in exactly one place. */
   slots: readonly LifecycleSlot[];
   /** The list's own rule table — the only source of a verb (P0-2). */
@@ -72,6 +82,7 @@ export function itemParts(input: ItemPartsInput): ItemPart[] {
     prs: item.prs,
     ticketKey: item.ticket?.key ?? null,
     needsYou: item.needsYou,
+    qaRepos: input.qaRepos ?? [],
   };
   const allowed = new Set(nextStages(facts));
   const parts: ItemPart[] = [];
@@ -82,6 +93,9 @@ export function itemParts(input: ItemPartsInput): ItemPart[] {
     }
     parts.push(stagePart(slot, input));
   }
+
+  const qa = qaPart(facts, input);
+  if (qa !== null) parts.push(qa);
 
   if (item.ticket !== null) {
     parts.push({
@@ -118,6 +132,57 @@ export function itemParts(input: ItemPartsInput): ItemPart[] {
     });
   }
   return parts;
+}
+
+/**
+ * Phase 15 §8 — the verification, as a part of the item like any other.
+ *
+ * It is NOT a lifecycle slot: QA sits off the forward-only ladder (R70), so it is neither
+ * derived from `nextStages` nor drawn where the three stages are. It exists on exactly the rows
+ * where a verification can exist — a live QA session, or a gate that would light the verbs —
+ * and it never invents a verb of its own: `Open`/`Chat` for a session that exists, and
+ * otherwise whichever of §8's two the row's own rule table already allows (P0-2).
+ *
+ * The state word comes from the ONE composer (`qaStateText`), so this part and the collapsed
+ * row's cell cannot drift apart.
+ */
+function qaPart(facts: ActionFacts, input: ItemPartsInput): ItemPart | null {
+  const agent = liveQaAgent(facts) ?? lastQaAgent(facts);
+  const startable = canVerifyInQa(facts, input.list);
+  if (agent === undefined && !startable) return null;
+  const childId = agent === undefined || agent.pending === true ? null : `agent:${agent.sessionId}`;
+  const actions: RowAction[] = [];
+  if (childId !== null) {
+    actions.push(...openAction(childId));
+    actions.push({ command: 'cgremlin.chat', label: 'Chat', childId, placement: 'inline' });
+  } else {
+    actions.push(...find(input.actions, 'cgremlin.verifyInQa', undefined, null));
+    actions.push(...find(input.actions, 'cgremlin.askQa', undefined, null));
+  }
+  return {
+    key: 'qa',
+    kind: 'qa',
+    name: MODE_NAME.qa,
+    glyph: MODE_GLYPH.qa,
+    state: agent === undefined ? 'notStarted' : qaSlotState(agent),
+    stateText: agent === undefined ? 'not started' : qaStateText(agent.phase),
+    detail: '',
+    childId,
+    actions,
+  };
+}
+
+/** A finished verification still says what it found, which is the whole point of the row. */
+function lastQaAgent(facts: ActionFacts): ActionAgent | undefined {
+  let found: ActionAgent | undefined;
+  for (const agent of facts.agents) if (agent.mode === 'qa') found = agent;
+  return found;
+}
+
+/** The same three words the lifecycle slots use, so one stylesheet rule covers both. */
+function qaSlotState(agent: ActionAgent): string {
+  if (agent.running) return 'running';
+  return agent.phase === 'not_ready' || agent.phase === 'failed' ? 'needsYou' : 'done';
 }
 
 /** §4's table, as one predicate per stage. `ran` is "an agent of this mode exists". */

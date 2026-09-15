@@ -7,6 +7,7 @@
  */
 import { CoreHttpError, EngineNotRunningError, type CoreClient } from '../core-client';
 import { troubleOf } from '../model/engine-trouble';
+import { qaReposOf } from '../model/items';
 import { currentAgentOf } from '../model/lifecycle';
 import { itemPathOf, type ItemArtifactListing } from '../model/work-items';
 import type { NotificationLevel } from '../model/notify-policy';
@@ -84,6 +85,8 @@ export function createUi(options: UiOptions): Ui {
      * workspace, through the same swap path (and the same dirty-editor confirm) the Item tab
      * uses. An item with no session to open swaps nothing rather than guessing.
      */
+    /** §8's gate: which repos have a `qa.url`, straight off the resolved `GET /config`. */
+    qaRepos: () => qaReposOf(coordinator.config()),
     onSelect: async (id) => {
       const agent = currentAgentOf(coordinator.itemOf(id)?.agents ?? []);
       if (agent?.worktreePath == null) return;

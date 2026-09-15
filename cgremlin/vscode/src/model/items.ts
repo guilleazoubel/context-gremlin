@@ -234,7 +234,26 @@ export interface CoreConfigView {
   defaultBaseRef: string;
   /** Present once the core ships R20's claim TTL; the chat heartbeat reads it. */
   humanTurnTtlMs?: number;
+  /**
+   * Phase 15 §6: the per-repo environment blocks, keyed by `owner/repo`. The panel reads exactly
+   * one thing out of them — whether a repo has a `qa.url` — because nothing else in the repo
+   * knows the QA address, and a `Verify in QA` button on a repo without one can only 404.
+   * **Optional**: an engine older than Phase 15 sends no `environments` at all.
+   */
+  environments?: Record<string, { qa?: { url?: string } | null } | null>;
   [key: string]: unknown;
+}
+
+/**
+ * The repos that have a QA environment configured, as §8's gate wants them. A malformed or
+ * absent block is "no QA here" rather than an error: the panel degrades to offering no verb.
+ */
+export function qaReposOf(config: CoreConfigView | null | undefined): string[] {
+  const environments = config?.environments;
+  if (environments === undefined || environments === null) return [];
+  return Object.entries(environments)
+    .filter(([, env]) => typeof env?.qa?.url === 'string' && env.qa.url !== '')
+    .map(([slug]) => slug);
 }
 
 // ---------------------------------------------------------------------------
