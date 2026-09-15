@@ -66,7 +66,9 @@ describe('prompt templates', () => {
 
   it('review prompt reproduces the legacy contract with the skill command and REVIEW.md path', () => {
     const t = renderReviewPrompt({ sessionDir, uiCheckRendered: true });
-    expect(t).toContain('Run /APFM:apfm-review and write the findings to REVIEW.md');
+    expect(t).toContain('Run /APFM:apfm-review.');
+    // §4f — the external skill is not edited; the brief's contract wins.
+    expect(t).toContain(`REVIEW.md must match the output contract in ${sessionDir}/BRIEF.md EXACTLY`);
     expect(t).toContain("run the '## LIVE UI CHECK' section");
     expect(t).toContain('Do NOT post to GitHub');
     expect(t).toContain(`Write the output to ${sessionDir}/REVIEW.md`);

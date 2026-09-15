@@ -15,12 +15,24 @@ The ticket is APP-1. Fetch it now via the Atlassian MCP (getJiraIssue) to read t
 ## What to do (autonomously — do not ask for routine steps)
 1. Understand the request from the ticket. As your first action write \`/s/inv-1/AGENT_NOTE\` = "APP-1: <one-line goal>".
 2. Explore the repository: trace the relevant code paths, reproduce/understand the issue, find the ROOT CAUSE.
-3. Write \`/s/inv-1/FINDINGS.md\` as a COMPLETE HANDOFF a fresh developer could execute from alone:
-   - **What's happening** (the observed problem/behavior)
-   - **Root cause** (the specific code and why)
-   - **Affected files/paths**
-   - **Risks / splash zone** (what a fix could plausibly affect)
-   - **Direction / plan** to fix the ticket (concrete steps, scoped to the ticket)
+3. Write \`/s/inv-1/FINDINGS.md\` as a COMPLETE HANDOFF a fresh developer could execute from alone. Use EXACTLY these headings, in this order, and no others:
+   \`\`\`
+   # FINDINGS — APP-1
+   **Verdict:** ✅ Root cause found — <one plain sentence naming the cause>
+   **Scope:** <one line: what you examined>
+
+   ## What's happening
+   ## Root cause
+   ## Affected files
+   ## Risks
+   ## Direction
+   \`\`\`
+   - **What's happening** — the observed problem/behavior.
+   - **Root cause** — the specific code, and why.
+   - **Affected files** — paths, one per line.
+   - **Risks** — the splash zone: what a fix could plausibly affect.
+   - **Direction** — concrete steps to fix the ticket, scoped to the ticket.
+   - Line 2's label is verbatim one of \`✅ Root cause found\`, \`⚠️ Partial\`, \`❌ Not reproducible\` — a bold line, never a heading. Do NOT add sections beyond the five (the one exception is "Tech debt (proposed)", below).
 4. Do NOT change code in this step. Investigation produces understanding only.
 
 ## Scope discipline
@@ -46,12 +58,24 @@ The ticket is APP-1. Fetch it now via the Atlassian MCP (getJiraIssue) to read t
 ## What to do (autonomously — do not ask for routine steps)
 1. Understand the request from the ticket. As your first action write \`/s/inv-1/AGENT_NOTE\` = "APP-1: <one-line goal>".
 2. Explore the repository: trace the relevant code paths, reproduce/understand the issue, find the ROOT CAUSE.
-3. Write \`/s/inv-1/FINDINGS.md\` as a COMPLETE HANDOFF a fresh developer could execute from alone:
-   - **What's happening** (the observed problem/behavior)
-   - **Root cause** (the specific code and why)
-   - **Affected files/paths**
-   - **Risks / splash zone** (what a fix could plausibly affect)
-   - **Direction / plan** to fix the ticket (concrete steps, scoped to the ticket)
+3. Write \`/s/inv-1/FINDINGS.md\` as a COMPLETE HANDOFF a fresh developer could execute from alone. Use EXACTLY these headings, in this order, and no others:
+   \`\`\`
+   # FINDINGS — APP-1
+   **Verdict:** ✅ Root cause found — <one plain sentence naming the cause>
+   **Scope:** <one line: what you examined>
+
+   ## What's happening
+   ## Root cause
+   ## Affected files
+   ## Risks
+   ## Direction
+   \`\`\`
+   - **What's happening** — the observed problem/behavior.
+   - **Root cause** — the specific code, and why.
+   - **Affected files** — paths, one per line.
+   - **Risks** — the splash zone: what a fix could plausibly affect.
+   - **Direction** — concrete steps to fix the ticket, scoped to the ticket.
+   - Line 2's label is verbatim one of \`✅ Root cause found\`, \`⚠️ Partial\`, \`❌ Not reproducible\` — a bold line, never a heading. Do NOT add sections beyond the five (the one exception is "Tech debt (proposed)", below).
 4. Do NOT change code in this step. Investigation produces understanding only.
 
 ## Scope discipline

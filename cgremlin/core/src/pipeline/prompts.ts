@@ -235,17 +235,22 @@ const SEVERITY_LIST = `## Severity (exactly four)
 
 const LINK_RULE = `- Every finding includes a **Link:** — a clickable GitHub permalink to the exact line, so the reviewer can open it and post a comment there manually. Build it ONCE up front: run \`git config --get remote.origin.url\` to get owner/repo (strip \`https://github.com/\`, \`git@github.com:\`, and \`.git\`) and \`git rev-parse HEAD\` for the full commit SHA (the PR branch is checked out here). The link is: \`https://github.com/<owner>/<repo>/blob/<full-sha>/<path>#L<startLine>\` (or \`#L<start>-L<end>\` for a range). Use the FULL 40-char SHA (a permalink), not \`HEAD\`.`;
 
-// The verbatim legacy REVIEW.md output contract, bin/cgremlin:1596-1660 (R9). This is the
-// contract the review agent used to get from CLAUDE.md; evaluateReview and every downstream
-// consumer depend on this exact shape.
-export function renderReviewContract(): string {
-  return `## Output — write \`REVIEW.md\` in this directory, EXACTLY this structure
-
-\`\`\`
-# PR Review: #<number> — <title>
-
-**Does it do what the ticket asked?** ✅ Yes / ⚠️ Mostly / ❌ No — <one plain sentence, name the ticket>
-**How deep did I look?** Quick pass / Deep pass (<one-line why>)
+/**
+ * MG-17k — the worked example IS the fixture. `test/pipeline/contract-guards.test.ts`
+ * asserts this string appears byte-identical in the rendered contract and
+ * feeds it to the parsers, so the shape the agent is shown and the shape the
+ * engine and the editor read cannot drift apart.
+ *
+ * Header block (§4b): `**Verdict:**` is a BOLD LINE, never a heading, so it
+ * can never be mistaken for — or make a second match of — the frozen
+ * `## QA Verdict` / `## Review Status` headings `pipeline/artifacts.ts`
+ * parses. Nothing here may introduce a heading at depth 2-3 with either name.
+ */
+export const REVIEW_CONTRACT_EXAMPLE = `# PR Review: #<number> — <title>
+**Verdict:** 🔄 Request changes — <one plain sentence: the call, and the reason for it>
+**Scope:** <one line: what you examined — the diff, the preview URL, the ticket>
+**Does it do what the ticket asked?** ⚠️ Mostly — <one plain sentence, name the ticket>
+**How deep did I look?** Deep pass (<one-line why>)
 
 ## Summary
 <2-3 plain sentences: what this PR changes, and your overall take. A teammate should understand the gist from this alone.>
@@ -253,23 +258,19 @@ export function renderReviewContract(): string {
 ## What I found
 | # | Severity | Where | Issue | Status |
 |---|----------|-------|-------|--------|
-| [1](#f1) | 🔴 Critical | \`file.ts:88\` | one plain-English line | open |
+| [1](#f1) | 🔴 Critical | \`src/api/web-content.ts:88\` | one plain-English line | open |
 | [2](#f2) | 🔧 Maintainability | \`ui/list.tsx:40\` | one plain-English line | open |
-| [3](#f3) | 📋 PM/AC | \`/search\` behavior | acceptance criterion not met — <one line> | open |
+| [3](#f3) | 📋 PM/AC | \`/search\` | acceptance criterion not met — <one line> | open |
 | [4](#f4) | 🎨 Design | \`PrimaryButton\` on \`/search\` | colour/size differ from Figma — <one line> | open |
-
-📋 PM/AC findings come from the acceptance-criteria check; 🎨 Design findings come from the Figma-fidelity check. Design findings additionally carry Expected vs Actual and an Evidence link (see the detail shape below).
-
-The \`#\` links jump to the full detail below. Keep the \`Status\` column current — it's how the reviewer sees at a glance what's still open.
-
-(If nothing: write "Nothing worth flagging — looks good to me." and set the verdict to Approve.)
 
 ## Details
 
 <a id="f1"></a>
 ### 1. <plain-English title of the problem>
-**Severity:** 🔴 Critical   **Where:** \`path/to/file.ext:LN-LN\`   **Status:** open
-**Link:** https://github.com/<owner>/<repo>/blob/<full-sha>/path/to/file.ext#L<start>-L<end>
+- **Severity:** 🔴 Critical
+- **Where:** \`src/api/web-content.ts:88\`
+- **Status:** open
+- **Link:** https://github.com/<owner>/<repo>/blob/<full-sha>/src/api/web-content.ts#L88
 
 **What's wrong:** <2-4 plain sentences. Describe when it happens, what the code does, and what it should do instead — in normal language, no jargon.>
 
@@ -279,21 +280,37 @@ The \`#\` links jump to the full detail below. Keep the \`Status\` column curren
 
 <a id="f2"></a>
 ### 2. <plain-English title>
-**Severity:** 🔧 Maintainability   **Where:** \`path/to/file.ext:LN-LN\`   **Status:** open
-**Link:** https://github.com/<owner>/<repo>/blob/<full-sha>/ui/list.tsx#L40
+- **Severity:** 🔧 Maintainability
+- **Where:** \`ui/list.tsx:40\`
+- **Status:** open
+- **Link:** https://github.com/<owner>/<repo>/blob/<full-sha>/ui/list.tsx#L40
 
-**What's wrong:** <same shape — for a maintainability issue, explain in plain words what's mixed together that shouldn't be.>
+**What's wrong:** <for a maintainability issue, explain in plain words what is mixed together that should not be.>
 
 **Why it matters:** <the concrete cost: what becomes hard to test, change, or reuse.>
 
 **Suggested fix:** <how to separate the concerns.>
 
+<a id="f3"></a>
+### 3. <plain-English title>
+- **Severity:** 📋 PM/AC
+- **Route:** /search
+- **Status:** open
+
+**What's wrong:** <which acceptance criterion is not met, and what the app does instead.>
+
+**Why it matters:** <what the user cannot do.>
+
+**Suggested fix:** <the behaviour the AC asks for.>
+
 <a id="f4"></a>
-### 4. Button colour and size don't match the Figma design
-**Severity:** 🎨 Design   **Where:** \`/search\` — \`PrimaryButton\`   **Status:** open
-**Expected (design):** background \`#1A73E8\`, font-size \`16px\`
-**Actual (rendered):** background \`#1B74E9\`, font-size \`14px\`
-**Evidence:** ui-findings/finding-4.html (composed image: ui-findings/finding-4.png)
+### 4. <plain-English title>
+- **Severity:** 🎨 Design
+- **Route:** /search — PrimaryButton
+- **Status:** open
+- **Expected (design):** background \`#1A73E8\`, font-size \`16px\`
+- **Actual (rendered):** background \`#1B74E9\`, font-size \`14px\`
+- **Evidence:** ui-findings/finding-4.html (composed image: ui-findings/finding-4.png)
 
 **What's wrong:** <plain sentence: which property differs, on which element/route.>
 
@@ -301,19 +318,31 @@ The \`#\` links jump to the full detail below. Keep the \`Status\` column curren
 
 **Suggested fix:** <the design token or style to apply.>
 
-## Verdict
-✅ Approve / 🔄 Request Changes / 💬 Comment — <one plain sentence explaining the call>
-
 ## Review History
 | Version | Date | Commit | Action |
 |---------|------|--------|--------|
-| v1 | <date> | <sha> | Initial review |
+| v1 | <date> | <sha> | Initial review |`;
+
+// The REVIEW.md output contract (R9, originally bin/cgremlin:1596-1660).
+// `evaluateReview` and every downstream consumer — the brief, the tab, the
+// re-review agent — depend on this exact shape.
+export function renderReviewContract(): string {
+  return `## Output — write \`REVIEW.md\` in this directory, EXACTLY this structure
+
+\`\`\`
+${REVIEW_CONTRACT_EXAMPLE}
 \`\`\`
 
 Rules for the file:
-- Follow this structure EXACTLY, every time. Same headings, same order, same finding shape.
+- Follow this structure EXACTLY, every time: the same four header lines, the same headings in the same order, the same finding shape. Do NOT add sections, rename headings, or reorder them — the engine and the editor read this file by those markers.
+- **Line 2 is the verdict, and it is the only one.** \`**Verdict:** <glyph> <label> — <one sentence>\`, with the label taken verbatim from: \`✅ Approve\`, \`🔄 Request changes\`, \`💬 Comment\`. Do NOT add a \`## Verdict\` section at the bottom; one verdict, in one place, above the fold.
+- **Line 3 is the scope** — one line naming what you actually examined (the diff, the preview URL, the ticket). If you could not examine something, say so here rather than implying you did.
 - Every finding has a stable anchor \`<a id="fN"></a>\` right before its heading, and the table's \`#\` cell links to it as \`[N](#fN)\`. Anchor ids never change across re-reviews (finding 1 is always \`f1\`).
-- \`Status\` appears in TWO places per finding — the table row and the detail heading — and they must always match. Values: \`open\` (new), \`held\` (queued to post), \`posted\` (sent), \`resolved\` (fixed, confirmed on re-review), \`🔇 dismissed\` (skip in re-reviews). Set everything to \`open\`; the triage and re-review agents change it later.
+- **One field per line, in the order shown.** \`- **Severity:**\`, \`- **Where:**\`, \`- **Status:**\`, \`- **Link:**\` — never two fields on one line.
+- **\`Where\` is a location and nothing else:** a backticked repo-relative \`path/to/file.ext:88\` or \`path/to/file.ext:80-92\`. No prose, no parentheses, no function name. A 📋 PM/AC or 🎨 Design finding has no file line: it uses \`- **Route:** /search — PrimaryButton\` instead and OMITS \`Where\`.
+- \`Status\` appears in TWO places per finding — the table row and the detail — and they must always match. Values: \`open\` (new), \`held\` (queued to post), \`posted\` (sent), \`resolved\` (fixed, confirmed on re-review), \`🔇 dismissed\` (skip in re-reviews). Set everything to \`open\`; the triage and re-review agents change it later.
+- 📋 PM/AC findings come from the acceptance-criteria check; 🎨 Design findings come from the Figma-fidelity check and additionally carry Expected, Actual and Evidence, as finding 4 shows.
+- If there is nothing to flag: keep every heading, write "Nothing worth flagging — looks good to me." under \`## Summary\`, leave \`## Details\` empty, and set the verdict to \`✅ Approve\`.
 - Keep it tight. The reviewer reads this to get the picture in under a minute, then talks through anything unclear with the agent.`;
 }
 
@@ -349,12 +378,24 @@ ${notes(p.sessionDir)}${envBlock}${ticketBlock}
 ## What to do (autonomously — do not ask for routine steps)
 1. Understand the request from the ticket. As your first action write \`${p.sessionDir}/AGENT_NOTE\` = "${key}: <one-line goal>".
 2. Explore the repository: trace the relevant code paths, reproduce/understand the issue, find the ROOT CAUSE.
-3. Write \`${p.sessionDir}/FINDINGS.md\` as a COMPLETE HANDOFF a fresh developer could execute from alone:
-   - **What's happening** (the observed problem/behavior)
-   - **Root cause** (the specific code and why)
-   - **Affected files/paths**
-   - **Risks / splash zone** (what a fix could plausibly affect)
-   - **Direction / plan** to fix the ticket (concrete steps, scoped to the ticket)
+3. Write \`${p.sessionDir}/FINDINGS.md\` as a COMPLETE HANDOFF a fresh developer could execute from alone. Use EXACTLY these headings, in this order, and no others:
+   \`\`\`
+   # FINDINGS — ${key}
+   **Verdict:** ✅ Root cause found — <one plain sentence naming the cause>
+   **Scope:** <one line: what you examined>
+
+   ## What's happening
+   ## Root cause
+   ## Affected files
+   ## Risks
+   ## Direction
+   \`\`\`
+   - **What's happening** — the observed problem/behavior.
+   - **Root cause** — the specific code, and why.
+   - **Affected files** — paths, one per line.
+   - **Risks** — the splash zone: what a fix could plausibly affect.
+   - **Direction** — concrete steps to fix the ticket, scoped to the ticket.
+   - Line 2's label is verbatim one of \`✅ Root cause found\`, \`⚠️ Partial\`, \`❌ Not reproducible\` — a bold line, never a heading. Do NOT add sections beyond the five (the one exception is "Tech debt (proposed)", below).
 4. Do NOT change code in this step. Investigation produces understanding only.
 ${uiCheckBlock}
 ## Scope discipline
@@ -364,6 +405,16 @@ Cover ONLY what the ticket asks. If you find necessary out-of-scope work, note i
 ${after}
 `;
 }
+
+/**
+ * MG-17k / MG-17l — FROZEN (`pipeline/artifacts.ts:19-38`). The engine reads
+ * a plan's approval from this block and from nothing else: both ✅ lines, and
+ * the heading matching EXACTLY ONCE in the file. `parsePlanReviewStatus` is
+ * proved against this very string in `test/pipeline/contract-guards.test.ts`.
+ */
+export const PLAN_REVIEW_STATUS_EXAMPLE = `## Review Status
+- PM: ✅ Approved — <one-line reasoning>
+- Principal Engineer: ✅ Approved — <one-line reasoning>`;
 
 export function renderPlanBrief(p: PlanBriefParams): string {
   const key = p.ticket ?? '(no ticket)';
@@ -379,11 +430,26 @@ You are continuing the investigation of ${key} in the same worktree. \`${p.sessi
 ${notes(p.sessionDir)}
 
 ## Drafting the plan (PLAN.md)
-Write \`${p.sessionDir}/PLAN.md\`, derived from FINDINGS.md's root cause and direction. It must be bulletproof enough that a fresh developer could implement it without asking you anything. Include:
+Write \`${p.sessionDir}/PLAN.md\`, derived from FINDINGS.md's root cause and direction. It must be bulletproof enough that a fresh developer could implement it without asking you anything. Use EXACTLY these headings, in this order, and no others:
+
+\`\`\`
+# PLAN — ${key}
+**Verdict:** 🚧 Under review — <one plain sentence: what this plan does>
+**Scope:** <one line: what it covers, and against which ticket>
+
+(## Review Status — the frozen block below goes HERE, at the top, once both reviewers approve)
+## What will be modified
+## How it works
+## How it is tested
+## Scope boundary
+\`\`\`
+
 - **What will be modified** — exact files/functions, not vague areas.
-- **How it will work** — the actual mechanism/approach, not just the goal.
-- **How it will be tested** — concrete test cases, not "add tests."
+- **How it works** — the actual mechanism/approach, not just the goal.
+- **How it is tested** — concrete test cases, not "add tests."
 - **Scope boundary** — what this plan explicitly does NOT do, to prevent scope creep later.
+- Line 2's label is verbatim one of \`✅ Approved\`, \`🚧 Under review\`, \`❌ Unresolved disagreement\`. It is for the reader; the engine decides from \`## Review Status\` alone, so write \`🚧 Under review\` until both reviewers have signed off and \`✅ Approved\` once they have.
+- \`## Review Status\` goes at the TOP, filled in only once both reviewers approve (below). It must appear EXACTLY ONCE in the file — a second copy left over from an earlier round makes the engine read the plan as unreviewed.
 
 ## Reviewing the plan (PM + Principal Engineer)
 Once a PLAN.md draft exists, write \`${p.sessionDir}/AGENT_NOTE\` = "plan drafted — under review", then dispatch TWO subagents in PARALLEL (Task tool) — do NOT do their work inline:
@@ -394,11 +460,9 @@ Once a PLAN.md draft exists, write \`${p.sessionDir}/AGENT_NOTE\` = "plan drafte
 
 If either returns CHANGES_REQUESTED: revise PLAN.md based on their reasoning, then re-dispatch BOTH subagents again (a partial re-review is not enough — a revision can affect either lens). Repeat up to 3 total rounds. If both have not approved after 3 rounds, STOP: write a "## Unresolved Review Disagreement" section at the top of PLAN.md quoting each unresolved objection verbatim, write \`${p.sessionDir}/AGENT_STATE\` = \`needs-input\` and \`${p.sessionDir}/AGENT_NOTE\` = "plan review stuck — needs your input", and stop — do not keep iterating past the cap.
 
-Once both approve, write a "## Review Status" section at the TOP of PLAN.md, exactly in this shape (the engine parses it):
+Once both approve, write a "## Review Status" section at the TOP of PLAN.md, exactly in this shape (the engine parses it — both lines, both ✅, exactly once in the file):
 \`\`\`
-## Review Status
-- PM: ✅ Approved — <one-line reasoning>
-- Principal Engineer: ✅ Approved — <one-line reasoning>
+${PLAN_REVIEW_STATUS_EXAMPLE}
 \`\`\`
 
 ${tail}
@@ -487,7 +551,7 @@ export function renderReviewPrompt(p: ReviewPromptParams): string {
     (p.includeLiveUiCheck ?? true) && uiCheckRendered
       ? ` Then ALWAYS run the '## LIVE UI CHECK' section in ${p.sessionDir}/BRIEF.md (PM + Designer subagents) and merge its 📋/🎨 findings into REVIEW.md — this is required even when ${bareSkillName(skill)} handled the code review.`
       : '';
-  return `Run ${skill} and write the findings to REVIEW.md following ${p.sessionDir}/BRIEF.md.${ui} Proceed autonomously; do NOT ask for confirmation or a verdict. Read the PR with git (the branch is checked out) or gh pr view/diff as needed. If Jira/Atlassian MCP is unavailable, skip Jira context and proceed with the diff alone. Do NOT post to GitHub. Write the output to ${p.sessionDir}/REVIEW.md.`;
+  return `Run ${skill}. Whatever shape it proposes, REVIEW.md must match the output contract in ${p.sessionDir}/BRIEF.md EXACTLY — that contract is what the engine and the editor read, and it overrides the skill's own output format wherever the two differ.${ui} Proceed autonomously; do NOT ask for confirmation or a verdict. Read the PR with git (the branch is checked out) or gh pr view/diff as needed. If Jira/Atlassian MCP is unavailable, skip Jira context and proceed with the diff alone. Do NOT post to GitHub. Write the output to ${p.sessionDir}/REVIEW.md.`;
 }
 
 export function renderRereviewPrompt(p: RereviewPromptParams): string {
@@ -539,7 +603,18 @@ export const RESPOND_MAX_COMMENTS_PER_THREAD = 20;
 export const RESPOND_MAX_COMMENT_CHARS = 2000;
 export const RESPOND_MAX_BRIEF_CHARS = 40_000;
 
-const COMMENTS_MD_SHAPE = `### <thread id>
+/**
+ * §4b/§4c — the header block and `## Threads` above the per-thread entries.
+ * The per-thread shape itself is unchanged: the respond agent, the triage
+ * agent and the tab all read these exact field names.
+ */
+const COMMENTS_MD_SHAPE = `# COMMENTS — <repo>#<number>
+**Verdict:** ✅ All threads triaged — <one sentence>
+**Scope:** <one line: how many threads, and which PR>
+
+## Threads
+
+### <thread id>
 - **Thread:** <thread id> (<resolved|open> · <outdated|current>)
 - **From:** @<login>
 - **Where:** <path>:<line>
@@ -626,7 +701,7 @@ Before acting, re-read the live threads the engine caches for you and reconcile 
   if (ticketSection !== '') sections.push(ticketSection);
 
   sections.push(`## What to write
-For every thread, append an entry to \`${ctx.sessionDir}/COMMENTS.md\` in exactly this shape:
+Write \`${ctx.sessionDir}/COMMENTS.md\` in exactly this shape — the three header lines once, then \`## Threads\`, then one \`### <thread id>\` entry per thread. Line 2's label is verbatim \`✅ All threads triaged\` or \`🚧 N of M triaged\`; it is a bold line, never a heading.
 
 ${COMMENTS_MD_SHAPE}
 
@@ -753,33 +828,68 @@ ${QA_CONDUCT_RULE}
 ${notes(sessionDir)}`;
 }
 
-function qaOutputContract(sessionDir: string): string {
-  return `## Output
-Write ONE file, \`${sessionDir}/QA.md\`, in exactly this shape. The engine parses the final block, so it must appear EXACTLY ONCE.
+/**
+ * MG-17k — the twin of `REVIEW_CONTRACT_EXAMPLE`: this is the string
+ * `parseQaVerdict` is proved against AND the string `skills/qa-verify/SKILL.md`
+ * carries between its `<!-- QA_CONTRACT_EXAMPLE -->` fences, so the skill, the
+ * brief and the parser move together or not at all.
+ *
+ * MG-17l — `## QA Verdict` appears here EXACTLY ONCE, and the header block's
+ * `**Verdict:**` is a bold line rather than a heading precisely so it cannot
+ * become a second match. A second match makes `parseQaVerdict` return
+ * `missing`, which silently turns a finished QA run into an unfinished one.
+ */
+export const QA_CONTRACT_EXAMPLE = `# QA Verification: <TICKET> — <summary>
+**Verdict:** ✅ Ready to deploy — <one sentence>
+**Scope:** <qa url> · merge commit <sha7> · <ISO timestamp>
 
-\`\`\`
-# QA Verification: <TICKET> — <summary>
-**Verdict:** ✅ Ready to deploy / ❌ Not ready / 🚧 Blocked — <one sentence>
-**Environment:** <qa url> · merge commit <sha7> · <ISO timestamp>
 ## Acceptance criteria
 | # | Criterion (from the ticket) | Result | Evidence |
 |---|---|---|---|
 | 1 | <verbatim AC> | ✅ holds / ❌ fails / ⚠️ partial / ⏭ not testable here | <route + observation, or qa-evidence/q1.png> |
+
 ## Checks
 - **UI:** <routes, what was seen>
 - **API/backend:** <endpoint · method · status · assertion>
 - **PostHog events:** <event · seen/not seen · properties>
 - **Feature flags:** <flag · state · effect>
 - **Regressions / splash zone:** <what else was smoke-tested>
+
 ## Problems found
 <a id="q1"></a>
 ### 1. <plain title>
-**Severity:** 🔴 Blocker / 🟠 Major / 🟡 Minor   **Where:** <route or endpoint>   **Status:** open
-**Expected (AC):** …   **Actual:** …   **Evidence:** qa-evidence/q1.png   **Why it matters:** …   **Next step:** …
+- **Severity:** 🔴 Blocker
+- **Where:** <route or endpoint>
+- **Status:** open
+- **Evidence:** qa-evidence/q1.png
+
+**Expected (AC):** <what the AC promises>
+
+**Actual:** <what the running system did>
+
+**Why it matters:** <who is affected and how>
+
+**Next step:** <the one thing that would unblock it>
+
 ## QA Verdict
 - Verdict: ✅ Ready to deploy
-- Blocking problems: 0
+- Blocking problems: 0`;
+
+export function qaOutputContract(sessionDir: string): string {
+  return `## Output
+Write ONE file, \`${sessionDir}/QA.md\`, in exactly this shape. The engine parses the final block, so \`## QA Verdict\` must appear EXACTLY ONCE in the file.
+
 \`\`\`
+${QA_CONTRACT_EXAMPLE}
+\`\`\`
+
+Rules for the file:
+- Follow this structure EXACTLY: the same three header lines, then \`## Acceptance criteria\`, \`## Checks\`, \`## Problems found\`, \`## QA Verdict\` — in that order, no extras, none renamed.
+- **Line 2 is the verdict**, and its label is verbatim one of \`✅ Ready to deploy\`, \`❌ Not ready\`, \`🚧 Blocked\`. The example shows the ✅ case; write the one you actually observed. The \`- Verdict:\` line in the final block carries the SAME glyph and label — the engine reads that line, the reader reads line 2, and they may never disagree.
+- **Line 3 is the scope**: the QA url, the merge commit you verified against, and when.
+- Do NOT write \`## Verdict\` or a second \`## QA Verdict\` anywhere. One verdict heading, at the end, exactly once.
+- Each problem gets a stable anchor \`<a id="qN"></a>\`, one field per line in the order shown, and severity verbatim from \`🔴 Blocker\`, \`🟠 Major\`, \`🟡 Minor\`. \`Where\` is the route or endpoint, nothing else.
+- \`## Problems found\` with no problems stays present and empty — the heading is part of the shape.
 
 Then set \`${sessionDir}/AGENT_STATE\` to \`ready\` (verdict written) or \`blocked\`, write one line to \`${sessionDir}/AGENT_NOTE\`, and STOP.`;
 }
