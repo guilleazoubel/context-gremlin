@@ -143,3 +143,30 @@ describe('the pane says what this document is and when it was written', () => {
     expect(dom.document.body.byClass('artifact-meta')[0]?.textContent).toBe('Review');
   });
 });
+
+/**
+ * §7 at 400px: `overflow-x: auto` on a `display: table` element creates no scroll container at
+ * all, so the five-column findings table and a 100-character permalink pushed the whole document
+ * sideways. The table gets a real scrolling block; the prose may break a link anywhere.
+ */
+describe('a wide table scrolls itself rather than the document', () => {
+  const TABLE = [
+    '# Review',
+    '',
+    '| # | Severity | Where | What | Status |',
+    '| --- | --- | --- | --- | --- |',
+    '| 1 | Critical | `a.ts:8` | dropped | open |',
+    '',
+    'See https://github.com/acme/web/blob/6f1c0d2e4b9a8c7d5e3f1a2b4c6d8e0f/src/a.ts#L88-L120',
+    '',
+  ].join('\n');
+
+  it('wraps the table in a scrolling block of its own', () => {
+    webview.render(state(agent(['REVIEW.md'], { 'REVIEW.md': TABLE })));
+    const body = dom.document.body.byClass('artifact-body')[0];
+    const table = body.find((el) => el.tagName === 'TABLE');
+    expect(table).toBeDefined();
+    expect(table?.parentNode?.className).toBe('table-scroll');
+    expect(body.byClass('table-scroll')).toHaveLength(1);
+  });
+});

@@ -55,6 +55,23 @@ function wireAnchors(body: HTMLElement): void {
   });
 }
 
+/**
+ * §7 — every table in its own scrolling block.
+ *
+ * `overflow-x: auto` on a `display: table` element establishes no scroll container, so a five
+ * column findings table simply overflowed and took the whole document sideways with it at 400px.
+ */
+function wrapTables(body: HTMLElement): void {
+  walk(body, (node) => {
+    if (node.tagName !== 'TABLE') return;
+    const parent = node.parentElement;
+    if (parent === null || parent.className === 'table-scroll') return;
+    const box = el('div', 'table-scroll');
+    parent.insertBefore(box, node);
+    box.appendChild(node);
+  });
+}
+
 export function createArtifactPane(): HTMLElement {
   const pane = el('section', 'pane artifact-pane');
   const parts: Parts = {
@@ -104,4 +121,5 @@ export function patchArtifactPane(pane: HTMLElement, data: ArtifactPaneData): vo
   setHtml(parts.body, renderArtifact(body));
   linkFileRefs(parts.body);
   wireAnchors(parts.body);
+  wrapTables(parts.body);
 }

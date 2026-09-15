@@ -45,6 +45,15 @@ describe('§7 the reading measure', () => {
     expect(css).toMatch(/max-width:\s*none/);
     expect(css).toMatch(/overflow-x:\s*auto/);
   });
+
+  it('scrolls a wide table inside its own block, and breaks a long link anywhere', () => {
+    // `overflow-x` on a `display: table` element establishes no scroll container, so the five
+    // column findings table used to push the whole document sideways at 400px.
+    expect(block('.artifact-body .table-scroll,\n.artifact-body pre')).toMatch(
+      /overflow-x:\s*auto/,
+    );
+    expect(css).toMatch(/overflow-wrap:\s*anywhere/);
+  });
 });
 
 describe('§5b the code-block background applies to code, and only to code', () => {

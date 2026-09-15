@@ -324,11 +324,28 @@ body {
   margin-top: 0;
 }
 
-/* §7: a table and a code block are not prose, so they opt out of the measure and scroll. */
-.artifact-body table,
+/*
+ * §7: a table and a code block are not prose, so they opt out of the measure and scroll.
+ *
+ * The table scrolls inside `.table-scroll`, which the pane wraps around it: `overflow-x` on a
+ * `display: table` element establishes no scroll container, so the table used to take the whole
+ * document sideways instead.
+ */
+.artifact-body .table-scroll,
 .artifact-body pre {
   max-width: none;
   overflow-x: auto;
+}
+
+.artifact-body table {
+  max-width: none;
+}
+
+/* §7: a 100-character permalink is not a word, and may break anywhere rather than overflow. */
+.artifact-body,
+.ticket-description,
+.ticket-comment-body {
+  overflow-wrap: anywhere;
 }
 
 .artifact-body table {
