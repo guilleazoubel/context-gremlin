@@ -1,24 +1,31 @@
 /*
- * The Item tab's stylesheet: hand-written, committed, and theme-aware.
+ * The Item tab's stylesheet: hand-written, committed, and theme-aware (phase 17 §7).
  *
  * Every colour is a `var(--vscode-*)` token, so light, dark and high-contrast themes all work
  * with no palette of our own. There is no icon font — `font-src 'none'` (R38) would drop it
  * silently — so every glyph is unicode (R54).
+ *
+ * The scale is six sizes and five spacings, and nothing else. The chart palette's red stays
+ * reserved for CI, which is why no rule here names it.
  */
 
 body {
   margin: 0;
   padding: 0 16px 32px;
   font-family: var(--vscode-font-family);
-  font-size: var(--vscode-font-size);
+  font-size: var(--vscode-font-size, 13px);
   color: var(--vscode-foreground);
   background: var(--vscode-editor-background);
-  line-height: 1.5;
+  /* Sans at a 72ch measure wants more leading than the editor's own 1.5. */
+  line-height: 1.6;
 }
+
+/* --- header ------------------------------------------------------------- */
 
 .item-header {
   position: sticky;
   top: 0;
+  z-index: 3;
   padding: 12px 0 8px;
   background: var(--vscode-editor-background);
   border-bottom: 1px solid var(--vscode-panel-border);
@@ -26,29 +33,36 @@ body {
 
 .item-title {
   margin: 0;
-  font-size: 1.25em;
+  font-size: calc(var(--vscode-font-size, 13px) * 1.3);
   font-weight: 600;
+  line-height: 1.3;
 }
 
 .badge {
-  margin-left: 6px;
+  margin-left: 4px;
   font-size: 0.9em;
 }
 
 .chips {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 6px;
+  gap: 8px;
+  margin-top: 4px;
 }
 
 .chip {
-  padding: 1px 8px;
+  padding: 2px 8px;
   border: 1px solid var(--vscode-panel-border);
   border-radius: 10px;
-  font-size: 0.9em;
+  font-size: 11px;
   color: var(--vscode-textLink-foreground);
   text-decoration: none;
+}
+
+/* --- action row --------------------------------------------------------- */
+
+.button-group {
+  margin-bottom: 12px;
 }
 
 .buttons {
@@ -58,8 +72,38 @@ body {
   margin: 12px 0 0;
 }
 
-.button-group {
-  margin-bottom: 12px;
+.buttons button {
+  padding: 4px 12px;
+  border: 1px solid var(--vscode-button-border, transparent);
+  border-radius: 2px;
+  font-family: inherit;
+  font-size: inherit;
+  cursor: pointer;
+}
+
+/* §6: exactly one filled button. Everything else is bordered and reads as secondary. */
+.buttons button.primary {
+  color: var(--vscode-button-foreground);
+  background: var(--vscode-button-background);
+}
+
+.buttons button.inline {
+  color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+  background: var(--vscode-button-secondaryBackground, transparent);
+  border-color: var(--vscode-panel-border);
+}
+
+.buttons button.primary:hover:enabled {
+  background: var(--vscode-button-hoverBackground);
+}
+
+.buttons button.inline:hover:enabled {
+  background: var(--vscode-button-secondaryHoverBackground, transparent);
+}
+
+.buttons button:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 /*
@@ -72,48 +116,54 @@ body {
   font-size: 11px;
 }
 
-/* The session id, said once on the pane it identifies rather than hidden in a tab's tooltip. */
-.agent-session {
-  margin: 0 0 8px;
-  color: var(--vscode-descriptionForeground);
-  font-size: 11px;
-}
+/* --- the part switcher -------------------------------------------------- */
 
-.buttons button {
-  padding: 4px 12px;
-  border: 1px solid var(--vscode-button-border, transparent);
-  border-radius: 2px;
-  color: var(--vscode-button-foreground);
-  background: var(--vscode-button-background);
-  font-family: inherit;
-  font-size: inherit;
-  cursor: pointer;
-}
-
-.buttons button:hover:enabled {
-  background: var(--vscode-button-hoverBackground);
-}
-
-.buttons button:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-.agent-tabs {
+/* §2: ONE line. It never wraps — a switcher that reflows is a paragraph, not a strip. */
+.part-switcher {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 4px;
+  overflow-x: auto;
+  white-space: nowrap;
+  background: var(--vscode-editor-background);
   border-bottom: 1px solid var(--vscode-panel-border);
 }
 
-.agent-tab {
+.part-tab {
+  flex: 0 0 auto;
   padding: 4px 10px;
   border: none;
   border-bottom: 2px solid transparent;
   color: var(--vscode-descriptionForeground);
   background: transparent;
   font-family: inherit;
-  font-size: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.part-tab.selected {
+  color: var(--vscode-foreground);
+  border-bottom-color: var(--vscode-focusBorder);
+}
+
+.agent-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.agent-tab {
+  padding: 2px 8px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--vscode-descriptionForeground);
+  background: transparent;
+  font-family: inherit;
+  font-size: 12px;
   cursor: pointer;
 }
 
@@ -122,49 +172,125 @@ body {
   border-bottom-color: var(--vscode-focusBorder);
 }
 
+.part-tab:focus-visible,
 .agent-tab:focus-visible,
 .buttons button:focus-visible,
-.chip:focus-visible {
+.chip:focus-visible,
+.pane:focus-visible {
   outline: 1px solid var(--vscode-focusBorder);
   outline-offset: 2px;
 }
 
-.focus {
-  margin-top: 16px;
+/* --- the pane ----------------------------------------------------------- */
+
+.pane {
+  margin-top: 12px;
+  outline: none;
 }
 
-.artifact {
-  border: 1px solid var(--vscode-panel-border);
-  border-radius: 3px;
+/*
+ * §3 — the verdict, above the fold. The tone is one custom property, set by the tone class, so
+ * the rule, the label and the wash are the same colour by construction and not by repetition.
+ */
+.verdict-strip {
+  --verdict-tone: var(--vscode-descriptionForeground);
   margin-bottom: 12px;
+  padding: 8px 12px;
+  border-left: 3px solid var(--verdict-tone);
+  background: color-mix(in srgb, var(--verdict-tone) 10%, transparent);
 }
 
-.artifact > summary {
-  padding: 6px 10px;
-  cursor: pointer;
-  color: var(--vscode-descriptionForeground);
+.verdict-strip.tone-pass {
+  --verdict-tone: var(--vscode-testing-iconPassed, var(--vscode-charts-green, var(--vscode-descriptionForeground)));
 }
 
-/* §14: the role leads, the filename and mtime follow it as provenance. */
-.artifact-label {
-  color: var(--vscode-foreground);
+.verdict-strip.tone-fail {
+  --verdict-tone: var(--vscode-errorForeground);
+}
+
+.verdict-strip.tone-blocked,
+.verdict-strip.tone-mixed {
+  --verdict-tone: var(--vscode-notificationsWarningIcon-foreground);
+}
+
+.verdict-line {
+  margin: 0;
+  color: var(--verdict-tone);
   font-weight: 600;
 }
 
-.artifact-file {
-  margin-left: 8px;
-  font-size: 0.9em;
+.verdict-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 4px 0 0;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+}
+
+/* §3: the chrome prints the WORD with a dot. Never the emoji — `font-src: none` (R38). */
+.verdict-count::before {
+  content: '';
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 4px;
+  border-radius: 50%;
+  background: currentColor;
+  vertical-align: baseline;
+}
+
+.verdict-count.severity-critical {
+  color: var(--vscode-errorForeground);
+}
+
+.verdict-count.severity-high,
+.verdict-count.severity-perf {
+  color: var(--vscode-notificationsWarningIcon-foreground);
 }
 
 .artifact-notice {
-  margin: 0 0 8px;
-  padding: 6px 10px;
+  margin: 0 0 12px;
+  padding: 8px 12px;
   border-left: 2px solid var(--vscode-panel-border);
   color: var(--vscode-descriptionForeground);
 }
 
-.artifact-body {
-  padding: 0 12px 12px;
+/* §7: the measure. Sans at 13px reads at about 72 characters a line, and no wider. */
+.artifact-body,
+.ticket-description,
+.ticket-comment {
+  max-width: 72ch;
+}
+
+.artifact-body h2,
+.pane-heading {
+  margin: 20px 0 6px;
+  font-size: calc(var(--vscode-font-size, 13px) * 1.15);
+  font-weight: 700;
+}
+
+.artifact-body h3 {
+  margin: 16px 0 4px;
+  font-size: 1em;
+  font-weight: 600;
+}
+
+.artifact-body h4 {
+  margin: 16px 0 4px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.artifact-body > :first-child,
+.pane > :first-child {
+  margin-top: 0;
+}
+
+/* §7: a table and a code block are not prose, so they opt out of the measure and scroll. */
+.artifact-body table,
+.artifact-body pre {
+  max-width: none;
   overflow-x: auto;
 }
 
@@ -175,41 +301,109 @@ body {
 .artifact-body th,
 .artifact-body td {
   border: 1px solid var(--vscode-panel-border);
-  padding: 3px 8px;
+  padding: 4px 8px;
+  font-size: 12px;
   text-align: left;
 }
 
-.artifact-body pre,
-.ticket-description,
-.ticket-comment pre {
-  padding: 8px;
-  overflow-x: auto;
-  white-space: pre-wrap;
-  background: var(--vscode-textCodeBlock-background);
+.artifact-body th {
+  background: var(--vscode-editorWidget-background);
+  font-weight: 600;
+}
+
+.artifact-body td:first-child {
+  font-variant-numeric: tabular-nums;
 }
 
 .artifact-body a,
-.pr-focus a {
+.pr-pane a {
   color: var(--vscode-textLink-foreground);
 }
 
-.pr-facts,
-.reviewers,
-.checks {
-  margin: 4px 0;
-  padding-left: 18px;
+/*
+ * §7 — the ONE place monospace is correct. The defect this replaces painted the whole ticket
+ * description with this rule, which is why every Jira ticket read as a dump.
+ */
+.artifact-body pre,
+.ticket-description pre,
+.ticket-comment-body pre {
+  padding: 8px;
+  white-space: pre-wrap;
+  background: var(--vscode-textCodeBlock-background);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.92em;
 }
+
+/* Inline code takes the same face with NO background, so `file.ts:88` reads as an address. */
+.artifact-body code,
+.ticket-description code,
+.ticket-comment-body code {
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.92em;
+}
+
+/* §3: a reference is a link, not a box. */
+.file-ref {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--vscode-textLink-foreground);
+  font-family: var(--vscode-editor-font-family, monospace);
+  font-size: 0.92em;
+  cursor: pointer;
+}
+
+.file-ref:hover {
+  text-decoration: underline;
+}
+
+.file-ref:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+}
+
+/* --- the ticket pane ---------------------------------------------------- */
 
 .ticket-meta,
 .ticket-comment-author,
-.empty {
+.empty,
+.agent-session {
   color: var(--vscode-descriptionForeground);
-  font-size: 0.9em;
+  font-size: 11px;
+}
+
+.ticket-meta {
+  margin: 0 0 12px;
+}
+
+.earlier-comments > summary {
+  color: var(--vscode-descriptionForeground);
+  font-size: 12px;
+  cursor: pointer;
 }
 
 .ticket-comment {
   border-top: 1px solid var(--vscode-panel-border);
   padding-top: 8px;
+  margin-top: 8px;
+}
+
+/* --- the PR pane -------------------------------------------------------- */
+
+.pr-facts,
+.reviewers,
+.checks {
+  margin: 4px 0;
+  padding-left: 20px;
+}
+
+.pr-link {
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--vscode-textLink-foreground);
+  font-family: inherit;
+  font-size: inherit;
+  cursor: pointer;
 }
 
 .error {
