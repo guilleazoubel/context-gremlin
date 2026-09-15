@@ -434,9 +434,12 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
   // Assigned once `workItems` exists, a few dozen lines below: the leg is a
   // constructor argument of the scanner, which is built first.
   let workItemsForQa: { list(): Promise<{ items: readonly WorkItemForQa[] }> } | null = null;
+  // Gap 2 — the same store instance the leg writes attempts to, read back by
+  // WorkItemService so an abandoned attempt shows up on `/items`.
+  const qaTriggerStore = new QaTriggerStore(adapters.fs, config.qaVerificationsPath!, adapters.now);
   const qaTrigger = new QaTriggerLeg({
     gh: adapters.gh,
-    store: new QaTriggerStore(adapters.fs, config.qaVerificationsPath!, adapters.now),
+    store: qaTriggerStore,
     lock,
     items: async () => (await workItemsForQa?.list())?.items ?? [],
     jira: async () => {
@@ -547,6 +550,7 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     dismissals: new DismissStore(adapters.fs, config.dismissalsPath!),
     events,
     now: adapters.now,
+    qaTrigger: qaTriggerStore,
     config: {
       me: config.me,
       watchAuthors: config.watchAuthors,

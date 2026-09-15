@@ -370,6 +370,10 @@ export function rowMetaCells(
     cells.push({ kind: 'author', text: `@${primary.author}` });
   }
 
+  // Gap 2 — an abandoned auto-verify attempt, muted, wherever the item sits: the core has
+  // already decided it applies (a real QA session, if any, supersedes it there).
+  if (item.qaAttempt != null) cells.push(qaAttemptCell(item.qaAttempt));
+
   cells.push({ kind: 'age', text: parts.age });
   cells.push({ kind: 'tier', text: parts.tier });
   // The `—` stays: a row whose size took its R45 default says it has none, never a zero (MG-12).
@@ -378,6 +382,21 @@ export function rowMetaCells(
   const ci = ciCell(primary?.ci ?? null);
   if (ci !== null) cells.push(ci);
   return cells;
+}
+
+const QA_ATTEMPT_TEXT: Record<'create-failed' | 'unreachable', string> = {
+  'create-failed': 'verify failed',
+  unreachable: 'qa unreachable',
+};
+
+/** Gap 2's one token: an abandoned auto-verify attempt, muted like `prState`. */
+function qaAttemptCell(attempt: NonNullable<WorkItem['qaAttempt']>): RowMetaCell {
+  return {
+    kind: 'qaAttempt',
+    text: QA_ATTEMPT_TEXT[attempt.outcome],
+    label: `automatic QA verification did not start — ${QA_ATTEMPT_TEXT[attempt.outcome]}`,
+    tone: 'muted',
+  };
 }
 
 function phaseCell(agent: WorkItemAgent): RowMetaCell {

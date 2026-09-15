@@ -137,6 +137,15 @@ export interface WorkItem {
   dismissed: boolean;
   dismissedAt: string | null;
   attention: { reasons: AttentionReason[]; since: string; acked: boolean; refs: ItemRef[] };
+  /**
+   * Gap 2 — the QA trigger store's own LAST record that an automatic
+   * verification reserved an attempt and never reached a session (a create
+   * failed, or QA was unreachable), overlaid by `WorkItemService` from
+   * `QaTriggerStore` — never derived here (`groupWorkItems` stays pure, and
+   * takes no I/O of its own). `null` while a QA session covers the item: a
+   * real session supersedes the abandoned-attempt signal.
+   */
+  qaAttempt: { outcome: 'create-failed' | 'unreachable'; at: string } | null;
 }
 
 export interface GroupWorkItemsInput {
@@ -532,6 +541,9 @@ function finish(cand: Candidate, ctx: FinishContext): WorkItem {
     dismissed: false,
     dismissedAt: null,
     attention: { reasons, since: sinceCandidates[0] ?? '', acked, refs },
+    // Overlaid by WorkItemService from the QA trigger store — see the
+    // field's own doc comment (Gap 2).
+    qaAttempt: null,
   };
 }
 

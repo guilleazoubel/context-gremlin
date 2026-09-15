@@ -6,6 +6,7 @@ import { dismissalFor, type DismissStore } from '../attention/dismiss-store';
 import { groupWorkItems, workListsOf, type WorkItem, type WorkLists } from './work-item';
 import type { WorkItemId } from './work-item-id';
 import type { PrStateCache } from '../gh/pr-state';
+import type { QaTriggerState } from '../qa/qa-trigger-store';
 
 export interface WorkItemServiceDeps {
   /**
@@ -33,6 +34,12 @@ export interface WorkItemServiceDeps {
   prStates?: { cached(): Promise<PrStateCache> };
   /** Per-item "not interesting now", shared by every window (`<stateDir>/dismissals.json`). */
   dismissals: DismissStore;
+  /**
+   * Gap 2 — the auto-verify leg's own record of what it tried. Optional: a
+   * harness that never wires QA auto-verify (or an item with no ticket) need
+   * not supply it, and `qaAttempt` then stays null everywhere.
+   */
+  qaTrigger?: { load(): Promise<QaTriggerState> };
   events: EngineEvents;
   /** The clock a dismissal is stamped with. */
   now?: () => Date;
@@ -117,6 +124,7 @@ export class WorkItemService {
       ...(this.deps.config.botLogins !== undefined ? { botLogins: this.deps.config.botLogins } : {}),
       ...(this.deps.config.jiraSiteUrl !== undefined ? { jiraSiteUrl: this.deps.config.jiraSiteUrl } : {}),
     });
+    await this.applyQaAttempts(items);
     const dismissed = await this.applyDismissals(items);
     const threads = this.deps.threads?.lastReport() ?? { scannedAt: null, error: null, fetched: 0 };
     return {
@@ -223,6 +231,29 @@ export class WorkItemService {
     this.lastDelta.set(id, deltaFieldsOf(refreshed));
     this.deps.events.emit('item.changed', { id, kind: refreshed.kind, changedFields: ['dismissed'] });
     return refreshed;
+  }
+
+  /**
+   * Gap 2 — overlays the trigger store's LAST attempt for the item's ticket,
+   * ONLY while no QA session covers the item (a live one, or one that ran to
+   * a terminal phase — `groupWorkItems` keeps every non-terminal agent, so
+   * "an agent of ours in mode qa" is the one check: a real session
+   * supersedes the abandoned-attempt signal). `qaTrigger` is optional and a
+   * ticket-less item has nothing to key the store by, so both bail to the
+   * `null` `groupWorkItems` already set.
+   */
+  private async applyQaAttempts(items: WorkItem[]): Promise<void> {
+    if (this.deps.qaTrigger === undefined) return;
+    const state = await this.deps.qaTrigger.load();
+    for (const item of items) {
+      if (item.ticket === null) continue;
+      if (item.agents.some((a) => a.mode === 'qa')) continue;
+      const attempts = state.tickets[item.ticket.key]?.attempts ?? [];
+      const last = attempts.at(-1);
+      if (last === undefined) continue;
+      if (last.outcome !== 'create-failed' && last.outcome !== 'unreachable') continue;
+      item.qaAttempt = { outcome: last.outcome, at: last.reservedAt };
+    }
   }
 
   /**

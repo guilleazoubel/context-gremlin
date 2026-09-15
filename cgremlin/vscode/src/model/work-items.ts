@@ -178,6 +178,15 @@ export interface WorkItem {
    */
   dismissed: boolean;
   dismissedAt: string | null;
+  /**
+   * Gap 2 — the trigger store's own record that an automatic verification
+   * reserved an attempt and then never reached a session (a create failed,
+   * or QA was unreachable). Read from the LAST such attempt for this item's
+   * ticket, and ONLY while no QA session currently exists for it — a real
+   * session supersedes the signal. **Optional**: an engine older than Gap 2
+   * sends neither field, which reads as "nothing abandoned".
+   */
+  qaAttempt?: { outcome: 'create-failed' | 'unreachable'; at: string } | null;
 }
 
 /** Tolerant of an engine that predates item 2: an absent field is not a dismissal. */
@@ -483,7 +492,9 @@ export type RowMetaKind =
   | 'ticketStatus'
   | 'prState'
   | 'agentPhase'
-  | 'running';
+  | 'running'
+  /** Gap 2 — an abandoned auto-verify attempt, muted, alongside the row's other tokens. */
+  | 'qaAttempt';
 
 export interface RowMetaCell {
   kind: RowMetaKind;

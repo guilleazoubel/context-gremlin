@@ -247,6 +247,23 @@ describe('§8 — the QA part of the expanded row', () => {
   });
 });
 
+describe('Gap 2 — an abandoned auto-verify attempt is visible', () => {
+  it('renders a muted token on the collapsed row, and the manual action stays offered', () => {
+    const withAttempt = item({ qaAttempt: { outcome: 'create-failed', at: '2026-09-15T09:00:00.000Z' } });
+    const cells = meta(withAttempt);
+    const token = cells.find((c) => c.kind === 'qaAttempt');
+    expect(token).toBeDefined();
+    expect(token?.tone).toBe('muted');
+
+    const facts = itemActionFacts(withAttempt, QA_REPOS);
+    expect(rowActions(facts, 'myWork').map((a) => a.label)).toContain('Verify in QA');
+  });
+
+  it('renders nothing with no qaAttempt at all (an engine that predates Gap 2, or a real session superseded the signal server-side)', () => {
+    expect(meta(item()).some((c) => c.kind === 'qaAttempt')).toBe(false);
+  });
+});
+
 describe('§5 — QA.md is labelled through the artifact-labels module', () => {
   it('names the role, and an archived version with it', () => {
     expect(artifactRole('QA.md')).toBe('qa');
