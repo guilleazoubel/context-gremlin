@@ -7,7 +7,7 @@ import {
   hasAnySecret,
   importLegacyConfig,
   loadCoreConfig,
-  redactBypassUrls,
+  redactSecrets,
   redactCoreConfig,
   RepoEnvironmentSchema,
   resolveCoreConfig,
@@ -434,16 +434,16 @@ describe('redactCoreConfig', () => {
   });
 });
 
-describe('redactBypassUrls', () => {
+describe('redactSecrets', () => {
   it('replaces the secret value while leaving the trailing param intact', () => {
     expect(
-      redactBypassUrls('https://h/?x-vercel-protection-bypass=abc123&x-vercel-set-bypass-cookie=true'),
+      redactSecrets('https://h/?x-vercel-protection-bypass=abc123&x-vercel-set-bypass-cookie=true'),
     ).toBe('https://h/?x-vercel-protection-bypass=<redacted>&x-vercel-set-bypass-cookie=true');
   });
 
   it('replaces every occurrence in a multi-line chunk', () => {
     const text = 'one https://a/?x-vercel-protection-bypass=s1\ntwo https://b/?x-vercel-protection-bypass=s2\n';
-    const out = redactBypassUrls(text);
+    const out = redactSecrets(text);
     expect(out).toBe(
       'one https://a/?x-vercel-protection-bypass=<redacted>\ntwo https://b/?x-vercel-protection-bypass=<redacted>\n',
     );
@@ -452,25 +452,25 @@ describe('redactBypassUrls', () => {
   });
 
   it('stops at whitespace', () => {
-    expect(redactBypassUrls('x-vercel-protection-bypass=abc def')).toBe(
+    expect(redactSecrets('x-vercel-protection-bypass=abc def')).toBe(
       'x-vercel-protection-bypass=<redacted> def',
     );
   });
 
   it('W1 redacts the curl request-header form', () => {
-    expect(redactBypassUrls('curl -H "x-vercel-protection-bypass: SENTINEL" https://h/')).toBe(
+    expect(redactSecrets('curl -H "x-vercel-protection-bypass: SENTINEL" https://h/')).toBe(
       'curl -H "x-vercel-protection-bypass: <redacted>" https://h/',
     );
   });
 
   it('W1 redacts the JSON header form', () => {
-    const out = redactBypassUrls('{"headers":{"x-vercel-protection-bypass":"SENTINEL"}}');
+    const out = redactSecrets('{"headers":{"x-vercel-protection-bypass":"SENTINEL"}}');
     expect(out).toBe('{"headers":{"x-vercel-protection-bypass":"<redacted>"}}');
     expect(out).not.toContain('SENTINEL');
   });
 
   it('W1 redacts the header form with no space after the colon and an unquoted value', () => {
-    expect(redactBypassUrls('x-vercel-protection-bypass:SENTINEL\n')).toBe(
+    expect(redactSecrets('x-vercel-protection-bypass:SENTINEL\n')).toBe(
       'x-vercel-protection-bypass:<redacted>\n',
     );
   });
@@ -478,14 +478,14 @@ describe('redactBypassUrls', () => {
   it('W1 redaction is idempotent across all three forms', () => {
     const text =
       'https://h/?x-vercel-protection-bypass=S\ncurl -H "x-vercel-protection-bypass: S"\n{"x-vercel-protection-bypass":"S"}\n';
-    const once = redactBypassUrls(text);
-    expect(redactBypassUrls(once)).toBe(once);
+    const once = redactSecrets(text);
+    expect(redactSecrets(once)).toBe(once);
     expect(once).not.toMatch(/bypass["']?\s*[:=]\s*["']?S\b/);
   });
 
   it('leaves text with no match byte-identical', () => {
     const text = 'nothing to see here\nhttps://example.com/?q=1\n';
-    expect(redactBypassUrls(text)).toBe(text);
+    expect(redactSecrets(text)).toBe(text);
   });
 });
 

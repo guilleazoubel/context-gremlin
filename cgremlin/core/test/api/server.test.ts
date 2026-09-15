@@ -564,6 +564,28 @@ describe('API server', () => {
     expect(versionedRes.body).toBe('archived review');
   });
 
+  it('GET /sessions/:id/artifacts/:name redacts secrets an agent may have pasted into the file', async () => {
+    const createRes = await request('POST', '/sessions/investigations', {
+      repoUrl: 'git@github.com:acme/app.git',
+      ticket: 'APP-7',
+      intent: 'investigate_only',
+      driveToCompletion: false,
+    });
+    const id = (createRes.body as { session: Session }).session.id;
+    await h.fs.writeFile(
+      `${SESSIONS_DIR}/${id}/QA.md`,
+      '# QA\ncurl -H "Authorization: Bearer tok_abcdef123" https://qa/x?x-vercel-protection-bypass=S3CRETV\nset-cookie: __session=aaa.bbb.ccc\n',
+    );
+
+    const res = await request('GET', `/sessions/${id}/artifacts/QA.md`);
+    expect(res.status).toBe(200);
+    const text = res.body as string;
+    expect(text).not.toContain('tok_abcdef123');
+    expect(text).not.toContain('S3CRETV');
+    expect(text).not.toContain('aaa.bbb.ccc');
+    expect(text).toContain('<redacted>');
+  });
+
   it('DELETE /workspaces refuses removal while an active development session shares the worktree, then allows it once abandoned', async () => {
     const session = makeSession({
       id: 'dev-1',

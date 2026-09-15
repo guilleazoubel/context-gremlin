@@ -28,7 +28,7 @@ import type { ReviewSessionFactory, CandidatePR } from '../pipeline/review-sessi
 import type { RespondSessionFactory } from '../pipeline/respond-session-factory';
 import { isClaimed } from '../pipeline/pipeline-service';
 import type { EnvironmentService, LocalAppStatus } from '../env/environment-service';
-import { redactBypassUrls, redactCoreConfig, type CoreConfig } from '../config/core-config';
+import { redactSecrets, redactCoreConfig, type CoreConfig } from '../config/core-config';
 import { handleEventStream, type EventRing } from './event-stream';
 import type { WorkItemService } from '../work/work-item-service';
 import type { WorkItem, WorkListKind } from '../work/work-item';
@@ -454,7 +454,11 @@ async function handleArtifactRead(
   if (!(await deps.fs.exists(filePath))) {
     throw new ArtifactNotFoundError(id, name);
   }
-  const content = await deps.fs.readFile(filePath);
+  // Belt-and-braces, exactly like `localStatusHttp`: an artifact is written
+  // by an AGENT, and Phase 15's QA agent talks to a real app with real
+  // headers and cookies. Redact on the way out rather than trusting every
+  // future agent never to paste one in.
+  const content = redactSecrets(await deps.fs.readFile(filePath));
   res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
   res.end(content);
 }
@@ -540,8 +544,8 @@ function localStatusHttp(status: LocalAppStatus): { code: number; body: unknown 
   // and redaction is idempotent, so no bypass URL can leave through here.
   const safe: LocalAppStatus = {
     ...status,
-    reason: status.reason === null ? null : redactBypassUrls(status.reason),
-    logTail: status.logTail === null ? null : redactBypassUrls(status.logTail),
+    reason: status.reason === null ? null : redactSecrets(status.reason),
+    logTail: status.logTail === null ? null : redactSecrets(status.logTail),
   };
   return status.state === 'unavailable'
     ? { code: 409, body: { error: safe.reason ?? 'the local app is unavailable', status: safe } }

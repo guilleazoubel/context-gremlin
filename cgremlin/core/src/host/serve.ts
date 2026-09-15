@@ -8,7 +8,7 @@ import { ClaudeCodeRunner } from '../agent/claude-code-runner';
 import { CodexRunner } from '../agent/codex-runner';
 import type { AgentRunner } from '../agent/agent-runner';
 import type { CoreConfig } from '../config/core-config';
-import { redactBypassUrls } from '../config/core-config';
+import { redactSecrets } from '../config/core-config';
 import { NodeLocalAppRunner } from '../env/node-local-app-runner';
 import { isSocketLive, listenOnSocket, SocketInUseError } from '../api/listen';
 import { buildEngine, type BuildEngineOptions, type Engine, type EngineAdapters } from './build-engine';
@@ -264,7 +264,7 @@ export async function serve(config: CoreConfig, adapters: EngineAdapters, opts: 
         logLine(opts.log, 'run.output', {
           sessionId: e.sessionId,
           stage: e.stage,
-          chunk: { ...e.chunk, data: redactBypassUrls(e.chunk.data) },
+          chunk: { ...e.chunk, data: redactSecrets(e.chunk.data) },
         }),
       ),
     );

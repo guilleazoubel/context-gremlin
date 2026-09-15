@@ -45,7 +45,30 @@ export const ClerkConfigSchema = z.object({
   verificationCode: z.string().min(1).default('424242'),
 });
 
+/**
+ * Phase 15 — the SHARED QA environment for one repo. `url` is REQUIRED and is
+ * the one thing only the user knows; nothing in the repo can derive it.
+ *
+ * R74: this adds NO new secret. `auth` selects which EXISTING credential the
+ * brief points at — the repo's `clerk` test identity, or the 0600
+ * `vercel.bypassSecret` file — and `'none'` means no test identity is
+ * configured at all, which the AUTOMATIC leg must refuse to run on. Only a
+ * human clicking Verify may run against a QA environment with no account.
+ */
+export const QaEnvironmentSchema = z.object({
+  url: z.string().url(),
+  /** Defaults to `url` at resolve time when absent. */
+  apiBaseUrl: z.string().url().optional(),
+  auth: z.enum(['clerk-test', 'vercel-bypass', 'none']).default('none'),
+  healthPath: z.string().default('/'),
+  healthTimeoutMs: z.number().int().positive().default(15_000),
+  posthog: z.object({ project: z.string().min(1), host: z.string().url() }).optional(),
+  featureFlags: z.array(z.string().min(1)).default([]),
+});
+export type QaEnvironment = z.infer<typeof QaEnvironmentSchema>;
+
 export const RepoEnvironmentSchema = z.object({
+  qa: QaEnvironmentSchema.optional(),
   localApp: LocalAppConfigSchema.optional(),
   vercel: VercelConfigSchema.optional(),
   clerk: ClerkConfigSchema.optional(),
@@ -84,6 +107,8 @@ export const JiraConfigSchema = z.object({
   timeoutMs: z.number().int().positive().default(15_000),
   /** R34 — one budget for the WHOLE Jira leg of a tick (whoami + every page). */
   scanBudgetMs: z.number().int().positive().default(20_000),
+  /** Phase 15 — the statuses that mean "this ticket is in QA". Instance-specific. */
+  qaStatuses: z.array(z.string().min(1)).default(['QA', 'UAT', 'Ready for QA']),
 });
 export type JiraConfig = z.infer<typeof JiraConfigSchema>;
 
@@ -108,6 +133,20 @@ export const CoreConfigSchema = z.object({
   socketPath: z.string().optional(),
   inventoryPath: z.string().optional(),
   reviewSkillCommand: z.string().default('/APFM:apfm-review'),
+  /** R75 — an enhancement that degrades silently when the skill is absent. */
+  qaSkillCommand: z.string().default('/cgremlin:qa-verify'),
+  /**
+   * The automatic verification leg's budget and cost discipline. `autoVerify`
+   * is the single switch that turns the whole leg off;
+   * `maxAutoStartsPerTick` is R77's no-burn rule.
+   */
+  qa: z
+    .object({
+      autoVerify: z.boolean().default(true),
+      maxAutoStartsPerTick: z.number().int().positive().default(1),
+      scanBudgetMs: z.number().int().positive().default(20_000),
+    })
+    .default({}),
   includeLiveUiCheck: z.boolean().default(true),
   defaultBaseRef: z.string().default('origin/main'),
   environments: z.record(z.string().regex(/^[^/\s]+\/[^/\s]+$/), RepoEnvironmentSchema).default({}),
@@ -155,11 +194,21 @@ function expandHome(value: string, home: string): string {
 export function resolveCoreConfig(raw: unknown, home: string): CoreConfig {
   const parsed = CoreConfigSchema.parse(raw);
   const stateDir = expandHome(parsed.stateDir, home);
+  // The QA API and the QA app are the same origin unless a repo says
+  // otherwise, and defaulting HERE (not at every read site) means `/config`,
+  // the brief and the trigger all see the same resolved value.
+  const environments = Object.fromEntries(
+    Object.entries(parsed.environments).map(([slug, env]) => [
+      slug,
+      env.qa === undefined ? env : { ...env, qa: { ...env.qa, apiBaseUrl: env.qa.apiBaseUrl ?? env.qa.url } },
+    ]),
+  );
   const expandOrDerive = (value: string | undefined, suffix: string): string =>
     value !== undefined ? expandHome(value, home) : `${stateDir}/${suffix}`;
   return {
     ...parsed,
     stateDir,
+    environments,
     sessionsDir: expandOrDerive(parsed.sessionsDir, 'sessions'),
     worktreesDir: expandOrDerive(parsed.worktreesDir, 'worktrees'),
     mirrorsDir: expandOrDerive(parsed.mirrorsDir, 'mirrors'),
@@ -223,9 +272,44 @@ export function redactCoreConfig(cfg: CoreConfig): CoreConfig {
  */
 const BYPASS_SECRET_REF = /(x-vercel-protection-bypass"?\s*[:=]\s*"?)([^"'\s&,}]+)/gi;
 
-/** Rewrites every `x-vercel-protection-bypass` value in free text to `<redacted>` (idempotent). */
-export function redactBypassUrls(text: string): string {
-  return text.replace(BYPASS_SECRET_REF, (_match, prefix: string) => `${prefix}<redacted>`);
+/**
+ * Phase 15 widens this beyond the vercel shape, because `QA.md` is a brand-new
+ * exposure surface: a verification agent talks to a real app, and the things
+ * it can accidentally paste into a report or a log are an `Authorization`
+ * header, a bearer token and a session cookie. Each pattern keeps its own
+ * name/separator in group 1 so the replacement stays shaped like the input,
+ * and stops at whatever could close the value, which is what makes repeated
+ * application idempotent (`<redacted>` no longer matches the value shape for
+ * the bearer/cookie forms, and re-matching it yields `<redacted>` again).
+ */
+const SECRET_REFS: readonly RegExp[] = [
+  BYPASS_SECRET_REF,
+  // `Authorization: Bearer <tok>` / `"authorization":"Basic <b64>"` — the
+  // scheme is kept, the credential is not.
+  /(authorization"?\s*[:=]\s*"?(?:Bearer|Basic|Token)\s+)([^"'\s,}]+)/gi,
+  // A bare `Authorization` value with no scheme.
+  /(authorization"?\s*[:=]\s*"?)(?!Bearer\b|Basic\b|Token\b|<redacted>)([^"'\s,}]+)/gi,
+  // A bearer token anywhere else (a curl line, a code sample).
+  /(\bBearer\s+)(?!<redacted>)([A-Za-z0-9._~+/=-]{8,})/g,
+  // Any cookie pair in a Cookie/Set-Cookie header, and `__session=` anywhere.
+  // The lookbehind keeps `x-vercel-set-bypass-cookie=true` — a FLAG, not a
+  // credential — from being mistaken for a cookie header.
+  /(?<![-\w])((?:set-)?cookie"?\s*[:=]\s*"?)(?!<redacted>)([^"'\s;,}]+)/gi,
+  /(__session=)(?!<redacted>)([^"'\s;,}&]+)/gi,
+];
+
+/**
+ * Rewrites every secret-shaped value in free text to `<redacted>`
+ * (idempotent). Applied on every path where agent-authored or app-derived
+ * text leaves the engine: event frames, the local-app status, the engine log
+ * and — Phase 15 — the artifact-read route.
+ */
+export function redactSecrets(text: string): string {
+  let out = text;
+  for (const re of SECRET_REFS) {
+    out = out.replace(re, (_match, prefix: string) => `${prefix}<redacted>`);
+  }
+  return out;
 }
 
 export async function loadCoreConfig(fs: SessionFileSystem, path: string, home: string): Promise<CoreConfig> {
