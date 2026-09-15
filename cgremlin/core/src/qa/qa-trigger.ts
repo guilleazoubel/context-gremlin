@@ -43,6 +43,18 @@ export interface QaTriggerDeps {
   config: QaTriggerConfig;
   qaFor: (repoSlug: string) => { hasUrl: boolean; hasTestIdentity: boolean };
   qaHealth: (repoSlug: string) => Promise<{ ok: boolean; reason: string | null }>;
+  /**
+   * Phase 16 — the commit sha of the build QA is actually SERVING, or null
+   * when the repo's QA will not say. Optional, and a null answer degrades the
+   * whole leg to Phase 15's merge-keyed behaviour (said once per repo in the
+   * log): a repo without a version endpoint must keep working, not stop.
+   * Called at most once per repo per tick.
+   */
+  qaVersion?: (repoSlug: string) => Promise<string | null>;
+  /** `git merge-base --is-ancestor` in the repo mirror — is this merge in that build? */
+  isAncestor?: (repoSlug: string, sha: string, deployedSha: string) => Promise<boolean>;
+  /** One line per degraded repo. Defaults to `console.warn`, which the engine log captures. */
+  log?: (line: string) => void;
   sessions: {
     existingFor: (ticket: string) => Promise<{ id: string; stageStatus: string; claimed?: boolean } | null>;
     activeSessionIds: () => readonly string[];
@@ -113,6 +125,10 @@ export function doneCategoryWarnings(
  */
 export class QaTriggerLeg {
   private flight: Promise<void> | null = null;
+  /** Phase 16 — one `qaVersion` call per repo per TICK, cleared at the top of every scan. */
+  private deployed = new Map<string, string | null>();
+  /** The repos already told about, so the degradation is said once, not every tick. */
+  private readonly degraded = new Set<string>();
   private report: QaScanReport = { scannedAt: null, started: [], skipped: [], errors: [], warnings: [] };
 
   constructor(private readonly deps: QaTriggerDeps) {}
@@ -240,7 +256,25 @@ export class QaTriggerLeg {
       }
       merged.push({ repo: item.repo, number: item.number, mergeSha: oid });
     }
-    const identity = qaIdentityOf(merged);
+    // Phase 16 — merging is not deploying. When QA says which build it is
+    // serving, a candidate qualifies only once EVERY merge commit is an
+    // ancestor of that build; until then the ticket waits, and the record of
+    // that wait is what keeps the next tick from re-asking gh.
+    const deployedSha = await this.deployedSha(candidate.slug);
+    if (deployedSha !== null && !(await this.inQaBuild(candidate, merged, deployedSha))) {
+      await store.reserve({
+        key: candidate.key,
+        identity: qaIdentityOf(merged, deployedSha),
+        ordinal,
+        attempt: 1,
+        reservedAt: nowIso,
+        sessionId: null,
+        outcome: 'awaiting-deploy',
+      });
+      this.skip(candidate.key, `the change is not in the qa build yet (${deployedSha.slice(0, 7)})`);
+      return false;
+    }
+    const identity = qaIdentityOf(merged, deployedSha);
     const fresh = await store.load();
     if (QaTriggerStore.attemptsFor(fresh, candidate.key, identity, ordinal) >= config.maxAttemptsPerEntry) {
       this.skip(candidate.key, 'qa attempt abandoned — click Verify in QA');
@@ -371,9 +405,48 @@ export class QaTriggerLeg {
     return merged;
   }
 
+  /**
+   * The build QA is serving, cached for the whole tick. `null` means this
+   * repo will not say — Phase 15's merge-keyed behaviour, announced once.
+   */
+  private async deployedSha(slug: string): Promise<string | null> {
+    const cached = this.deployed.get(slug);
+    if (cached !== undefined) return cached;
+    let sha: string | null = null;
+    try {
+      sha = (await this.deps.qaVersion?.(slug)) ?? null;
+    } catch {
+      sha = null;
+    }
+    this.deployed.set(slug, sha);
+    if (sha === null && !this.degraded.has(slug)) {
+      this.degraded.add(slug);
+      (this.deps.log ?? ((line: string) => console.warn(line)))(
+        `qa-trigger ${slug}: QA does not report a deployed version (qa.versionPath / qa.versionField) — ` +
+          'verification stays keyed on the MERGE, so it can run before the change is in QA.',
+      );
+    }
+    return sha;
+  }
+
+  /** Every merge commit an ancestor of the deployed build, through the mirror. */
+  private async inQaBuild(
+    candidate: Candidate,
+    merged: readonly { mergeSha: string }[],
+    deployedSha: string,
+  ): Promise<boolean> {
+    const isAncestor = this.deps.isAncestor;
+    if (isAncestor === undefined) return true;
+    for (const pr of merged) {
+      if (!(await isAncestor(candidate.slug, pr.mergeSha, deployedSha))) return false;
+    }
+    return true;
+  }
+
   private async scan(): Promise<void> {
     const { config, store, jira, now } = this.deps;
     const nowDate = (now ?? (() => new Date()))();
+    this.deployed = new Map();
     this.report = { scannedAt: nowDate.toISOString(), started: [], skipped: [], errors: [], warnings: [] };
 
     // E3a — inert unless every precondition holds: nothing is read, nothing
@@ -416,9 +489,20 @@ export class QaTriggerLeg {
         // NEW MERGE while it sits in QA looks like from here. The exact
         // identity check still happens in `start`, after the gh call.
         const attempts = previous!.attempts.filter((a) => a.ordinal === previous!.ordinal);
-        const lastAt = attempts.at(-1)?.reservedAt ?? null;
-        const touched = lastAt !== null && candidate.prs.some((pr) => (pr.updatedAt ?? '') > lastAt);
-        if (attempts.length >= config.maxAttemptsPerEntry && !touched) continue;
+        // Phase 16 — when the deployed build is known, EVERY gate below is
+        // asked of that build: a new build is a new identity with no attempts
+        // of its own, so it re-verifies; the build we already waited on (or
+        // already verified against) costs nothing and no gh call.
+        const build = await this.deployedSha(candidate.slug);
+        if (build !== null) {
+          const onBuild = attempts.filter((a) => a.identity === qaIdentityOf([], build));
+          if (onBuild.some((a) => a.outcome === 'awaiting-deploy')) continue;
+          if (onBuild.length >= config.maxAttemptsPerEntry) continue;
+        } else {
+          const lastAt = attempts.at(-1)?.reservedAt ?? null;
+          const touched = lastAt !== null && candidate.prs.some((pr) => (pr.updatedAt ?? '') > lastAt);
+          if (attempts.length >= config.maxAttemptsPerEntry && !touched) continue;
+        }
       }
       if (seedOnly) {
         this.skip(candidate.key, 'store unreadable — seeded, nothing started');

@@ -23,6 +23,7 @@ import { RespondSessionFactory } from '../pipeline/respond-session-factory';
 import { QaSessionFactory } from '../pipeline/qa-session-factory';
 import { QaTriggerLeg, doneCategoryWarnings } from '../qa/qa-trigger';
 import { awaitRunStart } from '../pipeline/run-start';
+import { DeployAncestry } from '../qa/qa-deploy';
 import { QaTriggerStore } from '../qa/qa-trigger-store';
 import type { WorkItem as WorkItemForQa } from '../work/work-item';
 import { PR_VIEW_FIELDS, failingChecks, parsePrView } from '../gh/pr-view';
@@ -437,6 +438,7 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
   // Gap 2 — the same store instance the leg writes attempts to, read back by
   // WorkItemService so an abandoned attempt shows up on `/items`.
   const qaTriggerStore = new QaTriggerStore(adapters.fs, config.qaVerificationsPath!, adapters.now);
+  const deployAncestry = new DeployAncestry({ git: adapters.git, fs: adapters.fs, mirrorsDir });
   const qaTrigger = new QaTriggerLeg({
     gh: adapters.gh,
     store: qaTriggerStore,
@@ -463,6 +465,11 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
         ok: false,
         reason: 'no environment service is configured',
       },
+    // Phase 16 — what QA is actually SERVING, and whether the merge is in it.
+    // Merging is not deploying: without these two the leg would verify a QA
+    // site that does not contain the change yet.
+    qaVersion: async (slug) => (await environment?.qaVersion(`https://github.com/${slug}.git`)) ?? null,
+    isAncestor: (slug, sha, deployedSha) => deployAncestry.isAncestor(slug, sha, deployedSha),
     sessions: {
       existingFor: async (ticket) => {
         const session = await qaFactory.existingFor(ticket);

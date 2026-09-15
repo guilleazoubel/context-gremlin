@@ -389,3 +389,62 @@ describe('R84/E10 — the PR-less entry', () => {
     expect(h.created).toEqual([]);
   });
 });
+
+/**
+ * Phase 16 item 2 — the flaw Phase 15 shipped with: it fired on MERGED, and
+ * merging is not deploying. The change is verifiable only once the build QA is
+ * serving actually contains it.
+ */
+describe('the change must be IN the qa build', () => {
+  const DEPLOYED = '088ce5e07db734834e4948ad3365f4155cd1ae4e';
+
+  async function seeded(over: Parameters<typeof harness>[0] = {}) {
+    const h = harness(over);
+    await h.store.observe('HB-1', 'In Progress');
+    return h;
+  }
+
+  it('a merged sha that is NOT in the deployed build starts nothing and records "awaiting"', async () => {
+    const h = await seeded({ qaVersion: async () => DEPLOYED, isAncestor: async () => false });
+    await tick(h);
+    expect(h.created).toEqual([]);
+    expect(h.leg.lastReport().skipped[0].why).toContain('not in the qa build yet');
+    const attempts = (await h.store.load()).tickets['HB-1'].attempts;
+    expect(attempts.map((a) => a.outcome)).toEqual(['awaiting-deploy']);
+    expect(attempts[0].identity).toBe(`qa:${DEPLOYED}`);
+  });
+
+  it('the same undeployed build on a later tick costs no further gh call', async () => {
+    const h = await seeded({ qaVersion: async () => DEPLOYED, isAncestor: async () => false });
+    await tick(h);
+    const after = h.gh.calls.length;
+    await h.leg.run();
+    expect(h.gh.calls.length).toBe(after);
+    expect(h.created).toEqual([]);
+  });
+
+  it('once the merge IS an ancestor of the deployed sha, exactly one start, keyed on the BUILD', async () => {
+    const h = await seeded({ qaVersion: async () => DEPLOYED, isAncestor: async () => true });
+    await tick(h);
+    expect(h.created).toEqual(['HB-1:acme/app#12']);
+    expect((await h.store.load()).tickets['HB-1'].attempts.at(-1)!.identity).toBe(`qa:${DEPLOYED}`);
+  });
+
+  it('the same deployed sha on three more ticks starts nothing more', async () => {
+    const h = await seeded({ qaVersion: async () => DEPLOYED, isAncestor: async () => true });
+    await tick(h);
+    await tick(h);
+    await tick(h);
+    expect(h.created).toEqual(['HB-1:acme/app#12']);
+  });
+
+  it('a repo with no version endpoint keeps the OLD merge-keyed behaviour, and says so ONCE', async () => {
+    const lines: string[] = [];
+    const h = await seeded({ qaVersion: async () => null, log: (line) => lines.push(line) });
+    await tick(h);
+    await tick(h);
+    expect(h.created).toEqual(['HB-1:acme/app#12']);
+    expect((await h.store.load()).tickets['HB-1'].attempts.at(-1)!.identity).toBe(`${REPO}#12@${MERGE_SHA}`);
+    expect(lines.filter((l) => l.includes('acme/app')).length).toBe(1);
+  });
+});
