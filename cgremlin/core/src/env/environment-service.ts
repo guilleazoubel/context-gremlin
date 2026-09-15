@@ -815,7 +815,13 @@ export class EnvironmentService {
     }
     if (qa.auth === 'clerk-test' && env.clerk !== undefined) {
       const clerk = ClerkConfigSchema.parse(env.clerk);
-      ctx.clerk = { emailTemplate: clerk.testEmailTemplate, verificationCode: clerk.verificationCode };
+      // `{key}` is resolved HERE, to this session's id: the UI-check path
+      // leaves it to the agent to pick a name, but an unattended
+      // verification must not be able to collide with another run's account.
+      ctx.clerk = {
+        emailTemplate: clerk.testEmailTemplate.replace('{key}', session.id),
+        verificationCode: clerk.verificationCode,
+      };
     }
     return ctx;
   }

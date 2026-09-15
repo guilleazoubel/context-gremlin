@@ -68,6 +68,18 @@ function notes(sessionDir: string): string {
 - State: overwrite \`${sessionDir}/AGENT_STATE\` with exactly one of \`working\`, \`ready\`, \`needs-input\`, \`blocked\` whenever it changes.`;
 }
 
+/**
+ * The ONE sentence that describes how to sign in as a Clerk test user. Both
+ * the live UI check's `## Environment` block and the QA brief's
+ * `## QA environment` block emit exactly this, so there is never a second
+ * phrasing to keep in sync. A `+clerk_test` address is Clerk's own test-mode
+ * identity: ephemeral, non-privileged, and it emails nobody — which is why
+ * signing up as one is the CONFIGURED account, not "creating a user".
+ */
+export function renderClerkTestUserLine(clerk: { emailTemplate: string; verificationCode: string }): string {
+  return `- Clerk test user: sign in with \`${clerk.emailTemplate}\` and the email verification code \`${clerk.verificationCode}\`.`;
+}
+
 // Renders the '## Environment' block for a brief. Every line is conditional on the
 // corresponding EnvironmentBriefContext field; '' when nothing is set (R14).
 export function renderEnvironmentSection(ctx: EnvironmentBriefContext): string {
@@ -93,7 +105,7 @@ export function renderEnvironmentSection(ctx: EnvironmentBriefContext): string {
     lines.push(`- Deployment-protection bypass secret: read the single line in \`${ctx.bypassSecretPath}\`.`);
   }
   if (ctx.clerk) {
-    lines.push(`- Clerk test user: sign in with \`${ctx.clerk.emailTemplate}\` and the email verification code \`${ctx.clerk.verificationCode}\`.`);
+    lines.push(renderClerkTestUserLine(ctx.clerk));
   }
   if (lines.length === 0) return '';
   return `## Environment (started for you by the engine — do NOT start or stop anything yourself)\n${lines.join('\n')}`;
@@ -694,8 +706,9 @@ export function renderQaEnvironmentSection(ctx: QaEnvironmentBriefContext): stri
   lines.push(`- QA app: ${ctx.url}`);
   lines.push(`- API base URL: ${ctx.apiBaseUrl ?? ctx.url}`);
   if (ctx.auth === 'clerk-test' && ctx.clerk !== null) {
+    lines.push(renderClerkTestUserLine(ctx.clerk));
     lines.push(
-      `- Test account: a Clerk TEST identity. Sign in with an email of the form \`${ctx.clerk.emailTemplate}\` (the \`+clerk_test\` suffix is what makes it a test account) and the email verification code \`${ctx.clerk.verificationCode}\`. The browser profile is fresh every run, so sign in every run.`,
+      `  The address above is unique to this verification run and the browser profile is fresh every run, so sign in every run. Use THAT account and no other.`,
     );
   } else if (ctx.auth === 'vercel-bypass' && ctx.bypassSecretPath !== null) {
     lines.push(

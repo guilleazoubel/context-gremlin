@@ -146,11 +146,37 @@ describe('EnvironmentService.qaBriefContext', () => {
     expect(JSON.stringify(ctx)).not.toContain(SECRET);
   });
 
-  it('carries the clerk test identity when that is the auth mode', async () => {
+  it('carries the clerk test identity, with {key} resolved to THIS session so runs cannot collide', async () => {
     const { service, local } = make(makeConfig({ qa: { url: 'https://q', auth: 'clerk-test' }, clerk: {} }));
     local.queueHealth({ ok: true, status: 200, reason: null, exited: false });
     const ctx = await service.qaBriefContext(qaSession());
-    expect(ctx.clerk).toEqual({ emailTemplate: 'uicheck-{key}+clerk_test@example.com', verificationCode: '424242' });
+    expect(ctx.clerk).toEqual({
+      emailTemplate: 'uicheck-qa-1+clerk_test@example.com',
+      verificationCode: '424242',
+    });
+  });
+
+  it('the exact config the user ships parses and yields a usable test identity', async () => {
+    const config = resolveCoreConfig(
+      {
+        repos: [SLUG],
+        me: 'me',
+        environments: {
+          [SLUG]: {
+            qa: { url: 'https://findcare.qa.aplaceformom.com/', auth: 'clerk-test' },
+            clerk: { testEmailTemplate: 'uicheck-{key}+clerk_test@example.com', verificationCode: '424242' },
+          },
+        },
+      },
+      HOME,
+    );
+    const { service, local } = make(config);
+    expect(service.hasQaTestIdentity(REPO_URL)).toBe(true);
+    local.queueHealth({ ok: true, status: 200, reason: null, exited: false });
+    const ctx = await service.qaBriefContext(qaSession());
+    expect(ctx.url).toBe('https://findcare.qa.aplaceformom.com/');
+    expect(ctx.apiBaseUrl).toBe('https://findcare.qa.aplaceformom.com/');
+    expect(ctx.clerk?.emailTemplate).toBe('uicheck-qa-1+clerk_test@example.com');
   });
 
   it('records an unreachable QA as a reason instead of throwing', async () => {

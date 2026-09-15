@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
   EMPTY_QA_ENVIRONMENT,
+  EMPTY_ENVIRONMENT,
+  renderEnvironmentSection,
+  renderClerkTestUserLine,
   QA_CONDUCT_RULE,
   QA_MAX_BRIEF_CHARS,
   renderQaBrief,
@@ -75,6 +78,15 @@ describe('renderQaEnvironmentSection', () => {
   it('an unreachable QA degrades to a do-not-start line, never a throw', () => {
     const text = renderQaEnvironmentSection(env({ unreachableReason: 'connect ECONNREFUSED' }));
     expect(text).toContain('QA: UNREACHABLE — connect ECONNREFUSED. Do not attempt to start anything');
+  });
+
+  it('uses the SAME clerk sentence the live UI check emits — one description of how to sign in', () => {
+    const clerk = { emailTemplate: 'uicheck-qa-1+clerk_test@example.com', verificationCode: '424242' };
+    const qa = renderQaEnvironmentSection(env({ auth: 'clerk-test', clerk }));
+    const review = renderEnvironmentSection({ ...EMPTY_ENVIRONMENT, clerk });
+    const line = renderClerkTestUserLine(clerk);
+    expect(qa).toContain(line);
+    expect(review).toContain(line);
   });
 
   it('says a test account exists without printing a credential when auth is none', () => {
