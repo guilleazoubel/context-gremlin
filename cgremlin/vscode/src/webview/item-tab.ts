@@ -72,9 +72,12 @@ function frameOf(): Frame {
   const switcher = createSwitcher();
   const agentTabs = el('div', 'agent-tabs');
   const paneHost = el('div', 'pane-host');
-  for (const node of [header, group, switcher.node, agentTabs, paneHost]) {
-    container.appendChild(node);
-  }
+  // ONE sticky layer. The header and the switcher used to stick independently at `top: 0`, with
+  // the header painted over the tablist — so the tab's only navigation disappeared as soon as the
+  // document scrolled. They stick together or not at all.
+  const chrome = el('div', 'item-chrome');
+  for (const node of [header, group, switcher.node]) chrome.appendChild(node);
+  for (const node of [chrome, agentTabs, paneHost]) container.appendChild(node);
   frame = { titleText, needsYou, chips, buttons, reasons, switcher, agentTabs, paneHost };
   return frame;
 }

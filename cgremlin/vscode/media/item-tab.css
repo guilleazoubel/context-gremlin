@@ -20,14 +20,25 @@ body {
   line-height: 1.6;
 }
 
-/* --- header ------------------------------------------------------------- */
+/* --- the sticky chrome -------------------------------------------------- */
 
-.item-header {
+/*
+ * The header, the action row and the part switcher, as ONE sticky layer.
+ *
+ * They used to stick separately at `top: 0` with the header at the higher `z-index`, so the
+ * tablist was painted UNDER the header and was invisible the moment the document scrolled — which
+ * took the tab's only navigation with it.
+ */
+.item-chrome {
   position: sticky;
   top: 0;
   z-index: 3;
-  padding: 12px 0 8px;
   background: var(--vscode-editor-background);
+  border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+.item-header {
+  padding: 12px 0 8px;
   border-bottom: 1px solid var(--vscode-panel-border);
 }
 
@@ -120,16 +131,11 @@ body {
 
 /* §2: ONE line. It never wraps — a switcher that reflows is a paragraph, not a strip. */
 .part-switcher {
-  position: sticky;
-  top: 0;
-  z-index: 2;
   display: flex;
   flex-wrap: nowrap;
   gap: 4px;
   overflow-x: auto;
   white-space: nowrap;
-  background: var(--vscode-editor-background);
-  border-bottom: 1px solid var(--vscode-panel-border);
 }
 
 .part-tab {

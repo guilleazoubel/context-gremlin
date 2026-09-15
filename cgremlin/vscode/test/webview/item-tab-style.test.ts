@@ -61,12 +61,25 @@ describe('§5b the code-block background applies to code, and only to code', () 
   });
 });
 
-describe('§2 the switcher is one sticky, scrollable line', () => {
-  it('never wraps, scrolls sideways, and sticks under the action row', () => {
+describe('§2 the switcher is one scrollable line inside the sticky chrome', () => {
+  it('never wraps and scrolls sideways', () => {
     const rule = block('.part-switcher');
-    expect(rule).toMatch(/position:\s*sticky/);
     expect(rule).toMatch(/overflow-x:\s*auto/);
     expect(rule).toMatch(/flex-wrap:\s*nowrap|white-space:\s*nowrap/);
+  });
+
+  /**
+   * The severe defect: the header and the switcher were BOTH `position: sticky; top: 0`, with the
+   * header at the higher `z-index` — so the tablist was painted under the header and vanished the
+   * moment you scrolled, taking the tab's only navigation with it. There is one sticky layer now,
+   * and it holds the header, the action row and the tablist together.
+   */
+  it('has exactly one sticky layer, and it is the chrome', () => {
+    expect(css.match(/position:\s*sticky/g)).toHaveLength(1);
+    expect(block('.item-chrome')).toMatch(/position:\s*sticky/);
+    expect(block('.item-chrome')).toMatch(/top:\s*0/);
+    expect(block('.item-header')).not.toMatch(/position:\s*sticky/);
+    expect(block('.part-switcher')).not.toMatch(/position:\s*sticky/);
   });
 
   it('marks the selected tab with a 2px focusBorder rule', () => {

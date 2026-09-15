@@ -98,6 +98,20 @@ describe('the parts are a real tablist', () => {
   });
 });
 
+describe('the tablist survives a scroll', () => {
+  it('draws the header, the action row and the tablist inside ONE sticky container', () => {
+    webview.render(state());
+    const chrome = dom.document.body.byClass('item-chrome')[0];
+    expect(chrome).toBeDefined();
+    expect(chrome.children.map((c) => c.className)).toEqual([
+      'item-header',
+      'button-group',
+      'part-switcher',
+    ]);
+    expect(tablist()?.parentNode).toBe(chrome);
+  });
+});
+
 describe('the keyboard model is roving, and arrow-select acts', () => {
   it('ArrowRight moves to the next part and selects it', () => {
     webview.render(state());
