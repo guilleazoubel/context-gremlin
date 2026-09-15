@@ -448,3 +448,70 @@ describe('the change must be IN the qa build', () => {
     expect(lines.filter((l) => l.includes('acme/app')).length).toBe(1);
   });
 });
+
+/**
+ * Phase 16 item 3 — a new QA cut is a NEW question. A later build can break
+ * what an earlier one passed, so a ticket still sitting in a QA status
+ * verifies again against the build that has just landed — re-running the
+ * session it already has (which archives the previous QA.md) rather than
+ * opening a second one.
+ */
+describe('a new qa build re-verifies', () => {
+  const BUILD_1 = '088ce5e07db734834e4948ad3365f4155cd1ae4e';
+  const BUILD_2 = 'b'.repeat(40);
+
+  function rebuilding(builds: string[], over: Parameters<typeof harness>[0] = {}) {
+    let existing: { id: string; stageStatus: string } | null = null;
+    const h = harness({
+      qaVersion: async () => builds[0],
+      isAncestor: async () => true,
+      sessions: { existingFor: async () => existing, activeSessionIds: () => [] },
+      ...over,
+    });
+    return {
+      h,
+      cut: (sha: string) => {
+        builds[0] = sha;
+      },
+      finish: (id: string, stageStatus: string) => {
+        existing = { id, stageStatus };
+      },
+    };
+  }
+
+  it('the same build twice does nothing; a new build starts exactly one more run', async () => {
+    const builds = [BUILD_1];
+    const { h, cut, finish } = rebuilding(builds);
+    await h.store.observe('HB-1', 'In Progress');
+    await tick(h);
+    expect(h.ran).toEqual(['qa-HB-1']);
+    finish('qa-HB-1', 'ready');
+    await tick(h);
+    expect(h.ran).toEqual(['qa-HB-1']);
+    cut(BUILD_2);
+    await tick(h);
+    expect(h.ran).toEqual(['qa-HB-1', 'qa-HB-1']);
+    // One session, two verifications — one per deployed build.
+    expect(h.created).toEqual(['HB-1:acme/app#12']);
+    expect((await h.store.load()).tickets['HB-1'].attempts.map((a) => a.identity)).toEqual([
+      `qa:${BUILD_1}`,
+      `qa:${BUILD_2}`,
+    ]);
+  });
+
+  it('a run already in flight on that session still blocks the new build', async () => {
+    const builds = [BUILD_1];
+    const { h, cut } = rebuilding(builds, {
+      sessions: {
+        existingFor: async () => ({ id: 'qa-live', stageStatus: 'verifying' }),
+        activeSessionIds: () => ['qa-live'],
+      },
+    });
+    await h.store.observe('HB-1', 'In Progress');
+    await tick(h);
+    cut(BUILD_2);
+    await tick(h);
+    expect(h.ran).toEqual([]);
+    expect(h.created).toEqual([]);
+  });
+});

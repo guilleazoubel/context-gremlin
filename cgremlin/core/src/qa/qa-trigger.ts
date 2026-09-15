@@ -209,13 +209,26 @@ export class QaTriggerLeg {
    * ticket forever; a boot sweep moves it to `failed`, which is runnable and
    * already raises `run_failed`.
    */
-  private async covered(key: string): Promise<boolean> {
+  private async coverage(key: string): Promise<{ blocked: boolean; reuse: string | null }> {
     const existing = await this.deps.sessions.existingFor(key);
-    if (existing === null) return false;
-    const live = this.deps.sessions.activeSessionIds().includes(existing.id);
-    if (existing.stageStatus === 'verifying' && !live) return false;
-    this.skip(key, live ? 'a qa run is already in flight' : `a qa session already covers it (${existing.stageStatus})`);
-    return true;
+    if (existing === null) return { blocked: false, reuse: null };
+    if (this.deps.sessions.activeSessionIds().includes(existing.id)) {
+      this.skip(key, 'a qa run is already in flight');
+      return { blocked: true, reuse: null };
+    }
+    // E8 — a `verifying` session nothing is running is a session the engine
+    // died under, not coverage and not something to re-run: a boot sweep
+    // moves it to `failed`, and a fresh session is the honest recovery.
+    if (existing.stageStatus === 'verifying') return { blocked: false, reuse: null };
+    if (existing.claimed === true) {
+      this.skip(key, 'a human holds the conversation claim on the qa session');
+      return { blocked: true, reuse: null };
+    }
+    // Phase 16 — the session is REUSED rather than blocking: a new deployed
+    // build is a new question, and `runVerify` archives the previous QA.md to
+    // `QA-v<n>.md` before it starts, so the earlier verdict stays readable.
+    // The identity gate above is what makes this at most once per build.
+    return { blocked: false, reuse: existing.id };
   }
 
   /**
@@ -228,7 +241,12 @@ export class QaTriggerLeg {
    * reserve and `run.started` leaves a record whose `attempt` has already hit
    * the cap and the leg never auto-retries.
    */
-  private async start(candidate: Candidate, ordinal: number, state: { tickets: Record<string, unknown> }): Promise<boolean> {
+  private async start(
+    candidate: Candidate,
+    ordinal: number,
+    state: { tickets: Record<string, unknown> },
+    reuse: string | null = null,
+  ): Promise<boolean> {
     const { config, store, gh } = this.deps;
     const nowIso = (this.deps.now ?? (() => new Date()))().toISOString();
     const pr = candidate.prs[0];
@@ -303,7 +321,8 @@ export class QaTriggerLeg {
     return this.deps.lock.withLock(lockKey, async () => {
       let sessionId: string;
       try {
-        sessionId = (await this.deps.createSession(candidate.key, merged[0].repo, merged[0].number)).id;
+        sessionId =
+          reuse ?? (await this.deps.createSession(candidate.key, merged[0].repo, merged[0].number)).id;
       } catch (err) {
         await store.patch(candidate.key, nowIso, { outcome: 'create-failed' });
         this.skip(candidate.key, `qa session could not be created — ${errorMessage(err)}`);
@@ -523,13 +542,14 @@ export class QaTriggerLeg {
         this.skip(candidate.key, 'pr closed without merging');
         continue;
       }
-      if (await this.covered(candidate.key)) continue;
+      const coverage = await this.coverage(candidate.key);
+      if (coverage.blocked) continue;
       // The ordinal advances only on a real ENTRY; a ticket already in QA
       // keeps the ordinal it entered on (R80).
       const record = inQa
         ? previous!
         : await store.enterQa(candidate.key, candidate.status);
-      if (await this.start(candidate, record.ordinal, state)) starts += 1;
+      if (await this.start(candidate, record.ordinal, state, coverage.reuse)) starts += 1;
     }
 
     // Everything we saw and did not take still has its status recorded, so a
