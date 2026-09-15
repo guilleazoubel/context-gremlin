@@ -294,6 +294,8 @@ export class ItemTab {
               status: detail.ticket.status,
               url: detail.ticket.url,
               assignee: detail.ticket.assignee,
+              assigneeName:
+                (detail.ticket as { assigneeName?: string | null }).assigneeName ?? null,
               descriptionText: detail.ticket.descriptionText,
               comments: detail.ticket.comments,
             },

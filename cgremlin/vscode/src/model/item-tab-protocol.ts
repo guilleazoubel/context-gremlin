@@ -63,7 +63,13 @@ export interface TabTicket {
   summary: string;
   status: string;
   url: string;
+  /** The account id — compared against `jira.me` upstream, so it stays the id. */
   assignee: string | null;
+  /**
+   * Phase 17 §5d — the assignee's display name. Optional on the wire: an engine built before the
+   * field existed simply does not send it, and the pane falls back to the id rather than to ''.
+   */
+  assigneeName?: string | null;
   descriptionText: string | null;
   comments: { author: string; at: string; bodyText: string | null }[];
 }
