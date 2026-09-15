@@ -28,6 +28,9 @@ const JiraIssueSummarySchema = z.object({
   status: z.string(),
   statusCategory: z.string(),
   assignee: z.string().nullable(),
+  // Defaulted, not required: a `jira.json` written before this field existed
+  // must still parse, or an upgrade silently discards the cache.
+  assigneeName: z.string().nullable().default(null),
   updated: z.string(),
   url: z.string(),
 });

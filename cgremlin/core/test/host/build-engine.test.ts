@@ -367,7 +367,7 @@ describe('the QA brief context (qaContext)', () => {
         detail: async () => ({
           ticket: {
             key: 'HB-1489', summary: 'Web content', status: 'UAT',
-            statusCategory: 'In Progress', assignee: 'Me Jira',
+            statusCategory: 'In Progress', assignee: 'Me Jira', assigneeName: 'Me Jira',
             updated: '2026-09-14T00:00:00.000Z',
             url: 'https://jira.invalid/browse/HB-1489',
             descriptionText: 'AC1: the block renders.\nAC2: the API returns 200.',

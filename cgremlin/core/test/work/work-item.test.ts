@@ -124,6 +124,7 @@ function jiraReport(issues: Partial<JiraIssueSummary>[], over: Partial<JiraScanR
       status: 'In Progress',
       statusCategory: 'indeterminate',
       assignee: null,
+      assigneeName: null,
       updated: '2026-09-03T00:00:00.000Z',
       url: 'https://example.atlassian.net/browse/HB-627',
       ...i,

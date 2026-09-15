@@ -16,6 +16,12 @@ export interface JiraIssueSummary {
   statusCategory: string;
   /** The assignee's Jira **accountId**, which is what `jira.me` is compared against (R37). */
   assignee: string | null;
+  /**
+   * The assignee's `displayName`, which Jira returns in the very same object
+   * as the accountId. It is presentation ONLY — nothing compares against it,
+   * and `assignee` stays the id so R37's `jira.me` check is untouched.
+   */
+  assigneeName: string | null;
   updated: string;
   /** R37: always built from `jira.siteUrl`, NEVER from `baseUrl`. */
   url: string;

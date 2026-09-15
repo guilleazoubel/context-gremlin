@@ -395,10 +395,24 @@ describe('JiraRestSource: the summary mapping', () => {
       status: 'In Progress',
       statusCategory: 'indeterminate',
       assignee: '712020:f0acd024-8d3a-4b87-9d4b-768ee3eb3f74',
+      assigneeName: 'Guilherme Azoubel',
       updated: '2026-09-09T10:00:00.000+0000',
       url: `${SITE_URL}/browse/HB-627`,
     });
     expect(second.assignee).toBeNull();
+  });
+
+  // MG-17h — the id is what `jira.me` is compared against (R37) and never
+  // moves; the display name rides ALONGSIDE it so the tab can print a person
+  // instead of `712020:f0ac…`. Jira's payload has carried it all along.
+  it('keeps `assignee` as the accountId and adds `assigneeName` from displayName', async () => {
+    stub.responder = (req, res) =>
+      stub.json(res, req.query.get('nextPageToken') === 'PAGE2TOKEN' ? fixture('search-jql-page2') : fixture('search-jql-page1'));
+    const [first, second] = await source().search('x');
+    expect(first.assignee).toBe('712020:f0acd024-8d3a-4b87-9d4b-768ee3eb3f74');
+    expect(first.assigneeName).toBe('Guilherme Azoubel');
+    expect(second.assignee).toBeNull();
+    expect(second.assigneeName).toBeNull();
   });
 });
 

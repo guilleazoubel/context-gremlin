@@ -52,7 +52,7 @@ interface RawIssue {
     summary?: string | null;
     updated?: string | null;
     status?: { name?: string; statusCategory?: { key?: string } } | null;
-    assignee?: { accountId?: string } | null;
+    assignee?: { accountId?: string; displayName?: string } | null;
   } | null;
   renderedFields?: { description?: string | null } | null;
 }
@@ -335,6 +335,7 @@ export class JiraRestSource implements JiraSource {
       status: fields.status?.name ?? '',
       statusCategory: fields.status?.statusCategory?.key ?? '',
       assignee: fields.assignee?.accountId ?? null,
+      assigneeName: fields.assignee?.displayName ?? null,
       updated: fields.updated ?? '',
       url: this.browseUrl(raw.key),
     };
