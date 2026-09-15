@@ -28,9 +28,38 @@ describe('htmlToText (R33) — the renderedFields flattener', () => {
     );
   });
 
-  it('<img> becomes "[image: alt]"', () => {
-    expect(htmlToText('<p><img src="a.png" alt="a diagram"></p>')).toBe('[image: a diagram]');
-    expect(htmlToText('<p><img src="a.png"></p>')).toBe('[image]');
+  it('<img> becomes a markdown image link', () => {
+    expect(htmlToText('<p><img src="a.png" alt="a diagram"></p>')).toBe('[image: a diagram](a.png)');
+    expect(htmlToText('<p><img src="a.png"></p>')).toBe('[image: a.png](a.png)');
+  });
+
+  // MG-17i — a Jira attachment reaches a brief and the tab as something the
+  // reader can OPEN. The bare word `[image]` was the whole defect: Jira's
+  // `renderedFields` attachment markup carries no `alt`, so every image
+  // collapsed to a placeholder and the `src` was thrown away.
+  it('keeps the src, and never prints a bare [image] when there is one', () => {
+    expect(htmlToText('<img src="/x/a.png">')).toContain('/x/a.png');
+    expect(htmlToText('<img src="/secure/attachment/1/shape.png">')).toBe(
+      '[image: shape.png](/secure/attachment/1/shape.png)',
+    );
+    expect(htmlToText('<img alt="a diagram">')).toBe('[image: a diagram]');
+    expect(htmlToText('<img>')).toBe('[image]');
+  });
+
+  it('absolutises a relative src against the site url, and leaves an absolute one alone', () => {
+    const site = 'https://aplaceformom.atlassian.net';
+    expect(htmlToText('<img src="/secure/attachment/1/a.png">', site)).toBe(
+      '[image: a.png](https://aplaceformom.atlassian.net/secure/attachment/1/a.png)',
+    );
+    expect(htmlToText('<img src="https://cdn.example.com/b.png">', site)).toBe(
+      '[image: b.png](https://cdn.example.com/b.png)',
+    );
+  });
+
+  it('keeps a src with spaces or parens a single markdown destination', () => {
+    expect(htmlToText('<img src="/x/Screen Shot (1).png">')).toBe(
+      '[image: Screen Shot (1).png](</x/Screen Shot (1).png>)',
+    );
   });
 
   it('decodes &amp;, &lt;, &#39; and &nbsp;', () => {

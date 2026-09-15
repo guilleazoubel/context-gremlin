@@ -123,31 +123,65 @@ Redact any token or cookie in a response body before quoting it.
 
 ## `QA.md` — write exactly this shape
 
-The engine parses the final block: `## QA Verdict` must appear **exactly once** in the file.
+The engine parses the final block: `## QA Verdict` must appear **exactly once** in the file. This
+example is generated from the same string the engine renders into `BRIEF.md` — do not edit one
+without the other.
 
+<!-- QA_CONTRACT_EXAMPLE:START -->
 ```
 # QA Verification: <TICKET> — <summary>
-**Verdict:** ✅ Ready to deploy / ❌ Not ready / 🚧 Blocked — <one sentence>
-**Environment:** <qa url> · merge commit <sha7> · <ISO timestamp>
+**Verdict:** ✅ Ready to deploy — <one sentence>
+**Scope:** <qa url> · merge commit <sha7> · <ISO timestamp>
+
 ## Acceptance criteria
 | # | Criterion (from the ticket) | Result | Evidence |
 |---|---|---|---|
 | 1 | <verbatim AC> | ✅ holds / ❌ fails / ⚠️ partial / ⏭ not testable here | <route + observation, or qa-evidence/q1.png> |
+
 ## Checks
 - **UI:** <routes, what was seen>
 - **API/backend:** <endpoint · method · status · assertion>
 - **PostHog events:** <event · seen/not seen · properties>
 - **Feature flags:** <flag · state · effect>
 - **Regressions / splash zone:** <what else was smoke-tested>
+
 ## Problems found
 <a id="q1"></a>
 ### 1. <plain title>
-**Severity:** 🔴 Blocker / 🟠 Major / 🟡 Minor   **Where:** <route or endpoint>   **Status:** open
-**Expected (AC):** …   **Actual:** …   **Evidence:** qa-evidence/q1.png   **Why it matters:** …   **Next step:** …
+- **Severity:** 🔴 Blocker
+- **Where:** <route or endpoint>
+- **Status:** open
+- **Evidence:** qa-evidence/q1.png
+
+**Expected (AC):** <what the AC promises>
+
+**Actual:** <what the running system did>
+
+**Why it matters:** <who is affected and how>
+
+**Next step:** <the one thing that would unblock it>
+
 ## QA Verdict
 - Verdict: ✅ Ready to deploy
 - Blocking problems: 0
 ```
+<!-- QA_CONTRACT_EXAMPLE:END -->
+
+Rules for the file:
+
+- Follow this structure EXACTLY: the three header lines, then `## Acceptance criteria`,
+  `## Checks`, `## Problems found`, `## QA Verdict` — in that order, no extras, none renamed.
+- **Line 2 is the verdict**, its label verbatim one of `✅ Ready to deploy`, `❌ Not ready`,
+  `🚧 Blocked`. The example shows the ✅ case; write the one you actually observed. The
+  `- Verdict:` line in the final block carries the SAME glyph and label — the engine reads that
+  line, the reader reads line 2, and they may never disagree.
+- **Line 3 is the scope**: the QA url, the merge commit you verified against, and when.
+- Do NOT write `## Verdict`, and never a second `## QA Verdict`. One verdict heading, at the end,
+  exactly once — two makes the engine read a finished run as unfinished.
+- Each problem gets a stable anchor `<a id="qN"></a>`, one field per line in the order shown, and
+  a severity verbatim from `🔴 Blocker`, `🟠 Major`, `🟡 Minor`. `Where` is the route or
+  endpoint, nothing else.
+- `## Problems found` with no problems stays present and empty — the heading is part of the shape.
 
 Then set `<sessionDir>/AGENT_STATE` to `ready` (verdict written) or `blocked`, write one line to
 `<sessionDir>/AGENT_NOTE`, and STOP.

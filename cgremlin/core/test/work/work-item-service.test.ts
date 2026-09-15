@@ -163,6 +163,7 @@ describe('Gap 2 — abandoned QA verification attempts', () => {
       {
         key: 'HB-1', summary: 'a ticket', status: 'UAT', statusCategory: 'In Progress',
         assignee: null, updated: '2026-09-10T00:00:00.000Z', url: 'https://example.atlassian.net/browse/HB-1',
+        assigneeName: null,
       },
     ],
   };

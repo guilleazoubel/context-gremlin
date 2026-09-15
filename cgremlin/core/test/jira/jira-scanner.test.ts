@@ -18,6 +18,7 @@ function issue(key: string): JiraIssueSummary {
     status: 'In Progress',
     statusCategory: 'indeterminate',
     assignee: '712020:me',
+    assigneeName: 'Me Jira',
     updated: '2026-09-09T10:00:00.000+0000',
     url: `https://aplaceformom.atlassian.net/browse/${key}`,
   };
@@ -263,6 +264,27 @@ describe('JiraScanner: the summary of a key the JQL never returned (R28)', () =>
 
     const cached = await new JiraStore(fs, PATH).load();
     expect(cached?.seeded?.map((i) => i.key)).toEqual(['HB-999']);
+  });
+
+  // MG-17h — a `jira.json` written by a build that predates `assigneeName`
+  // must still load, or an upgrade throws away the cache and the parking lot
+  // comes up empty until the next scan.
+  it('loads a cached report written before `assigneeName` existed', async () => {
+    const fs = new InMemoryFileSystem();
+    const legacy = {
+      scannedAt: NOW.toISOString(),
+      me: '712020:me',
+      issues: [{ ...issue('HB-627'), assigneeName: undefined }],
+      error: null,
+      kind: 'ok',
+    };
+    for (const i of legacy.issues) delete (i as Record<string, unknown>).assigneeName;
+    await fs.mkdir('/state', { recursive: true });
+    await fs.writeFile(PATH, JSON.stringify(legacy));
+
+    const cached = await new JiraStore(fs, PATH).load();
+    expect(cached?.issues.map((i) => i.assigneeName)).toEqual([null]);
+    expect(cached?.issues[0].assignee).toBe('712020:me');
   });
 
   it('never blocks: an unconfigured Jira asks nothing and a failing fetch leaves the key out', async () => {

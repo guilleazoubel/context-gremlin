@@ -582,6 +582,7 @@ describe('InventoryScanner: the Jira leg (R34, R12)', () => {
           status: 'In Progress',
           statusCategory: 'indeterminate',
           assignee: '712020:me',
+          assigneeName: null,
           updated: '2026-09-09T00:00:00.000Z',
           url: 'https://example.atlassian.net/browse/HB-627',
         },

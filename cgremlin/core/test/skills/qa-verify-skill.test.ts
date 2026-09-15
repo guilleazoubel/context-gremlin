@@ -1,7 +1,7 @@
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { QA_CONDUCT_RULE } from '../../src/pipeline/prompts';
+import { QA_CONDUCT_RULE, QA_CONTRACT_EXAMPLE } from '../../src/pipeline/prompts';
 
 /**
  * MG-33 (E12/R82) — the permitted/forbidden list must be byte-identical
@@ -56,6 +56,19 @@ describe('skills/qa-verify/SKILL.md', () => {
     expect(end).toBeGreaterThan(start);
     const between = text.slice(start + '<!-- QA_CONDUCT_RULE:START -->'.length, end).trim();
     expect(between).toBe(QA_CONDUCT_RULE);
+  });
+
+  // MG-17k — the skill file carries the `QA.md` shape, and the engine renders
+  // the same shape into the brief. One string, fenced, so the two cannot
+  // drift the way a hand-copied example always eventually does.
+  it('carries the QA.md example byte-identical to QA_CONTRACT_EXAMPLE', () => {
+    const text = readSkill();
+    const start = text.indexOf('<!-- QA_CONTRACT_EXAMPLE:START -->');
+    const end = text.indexOf('<!-- QA_CONTRACT_EXAMPLE:END -->');
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const between = text.slice(start + '<!-- QA_CONTRACT_EXAMPLE:START -->'.length, end);
+    expect(between).toContain(QA_CONTRACT_EXAMPLE);
   });
 
   it('never mentions +clerk_test — the per-run address is not this skill’s concern', () => {
