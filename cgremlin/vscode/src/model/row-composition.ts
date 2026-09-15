@@ -17,6 +17,7 @@
  */
 import type {
   CiStatus,
+  QaVerdict,
   RowMetaCell,
   SizeTier,
   WorkAgentMode,
@@ -179,21 +180,23 @@ export const MODE_NAME: Record<WorkAgentMode, string> = {
  *
  * The engine's phases are `queued | verifying | ready | not_ready | failed | closed | abandoned`
  * (R69). Two of them are re-worded here and nowhere else:
- *  - `not_ready` reads `not ready` — a row is prose, not an enum, and R79 folds the Blocked
- *    verdict into this same phase, so "not ready" is the honest word for both;
- *  - `failed` reads `blocked` — a run that died wrote no verdict at all, which is precisely
- *    what the user needs to know before clicking again. The run failure itself is already said
- *    by `run_failed` on the needs-you strip, so nothing is hidden by the softer word.
- *
- * The VERDICT is deliberately not read here: `WorkItemAgent` does not carry one, and inventing
- * a second source for it is exactly what one composer exists to prevent.
+ *  - `not_ready` reads `not ready` — a row is prose, not an enum. R79 folds the Blocked verdict
+ *    into this same phase (evaluateQa's `outcome`), so the PHASE alone cannot tell a real
+ *    not-ready verdict from a run the agent could not perform at all — Gap 1's `verdict`
+ *    parameter is what does: `blocked` reads `blocked`, anything else reads `not ready`;
+ *  - `failed` reads `failed` — a run that died wrote no verdict at all. It used to read
+ *    `blocked` as a softer word, but Gap 1 gives `blocked` a real, different meaning (the QA
+ *    VERDICT of that name), and conflating the two is exactly the ambiguity Gap 1 removes: a run
+ *    failure is already said by `run_failed` on the needs-you strip, so nothing is hidden by the
+ *    more literal word.
  */
 const QA_STATE_TEXT: Record<string, string> = {
   not_ready: 'not ready',
-  failed: 'blocked',
+  failed: 'failed',
 };
 
-export function qaStateText(phase: string): string {
+export function qaStateText(phase: string, verdict: QaVerdict | null = null): string {
+  if (phase === 'not_ready' && verdict === 'blocked') return 'blocked';
   return QA_STATE_TEXT[phase] ?? phase;
 }
 
@@ -383,7 +386,8 @@ function phaseCell(agent: WorkItemAgent): RowMetaCell {
   // §8's one toned cell: a verification that came back short of ready is the top of my work,
   // and the row has to say so without a second composition site (R72 does the ordering).
   const bad = agent.phase === 'not_ready' || agent.phase === 'failed';
-  const cell: RowMetaCell = { kind: 'agentPhase', text: `${glyph} ${qaStateText(agent.phase)}` };
+  const text = qaStateText(agent.phase, agent.qaVerdict ?? null);
+  const cell: RowMetaCell = { kind: 'agentPhase', text: `${glyph} ${text}` };
   return bad ? { ...cell, tone: 'bad' } : cell;
 }
 

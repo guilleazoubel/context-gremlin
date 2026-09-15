@@ -19,6 +19,8 @@ export type WorkItemKind = 'pr' | 'ticket' | 'pr+ticket' | 'session';
 export type WorkListKind = 'parkingLot' | 'myWork' | 'investigations' | 'waitingForReview';
 export type ParkingLotGroup = 'reviewing' | 'untouched' | 'someoneOnIt';
 export type WorkAgentMode = 'review' | 'investigation' | 'development' | 'respond' | 'qa';
+/** The wire's `QA_VERDICTS` (core `schema/session.ts`), mirrored — Gap 1. */
+export type QaVerdict = 'ready' | 'not_ready' | 'blocked';
 export type CiStatus = 'success' | 'pending' | 'failure' | 'none';
 export type SizeTier = 'S' | 'M' | 'L' | 'XL';
 
@@ -105,6 +107,13 @@ export interface WorkItemAgent {
   primaryArtifact: string | null;
   worktreePath: string | null;
   ref: string;
+  /**
+   * Gap 1 — the same parse `evaluateQa` ran, straight off the wire.
+   * **Optional**: an engine older than Gap 1 sends none, and a `not_ready`
+   * QA row then falls back to today's default wording, per `qaStateText`
+   * (the ONE composer this module never spells the words of itself).
+   */
+  qaVerdict?: QaVerdict | null;
   /**
    * PANEL-LOCAL optimism, never on the wire: this window has just asked the
    * engine to start this stage and has not yet seen it in `/items`. It makes

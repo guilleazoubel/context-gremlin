@@ -5,7 +5,7 @@ import type { CiStatus } from '../gh/pr-view';
 import { isLandedState, prStateKey, type PrState, type PrStateCache, type PrStateEntry } from '../gh/pr-state';
 import type { Inventory, InventoryEntry, TeamActivity } from '../inventory/inventory';
 import type { JiraScanReport } from '../jira/jira-store';
-import type { SessionMode } from '../schema/session';
+import type { QaVerdict, SessionMode } from '../schema/session';
 import { sizeTierOf, type SizeTier } from './size-tier';
 import { workItemIdOf, type WorkItemId } from './work-item-id';
 
@@ -103,6 +103,13 @@ export interface WorkItemAgent {
   worktreePath: string | null;
   /** The AttentionItem it came from — the ack key stays the ref (R3). */
   ref: ItemRef;
+  /**
+   * Gap 1 — the SAME parse `evaluateQa` already ran, straight off the
+   * AttentionItem it came from; `null` for a non-qa agent or one with no
+   * verdict yet. Never a second read of QA.md here (`groupWorkItems` stays
+   * pure, per this module's own doc comment).
+   */
+  qaVerdict: QaVerdict | null;
 }
 
 export interface WorkItem {
@@ -426,6 +433,7 @@ export function groupWorkItems(input: GroupWorkItemsInput): WorkItem[] {
       primaryArtifact: item.links.primaryArtifact,
       worktreePath: item.links.worktreePath,
       ref: item.ref,
+      qaVerdict: item.qaVerdict ?? null,
     });
     cand.contributors.push(item);
     cand.sessionTitle ??= item.title;
