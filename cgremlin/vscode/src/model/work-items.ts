@@ -187,6 +187,14 @@ export interface WorkItem {
    * sends neither field, which reads as "nothing abandoned".
    */
   qaAttempt?: { outcome: 'create-failed' | 'unreachable'; at: string } | null;
+  /**
+   * Phase 16 — which BUILD this item's change is measured against: `awaiting`
+   * while the PRs are merged but the build QA is serving does not contain them
+   * yet, `verified` naming the build a verification actually ran against.
+   * **Optional**: an engine that predates Phase 16, or a repo whose QA names
+   * no build, sends nothing and the row says nothing.
+   */
+  qaDeploy?: { state: 'awaiting' | 'verified'; sha: string } | null;
 }
 
 /** Tolerant of an engine that predates item 2: an absent field is not a dismissal. */
@@ -494,7 +502,9 @@ export type RowMetaKind =
   | 'agentPhase'
   | 'running'
   /** Gap 2 — an abandoned auto-verify attempt, muted, alongside the row's other tokens. */
-  | 'qaAttempt';
+  | 'qaAttempt'
+  /** Phase 16 — which qa build the row's change is measured against, muted. */
+  | 'qaDeploy';
 
 export interface RowMetaCell {
   kind: RowMetaKind;

@@ -43,6 +43,18 @@ export interface QaTriggerDeps {
   config: QaTriggerConfig;
   qaFor: (repoSlug: string) => { hasUrl: boolean; hasTestIdentity: boolean };
   qaHealth: (repoSlug: string) => Promise<{ ok: boolean; reason: string | null }>;
+  /**
+   * Phase 16 — the commit sha of the build QA is actually SERVING, or null
+   * when the repo's QA will not say. Optional, and a null answer degrades the
+   * whole leg to Phase 15's merge-keyed behaviour (said once per repo in the
+   * log): a repo without a version endpoint must keep working, not stop.
+   * Called at most once per repo per tick.
+   */
+  qaVersion?: (repoSlug: string) => Promise<string | null>;
+  /** `git merge-base --is-ancestor` in the repo mirror — is this merge in that build? */
+  isAncestor?: (repoSlug: string, sha: string, deployedSha: string) => Promise<boolean>;
+  /** One line per degraded repo. Defaults to `console.warn`, which the engine log captures. */
+  log?: (line: string) => void;
   sessions: {
     existingFor: (ticket: string) => Promise<{ id: string; stageStatus: string; claimed?: boolean } | null>;
     activeSessionIds: () => readonly string[];
@@ -113,6 +125,10 @@ export function doneCategoryWarnings(
  */
 export class QaTriggerLeg {
   private flight: Promise<void> | null = null;
+  /** Phase 16 — one `qaVersion` call per repo per TICK, cleared at the top of every scan. */
+  private deployed = new Map<string, string | null>();
+  /** The repos already told about, so the degradation is said once, not every tick. */
+  private readonly degraded = new Set<string>();
   private report: QaScanReport = { scannedAt: null, started: [], skipped: [], errors: [], warnings: [] };
 
   constructor(private readonly deps: QaTriggerDeps) {}
@@ -193,13 +209,26 @@ export class QaTriggerLeg {
    * ticket forever; a boot sweep moves it to `failed`, which is runnable and
    * already raises `run_failed`.
    */
-  private async covered(key: string): Promise<boolean> {
+  private async coverage(key: string): Promise<{ blocked: boolean; reuse: string | null }> {
     const existing = await this.deps.sessions.existingFor(key);
-    if (existing === null) return false;
-    const live = this.deps.sessions.activeSessionIds().includes(existing.id);
-    if (existing.stageStatus === 'verifying' && !live) return false;
-    this.skip(key, live ? 'a qa run is already in flight' : `a qa session already covers it (${existing.stageStatus})`);
-    return true;
+    if (existing === null) return { blocked: false, reuse: null };
+    if (this.deps.sessions.activeSessionIds().includes(existing.id)) {
+      this.skip(key, 'a qa run is already in flight');
+      return { blocked: true, reuse: null };
+    }
+    // E8 — a `verifying` session nothing is running is a session the engine
+    // died under, not coverage and not something to re-run: a boot sweep
+    // moves it to `failed`, and a fresh session is the honest recovery.
+    if (existing.stageStatus === 'verifying') return { blocked: false, reuse: null };
+    if (existing.claimed === true) {
+      this.skip(key, 'a human holds the conversation claim on the qa session');
+      return { blocked: true, reuse: null };
+    }
+    // Phase 16 — the session is REUSED rather than blocking: a new deployed
+    // build is a new question, and `runVerify` archives the previous QA.md to
+    // `QA-v<n>.md` before it starts, so the earlier verdict stays readable.
+    // The identity gate above is what makes this at most once per build.
+    return { blocked: false, reuse: existing.id };
   }
 
   /**
@@ -212,7 +241,12 @@ export class QaTriggerLeg {
    * reserve and `run.started` leaves a record whose `attempt` has already hit
    * the cap and the leg never auto-retries.
    */
-  private async start(candidate: Candidate, ordinal: number, state: { tickets: Record<string, unknown> }): Promise<boolean> {
+  private async start(
+    candidate: Candidate,
+    ordinal: number,
+    state: { tickets: Record<string, unknown> },
+    reuse: string | null = null,
+  ): Promise<boolean> {
     const { config, store, gh } = this.deps;
     const nowIso = (this.deps.now ?? (() => new Date()))().toISOString();
     const pr = candidate.prs[0];
@@ -240,7 +274,25 @@ export class QaTriggerLeg {
       }
       merged.push({ repo: item.repo, number: item.number, mergeSha: oid });
     }
-    const identity = qaIdentityOf(merged);
+    // Phase 16 — merging is not deploying. When QA says which build it is
+    // serving, a candidate qualifies only once EVERY merge commit is an
+    // ancestor of that build; until then the ticket waits, and the record of
+    // that wait is what keeps the next tick from re-asking gh.
+    const deployedSha = await this.deployedSha(candidate.slug);
+    if (deployedSha !== null && !(await this.inQaBuild(candidate, merged, deployedSha))) {
+      await store.reserve({
+        key: candidate.key,
+        identity: qaIdentityOf(merged, deployedSha),
+        ordinal,
+        attempt: 1,
+        reservedAt: nowIso,
+        sessionId: null,
+        outcome: 'awaiting-deploy',
+      });
+      this.skip(candidate.key, `the change is not in the qa build yet (${deployedSha.slice(0, 7)})`);
+      return false;
+    }
+    const identity = qaIdentityOf(merged, deployedSha);
     const fresh = await store.load();
     if (QaTriggerStore.attemptsFor(fresh, candidate.key, identity, ordinal) >= config.maxAttemptsPerEntry) {
       this.skip(candidate.key, 'qa attempt abandoned — click Verify in QA');
@@ -269,7 +321,8 @@ export class QaTriggerLeg {
     return this.deps.lock.withLock(lockKey, async () => {
       let sessionId: string;
       try {
-        sessionId = (await this.deps.createSession(candidate.key, merged[0].repo, merged[0].number)).id;
+        sessionId =
+          reuse ?? (await this.deps.createSession(candidate.key, merged[0].repo, merged[0].number)).id;
       } catch (err) {
         await store.patch(candidate.key, nowIso, { outcome: 'create-failed' });
         this.skip(candidate.key, `qa session could not be created — ${errorMessage(err)}`);
@@ -371,9 +424,48 @@ export class QaTriggerLeg {
     return merged;
   }
 
+  /**
+   * The build QA is serving, cached for the whole tick. `null` means this
+   * repo will not say — Phase 15's merge-keyed behaviour, announced once.
+   */
+  private async deployedSha(slug: string): Promise<string | null> {
+    const cached = this.deployed.get(slug);
+    if (cached !== undefined) return cached;
+    let sha: string | null = null;
+    try {
+      sha = (await this.deps.qaVersion?.(slug)) ?? null;
+    } catch {
+      sha = null;
+    }
+    this.deployed.set(slug, sha);
+    if (sha === null && !this.degraded.has(slug)) {
+      this.degraded.add(slug);
+      (this.deps.log ?? ((line: string) => console.warn(line)))(
+        `qa-trigger ${slug}: QA does not report a deployed version (qa.versionPath / qa.versionField) — ` +
+          'verification stays keyed on the MERGE, so it can run before the change is in QA.',
+      );
+    }
+    return sha;
+  }
+
+  /** Every merge commit an ancestor of the deployed build, through the mirror. */
+  private async inQaBuild(
+    candidate: Candidate,
+    merged: readonly { mergeSha: string }[],
+    deployedSha: string,
+  ): Promise<boolean> {
+    const isAncestor = this.deps.isAncestor;
+    if (isAncestor === undefined) return true;
+    for (const pr of merged) {
+      if (!(await isAncestor(candidate.slug, pr.mergeSha, deployedSha))) return false;
+    }
+    return true;
+  }
+
   private async scan(): Promise<void> {
     const { config, store, jira, now } = this.deps;
     const nowDate = (now ?? (() => new Date()))();
+    this.deployed = new Map();
     this.report = { scannedAt: nowDate.toISOString(), started: [], skipped: [], errors: [], warnings: [] };
 
     // E3a — inert unless every precondition holds: nothing is read, nothing
@@ -416,9 +508,20 @@ export class QaTriggerLeg {
         // NEW MERGE while it sits in QA looks like from here. The exact
         // identity check still happens in `start`, after the gh call.
         const attempts = previous!.attempts.filter((a) => a.ordinal === previous!.ordinal);
-        const lastAt = attempts.at(-1)?.reservedAt ?? null;
-        const touched = lastAt !== null && candidate.prs.some((pr) => (pr.updatedAt ?? '') > lastAt);
-        if (attempts.length >= config.maxAttemptsPerEntry && !touched) continue;
+        // Phase 16 — when the deployed build is known, EVERY gate below is
+        // asked of that build: a new build is a new identity with no attempts
+        // of its own, so it re-verifies; the build we already waited on (or
+        // already verified against) costs nothing and no gh call.
+        const build = await this.deployedSha(candidate.slug);
+        if (build !== null) {
+          const onBuild = attempts.filter((a) => a.identity === qaIdentityOf([], build));
+          if (onBuild.some((a) => a.outcome === 'awaiting-deploy')) continue;
+          if (onBuild.length >= config.maxAttemptsPerEntry) continue;
+        } else {
+          const lastAt = attempts.at(-1)?.reservedAt ?? null;
+          const touched = lastAt !== null && candidate.prs.some((pr) => (pr.updatedAt ?? '') > lastAt);
+          if (attempts.length >= config.maxAttemptsPerEntry && !touched) continue;
+        }
       }
       if (seedOnly) {
         this.skip(candidate.key, 'store unreadable — seeded, nothing started');
@@ -439,13 +542,14 @@ export class QaTriggerLeg {
         this.skip(candidate.key, 'pr closed without merging');
         continue;
       }
-      if (await this.covered(candidate.key)) continue;
+      const coverage = await this.coverage(candidate.key);
+      if (coverage.blocked) continue;
       // The ordinal advances only on a real ENTRY; a ticket already in QA
       // keeps the ordinal it entered on (R80).
       const record = inQa
         ? previous!
         : await store.enterQa(candidate.key, candidate.status);
-      if (await this.start(candidate, record.ordinal, state)) starts += 1;
+      if (await this.start(candidate, record.ordinal, state, coverage.reuse)) starts += 1;
     }
 
     // Everything we saw and did not take still has its status recorded, so a

@@ -22,7 +22,7 @@
  * The legacy `~/.cgremlin` state dir is never touched: HOME itself is redirected into the temp dir.
  */
 import { execFileSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { chmod, copyFile, mkdir, mkdtemp, readdir, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -104,6 +104,13 @@ export interface SeededStateDir {
   jiraToken: string | null;
   humanTurnTtlMs: number;
   seeded: SeededSessions;
+  /**
+   * Phase 16 — the local origin, and its two commits: `head` is the sha the
+   * merged PR fixture carries, `parent` an OLDER build that does not contain
+   * it. A QA serving `parent` is a QA the change has not reached yet.
+   */
+  originPath: string;
+  originShas: { head: string; parent: string };
 }
 
 export interface CoreHarness extends SeededStateDir {
@@ -321,7 +328,17 @@ export async function seedStateDir(opts: StartEngineOptions = {}): Promise<Seede
             vercel: { scope: 'fake-scope', project: 'fake', previewProject: 'fake', bypassSecret },
             // Phase 15 §6. `url` is a loopback stub, never a real deployment.
             ...(opts.qa !== undefined
-              ? { qa: { url: opts.qa.url, auth: opts.qa.auth, healthPath: '/', healthTimeoutMs: 3_000 } }
+              ? {
+                  qa: {
+                    url: opts.qa.url,
+                    auth: opts.qa.auth,
+                    healthPath: '/',
+                    healthTimeoutMs: 3_000,
+                    // Phase 16 — the user's own keys: where QA says which build it serves.
+                    versionPath: '/api/health',
+                    versionField: 'version',
+                  },
+                }
               : {}),
           },
         },
@@ -406,10 +423,24 @@ export async function seedStateDir(opts: StartEngineOptions = {}): Promise<Seede
     jiraToken: opts.jira?.apiToken !== undefined && opts.jira.apiToken !== '' ? opts.jira.apiToken : null,
     humanTurnTtlMs,
     seeded,
+    originPath: path.join(originsDir, `${REPO_SLUG}.git`),
+    originShas: originShasOf(path.join(originsDir, `${REPO_SLUG}.git`)),
   };
 }
 
-/** A one-commit local origin carrying `main` and PR #5's head branch, for the respond worktree. */
+/** `main`'s head (the merged PR's sha) and the commit before it (an older build). */
+function originShasOf(originPath: string): { head: string; parent: string } {
+  const rev = (ref: string): string =>
+    execFileSync('git', ['rev-parse', ref], { cwd: originPath, encoding: 'utf8' }).trim();
+  return { head: rev('HEAD'), parent: rev('HEAD~1') };
+}
+
+/**
+ * A local origin carrying `main` and PR #5's head branch, for the respond
+ * worktree. TWO commits on `main` since Phase 16: the merged PR's sha is the
+ * head, and the commit before it stands in for a QA build cut earlier — one
+ * that does not contain the change.
+ */
 async function createOrigin(originPath: string): Promise<void> {
   await mkdir(path.dirname(originPath), { recursive: true });
   const git = (args: string[], cwd = originPath): void => {
@@ -424,6 +455,22 @@ async function createOrigin(originPath: string): Promise<void> {
   git(['commit', '-q', '-m', 'init']);
   // The branch PR #5 is open on — `RespondSessionFactory` branches from `origin/<headRefName>`.
   git(['branch', 'me/fixture-five']);
+  await writeFile(path.join(originPath, 'CHANGE.md'), '# the merged change\n', 'utf8');
+  git(['add', 'CHANGE.md']);
+  git(['commit', '-q', '-m', 'the merged change']);
+}
+
+/** One more commit on the origin's `main` — the build QA cuts next. */
+export function commitOnOrigin(originPath: string, message: string): string {
+  const git = (args: string[]): string =>
+    execFileSync('git', ['-c', 'user.email=integration@example.com', '-c', 'user.name=integration', ...args], {
+      cwd: originPath,
+      encoding: 'utf8',
+    });
+  writeFileSync(path.join(originPath, `${message.replace(/[^a-z0-9]/gi, '-')}.md`), `${message}\n`, 'utf8');
+  git(['add', '-A']);
+  git(['commit', '-q', '-m', message]);
+  return git(['rev-parse', 'HEAD']).trim();
 }
 
 /**

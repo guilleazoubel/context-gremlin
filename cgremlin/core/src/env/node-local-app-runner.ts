@@ -11,6 +11,7 @@ import type {
   LocalAppRunner,
   LocalAppSpec,
   LocalAppStopResult,
+  TextResult,
 } from './local-app-runner';
 
 const MAX_BUFFER_BYTES = 64 * 1024 * 1024;
@@ -19,6 +20,8 @@ const STOP_GRACE_MS = 5_000;
 const STOP_POLL_INTERVAL_MS = 200;
 /** How long the port may stay bound after the group is gone before we look at who holds it. */
 const PORT_RELEASE_MS = 1_000;
+/** All a version endpoint can ever legitimately be; anything longer is not read. */
+const MAX_TEXT_BYTES = 64 * 1024;
 
 function wrap(command: string, nodeVersion?: string): string {
   return nodeVersion === undefined
@@ -157,6 +160,56 @@ export class NodeLocalAppRunner implements LocalAppRunner {
       const remaining = deadline - Date.now();
       await sleep(Math.max(0, Math.min(opts.intervalMs, remaining)), opts.signal);
     }
+  }
+
+  /**
+   * Phase 16 — ONE GET whose body matters, with the same degrade-never-throw
+   * posture as `healthcheck` and a hard cap on what is read: a QA endpoint
+   * that answers with a stream must never become unbounded memory here.
+   * The URL is used VERBATIM (no trailing slash is appended, unlike
+   * `attemptRequest`): `/api/health/` is a different route from `/api/health`.
+   */
+  getText(url: string, opts: { timeoutMs: number }): Promise<TextResult> {
+    return new Promise((resolve) => {
+      let parsed: URL;
+      try {
+        parsed = new URL(url);
+      } catch (err) {
+        resolve({ status: null, body: null, reason: (err as Error).message });
+        return;
+      }
+      const client = parsed.protocol === 'https:' ? https : http;
+      let settled = false;
+      const finish = (result: TextResult): void => {
+        if (settled) return;
+        settled = true;
+        resolve(result);
+      };
+      const req = client.get(parsed, { timeout: opts.timeoutMs }, (res) => {
+        const status = res.statusCode ?? null;
+        let body = '';
+        res.setEncoding('utf8');
+        res.on('data', (chunk: string) => {
+          if (body.length >= MAX_TEXT_BYTES) return;
+          body += chunk;
+        });
+        res.on('end', () => {
+          const ok = status !== null && status >= 200 && status < 300;
+          finish({
+            status,
+            body: body.slice(0, MAX_TEXT_BYTES),
+            reason: ok ? null : `status ${status}`,
+          });
+        });
+      });
+      req.on('timeout', () => {
+        req.destroy();
+        finish({ status: null, body: null, reason: 'request timed out' });
+      });
+      req.on('error', (err) => {
+        finish({ status: null, body: null, reason: err.message });
+      });
+    });
   }
 
   async isAlive(proc: LocalAppProcess): Promise<boolean> {

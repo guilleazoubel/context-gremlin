@@ -777,6 +777,38 @@ export class EnvironmentService {
   }
 
   /**
+   * Phase 16 — WHICH BUILD the shared QA environment is serving, as a commit
+   * sha, or `null` when it will not say.
+   *
+   * The flaw this closes: a merged PR is not a deployed PR. QA gets the change
+   * only when somebody cuts a build, so "merged" can never mean "verifiable".
+   * One GET of `<qa.url><qa.versionPath>` within the same `healthTimeoutMs`
+   * budget as `qaHealth`, no retry, and every failure — missing endpoint,
+   * non-2xx, unparseable body, absent field, a runner too old to have
+   * `getText` — is a `null` the caller degrades on. It never throws and it
+   * never blocks a scan.
+   *
+   * A value that is not a commit sha (a semver, a build number) is `null` on
+   * purpose: the only use of this sha is `git merge-base --is-ancestor`, and
+   * feeding that a semver would answer "not deployed" forever. Degrading to
+   * the old merge-keyed behaviour is the honest outcome.
+   */
+  async qaVersion(repoUrl: string): Promise<string | null> {
+    const qa = this.environmentFor(repoUrl)?.qa;
+    if (qa === undefined) return null;
+    const get = this.deps.local.getText?.bind(this.deps.local);
+    if (get === undefined) return null;
+    const url = `${qa.url.replace(/\/$/, '')}${qa.versionPath}`;
+    try {
+      const result = await get(url, { timeoutMs: qa.healthTimeoutMs });
+      if (result.body === null || result.reason !== null) return null;
+      return shaFromVersionBody(result.body, qa.versionField);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Whether a TEST identity is configured for this repo's QA environment.
    * The AUTOMATIC leg refuses to start without one: an unattended agent
    * driving a shared app must be a known test account, and `auth:'none'`
@@ -829,6 +861,26 @@ export class EnvironmentService {
 
 // The legacy wording for the four prerequisites `_local_prereqs` hardcoded
 // (`bin/cgremlin:524-535`); anything else a repo configures gets a generic line.
+/** A commit sha, and nothing else — see {@link EnvironmentService.qaVersion}. */
+const COMMIT_SHA = /^[0-9a-f]{7,40}$/i;
+
+function shaFromVersionBody(body: string, field: string): string | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return null;
+  }
+  let value: unknown = parsed;
+  for (const segment of field.split('.')) {
+    if (typeof value !== 'object' || value === null) return null;
+    value = (value as Record<string, unknown>)[segment];
+  }
+  if (typeof value !== 'string') return null;
+  const sha = value.trim();
+  return COMMIT_SHA.test(sha) ? sha : null;
+}
+
 function missingFileMessage(file: string, nodeVersion: string | undefined): string {
   if (file === '/Library/LaunchDaemons/com.grace.portforward.plist') {
     return "PREREQ: the 443→8080 port-forward daemon is missing. Run 'pnpm setup:local' in the repo, with you present (needs sudo).";

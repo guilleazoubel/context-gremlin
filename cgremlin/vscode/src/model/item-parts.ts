@@ -14,7 +14,7 @@
  *
  * Pure module — no editor API (MG-B1).
  */
-import { MODE_GLYPH, MODE_NAME, prLabel, prRefOf, qaStateText } from './row-composition';
+import { MODE_GLYPH, MODE_NAME, prLabel, prRefOf, qaDeployText, qaStateText } from './row-composition';
 import type { LifecycleSlot } from './lifecycle';
 import { chatTargetOfAgents, isLandedPr, prState, sizeOf, type WorkItem, type WorkListKind } from './work-items';
 import {
@@ -150,22 +150,31 @@ function qaPart(facts: ActionFacts, input: ItemPartsInput): ItemPart | null {
   const agent = liveQaAgent(facts) ?? lastQaAgent(facts);
   const startable = canVerifyInQa(facts, input.list);
   if (agent === undefined && !startable) return null;
+  // Phase 16 — a change nobody has deployed yet has no verdict to report, and
+  // the part says exactly what the collapsed row says (same composer).
+  const awaiting = input.item.qaDeploy?.state === 'awaiting' ? input.item.qaDeploy : null;
   const childId = agent === undefined || agent.pending === true ? null : `agent:${agent.sessionId}`;
   const actions: RowAction[] = [];
   if (childId !== null) {
     actions.push(...openAction(childId));
     actions.push({ command: 'cgremlin.chat', label: 'Chat', childId, placement: 'inline' });
-  } else {
-    actions.push(...find(input.actions, 'cgremlin.verifyInQa', undefined, null));
-    actions.push(...find(input.actions, 'cgremlin.askQa', undefined, null));
   }
+  // Phase 16 — and the re-verification, wherever the row's own rule table
+  // allows it: a verdict is about ONE build, so a finished verification is
+  // never a reason to take the ask away (P0-2 still holds — no verb is
+  // invented here, both are looked up in the actions the list allows).
+  actions.push(...find(input.actions, 'cgremlin.verifyInQa', undefined, null));
+  actions.push(...find(input.actions, 'cgremlin.askQa', undefined, null));
   return {
     key: 'qa',
     kind: 'qa',
     name: MODE_NAME.qa,
     glyph: MODE_GLYPH.qa,
     state: agent === undefined ? 'notStarted' : qaSlotState(agent),
-    stateText: agent === undefined ? 'not started' : qaStateText(agent.phase, agent.qaVerdict ?? null),
+    stateText:
+      agent === undefined
+        ? (awaiting === null ? 'not started' : qaDeployText(awaiting))
+        : qaStateText(agent.phase, agent.qaVerdict ?? null),
     detail: '',
     childId,
     actions,

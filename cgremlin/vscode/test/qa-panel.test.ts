@@ -194,9 +194,11 @@ describe('§8 — the two verbs, offered only when the gate passes', () => {
     expect(live).toContain('Chat:primary');
   });
 
+  // Phase 16 amends this: a closed session is still a verification that
+  // happened, so the verb says `again` and leaves the one click to Chat.
   it('offers them again once the QA session is closed', () => {
     expect(labels({ agents: [qaAgent({ phase: 'closed', running: false })] }))
-      .toContain('Verify in QA:primary');
+      .toContain('Verify in QA again:inline');
   });
 });
 
@@ -273,5 +275,91 @@ describe('§5 — QA.md is labelled through the artifact-labels module', () => {
 
   it('is the primary answer, ahead of the review and the brief', () => {
     expect(primaryArtifactName(['BRIEF.md', 'REVIEW.md', 'QA.md'])).toBe('QA.md');
+  });
+});
+
+/**
+ * Phase 16 item 4 — manual re-verification, always available.
+ *
+ * Merging is not deploying, and a verdict is only ever a verdict about ONE
+ * build. The user must be able to ask again — after a ✅ as much as after a ❌
+ * — so the verbs are withdrawn only while a run is actually in flight, never
+ * because a verdict exists. A second click re-runs the session it already has,
+ * which archives the previous `QA.md` to `QA-v<n>.md`.
+ */
+describe('Phase 16 §4 — Verify in QA again', () => {
+  const facts = (over: Partial<WorkItem> = {}) => itemActionFacts(item(over), QA_REPOS);
+  const labels = (over: Partial<WorkItem> = {}, list: 'myWork' | 'waitingForReview' = 'myWork') =>
+    rowActions(facts(over), list).map((a) => `${a.label}:${a.placement}`);
+
+  it.each(['ready', 'not_ready', 'failed'])('offers a re-verify after a %s verdict', (phase) => {
+    const done = labels({ agents: [qaAgent({ phase, running: false })] });
+    expect(done).toContain('Verify in QA again:inline');
+    expect(done).toContain('Ask about QA:inline');
+    // The conversation keeps the one click: a re-verify is a deliberate ask.
+    expect(done).toContain('Chat:primary');
+  });
+
+  it('still says "Verify in QA" where no verification has ever run', () => {
+    expect(labels()).toContain('Verify in QA:primary');
+    expect(labels().join(' ')).not.toContain('again');
+  });
+
+  it('withdraws it only while a run is in flight', () => {
+    expect(labels({ agents: [qaAgent()] }).join(' ')).not.toContain('Verify in QA');
+  });
+
+  it('carries the re-verify in the expanded QA part, beside Open and Chat', () => {
+    const it_ = item({ agents: [qaAgent({ phase: 'ready', running: false })] });
+    const f = itemActionFacts(it_, QA_REPOS);
+    const parts = itemParts({
+      item: it_, list: 'myWork', slots: lifecycleSlots({ agents: it_.agents, facts: f, now: NOW }),
+      actions: rowActions(f, 'myWork'), now: NOW, qaRepos: QA_REPOS,
+    });
+    const qa = parts.find((p) => p.kind === 'qa');
+    expect(qa?.actions.map((a) => a.label)).toEqual(['Open', 'Chat', 'Verify in QA again', 'Ask about QA']);
+  });
+});
+
+/**
+ * Phase 16 item 5 — the row says which side of the deploy the change is on.
+ *
+ * The defect, in the user's words: "how do you know it? it is only when we cut
+ * a new qa version." A merged change the QA build does not contain yet must
+ * never read like a verification that passed.
+ */
+describe('Phase 16 §5 — merged, but not in QA yet', () => {
+  const BUILD = '088ce5e07db734834e4948ad3365f4155cd1ae4e';
+
+  it('reads "awaiting qa deploy", muted, on the collapsed row', () => {
+    const cells = meta(item({ qaDeploy: { state: 'awaiting', sha: BUILD } }));
+    const token = cells.find((c) => c.kind === 'qaDeploy');
+    expect(token?.text).toBe('awaiting qa deploy');
+    expect(token?.tone).toBe('muted');
+  });
+
+  it('names the build once a verification has run against it', () => {
+    const cells = meta(
+      item({
+        qaDeploy: { state: 'verified', sha: BUILD },
+        agents: [qaAgent({ phase: 'ready', running: false })],
+      }),
+    );
+    expect(cells.find((c) => c.kind === 'agentPhase')?.text).toBe('⛋ ready');
+    expect(cells.find((c) => c.kind === 'qaDeploy')?.text).toBe('build 088ce5e');
+  });
+
+  it('says nothing at all where QA names no build', () => {
+    expect(meta(item()).some((c) => c.kind === 'qaDeploy')).toBe(false);
+  });
+
+  it('the expanded QA part says the same words, from the same composer', () => {
+    const it_ = item({ qaDeploy: { state: 'awaiting', sha: BUILD } });
+    const f = itemActionFacts(it_, QA_REPOS);
+    const parts = itemParts({
+      item: it_, list: 'myWork', slots: lifecycleSlots({ agents: it_.agents, facts: f, now: NOW }),
+      actions: rowActions(f, 'myWork'), now: NOW, qaRepos: QA_REPOS,
+    });
+    expect(parts.find((p) => p.kind === 'qa')?.stateText).toBe('awaiting qa deploy');
   });
 });

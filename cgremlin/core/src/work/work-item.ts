@@ -146,6 +146,16 @@ export interface WorkItem {
    * real session supersedes the abandoned-attempt signal.
    */
   qaAttempt: { outcome: 'create-failed' | 'unreachable'; at: string } | null;
+  /**
+   * Phase 16 — which build this ticket's change is measured against, overlaid
+   * by `WorkItemService` from the same trigger store (never derived here).
+   * `awaiting` is the whole point of the phase: the PRs are merged but the
+   * build QA is serving does not contain them yet, so nothing has been
+   * verified and the row must not read like a pass. `verified` names the
+   * build a verification actually ran against. `null` for a repo whose QA
+   * names no build at all — there is nothing honest to say.
+   */
+  qaDeploy: { state: 'awaiting' | 'verified'; sha: string } | null;
 }
 
 export interface GroupWorkItemsInput {
@@ -544,6 +554,7 @@ function finish(cand: Candidate, ctx: FinishContext): WorkItem {
     // Overlaid by WorkItemService from the QA trigger store — see the
     // field's own doc comment (Gap 2).
     qaAttempt: null,
+    qaDeploy: null,
   };
 }
 

@@ -8,7 +8,16 @@ import type { SessionFileSystem } from '../fs/session-file-system';
  * verification. The QA-entry ORDINAL is carried separately, so a re-entry at
  * the same shas is unambiguous without pretending we know when Jira changed.
  */
-export function qaIdentityOf(prs: readonly { repo: string; number: number; mergeSha: string }[]): string {
+export function qaIdentityOf(
+  prs: readonly { repo: string; number: number; mergeSha: string }[],
+  deployedSha: string | null = null,
+): string {
+  // Phase 16 — when QA says which build it is serving, THAT is the identity: a
+  // verification runs once per deployed build, not once per merge. A later
+  // build can break what an earlier one passed, and a merge nobody has
+  // deployed is not verifiable at all. The merge-keyed join survives verbatim
+  // for a repo whose QA has no version endpoint.
+  if (deployedSha !== null) return `qa:${deployedSha}`;
   return prs
     .map((pr) => `${pr.repo}#${pr.number}@${pr.mergeSha}`)
     .sort()
@@ -22,7 +31,15 @@ export type QaAttemptOutcome =
   | 'unreachable'
   | 'ready'
   | 'not_ready'
-  | 'failed';
+  | 'failed'
+  /**
+   * Phase 16 — the change is merged, but the build QA is serving does not
+   * contain it yet. NOT an attempt at verifying (it costs nothing and gives
+   * up nothing): it is the record that stops the leg re-asking gh about the
+   * same build every tick, and it is what the row reads to say
+   * `awaiting qa deploy`.
+   */
+  | 'awaiting-deploy';
 
 /**
  * Written BEFORE the session is created (E2). A crash between the reserve and
@@ -130,10 +147,15 @@ export class QaTriggerStore {
     }
   }
 
-  /** How many attempts are already recorded for this exact `(key, identity, ordinal)`. */
+  /**
+   * How many attempts at VERIFYING are already recorded for this exact
+   * `(key, identity, ordinal)`. An `awaiting-deploy` record is not one of
+   * them: waiting for a build is not a used-up attempt, or a ticket that sat
+   * out one build could never be verified by the next.
+   */
   static attemptsFor(state: QaTriggerState, key: string, identity: string, ordinal: number): number {
     return (state.tickets[key]?.attempts ?? []).filter(
-      (a) => a.identity === identity && a.ordinal === ordinal,
+      (a) => a.identity === identity && a.ordinal === ordinal && a.outcome !== 'awaiting-deploy',
     ).length;
   }
 

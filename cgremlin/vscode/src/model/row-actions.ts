@@ -111,6 +111,22 @@ export function liveQaAgent(facts: ActionFacts): ActionAgent | undefined {
 }
 
 /**
+ * Phase 16 — a QA verification that is ACTUALLY RUNNING. The only reason to
+ * withdraw the verbs: a second POST while the agent is mid-run would be
+ * refused, and two agents must never write one QA.md. A finished
+ * verification — whatever its verdict — is never a reason, because a verdict
+ * is a verdict about ONE build and QA gets new ones.
+ */
+function runningQaAgent(facts: ActionFacts): ActionAgent | undefined {
+  return facts.agents.find((agent) => agent.mode === 'qa' && agent.running);
+}
+
+/** Phase 16 — a verification has been run before, so the verb says `again`. */
+export function qaVerbLabel(facts: ActionFacts): string {
+  return facts.agents.some((agent) => agent.mode === 'qa') ? 'Verify in QA again' : 'Verify in QA';
+}
+
+/**
  * §8's gate, off the forward-only ladder entirely (R70) and asked in exactly one place.
  *
  * Every clause is a request the engine would otherwise refuse: `POST … {mode:'qa'}` needs a PR
@@ -266,17 +282,20 @@ export function rowActions(facts: ActionFacts, list: WorkListKind): RowAction[] 
 }
 
 /**
- * §8's two verbs, in the one place a verb is decided. They are withdrawn the moment a live QA
- * session exists — `Chat` is then the verb, and a second `Verify in QA` would either 409 or
- * re-run a verification nobody asked for.
+ * §8's two verbs, in the one place a verb is decided. They are withdrawn only while a QA run is
+ * IN FLIGHT — never because a verdict exists (Phase 16): merging is not deploying, a verdict is
+ * about one build, and QA gets new ones, so asking again must always be possible. Where a
+ * verification has already happened the verb says `again` and takes the INLINE slot: the
+ * conversation keeps the row's one click, and a re-verification is a deliberate ask.
  */
 function pushQa(
   facts: ActionFacts,
   list: WorkListKind,
   push: (action: Omit<RowAction, 'placement'>, want: ActionPlacement) => void,
 ): void {
-  if (!canVerifyInQa(facts, list) || liveQaAgent(facts) !== undefined) return;
-  push({ command: 'cgremlin.verifyInQa', label: 'Verify in QA' }, 'primary');
+  if (!canVerifyInQa(facts, list) || runningQaAgent(facts) !== undefined) return;
+  const again = qaVerbLabel(facts) !== 'Verify in QA';
+  push({ command: 'cgremlin.verifyInQa', label: qaVerbLabel(facts) }, again ? 'inline' : 'primary');
   // R73's chat-only entry: create the session, write its brief, start nothing.
   push({ command: 'cgremlin.askQa', label: 'Ask about QA' }, 'inline');
 }

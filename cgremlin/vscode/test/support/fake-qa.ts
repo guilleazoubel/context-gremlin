@@ -17,6 +17,13 @@ import type { AddressInfo } from 'node:net';
 export interface FakeQa {
   /** A URL that answers 200 on every path. */
   url: string;
+  /**
+   * Phase 16 — what `/api/health` says QA is SERVING. `null` (the default) is
+   * a QA with no version endpoint worth reading: the body carries no
+   * `version`, so the engine degrades to the merge-keyed behaviour and every
+   * test written before Phase 16 keeps its meaning.
+   */
+  setVersion(sha: string | null): void;
   /** A loopback URL nothing can listen on — `qaHealth` fails against it, always. */
   deadUrl: string;
   /** Every request the engine made to the stub, in order. */
@@ -26,9 +33,15 @@ export interface FakeQa {
 
 export async function startFakeQa(): Promise<FakeQa> {
   const seen: { method: string; pathname: string }[] = [];
+  let version: string | null = null;
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? '/', 'http://qa.invalid');
     seen.push({ method: req.method ?? 'GET', pathname: url.pathname });
+    if (url.pathname === '/api/health') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify(version === null ? { status: 'ok' } : { status: 'ok', version }));
+      return;
+    }
     res.writeHead(200, { 'content-type': 'text/html' });
     res.end('<!doctype html><title>fake qa</title>');
   });
@@ -38,6 +51,9 @@ export async function startFakeQa(): Promise<FakeQa> {
   return {
     url: `http://127.0.0.1:${live}`,
     deadUrl: 'http://127.0.0.1:1',
+    setVersion: (sha) => {
+      version = sha;
+    },
     requests: () => seen,
     stop: () => new Promise<void>((resolve) => server.close(() => resolve())),
   };

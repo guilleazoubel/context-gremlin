@@ -1,6 +1,7 @@
 import type {
   ExecResult,
   HealthResult,
+  TextResult,
   LocalAppProcess,
   LocalAppRunner,
   LocalAppSpec,
@@ -28,6 +29,9 @@ export class FakeLocalAppRunner implements LocalAppRunner {
 
   private readonly execResponses: Array<ExecResult | Error> = [];
   private readonly healthResponses: Array<HealthResult | Error> = [];
+  private readonly textResponses: Array<TextResult | Error> = [];
+  /** Every `getText` the service made — a test asserts the URL it built. */
+  readonly textCalls: Array<{ url: string; opts: { timeoutMs: number } }> = [];
   /** How many times `healthcheck` was called — lets a test assert "no network call happened". */
   healthCallCount = 0;
   private readonly pgidByPid = new Map<number, number>();
@@ -54,6 +58,18 @@ export class FakeLocalAppRunner implements LocalAppRunner {
 
   queueHealth(response: HealthResult | Error): void {
     this.healthResponses.push(response);
+  }
+
+  /** Phase 16: what the next `getText` (the QA version endpoint) answers. */
+  queueText(response: TextResult | Error): void {
+    this.textResponses.push(response);
+  }
+
+  async getText(url: string, opts: { timeoutMs: number }): Promise<TextResult> {
+    this.textCalls.push({ url, opts });
+    const next = this.textResponses.shift();
+    if (next instanceof Error) throw next;
+    return next ?? { status: 200, body: '', reason: null };
   }
 
   /**
