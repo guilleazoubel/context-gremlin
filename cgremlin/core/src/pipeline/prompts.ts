@@ -631,3 +631,236 @@ Nothing here posts to GitHub. Do NOT reply to a comment, do NOT resolve a thread
   }
   return truncated ? `${text}${note}` : text;
 }
+
+// ---------------------------------------------------------------------------
+// Phase 15 — the QA verification brief. Same file, same purity, same gate
+// discipline as `renderEnvironmentSection`, and it reuses
+// `renderTicketSection` VERBATIM: the ACs ARE the ticket description, so the
+// ticket text is still composed in exactly one place.
+// ---------------------------------------------------------------------------
+
+export type QaAuthMode = 'clerk-test' | 'vercel-bypass' | 'none';
+
+export interface QaEnvironmentBriefContext {
+  url: string | null;
+  /** Defaults to `url` when the repo does not configure one. */
+  apiBaseUrl: string | null;
+  auth: QaAuthMode;
+  /** The PATH of the 0600 secret file — never the secret. */
+  bypassSecretPath: string | null;
+  clerk: { emailTemplate: string; verificationCode: string } | null;
+  posthog: { project: string; host: string } | null;
+  featureFlags: readonly string[];
+  /** Set by `EnvironmentService.qaHealth`; degrades the section, never throws. */
+  unreachableReason: string | null;
+}
+
+export const EMPTY_QA_ENVIRONMENT: QaEnvironmentBriefContext = {
+  url: null,
+  apiBaseUrl: null,
+  auth: 'none',
+  bypassSecretPath: null,
+  clerk: null,
+  posthog: null,
+  featureFlags: [],
+  unreachableReason: null,
+};
+
+/**
+ * The rules of engagement, carried VERBATIM by the brief and by
+ * `skills/qa-verify/SKILL.md`. A UI smoke test cannot be read-only against a
+ * running app, and this must not pretend otherwise: the agent USES the app.
+ * What it must never do is the list below — and only part of it is
+ * enforceable by the `qa` permission guard, which covers `Bash(...)` only.
+ */
+export const QA_CONDUCT_RULE = `You may USE the QA app as a normal user would — navigate, fill forms and submit — signed in with the configured TEST account only. You must never delete records, perform admin operations, trigger anything that emails or texts a real person, capture a payment, touch another user's data, or write to Jira or GitHub. QA is SHARED: other people are using it right now. Some of this is enforced by the permission guard, which covers shell commands only — an MCP tool that can write is NOT blocked, so these rules bind you, not just the sandbox.`;
+
+const QA_NO_SECRETS_RULE =
+  'Standing rule: never print a secret, cookie, token or `Authorization` header into `QA.md`, `AGENT_NOTE` or the transcript. Redact them in every response body you quote.';
+
+/**
+ * The `## QA environment` block — sibling of `renderEnvironmentSection`, with
+ * the same '' gate: nothing configured, nothing rendered, and the caller
+ * decides what to do with ''.
+ */
+export function renderQaEnvironmentSection(ctx: QaEnvironmentBriefContext): string {
+  if (ctx.url === null || ctx.url === '') return '';
+  const lines: string[] = [];
+  if (ctx.unreachableReason !== null) {
+    lines.push(
+      `- QA: UNREACHABLE — ${ctx.unreachableReason}. Do not attempt to start anything. Write the 🚧 Blocked verdict with this reason and STOP.`,
+    );
+  }
+  lines.push(`- QA app: ${ctx.url}`);
+  lines.push(`- API base URL: ${ctx.apiBaseUrl ?? ctx.url}`);
+  if (ctx.auth === 'clerk-test' && ctx.clerk !== null) {
+    lines.push(
+      `- Test account: a Clerk TEST identity. Sign in with an email of the form \`${ctx.clerk.emailTemplate}\` (the \`+clerk_test\` suffix is what makes it a test account) and the email verification code \`${ctx.clerk.verificationCode}\`. The browser profile is fresh every run, so sign in every run.`,
+    );
+  } else if (ctx.auth === 'vercel-bypass' && ctx.bypassSecretPath !== null) {
+    lines.push(
+      `- Deployment protection: read the single line in \`${ctx.bypassSecretPath}\` at run time and send it as the \`x-vercel-protection-bypass\` request header (or append \`?x-vercel-protection-bypass=<secret>&x-vercel-set-bypass-cookie=true\` on first navigation). Never echo its value anywhere.`,
+    );
+  } else {
+    lines.push(
+      `- Test account: no test account is configured for this repo. Verify only what is reachable signed out, and say so plainly in the report rather than guessing at credentials.`,
+    );
+  }
+  if (ctx.posthog !== null) {
+    lines.push(`- PostHog: project \`${ctx.posthog.project}\` at ${ctx.posthog.host} — READ-ONLY queries only.`);
+  }
+  if (ctx.featureFlags.length > 0) {
+    lines.push(`- Feature flags this change reads: ${ctx.featureFlags.map((f) => `\`${f}\``).join(', ')}.`);
+  }
+  lines.push(`- ${QA_NO_SECRETS_RULE}`);
+  return `## QA environment (shared — other people are using it right now)\n${lines.join('\n')}`;
+}
+
+/** R75 — the protocol lives in the BRIEF, so it works in a target repo where no cgremlin file exists. */
+function qaHowToVerify(sessionDir: string): string {
+  return `## How to verify
+${QA_CONDUCT_RULE}
+
+**1. Read the acceptance criteria.** The \`## Ticket\` section above carries the description (the ACs live there), the status and recent comments. Extract each AC as a numbered, testable statement, verbatim where you can; if there are no explicit ACs, derive them from the summary + PR description and SAY SO. Then read the paths under \`## What we already know\` for known risks and the splash zone. Do not re-review the code — you check the running system.
+
+**2. Know what changed.** From \`## The change\`, map the changed files to (a) routes/screens, (b) API endpoints, (c) analytics calls, (d) feature-flag reads. That map IS your test list; anything outside it is a smoke check, not a verification.
+
+**3. UI.** Drive the QA URL with the chrome-devtools MCP (\`navigate_page\`, \`take_screenshot\`, \`evaluate_script\`, \`list_console_messages\`, \`list_network_requests\`). Authenticate exactly as \`## QA environment\` says; the profile is fresh every run, so do it every run. Per AC: exercise it, record holds / fails / partial with one line of observation and a screenshot into \`${sessionDir}/qa-evidence/\` for anything that is not a clean pass. Check the console for errors and the network log for 4xx/5xx on the routes you touched. Never submit a destructive form.
+
+**4. API / backend.** For each endpoint the diff touched, call it against the API base URL with the same session: the happy path (assert shape and status), authentication (unauthenticated ⇒ 401/403, never 200 with data), and one error path (bad input ⇒ a sane 4xx, not a 500). Reads only, unless an AC cannot be verified without a write — then use the configured test account, stay inside the conduct rule above, and record exactly what you created. Never print an \`Authorization\` header, a cookie or a token.
+
+**5. PostHog events.** If a PostHog MCP is available, use it READ-ONLY: query recent events for the feature's event names in the QA project over the last hour, filtered to the test user you just used. Confirm each fires, ONCE (not twice), with the properties the ticket or the diff implies. If no PostHog MCP is configured, verify the client-side call instead (\`list_network_requests\` for the capture request, or the console) and record that as the weaker evidence it is.
+
+**6. Feature flags.** For each flag named above or read by the diff, record its state in QA and whether you verified the ON path, the OFF path, or only the current one. A feature behind an OFF flag in QA is **not verified** — say so; it is not a pass.
+
+**7. Evidence.** \`${sessionDir}/qa-evidence/\`: \`q<N>.png\` per problem plus any response bodies you assert on (redact tokens). Every problem in the report cites one.
+
+**8. The verdict.** ✅ **Ready to deploy** — every AC holds, no blocker, no major. ❌ **Not ready** — any AC fails, or any blocker/major problem. 🚧 **Blocked** — you could not verify: QA unreachable, auth failed, the flag is off, the build in QA predates the merge commit. Say precisely what you needed; do NOT retry in a loop and do NOT guess.
+
+${notes(sessionDir)}`;
+}
+
+function qaOutputContract(sessionDir: string): string {
+  return `## Output
+Write ONE file, \`${sessionDir}/QA.md\`, in exactly this shape. The engine parses the final block, so it must appear EXACTLY ONCE.
+
+\`\`\`
+# QA Verification: <TICKET> — <summary>
+**Verdict:** ✅ Ready to deploy / ❌ Not ready / 🚧 Blocked — <one sentence>
+**Environment:** <qa url> · merge commit <sha7> · <ISO timestamp>
+## Acceptance criteria
+| # | Criterion (from the ticket) | Result | Evidence |
+|---|---|---|---|
+| 1 | <verbatim AC> | ✅ holds / ❌ fails / ⚠️ partial / ⏭ not testable here | <route + observation, or qa-evidence/q1.png> |
+## Checks
+- **UI:** <routes, what was seen>
+- **API/backend:** <endpoint · method · status · assertion>
+- **PostHog events:** <event · seen/not seen · properties>
+- **Feature flags:** <flag · state · effect>
+- **Regressions / splash zone:** <what else was smoke-tested>
+## Problems found
+<a id="q1"></a>
+### 1. <plain title>
+**Severity:** 🔴 Blocker / 🟠 Major / 🟡 Minor   **Where:** <route or endpoint>   **Status:** open
+**Expected (AC):** …   **Actual:** …   **Evidence:** qa-evidence/q1.png   **Why it matters:** …   **Next step:** …
+## QA Verdict
+- Verdict: ✅ Ready to deploy
+- Blocking problems: 0
+\`\`\`
+
+Then set \`${sessionDir}/AGENT_STATE\` to \`ready\` (verdict written) or \`blocked\`, write one line to \`${sessionDir}/AGENT_NOTE\`, and STOP.`;
+}
+
+export interface QaChangeContext {
+  title: string | null;
+  author: string | null;
+  mergedAt: string | null;
+  changedFiles: number | null;
+  additions: number | null;
+  deletions: number | null;
+  files: readonly string[];
+}
+
+export interface QaBriefContext {
+  sessionDir: string;
+  ticket: string;
+  prRepo: string | null;
+  prNumber: number | null;
+  /** The PR's merge commit oid — the thing QA is supposed to be running. */
+  mergeSha: string | null;
+  change: QaChangeContext | null;
+  /** Absolute paths to REVIEW.md / FINDINGS.md / PLAN.md / COMMENTS.md, existence-checked by the caller. */
+  priorArtifacts: readonly string[];
+  ticketContext?: TicketBriefContext | null;
+  env?: QaEnvironmentBriefContext;
+}
+
+export const QA_MAX_BRIEF_CHARS = 40_000;
+export const QA_MAX_CHANGED_FILES = 100;
+export const DEFAULT_QA_SKILL = '/cgremlin:qa-verify';
+
+function qaChangeSection(ctx: QaBriefContext, change: QaChangeContext): { text: string; truncated: boolean } {
+  const lines = [`## The change`];
+  const where = ctx.prRepo !== null && ctx.prNumber !== null ? `${ctx.prRepo}#${ctx.prNumber}` : '(no PR)';
+  lines.push(`- ${where} — ${change.title ?? '(no title)'} · **MERGED**`);
+  lines.push(`- Merge commit: ${ctx.mergeSha ?? '(unknown)'}${change.mergedAt === null ? '' : ` · merged ${change.mergedAt}`}${change.author === null ? '' : ` by @${change.author}`}`);
+  lines.push(`- ${change.changedFiles ?? '—'} files changed, +${change.additions ?? '—'}/−${change.deletions ?? '—'}`);
+  const files = change.files.slice(0, QA_MAX_CHANGED_FILES);
+  const truncated = files.length < change.files.length;
+  if (files.length > 0) lines.push('', ...files.map((f) => `- \`${f}\``));
+  if (truncated) lines.push('', `_(${change.files.length - files.length} more files not listed)_`);
+  if (ctx.prNumber !== null && ctx.prRepo !== null) {
+    lines.push(
+      '',
+      `Three ways to read the diff, all of which work on a MERGED PR: \`gh pr diff ${ctx.prNumber} --repo ${ctx.prRepo}\`, \`git fetch origin pull/${ctx.prNumber}/head\`, or — offline, since this worktree is checked out at the merge commit — \`git show --stat ${ctx.mergeSha ?? 'HEAD'}\`.`,
+    );
+  }
+  return { text: lines.join('\n'), truncated };
+}
+
+export function renderQaBrief(ctx: QaBriefContext): string {
+  const env = ctx.env ?? EMPTY_QA_ENVIRONMENT;
+  const where = ctx.prRepo !== null && ctx.prNumber !== null ? ` (${ctx.prRepo}#${ctx.prNumber}` : '';
+  const sha = ctx.mergeSha === null ? '' : `, merged ${ctx.mergeSha.slice(0, 7)}`;
+  const title = `# QA VERIFICATION — ${ctx.ticket}${where}${where === '' ? '' : `${sha})`}`;
+
+  let truncated = false;
+  const sections: string[] = [title, QA_CONDUCT_RULE];
+
+  const ticketSection = renderTicketSection(ctx.ticketContext);
+  if (ticketSection !== '') sections.push(ticketSection);
+
+  if (ctx.change !== null) {
+    const block = qaChangeSection(ctx, ctx.change);
+    if (block.truncated) truncated = true;
+    sections.push(block.text);
+  }
+
+  if (ctx.priorArtifacts.length > 0) {
+    sections.push(
+      `## What we already know\nPaths, not contents — read only what you need:\n${ctx.priorArtifacts
+        .map((p) => `- \`${p}\``)
+        .join('\n')}`,
+    );
+  }
+
+  const envSection = renderQaEnvironmentSection(env);
+  if (envSection !== '') sections.push(envSection);
+
+  sections.push(qaHowToVerify(ctx.sessionDir), qaOutputContract(ctx.sessionDir));
+
+  let text = sections.join('\n\n');
+  const note = '\n\n_(truncated by the engine)_';
+  if (text.length > QA_MAX_BRIEF_CHARS - note.length) {
+    text = text.slice(0, QA_MAX_BRIEF_CHARS - note.length);
+    truncated = true;
+  }
+  return truncated ? `${text}${note}` : text;
+}
+
+export interface QaPromptParams { sessionDir: string; qaSkillCommand?: string }
+
+export function renderQaPrompt(p: QaPromptParams): string {
+  const skill = p.qaSkillCommand ?? DEFAULT_QA_SKILL;
+  return `Run ${skill} if available and follow ${p.sessionDir}/BRIEF.md; if it is not available follow BRIEF.md's \`## How to verify\` directly. Write ${p.sessionDir}/QA.md. Make no code changes, open no PR, post nothing.`;
+}
