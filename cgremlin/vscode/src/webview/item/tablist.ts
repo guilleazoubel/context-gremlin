@@ -99,14 +99,21 @@ export function createSwitcher(): Switcher {
   return {
     node,
     render: (next, key) => {
+      const moved = key !== selectedKey;
       parts = next;
       selectedKey = key;
-      reconcile(
+      const tabs = reconcile(
         node,
         next.map((part) => ({ key: part.key, data: part })),
         create,
         patch,
       );
+      // At 400px with six parts the selected tab can sit past the right edge, and an overlay
+      // scrollbar gives no hint the strip runs on — so the strip is moved to it. Only on a CHANGE
+      // of selection: a re-render must leave a hand-scrolled strip where the user put it.
+      if (!moved) return;
+      const at = next.findIndex((part) => part.key === key);
+      tabs[at]?.scrollIntoView({ inline: 'nearest', block: 'nearest' });
     },
   };
 }

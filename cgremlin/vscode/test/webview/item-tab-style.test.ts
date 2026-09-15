@@ -82,6 +82,16 @@ describe('§2 the switcher is one scrollable line inside the sticky chrome', () 
     expect(block('.part-switcher')).not.toMatch(/position:\s*sticky/);
   });
 
+  it('shows a scroll affordance under an overlay scrollbar, and caps one long tab', () => {
+    const rule = block('.part-switcher');
+    // Scroll-attached shadows: they appear only where the strip actually overflows, which is the
+    // affordance macOS overlay scrollbars do not give.
+    expect(rule).toMatch(/background-attachment:\s*local/);
+    // One `other` artifact with a long filename may not eat the whole strip.
+    expect(block('.part-tab')).toMatch(/max-width:/);
+    expect(block('.part-tab')).toMatch(/text-overflow:\s*ellipsis/);
+  });
+
   it('marks the selected tab with a 2px focusBorder rule', () => {
     expect(block('.part-tab.selected')).toContain('--vscode-focusBorder');
   });

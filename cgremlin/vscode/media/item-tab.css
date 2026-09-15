@@ -129,17 +129,36 @@ body {
 
 /* --- the part switcher -------------------------------------------------- */
 
-/* §2: ONE line. It never wraps — a switcher that reflows is a paragraph, not a strip. */
+/*
+ * §2: ONE line. It never wraps — a switcher that reflows is a paragraph, not a strip.
+ *
+ * The four backgrounds are scroll-attached shadows: two `local` washes in the chrome's own colour
+ * cover the shadows at rest, and the two `scroll` radials show through at whichever edge the
+ * strip actually runs past. macOS hides the overlay scrollbar until it is used, so without this
+ * nothing says there are more parts off the right-hand side.
+ */
 .part-switcher {
   display: flex;
   flex-wrap: nowrap;
   gap: 4px;
   overflow-x: auto;
   white-space: nowrap;
+  background:
+    linear-gradient(to right, var(--vscode-editor-background) 30%, transparent),
+    linear-gradient(to left, var(--vscode-editor-background) 30%, transparent) 100% 0,
+    radial-gradient(farthest-side at 0 50%, var(--vscode-panel-border), transparent),
+    radial-gradient(farthest-side at 100% 50%, var(--vscode-panel-border), transparent) 100% 0;
+  background-repeat: no-repeat;
+  background-size: 20px 100%, 20px 100%, 8px 100%, 8px 100%;
+  background-attachment: local, local, scroll, scroll;
 }
 
 .part-tab {
   flex: 0 0 auto;
+  /* One `other` artifact keeps its filename, and a long one may not eat the whole strip. */
+  max-width: 20ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
   padding: 4px 10px;
   border: none;
   border-bottom: 2px solid transparent;

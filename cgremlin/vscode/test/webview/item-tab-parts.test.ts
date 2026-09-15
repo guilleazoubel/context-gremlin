@@ -112,6 +112,19 @@ describe('the tablist survives a scroll', () => {
   });
 });
 
+describe('the selected tab is on screen at 400px', () => {
+  it('scrolls it into view when the selection changes, and not otherwise', () => {
+    webview.render(state({ focus: { kind: 'ticket' } }));
+    const qa = () => tabs()[0];
+    const before = qa().scrolledIntoView;
+    webview.render(state());
+    expect(qa().scrolledIntoView).toBe(before + 1);
+    // A re-render over the same selection leaves a hand-scrolled strip where the user put it.
+    webview.render(state());
+    expect(qa().scrolledIntoView).toBe(before + 1);
+  });
+});
+
 describe('the keyboard model is roving, and arrow-select acts', () => {
   it('ArrowRight moves to the next part and selects it', () => {
     webview.render(state());
