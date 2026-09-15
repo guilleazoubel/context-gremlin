@@ -14,6 +14,7 @@
  *
  * Pure module — the store is the same narrow two-member slice the sorts persist through (R64).
  */
+import { prRefOf } from './row-composition';
 import type { WorkItem } from './work-items';
 
 export const TITLE_STATE_PREFIX = 'cgremlin.itemTitle.';
@@ -34,7 +35,7 @@ export function titleStateKey(ref: string): string {
 export function titleKeysOf(item: WorkItem): string[] {
   const keys = [item.id];
   if (item.ticket !== null) keys.push(`ticket:${item.ticket.key}`);
-  for (const pr of item.prs) keys.push(`pr:${pr.repo}#${pr.number}`);
+  for (const pr of item.prs) keys.push(prRefOf(pr));
   for (const agent of item.agents) keys.push(`session:${agent.sessionId}`);
   for (const ref of item.attention.refs) if (typeof ref === 'string') keys.push(ref);
   return [...new Set(keys)];

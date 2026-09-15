@@ -13,6 +13,7 @@
  *
  * Pure module — no editor API (MG-B1).
  */
+import { prLabel } from './row-composition';
 import { nextStages, STAGE_ORDER, type ActionFacts, type StageKind } from './row-actions';
 import { compactAge } from './work-items';
 
@@ -172,7 +173,7 @@ export function detailSignatureOf(item: {
     .map((a) => `${a.sessionId}|${a.mode}|${a.phase}|${a.running}|${a.needsYou}|${a.worktreePath ?? ''}`)
     .join(';');
   const prs = item.prs
-    .map((p) => `${p.repo}#${p.number}|${p.updatedAt ?? ''}|${p.reviewDecision ?? ''}|${p.isDraft ?? ''}`)
+    .map((p) => `${prLabel(p)}|${p.updatedAt ?? ''}|${p.reviewDecision ?? ''}|${p.isDraft ?? ''}`)
     .join(';');
   const ticket = item.ticket === null ? '' : `${item.ticket.status}|${item.ticket.updatedAt}`;
   return `${agents}//${prs}//${ticket}`;

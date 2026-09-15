@@ -14,6 +14,9 @@ import { RespondSessionFactory } from '../../src/pipeline/respond-session-factor
 import { FIXED_NOW, SESSIONS_DIR, WORKTREES_DIR } from '../support/pipeline-harness';
 import type { JiraScanReport } from '../../src/jira/jira-store';
 import type { JiraIssueDetail } from '../../src/jira/jira-source';
+import type { PrStateCache } from '../../src/gh/pr-state';
+import { PR_STATE_ENTRY_DEFAULTS } from '../support/pr-state-entry';
+import type { Session } from '../../src/schema/session';
 
 const NOW = new Date('2026-09-10T12:00:00.000Z');
 
@@ -27,6 +30,7 @@ let jira: JiraScanReport;
 let ticketDetailCalls: string[];
 let ticketDetailAnswer: { ticket: JiraIssueDetail | null; ticketError: string | null };
 let threadReport: { scannedAt: string | null; error: string | null; fetched: number };
+let prStates: PrStateCache;
 
 function prFixture(number: number, author: string, overrides: Record<string, unknown> = {}) {
   return {
@@ -107,6 +111,7 @@ async function start(opts: { withWorkItems?: boolean } = {}): Promise<void> {
     threads: { lastReport: () => threadReport },
     events: ih.h.events,
     dismissals: new DismissStore(ih.h.fs, '/state/dismissals.json'),
+    prStates: { cached: async () => prStates },
     now: () => NOW,
     config: { me: 'me-user', watchAuthors: ['bob'], showAllRepoPrs: false, projectKeys: ['HB'] },
   });
@@ -158,6 +163,7 @@ beforeEach(async () => {
   ticketDetailCalls = [];
   ticketDetailAnswer = { ticket: null, ticketError: null };
   threadReport = { scannedAt: null, error: null, fetched: 0 };
+  prStates = {};
 });
 
 afterEach(async () => {
@@ -727,5 +733,96 @@ describe('POST /items/<path>/dismiss and /undismiss', () => {
     expect((await request('POST', '/items/ticket/HB-900/undismiss')).status).toBe(200);
     expect((await request('POST', '/items/pr/acme/app/404/dismiss')).status).toBe(404);
     expect((await request('POST', '/items/session/nope/undismiss')).status).toBe(404);
+  });
+});
+
+/**
+ * Phase 14 — a session stays ADDRESSABLE once it is terminal.
+ *
+ * The live case: `pr-grace-frontend-2061-20260915-160008` is `dismissed`, its
+ * PR merged and therefore left the open-PR inventory, and nothing else
+ * references it — so it is in no list, `groupWorkItems` never makes an item
+ * for it, and `GET /items/session/<id>` answered
+ * `{"error":"No work item found for …"}`. The user could not open the only
+ * artifact the session had.
+ */
+describe('GET /items/session/:id resolves for ANY session the store knows', () => {
+  const MERGED_SESSION_ID = 'pr-app-2061-20260915-160008';
+
+  function terminalReviewSession(): Session {
+    return {
+      schemaVersion: 2,
+      id: MERGED_SESSION_ID,
+      mode: 'review',
+      createdAt: '2026-09-15T16:00:08.000Z',
+      workspace: { repoUrl: 'git@github.com:acme/app.git' },
+      lineage: { pipelineId: MERGED_SESSION_ID, parentSessionId: null, ticket: null, selfReview: false },
+      agent: null,
+      lastRun: null,
+      pr: {
+        repo: 'acme/app',
+        number: 2061,
+        url: 'https://github.com/acme/app/pull/2061',
+        headSha: 'b'.repeat(40),
+        reviewedSha: null,
+        title: 'feat(HB-6210): the landed change',
+        author: 'bob',
+      },
+      stageStatus: 'dismissed',
+      reviewVersion: 0,
+      lastRereviewSummary: null,
+    } as unknown as Session;
+  }
+
+  it('resolves the terminal review on a merged PR, with its agent, its PR state and its artifacts', async () => {
+    prStates = {
+      'acme/app#2061': {
+        ...PR_STATE_ENTRY_DEFAULTS,
+        author: 'bob',
+        createdAt: '2026-09-09T08:00:00Z',
+        state: 'merged',
+        title: 'feat(HB-6210): the landed change',
+        url: 'https://github.com/acme/app/pull/2061',
+        mergedAt: '2026-09-15T14:28:21Z',
+        closedAt: '2026-09-15T14:28:21Z',
+        branch: 'feature/HB-6210-x',
+        ticketKeys: ['HB-6210'],
+        checkedAt: '2026-09-15T16:10:00.000Z',
+      },
+    };
+    await start();
+    // The PR merged, so it is NOT in the open-PR inventory.
+    await scan([]);
+    const session = terminalReviewSession();
+    await ih.h.store.save(session);
+    await ih.h.fs.mkdir(`${SESSIONS_DIR}/${session.id}`, { recursive: true });
+    await ih.h.fs.writeFile(`${SESSIONS_DIR}/${session.id}/BRIEF.md`, '# REVIEW — PR #2061\n');
+
+    const res = await request('GET', `/items/session/${session.id}`);
+    expect(res.status).toBe(200);
+    expect(res.body.item.agents.map((a: Json) => a.sessionId)).toEqual([session.id]);
+    expect(res.body.item.agents[0]).toMatchObject({ mode: 'review', phase: 'dismissed' });
+    expect(res.body.item.prs).toHaveLength(1);
+    expect(res.body.item.prs[0]).toMatchObject({ repo: 'acme/app', number: 2061, state: 'merged' });
+    // It belongs to no list — that is the point, and it is NOT a 404.
+    expect(res.body.item.lists).toEqual([]);
+    expect(res.body.artifacts[session.id].map((a: Json) => a.name)).toContain('BRIEF.md');
+  });
+
+  it('the lists themselves are unchanged — the terminal session is in none of them', async () => {
+    await start();
+    await scan([]);
+    await ih.h.store.save(terminalReviewSession());
+    const res = await request('GET', '/items');
+    expect(res.status).toBe(200);
+    expect(res.body.items.find((i: Json) => i.agents.some((a: Json) => a.sessionId === MERGED_SESSION_ID))).toBeUndefined();
+  });
+
+  it('an unknown session id still 404s', async () => {
+    await start();
+    await scan([]);
+    const res = await request('GET', '/items/session/never-existed-20260915-000000');
+    expect(res.status).toBe(404);
+    expect(res.body.error).toContain('No work item found');
   });
 });

@@ -963,8 +963,16 @@ async function handleRequest(
         const { parsed, rest } = addressed;
         const tail = rest[0];
         const listing = await workItems.list();
-        const item = findAddressedItem(listing.items, parsed);
-        if (item === undefined) {
+        // Phase 14 — a `session/:id` path resolves for ANY session the store
+        // knows, even one that belongs to no list (a dismissed review of a PR
+        // that merged and left the inventory). `getBySession` falls back to a
+        // one-item grouping built from the session's own attention item; the
+        // lists themselves are untouched.
+        const item =
+          parsed.kind === 'session'
+            ? ((await workItems.getBySession(parsed.id)) ?? undefined)
+            : findAddressedItem(listing.items, parsed);
+        if (item === undefined || item === null) {
           sendJson(res, 404, { error: `No work item found for /${parts.join('/')}` });
           return;
         }

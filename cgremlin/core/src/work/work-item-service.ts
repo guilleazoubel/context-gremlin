@@ -15,7 +15,16 @@ export interface WorkItemServiceDeps {
    * `GET /items`) hold by construction rather than by care. The DoD grep
    * over `src/work` is what keeps it that way.
    */
-  attention: { list(opts: { all?: boolean; dedupe?: boolean }): Promise<{ evaluatedAt: string; items: AttentionItem[] }> };
+  attention: {
+    list(opts: { all?: boolean; dedupe?: boolean }): Promise<{ evaluatedAt: string; items: AttentionItem[] }>;
+    /**
+     * Phase 14 — ONE session, terminal included, still through attention (R1).
+     * Optional so a harness that only exercises the lists need not stub it;
+     * without it `getBySession` degrades to "only sessions that are in a
+     * list", which is exactly today's behaviour.
+     */
+    itemFor?(ref: string): Promise<AttentionItem | null>;
+  };
   inventory: { load(): Promise<Inventory | null> };
   jira: { lastReport(): Promise<JiraScanReport> };
   /** R52 — filled in by the review-thread leg; `{ error: null }` until it has run. */
@@ -152,6 +161,49 @@ export class WorkItemService {
   /** By the item's OWN id. Path-shaped lookups (R65) resolve through `list()` in the API layer. */
   async get(id: WorkItemId): Promise<WorkItem | null> {
     return (await this.list()).items.find((item) => item.id === id) ?? null;
+  }
+
+  /**
+   * Phase 14 — a session stays ADDRESSABLE once it is terminal.
+   *
+   * A work item exists while something references it: an open PR in the
+   * inventory, a ticket in the JQL, or a live session. A dismissed review of
+   * a PR that has merged has none of those, so it is in no list and
+   * `groupWorkItems` never makes an item for it — and `/items/session/:id`
+   * 404'd on exactly the session the user was trying to read.
+   *
+   * So: look in the lists first (the normal case, unchanged), and only when
+   * nothing there names the session build a ONE-ITEM grouping from the
+   * session's own attention item. It is the SAME `groupWorkItems`, so the
+   * pr-state cache still supplies the PR's state and the ticket link — there
+   * is no second composer. The result belongs to no list, and says so:
+   * `lists: []`, `parkingLotGroup: null`. The lists themselves never see it.
+   */
+  async getBySession(sessionId: string): Promise<WorkItem | null> {
+    const listing = await this.list();
+    const inList = listing.items.find((item) => item.agents.some((a) => a.sessionId === sessionId));
+    if (inList !== undefined) return inList;
+    const attentionItem = await this.deps.attention.itemFor?.(`session:${sessionId}`);
+    if (attentionItem === undefined || attentionItem === null) return null;
+    const [inventory, jira, prStates] = await Promise.all([
+      this.deps.inventory.load().catch(() => null),
+      this.deps.jira.lastReport(),
+      this.deps.prStates?.cached().catch(() => ({})) ?? Promise.resolve({}),
+    ]);
+    const built = groupWorkItems({
+      items: [attentionItem],
+      inventory,
+      jira,
+      me: this.deps.config.me,
+      watchAuthors: this.deps.config.watchAuthors,
+      showAllRepoPrs: this.deps.config.showAllRepoPrs,
+      projectKeys: this.deps.config.projectKeys,
+      prStates,
+      ...(this.deps.config.botLogins !== undefined ? { botLogins: this.deps.config.botLogins } : {}),
+      ...(this.deps.config.jiraSiteUrl !== undefined ? { jiraSiteUrl: this.deps.config.jiraSiteUrl } : {}),
+    }).find((item) => item.agents.some((a) => a.sessionId === sessionId));
+    if (built === undefined) return null;
+    return { ...built, lists: [], parkingLotGroup: null };
   }
 
   private nowIso(): string {

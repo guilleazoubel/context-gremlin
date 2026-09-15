@@ -15,6 +15,7 @@ import { PHASE9_ENTRY_DEFAULTS } from '../support/inventory-entry';
 import type { JiraScanReport } from '../../src/jira/jira-store';
 import type { PrStateCache } from '../../src/gh/pr-state';
 import { prStateKey } from '../../src/gh/pr-state';
+import { PR_STATE_ENTRY_DEFAULTS } from '../support/pr-state-entry';
 
 const ME = 'me-user';
 const JIRA_ME = 'Guilherme Azoubel';
@@ -25,6 +26,7 @@ const TITLE = 'feat(HB-1489): add web-content read endpoint to the Grace backend
 function mergedCache(number = 2180, ticketKeys: string[] = ['HB-1489']): PrStateCache {
   return {
     [prStateKey(REPO, number)]: {
+      ...PR_STATE_ENTRY_DEFAULTS,
       state: 'merged',
       title: TITLE,
       url: `https://github.com/${REPO}/pull/${number}`,
@@ -237,5 +239,57 @@ describe('landed work sinks', () => {
 
   it('waitingForReview (created-at ascending) never lists a landed PR at all', () => {
     expect(listsWith().waitingForReview).not.toContain('ticket:HB-1489');
+  });
+});
+
+/**
+ * Phase 14 — nothing on a merged PR's row may be blank where the cache has
+ * the answer. The user's words: "I don't know who did it, I don't know that
+ * it was already merged, I don't see the title or the jira ticket attached."
+ */
+describe('a merged PR decorates its row from the cache, not from the (departed) inventory', () => {
+  function fullMergedCache(): PrStateCache {
+    const base = mergedCache();
+    const key = prStateKey(REPO, 2180);
+    return {
+      [key]: {
+        ...base[key],
+        author: 'gennaro',
+        createdAt: '2026-09-09T08:00:00Z',
+        changedFiles: 7,
+        additions: 120,
+        deletions: 30,
+        isDraft: false,
+        labels: ['backend'],
+      },
+    };
+  }
+
+  it('carries author, age, size tier, files +a/-d, title, labels and `merged`', () => {
+    const items = groupWorkItems({
+      items: [respondAgent()],
+      inventory: null,
+      jira: jira(),
+      me: ME,
+      watchAuthors: [],
+      showAllRepoPrs: false,
+      projectKeys: ['HB'],
+      prStates: fullMergedCache(),
+    });
+    const pr = items.flatMap((i) => i.prs).find((p) => p.number === 2180);
+    expect(pr).toMatchObject({
+      repo: REPO,
+      number: 2180,
+      state: 'merged',
+      title: TITLE,
+      author: 'gennaro',
+      createdAt: '2026-09-09T08:00:00Z',
+      changedFiles: 7,
+      additions: 120,
+      deletions: 30,
+      isDraft: false,
+      labels: ['backend'],
+    });
+    expect(pr?.sizeTier).not.toBeNull();
   });
 });

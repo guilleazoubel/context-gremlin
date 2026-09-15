@@ -18,6 +18,8 @@ import type {
   TabPr,
 } from '../model/item-tab-protocol';
 import { renderArtifact } from './markdown';
+import { prLabel } from '../model/row-composition';
+import { BRIEF_ONLY_NOTICE, artifactLabel, briefOnly, orderArtifacts } from '../model/artifact-labels';
 
 declare function acquireVsCodeApi(): { postMessage(message: unknown): void };
 
@@ -113,11 +115,21 @@ function agentTabs(current: ItemTabState): HTMLElement {
   return tabs;
 }
 
+/**
+ * §14: the block says WHAT this artifact is before it says what it is called.
+ *
+ * A brief's own first line is `# REVIEW — PR #2061`, because it is the brief FOR a review — so a
+ * block headed `BRIEF.md · <iso>` and filled with rendered instructions reads as the verdict. The
+ * role label is the heading; the filename and the mtime stay, underneath, as provenance.
+ * `model/artifact-labels` is the ONE place that decides a role (no second naming rule here).
+ */
 function artifactBlock(artifact: TabArtifact): HTMLElement {
   const box = el('details', 'artifact');
   box.setAttribute('open', '');
   box.id = `artifact-${artifact.sessionId}-${artifact.name}`;
-  const summary = el('summary', undefined, `${artifact.name} · ${artifact.mtime}`);
+  const summary = el('summary');
+  summary.appendChild(el('span', 'artifact-label', artifactLabel(artifact.name)));
+  summary.appendChild(el('span', 'artifact-file', `${artifact.name} · ${artifact.mtime}`));
   box.appendChild(summary);
   const body = el('div', 'artifact-body');
   if (artifact.text === null) body.textContent = 'Loading…';
@@ -135,13 +147,19 @@ function agentFocus(agent: TabAgent): HTMLElement {
     box.appendChild(el('p', 'empty', 'This agent has written no artifact yet.'));
     return box;
   }
-  for (const artifact of agent.artifacts) box.appendChild(artifactBlock(artifact));
+  const names = agent.artifacts.map((a) => a.name);
+  // The brief is context, never the answer: the real output leads, the brief comes last, and when
+  // the brief is ALL there is the pane says so BEFORE the user starts reading it as a review.
+  if (briefOnly(names)) box.appendChild(el('p', 'artifact-notice', BRIEF_ONLY_NOTICE));
+  const order = orderArtifacts(names);
+  const sorted = [...agent.artifacts].sort((a, b) => order.indexOf(a.name) - order.indexOf(b.name));
+  for (const artifact of sorted) box.appendChild(artifactBlock(artifact));
   return box;
 }
 
 function prFocus(pr: TabPr): HTMLElement {
   const box = el('section', 'focus pr-focus');
-  box.appendChild(el('h2', undefined, `${pr.repo}#${pr.number} — ${pr.title ?? ''}`.trim()));
+  box.appendChild(el('h2', undefined, `${prLabel(pr)} — ${pr.title ?? ''}`.trim()));
   const facts = el('ul', 'pr-facts');
   const add = (label: string, value: string): void => {
     if (value === '') return;

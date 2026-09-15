@@ -95,6 +95,31 @@ export class FakeElement {
     this.props.set('hidden', value);
   }
 
+  /**
+   * Phase 14 — `innerHTML` PARSES.
+   *
+   * The item tab's one `innerHTML` assignment is the markdown-it output, and this DOM had no
+   * `innerHTML` at all: the assignment landed on an untyped property, no test ever looked at it,
+   * and "the artifact renders as markdown" was therefore unguarded — a regression that turned the
+   * body back into plain text would have been invisible here. So the setter parses the rendered
+   * fragment into real child elements, which is what lets a test assert a HEADING ELEMENT rather
+   * than a string that happens to contain `<h1>`.
+   *
+   * It is a small parser on purpose: markdown-it's output is well-formed, tag-per-element HTML
+   * with no attributes this DOM needs. Anything it cannot parse becomes text, never a throw.
+   */
+  get innerHTML(): string {
+    return (this.props.get('innerHTML') as string | undefined) ?? '';
+  }
+  set innerHTML(value: string) {
+    this.wrote('prop', 'innerHTML');
+    if (this.innerHTML === value) return;
+    this.log('prop', 'innerHTML');
+    this.props.set('innerHTML', value);
+    for (const child of this.children.splice(0)) child.parentNode = null;
+    for (const node of parseFragment(value, this.doc)) this.appendChild(node);
+  }
+
   setAttribute(name: string, value: string): void {
     this.wrote('attr', `${name}=${value}`);
     if (this.attrs.get(name) === value) return;
@@ -189,12 +214,56 @@ export class FakeElement {
   }
 }
 
+const TAG = /<(\/?)([a-zA-Z][a-zA-Z0-9]*)(?:\s[^>]*)?(\/?)>/g;
+const ENTITIES: Record<string, string> = {
+  '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'", '&nbsp;': ' ',
+};
+
+function unescape(text: string): string {
+  return text.replace(/&(?:amp|lt|gt|quot|#39|nbsp);/g, (m) => ENTITIES[m] ?? m);
+}
+
+/** Enough of an HTML parser for markdown-it output: elements, nesting and text. */
+function parseFragment(html: string, doc: FakeDocument): FakeElement[] {
+  const top: FakeElement[] = [];
+  const stack: FakeElement[] = [];
+  const put = (node: FakeElement): void => {
+    const parent = stack[stack.length - 1];
+    if (parent === undefined) top.push(node);
+    else parent.appendChild(node);
+  };
+  const text = (raw: string): void => {
+    if (raw.trim() === '') return;
+    const parent = stack[stack.length - 1];
+    const node = doc.createElement('#text');
+    node.textContent = unescape(raw);
+    if (parent === undefined) top.push(node);
+    else parent.appendChild(node);
+  };
+  let at = 0;
+  for (let m = TAG.exec(html); m !== null; m = TAG.exec(html)) {
+    text(html.slice(at, m.index));
+    at = m.index + m[0].length;
+    if (m[1] === '/') {
+      stack.pop();
+      continue;
+    }
+    const node = doc.createElement(m[2]);
+    put(node);
+    if (m[3] !== '/' && !['br', 'hr', 'img', 'input'].includes(m[2].toLowerCase())) stack.push(node);
+  }
+  text(html.slice(at));
+  return top;
+}
+
 export class FakeDocument {
   /** What actually changed. */
   readonly log: DomMutation[] = [];
   /** What was assigned, changed or not — see `FakeElement.wrote`. */
   readonly writes: DomMutation[] = [];
   activeElement: FakeElement | null = null;
+  /** The webview writes `document.title`; this DOM must simply hold it. */
+  title = '';
   readonly body: FakeElement;
   readonly listeners = new Map<string, ((event: unknown) => void)[]>();
 

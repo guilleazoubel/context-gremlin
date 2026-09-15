@@ -97,6 +97,14 @@ export interface SourceAdapter {
   /** Recompute exactly one item, for a targeted refresh. `null` when it no longer exists. */
   collectOne(ref: ItemRef): Promise<CollectedItem | null>;
   /**
+   * Phase 14 — `collectOne`, except a TERMINAL item still resolves. Attention
+   * is about live work, so `collectOne` drops a finished session on purpose;
+   * ADDRESSABILITY is a different question, and `GET /items/session/:id` must
+   * answer it for any session the store knows. A source with no notion of
+   * "terminal" simply omits this and gets `collectOne`.
+   */
+  collectAny?(ref: ItemRef): Promise<CollectedItem | null>;
+  /**
    * Optional: the on-disk ISO mtime of one of this source's artifacts, or
    * null when this source has no such artifact (or cannot tell). Feeds
    * `artifact.changed`; a source with no artifacts simply omits it.
@@ -153,6 +161,15 @@ export class SessionSourceAdapter implements SourceAdapter {
   }
 
   async collectOne(ref: ItemRef): Promise<CollectedItem | null> {
+    return this.collectRef(ref, { includeTerminal: false });
+  }
+
+  /** Phase 14: the same read, minus the "live work only" filter. */
+  async collectAny(ref: ItemRef): Promise<CollectedItem | null> {
+    return this.collectRef(ref, { includeTerminal: true });
+  }
+
+  private async collectRef(ref: ItemRef, opts: { includeTerminal: boolean }): Promise<CollectedItem | null> {
     if (!ref.startsWith('session:')) return null;
     const id = ref.slice('session:'.length);
     if (id.length === 0) return null;
@@ -162,7 +179,7 @@ export class SessionSourceAdapter implements SourceAdapter {
     } catch {
       return null; // unknown, invalid or corrupt: it has no attention state
     }
-    if (isTerminal(session)) return null;
+    if (!opts.includeTerminal && isTerminal(session)) return null;
     return this.itemFor(session, await this.localAppStatus());
   }
 
@@ -421,6 +438,27 @@ export class AttentionService {
       evaluatedAt: this.now().toISOString(),
       items: opts.all ? items : items.filter((item) => item.attention.needsAttention),
     };
+  }
+
+  /**
+   * Phase 14 — exactly one evaluated item for a ref, TERMINAL INCLUDED, and
+   * `null` when no source knows it. This is what keeps `WorkItemService` the
+   * only thing that never reads a session document (R1/R27): the work layer
+   * asks attention for the session, it does not go and load one.
+   */
+  async itemFor(ref: ItemRef): Promise<AttentionItem | null> {
+    const acks = await this.loadAcks();
+    for (const adapter of this.deps.adapters) {
+      let collected: CollectedItem | null = null;
+      try {
+        collected = adapter.collectAny ? await adapter.collectAny(ref) : await adapter.collectOne(ref);
+      } catch {
+        collected = null;
+      }
+      if (collected === null) continue;
+      return this.evaluate(adapter.source, collected, acks);
+    }
+    return null;
   }
 
   /** The ONE ack path; 404 when the ref names nothing. */

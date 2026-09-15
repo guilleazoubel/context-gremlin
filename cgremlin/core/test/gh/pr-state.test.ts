@@ -19,6 +19,7 @@ import {
 } from '../../src/gh/pr-state';
 import { InMemoryFileSystem } from '../support/in-memory-file-system';
 import { FakeGhRunner } from '../support/fake-gh-runner';
+import { PR_STATE_ENTRY_DEFAULTS } from '../support/pr-state-entry';
 
 const NOW = (): Date => new Date('2026-09-14T09:00:00.000Z');
 const REPO = 'aplaceformom/grace';
@@ -136,6 +137,7 @@ describe('PrStateStore', () => {
     const store = new PrStateStore(fs, '/state/pr-states.json');
     const cache: PrStateCache = {
       [prStateKey(REPO, 2180)]: {
+        ...PR_STATE_ENTRY_DEFAULTS,
         state: 'merged',
         title: TITLE,
         url: null,
@@ -169,5 +171,63 @@ describe('isLandedState', () => {
     // exactly as it did before this field existed.
     expect(isLandedState(null)).toBe(false);
     expect(isLandedState(undefined)).toBe(false);
+  });
+});
+
+/**
+ * Phase 14 — the cache must carry ENOUGH to render a full row.
+ *
+ * The live complaint on `aplaceformom/grace-frontend#2061`: "I don't know who
+ * did it, I don't know that it was already merged, I don't see the title or
+ * the jira ticket attached to it." A merged PR leaves the open-PR inventory,
+ * so author, age, size and CI all went null AT ONCE and every line of the row
+ * degraded together. The fix is one widened projection, fetched once, ever.
+ */
+describe('the pr-state projection carries a whole row, not just a verdict', () => {
+  const FULL = {
+    author: { login: 'gennaro' },
+    createdAt: '2026-09-09T08:00:00Z',
+    changedFiles: 7,
+    additions: 120,
+    deletions: 30,
+    isDraft: false,
+    labels: [{ name: 'backend' }, { name: 'needs-qa' }],
+  };
+
+  it('pins author, createdAt, size and labels into the projection and the entry', async () => {
+    for (const field of ['author', 'createdAt', 'changedFiles', 'additions', 'deletions', 'isDraft', 'labels']) {
+      expect(PR_STATE_FIELDS.split(',')).toContain(field);
+    }
+    const gh = new FakeGhRunner();
+    gh.queueResponse({ stdout: mergedView(FULL) });
+    const { resolver } = resolverOn(gh);
+
+    await resolver.run([{ repo: REPO, number: 2180 }]);
+
+    expect(gh.calls[0]).toEqual(['pr', 'view', '2180', '--repo', REPO, '--json', PR_STATE_FIELDS]);
+    expect((await resolver.cached())[prStateKey(REPO, 2180)]).toMatchObject({
+      state: 'merged',
+      author: 'gennaro',
+      createdAt: '2026-09-09T08:00:00Z',
+      changedFiles: 7,
+      additions: 120,
+      deletions: 30,
+      isDraft: false,
+      labels: ['backend', 'needs-qa'],
+    });
+  });
+
+  it('a projection missing the new fields still parses — the cache degrades, it never throws', async () => {
+    const gh = new FakeGhRunner();
+    gh.queueResponse({ stdout: mergedView() });
+    const { resolver } = resolverOn(gh);
+    await resolver.run([{ repo: REPO, number: 2180 }]);
+    expect((await resolver.cached())[prStateKey(REPO, 2180)]).toMatchObject({
+      state: 'merged',
+      author: null,
+      createdAt: null,
+      changedFiles: null,
+      labels: [],
+    });
   });
 });

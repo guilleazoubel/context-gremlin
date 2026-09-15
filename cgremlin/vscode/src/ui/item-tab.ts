@@ -15,6 +15,7 @@
 import crypto from 'node:crypto';
 import { CoreHttpError, engineErrorText, type CoreClient } from '../core-client';
 import { ciDot, itemPathOf, type WorkItem, type WorkItemPr, prState } from '../model/work-items';
+import { prLabel } from '../model/row-composition';
 import {
   parseWebviewMessage,
   type HostToWebview,
@@ -273,7 +274,7 @@ export class ItemTab {
       needsYou: item.needsYou,
       chips: [
         ...(item.ticket === null ? [] : [{ label: item.ticket.key, url: item.ticket.url }]),
-        ...item.prs.map((pr) => ({ label: `${pr.repo}#${pr.number}`, url: pr.url })),
+        ...item.prs.map((pr) => ({ label: prLabel(pr), url: pr.url })),
       ],
       focus: this.focus,
       selectedSessionId: this.selected,

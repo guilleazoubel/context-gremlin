@@ -52,6 +52,52 @@ const MERGE_ELIGIBLE_DEVELOPMENT_PHASES: readonly DevelopmentPhase[] = ['active'
 /** One string for both claim-skip sites (planning and the apply loop), so the two cannot drift. */
 const CLAIMED_SKIP_REASON = 'conversation claimed by a human turn';
 
+/**
+ * Phase 14 — the deliberate start.
+ *
+ * A review (or a respond) that was IN FLIGHT when its PR landed is ended by
+ * that landing: the work it was doing is over. A review the user started ON
+ * PURPOSE **after** the PR had already merged — to READ a landed change — is
+ * not. Both look identical to the MERGED/CLOSED branches below, and the only
+ * thing that tells them apart is WHEN the session was created relative to
+ * when the PR landed.
+ *
+ * The live case: `pr-grace-frontend-2061-20260915-160008`, created at 16:00
+ * on `aplaceformom/grace-frontend#2061`, which merged at 14:28 the same day.
+ * The first tick dismissed it and stopped its run, and all the user ever got
+ * was the BRIEF.
+ *
+ * THE RULE, stated once: a `review` or `respond` session whose `createdAt` is
+ * strictly AFTER the PR's landing timestamp (`mergedAt` for a merge,
+ * `closedAt` for a close) is never ended by that landing — it is reported as
+ * `skipped` instead, and its run is left running. An unknown or unparseable
+ * landing timestamp keeps the old behaviour: we only decline to end a session
+ * when we can actually prove it started later.
+ */
+function landedAtOf(view: ReturnType<typeof mapPrView>): string | null {
+  if (view.state === 'MERGED') return view.mergedAt ?? view.closedAt;
+  if (view.state === 'CLOSED') return view.closedAt;
+  return null;
+}
+
+function startedAfterLanding(session: Session, view: ReturnType<typeof mapPrView>): boolean {
+  const landedAt = landedAtOf(view);
+  if (landedAt === null) return false;
+  const landed = Date.parse(landedAt);
+  const created = Date.parse(session.createdAt);
+  if (Number.isNaN(landed) || Number.isNaN(created)) return false;
+  return created > landed;
+}
+
+/** One sentence for both legs (review and respond), so the two reasons cannot drift. */
+function deliberateStartSkip(session: Session, to: string, reason: string): SkippedTransition {
+  return {
+    sessionId: session.id,
+    to,
+    why: `${reason} before this ${session.mode} was started — started deliberately on a landed PR, left at '${session.stageStatus}'`,
+  };
+}
+
 function canApplyTransition(mode: SessionMode, from: string, to: string): boolean {
   switch (mode) {
     case 'review':
@@ -87,7 +133,11 @@ export function planReconciliation(input: PlanReconciliationInput): PlanReconcil
   const skipped: SkippedTransition[] = [];
 
   if (view.state === 'MERGED') {
-    proposeTransition(actions, skipped, 'review', review.id, review.stageStatus, 'dismissed', 'PR merged');
+    if (startedAfterLanding(review, view)) {
+      skipped.push(deliberateStartSkip(review, 'dismissed', 'PR merged'));
+    } else {
+      proposeTransition(actions, skipped, 'review', review.id, review.stageStatus, 'dismissed', 'PR merged');
+    }
     if (
       source &&
       source.mode === 'development' &&
@@ -99,7 +149,11 @@ export function planReconciliation(input: PlanReconciliationInput): PlanReconcil
   }
 
   if (view.state === 'CLOSED') {
-    proposeTransition(actions, skipped, 'review', review.id, review.stageStatus, 'dismissed', 'PR closed without merging');
+    if (startedAfterLanding(review, view)) {
+      skipped.push(deliberateStartSkip(review, 'dismissed', 'PR closed without merging'));
+    } else {
+      proposeTransition(actions, skipped, 'review', review.id, review.stageStatus, 'dismissed', 'PR closed without merging');
+    }
     if (
       source &&
       source.mode === 'development' &&
@@ -182,6 +236,11 @@ export function planPrSessionReconciliation(
   // was answering went in with the merge); a close without a merge abandons
   // it, exactly as it does the development session that opened the PR.
   const to = view.state === 'MERGED' ? 'closed' : 'abandoned';
+  // The deliberate start applies to a respond exactly as it does to a review.
+  if (startedAfterLanding(session, view)) {
+    skipped.push(deliberateStartSkip(session, to, reason));
+    return { actions, skipped };
+  }
   proposeTransition(actions, skipped, 'respond', session.id, session.stageStatus, to, reason);
   return { actions, skipped };
 }

@@ -17,6 +17,7 @@
  *
  * Pure module — no editor API (MG-B1).
  */
+import { prLabel, prRefOf } from './row-composition';
 import {
   agentChildId,
   chatTargetOfAgents,
@@ -204,8 +205,8 @@ export function rowActions(facts: ActionFacts, list: WorkListKind): RowAction[] 
     push(
       {
         command: 'cgremlin.openPr',
-        label: `Open ${part.repo}#${part.number}`,
-        childId: `pr:${part.repo}#${part.number}`,
+        label: `Open ${prLabel(part)}`,
+        childId: prRefOf(part),
       },
       'overflow',
     );
