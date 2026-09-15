@@ -223,6 +223,9 @@ export function mapPrView(
   reviewDecision: ReviewDecision;
   ci: CiStatus;
   headRefName: string;
+  /** WHEN it landed. Reconciliation compares a session's `createdAt` against these (Phase 14). */
+  mergedAt: string | null;
+  closedAt: string | null;
 } {
   const checks = view.statusCheckRollup ?? [];
   return {
@@ -240,6 +243,8 @@ export function mapPrView(
     reviewDecision: view.reviewDecision,
     ci: ciStatus(checks),
     headRefName: view.headRefName,
+    mergedAt: view.mergedAt,
+    closedAt: view.closedAt,
   };
 }
 

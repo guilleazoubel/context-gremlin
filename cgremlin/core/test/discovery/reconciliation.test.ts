@@ -51,6 +51,8 @@ function view(overrides: Partial<ReturnType<typeof mapPrView>> = {}): ReturnType
     reviewDecision: '',
     ci: 'success',
     headRefName: 'fix/x',
+    mergedAt: null,
+    closedAt: null,
     ...overrides,
   };
 }
@@ -287,7 +289,7 @@ describe('ReconciliationTick', () => {
     const { h, gh, lock } = tickHarness();
     const review = reviewSession({ stageStatus: 'ready', repo: 'acme/app', number: 5 });
     await h.store.save(review);
-    gh.queueResponse({ stdout: viewJson({ state: 'MERGED', mergedAt: '2026-09-04T00:00:00Z' }) });
+    gh.queueResponse({ stdout: viewJson({ state: 'MERGED', mergedAt: '2026-09-05T00:00:00Z' }) });
 
     const tick = new ReconciliationTick({ gh, store: h.store, pipeline: h.service, events: h.events, lock });
     const report = await tick.run();
@@ -310,7 +312,7 @@ describe('ReconciliationTick', () => {
     expect((await h.store.load(review.id)).stageStatus).toBe('reviewing');
     expect(h.runner.isStopped(handle)).toBe(false);
 
-    gh.queueResponse({ stdout: viewJson({ state: 'MERGED', mergedAt: '2026-09-04T00:00:00Z' }) });
+    gh.queueResponse({ stdout: viewJson({ state: 'MERGED', mergedAt: '2026-09-05T00:00:00Z' }) });
 
     const tick = new ReconciliationTick({ gh, store: h.store, pipeline: h.service, events: h.events, lock });
     const report = await tick.run();
@@ -334,7 +336,7 @@ describe('ReconciliationTick', () => {
     const handle = h.runner.lastHandle();
     expect(h.runner.isStopped(handle)).toBe(false);
 
-    gh.queueResponse({ stdout: viewJson({ state: 'MERGED', mergedAt: '2026-09-04T00:00:00Z' }) });
+    gh.queueResponse({ stdout: viewJson({ state: 'MERGED', mergedAt: '2026-09-05T00:00:00Z' }) });
 
     const tick = new ReconciliationTick({ gh, store: h.store, pipeline: h.service, events: h.events, lock });
     const report = await tick.run();
@@ -407,7 +409,7 @@ describe('ReconciliationTick', () => {
     await h.store.save(healthy);
     // store.list() sorts by id, so pr-app-4-x is queried before pr-app-5-x
     gh.queueResponse(new Error('gh: rate limited'));
-    gh.queueResponse({ stdout: viewJson({ state: 'MERGED', mergedAt: '2026-09-04T00:00:00Z' }) });
+    gh.queueResponse({ stdout: viewJson({ state: 'MERGED', mergedAt: '2026-09-05T00:00:00Z' }) });
 
     const tick = new ReconciliationTick({ gh, store: h.store, pipeline: h.service, events: h.events, lock });
     const report = await tick.run();
@@ -445,7 +447,7 @@ describe('ReconciliationTick', () => {
     gh.queueResponse({
       stdout: viewJson({
         number: 42, url: 'https://github.com/acme/app/pull/42', headRefName: 'feature/APP-1-x',
-        state: 'MERGED', mergedAt: '2026-09-04T01:00:00Z',
+        state: 'MERGED', mergedAt: '2026-09-05T01:00:00Z',
       }),
     });
     const tick = new ReconciliationTick({ gh, store: h.store, pipeline: h.service, events: h.events, lock });
@@ -483,7 +485,7 @@ describe('R20 — a claimed conversation skips the re-review, it never errors', 
     expect(skipped).toEqual([]);
 
     await h.store.save(review);
-    gh.queueResponse({ stdout: viewJson({ state: 'MERGED', mergedAt: '2026-09-04T00:00:00Z' }) });
+    gh.queueResponse({ stdout: viewJson({ state: 'MERGED', mergedAt: '2026-09-05T00:00:00Z' }) });
     const tick = new ReconciliationTick({ gh, store: h.store, pipeline: h.service, events: h.events, lock, now: () => NOW });
     const report = await tick.run();
     expect(report.errors).toEqual([]);
@@ -700,5 +702,121 @@ describe('ReconciliationTick over respond sessions', () => {
       },
     ]);
     expect((await h.store.load('inv-1')).stageStatus).toBe('planning');
+  });
+});
+
+/**
+ * Phase 14 — a review the user started ON PURPOSE after the PR landed.
+ *
+ * The live case: `pr-grace-frontend-2061-20260915-160008`, created at 16:00
+ * on a PR that merged at 14:28 the same day, because the user wanted to READ
+ * it. Reconciliation dismissed it and stopped its run on the first tick.
+ */
+const MERGED_AT = '2026-09-15T14:28:21Z';
+const CLOSED_AT = '2026-09-15T14:28:21Z';
+/** After the merge — the deliberate start. */
+const AFTER = '2026-09-15T16:00:08.000Z';
+/** Before the merge — a review that was genuinely in flight when the PR landed. */
+const BEFORE = '2026-09-15T09:00:00.000Z';
+
+function withCreatedAt<S extends Session>(session: S, createdAt: string): S {
+  return { ...session, createdAt };
+}
+
+describe('a session STARTED AFTER the PR landed is never ended by that landing', () => {
+  it('a review created BEFORE the merge is still dismissed', () => {
+    const review = withCreatedAt(reviewSession({ stageStatus: 'reviewing' }), BEFORE);
+    const { actions, skipped } = planReconciliation({
+      now: NOW, review, source: null, view: view({ state: 'MERGED', mergedAt: MERGED_AT, closedAt: MERGED_AT }),
+    });
+    expect(actions).toEqual([{ type: 'transition', sessionId: review.id, to: 'dismissed', reason: 'PR merged' }]);
+    expect(skipped).toEqual([]);
+  });
+
+  it('a review created AFTER the merge is left alone, reported as skipped naming the deliberate start', () => {
+    const review = withCreatedAt(reviewSession({ stageStatus: 'reviewing' }), AFTER);
+    const { actions, skipped } = planReconciliation({
+      now: NOW, review, source: null, view: view({ state: 'MERGED', mergedAt: MERGED_AT, closedAt: MERGED_AT }),
+    });
+    expect(actions).toEqual([]);
+    expect(skipped).toEqual([
+      {
+        sessionId: review.id,
+        to: 'dismissed',
+        why: "PR merged before this review was started — started deliberately on a landed PR, left at 'reviewing'",
+      },
+    ]);
+  });
+
+  it('a review created AFTER a close without merging is left alone too', () => {
+    const review = withCreatedAt(reviewSession({ stageStatus: 'reviewing' }), AFTER);
+    const { actions, skipped } = planReconciliation({
+      now: NOW, review, source: null, view: view({ state: 'CLOSED', closedAt: CLOSED_AT, mergedAt: null }),
+    });
+    expect(actions).toEqual([]);
+    expect(skipped).toEqual([
+      {
+        sessionId: review.id,
+        to: 'dismissed',
+        why: "PR closed without merging before this review was started — started deliberately on a landed PR, left at 'reviewing'",
+      },
+    ]);
+  });
+
+  it('the lineage source is still merged — the rule is about the review, not about the PR', () => {
+    const review = withCreatedAt(reviewSession({ stageStatus: 'reviewing', parentSessionId: 'dev-1' }), AFTER);
+    const source = developmentSession('dev-1', 'pr_opened');
+    const { actions } = planReconciliation({
+      now: NOW, review, source, view: view({ state: 'MERGED', mergedAt: MERGED_AT, closedAt: MERGED_AT }),
+    });
+    expect(actions).toEqual([{ type: 'transition', sessionId: 'dev-1', to: 'merged', reason: 'PR merged' }]);
+  });
+
+  it('a respond created AFTER the merge is left alone; one created before still closes', () => {
+    const after = withCreatedAt(respondSession('addressing'), AFTER) as RespondSession;
+    const merged = view({ state: 'MERGED', mergedAt: MERGED_AT, closedAt: MERGED_AT });
+    expect(planPrSessionReconciliation({ session: after, view: merged })).toEqual({
+      actions: [],
+      skipped: [
+        {
+          sessionId: 'respond-app-5-x',
+          to: 'closed',
+          why: "PR merged before this respond was started — started deliberately on a landed PR, left at 'addressing'",
+        },
+      ],
+    });
+    const before = withCreatedAt(respondSession('addressing'), BEFORE) as RespondSession;
+    expect(planPrSessionReconciliation({ session: before, view: merged }).actions).toEqual([
+      { type: 'transition', sessionId: 'respond-app-5-x', to: 'closed', reason: 'PR merged' },
+    ]);
+  });
+
+  it('an unknown landing timestamp keeps today’s behaviour — dismiss', () => {
+    const review = withCreatedAt(reviewSession({ stageStatus: 'reviewing' }), AFTER);
+    const { actions } = planReconciliation({
+      now: NOW, review, source: null, view: view({ state: 'MERGED', mergedAt: null, closedAt: null }),
+    });
+    expect(actions).toEqual([{ type: 'transition', sessionId: review.id, to: 'dismissed', reason: 'PR merged' }]);
+  });
+
+  it('the tick leaves the deliberately-started review untouched AND does not stop its run', async () => {
+    const { h, gh, lock } = tickHarness();
+    const review = withCreatedAt(reviewSession({ stageStatus: 'ready', repo: 'acme/app', number: 5 }), AFTER);
+    await h.store.save(review);
+    const runPromise = h.service.runReview(review.id);
+    await flush();
+    const handle = h.runner.lastHandle();
+    expect((await h.store.load(review.id)).stageStatus).toBe('reviewing');
+
+    gh.queueResponse({ stdout: viewJson({ state: 'MERGED', mergedAt: MERGED_AT }) });
+    const tick = new ReconciliationTick({ gh, store: h.store, pipeline: h.service, events: h.events, lock });
+    const report = await tick.run();
+
+    expect(report.errors).toEqual([]);
+    expect(report.actions).toEqual([]);
+    expect(report.skipped).toHaveLength(1);
+    expect(h.runner.isStopped(handle)).toBe(false);
+    expect((await h.store.load(review.id)).stageStatus).toBe('reviewing');
+    void runPromise;
   });
 });

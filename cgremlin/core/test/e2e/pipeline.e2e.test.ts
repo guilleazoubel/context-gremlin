@@ -308,8 +308,12 @@ describe.skipIf(!hasGit())('Phase 3 engine end-to-end: review / re-review / reco
       expect(readyAgain.pr?.reviewedSha).toBe(newSha);
 
       // --- Step 4: the PR merges; a tick dismisses the review ---
+      // The merge must land AFTER this session was created, or it is the
+      // Phase 14 case (a review deliberately started on an already-landed
+      // PR) and reconciliation is right to leave it alone. The session was
+      // created moments ago by this test, so `now` is the in-flight shape.
       engine.gh.queueResponse({
-        stdout: viewJson({ headRefOid: newSha, state: 'MERGED', mergedAt: '2026-09-04T00:00:00Z' }),
+        stdout: viewJson({ headRefOid: newSha, state: 'MERGED', mergedAt: new Date().toISOString() }),
       });
       await tick.run();
       await waitFor(engine, review.id, (s) => s.stageStatus === 'dismissed');
