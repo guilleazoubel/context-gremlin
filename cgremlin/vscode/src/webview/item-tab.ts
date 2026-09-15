@@ -203,7 +203,7 @@ function createPane(part: TabPart): HTMLElement {
 function patchPaneOf(pane: HTMLElement, part: TabPart, current: ItemTabState): void {
   const focus = part.focus;
   if (focus.kind === 'ticket') {
-    if (current.ticket !== null) patchTicketPane(pane, current.ticket);
+    patchTicketPane(pane, current.ticket, current.ticketError);
     return;
   }
   if (focus.kind === 'pr') {

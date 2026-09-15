@@ -51,7 +51,9 @@ export function partsOf(state: ItemTabState): TabPart[] {
       });
     }
   }
-  if (state.ticket !== null) {
+  // A ticket the host could not READ is still a part of the item: the pane carries the reason,
+  // because a tab that silently disappears reads as "there is no ticket".
+  if (state.ticket !== null || state.ticketError !== null) {
     parts.push({ key: 'ticket', label: 'Ticket', focus: { kind: 'ticket' } });
   }
   for (const pr of state.prs) {

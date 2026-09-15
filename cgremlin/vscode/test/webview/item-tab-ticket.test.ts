@@ -136,3 +136,44 @@ describe('§1 the newest comment is open and the rest are behind one disclosure'
     expect(dom.document.body.byClass('earlier-comments')[0].hidden).toBe(true);
   });
 });
+
+/**
+ * The PM/designer review: `ticketError` reached the state and was rendered NOWHERE, so a failed
+ * Jira read dropped the Ticket tab with no explanation — the item simply had one part fewer.
+ * The error IS the pane: the tab is still there, and it says what went wrong.
+ */
+describe('a failed ticket read is a Ticket pane, not a missing tab', () => {
+  const failed = (message: string): ItemTabState => {
+    const built = {
+      itemId: 'i',
+      title: SAME,
+      needsYou: false,
+      lists: [],
+      chips: [],
+      focus: { kind: 'ticket' },
+      selectedSessionId: null,
+      agents: [],
+      prs: [],
+      ticket: null,
+      ticketError: message,
+      buttons: [],
+      parts: [],
+    } as unknown as ItemTabState;
+    built.parts = partsOf(built);
+    return built;
+  };
+
+  it('keeps the Ticket tab and puts the message on screen', () => {
+    webview.render(failed('Jira refused the read: 401 Unauthorized.'));
+    const tabs = dom.document.body.findAll((el) => el.getAttribute('role') === 'tab');
+    expect(tabs.map((t) => t.textContent)).toEqual(['Ticket']);
+    const error = dom.document.body.byClass('error')[0];
+    expect(error?.hidden).toBe(false);
+    expect(error?.textContent).toBe('Jira refused the read: 401 Unauthorized.');
+  });
+
+  it('says nothing where the read succeeded', () => {
+    webview.render(state(ticket()));
+    expect(dom.document.body.byClass('error')[0]?.hidden).toBe(true);
+  });
+});
