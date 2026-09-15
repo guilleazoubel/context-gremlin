@@ -20,6 +20,7 @@ import { JiraStore, TicketDetailCache } from '../jira/jira-store';
 import { ReviewThreadScanner, ReviewThreadStore, threadCacheKey, type ReviewThreadCache } from '../gh/review-threads';
 import { PrStateResolver, PrStateStore } from '../gh/pr-state';
 import { RespondSessionFactory } from '../pipeline/respond-session-factory';
+import { QaSessionFactory } from '../pipeline/qa-session-factory';
 import { PR_VIEW_FIELDS, failingChecks, parsePrView } from '../gh/pr-view';
 import type { JiraSource } from '../jira/jira-source';
 import { InventoryStore } from '../inventory/inventory-store';
@@ -163,6 +164,7 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
       worktreesDir,
       defaultBaseRef: config.defaultBaseRef,
       reviewSkillCommand: config.reviewSkillCommand,
+      qaSkillCommand: config.qaSkillCommand,
       includeLiveUiCheck: config.includeLiveUiCheck,
       runnerKind: adapters.runnerKind,
       humanTurnTtlMs: config.humanTurnTtlMs,
@@ -241,6 +243,15 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     events,
     worktreesDir,
     me: config.me,
+    now: adapters.now,
+  });
+  const qaFactory = new QaSessionFactory({
+    gh: adapters.gh,
+    store,
+    workspace,
+    events,
+    worktreesDir,
+    defaultBaseRef: config.defaultBaseRef,
     now: adapters.now,
   });
   const factory = new ReviewSessionFactory({
@@ -424,6 +435,7 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     workItems,
     ticketDetail,
     respondFactory,
+    qaFactory,
     now: adapters.now,
     eventRing,
     lock,
