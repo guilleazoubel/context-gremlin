@@ -212,22 +212,29 @@ function prFromAgentLinks(
     number,
     url: cached?.url ?? url ?? `https://github.com/${repo}/pull/${number}`,
     title: cached?.title ?? null,
-    author: null,
+    // Phase 14: the cache is the ONLY surviving description of a PR the
+    // open-PR inventory no longer has, so every field it carries is used.
+    // A field the cache does not have stays null — never a guess.
+    author: cached?.author ?? null,
     branch: cached?.branch ?? null,
-    isDraft: null,
+    isDraft: cached?.isDraft ?? null,
     isMine: null,
     reviewDecision: null,
     humanActivity: null,
     reviewRequests: null,
     teamActivity: null,
     updatedAt: null,
-    createdAt: null,
-    changedFiles: null,
-    additions: null,
-    deletions: null,
+    createdAt: cached?.createdAt ?? null,
+    changedFiles: cached?.changedFiles ?? null,
+    additions: cached?.additions ?? null,
+    deletions: cached?.deletions ?? null,
     ci: null,
-    labels: null,
-    sizeTier: null,
+    labels: cached?.labels ?? null,
+    sizeTier: sizeTierOf({
+      changedFiles: cached?.changedFiles ?? null,
+      additions: cached?.additions ?? null,
+      deletions: cached?.deletions ?? null,
+    }),
     state: cached?.state ?? null,
   };
 }

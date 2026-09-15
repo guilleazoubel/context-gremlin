@@ -12,6 +12,7 @@
  * the real ReconciliationTick, the real pr-state leg and the real
  * WorkItemService — so the wiring is under test, not just the units.
  */
+import { PR_STATE_FIELDS } from '../../src/gh/pr-state';
 import { describe, expect, it } from 'vitest';
 import { buildEngine, type EngineAdapters } from '../../src/host/build-engine';
 import { resolveCoreConfig, type CoreConfig } from '../../src/config/core-config';
@@ -251,7 +252,7 @@ describe('the merged PR, through the real engine', () => {
     );
     expect(stateCalls.length).toBe(1);
     expect(stateCalls[0]).toEqual([
-      'pr', 'view', '2180', '--repo', REPO, '--json', 'state,mergedAt,closedAt,title,url,headRefName',
+      'pr', 'view', '2180', '--repo', REPO, '--json', PR_STATE_FIELDS,
     ]);
   });
 

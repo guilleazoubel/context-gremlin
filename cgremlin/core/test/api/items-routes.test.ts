@@ -15,6 +15,7 @@ import { FIXED_NOW, SESSIONS_DIR, WORKTREES_DIR } from '../support/pipeline-harn
 import type { JiraScanReport } from '../../src/jira/jira-store';
 import type { JiraIssueDetail } from '../../src/jira/jira-source';
 import type { PrStateCache } from '../../src/gh/pr-state';
+import { PR_STATE_ENTRY_DEFAULTS } from '../support/pr-state-entry';
 import type { Session } from '../../src/schema/session';
 
 const NOW = new Date('2026-09-10T12:00:00.000Z');
@@ -776,6 +777,9 @@ describe('GET /items/session/:id resolves for ANY session the store knows', () =
   it('resolves the terminal review on a merged PR, with its agent, its PR state and its artifacts', async () => {
     prStates = {
       'acme/app#2061': {
+        ...PR_STATE_ENTRY_DEFAULTS,
+        author: 'bob',
+        createdAt: '2026-09-09T08:00:00Z',
         state: 'merged',
         title: 'feat(HB-6210): the landed change',
         url: 'https://github.com/acme/app/pull/2061',

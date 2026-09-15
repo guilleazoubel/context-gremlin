@@ -28,8 +28,20 @@ export function isLandedState(state: PrState | null | undefined): boolean {
   return state === 'merged' || state === 'closed';
 }
 
-/** The read-only projection, pinned here so the resolver and its tests cannot drift. */
-export const PR_STATE_FIELDS = 'state,mergedAt,closedAt,title,url,headRefName';
+/**
+ * The read-only projection, pinned here so the resolver and its tests cannot
+ * drift.
+ *
+ * Phase 14 widens it from a VERDICT to a whole ROW. A merged PR leaves the
+ * open-PR inventory, so author, age, size, draftness and labels all go null
+ * AT ONCE and every line of the row degrades together — the live complaint on
+ * `aplaceformom/grace-frontend#2061`: "I don't know who did it, I don't know
+ * that it was already merged, I don't see the title or the jira ticket." The
+ * extra fields cost nothing at steady state: a landed PR is fetched ONCE,
+ * ever (`isLandedState`).
+ */
+export const PR_STATE_FIELDS =
+  'state,mergedAt,closedAt,title,url,headRefName,author,createdAt,changedFiles,additions,deletions,isDraft,labels';
 
 const PrStateViewSchema = z.object({
   state: z.string(),
@@ -38,6 +50,17 @@ const PrStateViewSchema = z.object({
   title: z.string().optional(),
   url: z.string().optional(),
   headRefName: z.string().optional(),
+  // Every one of these is `.catch(...)`-guarded or optional: a gh that does
+  // not emit a field, or emits it in a shape we did not predict, must degrade
+  // to "unknown" rather than throw away the whole entry (the verdict is the
+  // part nothing else can recover).
+  author: z.object({ login: z.string() }).nullable().catch(null).optional(),
+  createdAt: z.string().nullable().catch(null).optional(),
+  changedFiles: z.number().int().nullable().catch(null).optional(),
+  additions: z.number().int().nullable().catch(null).optional(),
+  deletions: z.number().int().nullable().catch(null).optional(),
+  isDraft: z.boolean().nullable().catch(null).optional(),
+  labels: z.array(z.object({ name: z.string() }).passthrough()).catch([]).optional(),
 });
 
 export interface PrStateEntry {
@@ -60,6 +83,17 @@ export interface PrStateEntry {
    * yields `['HB-1489']`, which is the whole live case.
    */
   ticketKeys: string[];
+  /**
+   * Phase 14 — what the ROW is made of, for a PR the inventory no longer has.
+   * All nullable: an older cache file predates them and must still load.
+   */
+  author: string | null;
+  createdAt: string | null;
+  changedFiles: number | null;
+  additions: number | null;
+  deletions: number | null;
+  isDraft: boolean | null;
+  labels: string[];
   checkedAt: string;
 }
 
@@ -77,6 +111,13 @@ const PrStateEntrySchema = z.object({
   closedAt: z.string().nullable().default(null),
   branch: z.string().nullable().default(null),
   ticketKeys: z.array(z.string()).default([]),
+  author: z.string().nullable().default(null),
+  createdAt: z.string().nullable().default(null),
+  changedFiles: z.number().int().nullable().default(null),
+  additions: z.number().int().nullable().default(null),
+  deletions: z.number().int().nullable().default(null),
+  isDraft: z.boolean().nullable().default(null),
+  labels: z.array(z.string()).default([]),
   checkedAt: z.string(),
 });
 
@@ -235,6 +276,13 @@ export class PrStateResolver {
       closedAt: view.closedAt ?? null,
       branch,
       ticketKeys: keys,
+      author: view.author?.login ?? null,
+      createdAt: view.createdAt ?? null,
+      changedFiles: view.changedFiles ?? null,
+      additions: view.additions ?? null,
+      deletions: view.deletions ?? null,
+      isDraft: view.isDraft ?? null,
+      labels: (view.labels ?? []).map((l) => l.name),
       checkedAt,
     };
   }
