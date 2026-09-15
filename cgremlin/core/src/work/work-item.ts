@@ -5,7 +5,7 @@ import type { CiStatus } from '../gh/pr-view';
 import { isLandedState, prStateKey, type PrState, type PrStateCache, type PrStateEntry } from '../gh/pr-state';
 import type { Inventory, InventoryEntry, TeamActivity } from '../inventory/inventory';
 import type { JiraScanReport } from '../jira/jira-store';
-import type { SessionMode } from '../schema/session';
+import type { QaVerdict, SessionMode } from '../schema/session';
 import { sizeTierOf, type SizeTier } from './size-tier';
 import { workItemIdOf, type WorkItemId } from './work-item-id';
 
@@ -103,6 +103,13 @@ export interface WorkItemAgent {
   worktreePath: string | null;
   /** The AttentionItem it came from — the ack key stays the ref (R3). */
   ref: ItemRef;
+  /**
+   * Gap 1 — the SAME parse `evaluateQa` already ran, straight off the
+   * AttentionItem it came from; `null` for a non-qa agent or one with no
+   * verdict yet. Never a second read of QA.md here (`groupWorkItems` stays
+   * pure, per this module's own doc comment).
+   */
+  qaVerdict: QaVerdict | null;
 }
 
 export interface WorkItem {
@@ -130,6 +137,15 @@ export interface WorkItem {
   dismissed: boolean;
   dismissedAt: string | null;
   attention: { reasons: AttentionReason[]; since: string; acked: boolean; refs: ItemRef[] };
+  /**
+   * Gap 2 — the QA trigger store's own LAST record that an automatic
+   * verification reserved an attempt and never reached a session (a create
+   * failed, or QA was unreachable), overlaid by `WorkItemService` from
+   * `QaTriggerStore` — never derived here (`groupWorkItems` stays pure, and
+   * takes no I/O of its own). `null` while a QA session covers the item: a
+   * real session supersedes the abandoned-attempt signal.
+   */
+  qaAttempt: { outcome: 'create-failed' | 'unreachable'; at: string } | null;
 }
 
 export interface GroupWorkItemsInput {
@@ -426,6 +442,7 @@ export function groupWorkItems(input: GroupWorkItemsInput): WorkItem[] {
       primaryArtifact: item.links.primaryArtifact,
       worktreePath: item.links.worktreePath,
       ref: item.ref,
+      qaVerdict: item.qaVerdict ?? null,
     });
     cand.contributors.push(item);
     cand.sessionTitle ??= item.title;
@@ -524,6 +541,9 @@ function finish(cand: Candidate, ctx: FinishContext): WorkItem {
     dismissed: false,
     dismissedAt: null,
     attention: { reasons, since: sinceCandidates[0] ?? '', acked, refs },
+    // Overlaid by WorkItemService from the QA trigger store — see the
+    // field's own doc comment (Gap 2).
+    qaAttempt: null,
   };
 }
 

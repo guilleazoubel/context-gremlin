@@ -20,6 +20,7 @@ import { PHASE9_ENTRY_DEFAULTS } from '../support/inventory-entry';
 import type { Inventory, InventoryEntry } from '../../src/inventory/inventory';
 import type { JiraScanReport } from '../../src/jira/jira-store';
 import { migrateV1ToV2, type Session } from '../../src/schema/session';
+import type { QaTriggerState } from '../../src/qa/qa-trigger-store';
 
 const NOW = new Date('2026-09-10T12:00:00.000Z');
 const REPO = 'acme/app';
@@ -77,7 +78,15 @@ const EMPTY_JIRA: JiraScanReport = {
   kind: 'ok',
 };
 
-async function makeFixture(entries: InventoryEntry[], jira: JiraScanReport = EMPTY_JIRA) {
+interface QaTriggerStub {
+  load(): Promise<QaTriggerState>;
+}
+
+async function makeFixture(
+  entries: InventoryEntry[],
+  jira: JiraScanReport = EMPTY_JIRA,
+  qaTrigger?: QaTriggerStub,
+) {
   const lock = new LoggingLock();
   const h = createHarness({ lock });
   await h.fs.mkdir('/state', { recursive: true });
@@ -108,6 +117,7 @@ async function makeFixture(entries: InventoryEntry[], jira: JiraScanReport = EMP
     dismissals: new DismissStore(h.fs, '/state/dismissals.json'),
     events: h.events,
     config: { me: 'me-user', watchAuthors: ['bob'], showAllRepoPrs: false, projectKeys: ['HB'] },
+    ...(qaTrigger !== undefined ? { qaTrigger } : {}),
   });
   return { h, lock, service, changed, inventoryStore };
 }
@@ -143,6 +153,63 @@ describe('WorkItemService.list', () => {
     const { service } = await makeFixture([entry({ number: 1 })]);
     expect((await service.get('pr:acme/app#1'))?.id).toBe('pr:acme/app#1');
     expect(await service.get('ticket:HB-999')).toBeNull();
+  });
+});
+
+describe('Gap 2 — abandoned QA verification attempts', () => {
+  const TICKET_JIRA: JiraScanReport = {
+    ...EMPTY_JIRA,
+    issues: [
+      {
+        key: 'HB-1', summary: 'a ticket', status: 'UAT', statusCategory: 'In Progress',
+        assignee: null, updated: '2026-09-10T00:00:00.000Z', url: 'https://example.atlassian.net/browse/HB-1',
+      },
+    ],
+  };
+
+  function triggerWith(outcome: 'create-failed' | 'unreachable', reservedAt: string): QaTriggerStub {
+    return {
+      load: async () => ({
+        ok: true,
+        tickets: {
+          'HB-1': {
+            lastStatus: 'UAT',
+            lastObservedAt: reservedAt,
+            ordinal: 1,
+            attempts: [{ key: 'HB-1', identity: 'x', ordinal: 1, attempt: 1, reservedAt, sessionId: null, outcome }],
+          },
+        },
+      }),
+    };
+  }
+
+  function qaSession(id: string, ticket: string): Session {
+    return {
+      schemaVersion: 2,
+      id,
+      createdAt: '2026-09-10T08:00:00.000Z',
+      mode: 'qa',
+      stageStatus: 'verifying',
+      workspace: { repoUrl: `git@github.com:${REPO}.git`, worktreePath: `/wt/${id}` },
+      lineage: { pipelineId: id, parentSessionId: null, ticket },
+      agent: null,
+      lastRun: null,
+      pr: null,
+      qa: { verifiedSha: null, verdict: null },
+    } as Session;
+  }
+
+  it('surfaces the trigger store’s last create-failed attempt when no QA session exists', async () => {
+    const { service } = await makeFixture([], TICKET_JIRA, triggerWith('create-failed', '2026-09-10T09:00:00.000Z'));
+    const item = (await service.list()).items.find((i) => i.id === 'ticket:HB-1')!;
+    expect(item.qaAttempt).toEqual({ outcome: 'create-failed', at: '2026-09-10T09:00:00.000Z' });
+  });
+
+  it('is absent once a QA session exists for the item — a real session supersedes the signal', async () => {
+    const { h, service } = await makeFixture([], TICKET_JIRA, triggerWith('create-failed', '2026-09-10T09:00:00.000Z'));
+    await h.store.save(qaSession('qa-1', 'HB-1'));
+    const item = (await service.list()).items.find((i) => i.id === 'ticket:HB-1')!;
+    expect(item.qaAttempt ?? null).toBeNull();
   });
 });
 

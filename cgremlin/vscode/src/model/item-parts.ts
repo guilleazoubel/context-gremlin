@@ -165,7 +165,7 @@ function qaPart(facts: ActionFacts, input: ItemPartsInput): ItemPart | null {
     name: MODE_NAME.qa,
     glyph: MODE_GLYPH.qa,
     state: agent === undefined ? 'notStarted' : qaSlotState(agent),
-    stateText: agent === undefined ? 'not started' : qaStateText(agent.phase),
+    stateText: agent === undefined ? 'not started' : qaStateText(agent.phase, agent.qaVerdict ?? null),
     detail: '',
     childId,
     actions,

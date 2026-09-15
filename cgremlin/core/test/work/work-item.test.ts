@@ -77,6 +77,7 @@ interface AgentOpts {
   since?: string;
   title?: string;
   acked?: boolean;
+  qaVerdict?: 'ready' | 'not_ready' | 'blocked' | null;
 }
 
 function agentAttention(o: AgentOpts): AttentionItem {
@@ -109,6 +110,7 @@ function agentAttention(o: AgentOpts): AttentionItem {
     stageStatus: o.stageStatus ?? 'reviewing',
     running: false,
     claimed: false,
+    qaVerdict: o.qaVerdict ?? null,
   };
 }
 
@@ -158,6 +160,24 @@ function listsOf(items: WorkItem[], id: string): string[] {
 // ---------------------------------------------------------------------------
 // The D2 table, as re-scoped by R47–R50.
 // ---------------------------------------------------------------------------
+
+// Gap 1 — the wire field is a straight passthrough of the AttentionItem's
+// own qaVerdict (itself the SAME parse `evaluateQa` already did); grouping
+// invents no second read of QA.md.
+describe('groupWorkItems: qaVerdict passthrough (Gap 1)', () => {
+  it("carries the agent's qaVerdict onto the wire WorkItemAgent", () => {
+    const items = group({
+      items: [agentAttention({ id: 'qa-1', mode: 'qa', ticket: 'HB-627', qaVerdict: 'blocked' })],
+      jira: jiraReport([{ key: 'HB-627' }]),
+    });
+    expect(items[0].agents[0].qaVerdict).toBe('blocked');
+  });
+
+  it('defaults to null when the attention item carries none', () => {
+    const items = group({ items: [agentAttention({ id: 'qa-2', mode: 'qa', ticket: 'HB-627' })], jira: jiraReport([{ key: 'HB-627' }]) });
+    expect(items[0].agents[0].qaVerdict).toBeNull();
+  });
+});
 
 describe('groupWorkItems: list membership (R47–R50, MG-2)', () => {
   it("a teammate PR with no agent is ONLY in parkingLot, group 'untouched'", () => {

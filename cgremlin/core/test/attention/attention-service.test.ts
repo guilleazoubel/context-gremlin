@@ -189,7 +189,7 @@ describe('AttentionService.list', () => {
     expect(all.items.map((i) => i.ref).sort()).toEqual(['pr:acme/app#7', 'session:loud', 'session:quiet']);
     const item = all.items.find((i) => i.ref === 'session:loud')!;
     expect(Object.keys(item).sort()).toEqual(
-      ['attention', 'claimed', 'id', 'links', 'mode', 'ref', 'repoOrContext', 'running', 'source', 'stageStatus', 'title'].sort(),
+      ['attention', 'claimed', 'id', 'links', 'mode', 'qaVerdict', 'ref', 'repoOrContext', 'running', 'source', 'stageStatus', 'title'].sort(),
     );
     expect(item.source).toBe('session');
     expect(item.mode).toBe('investigation');
@@ -242,6 +242,29 @@ describe('AttentionService.list', () => {
     const all = await fx.service.list({ all: true });
     expect(all.items.find((i) => i.ref === 'session:junk-art')!.links.primaryArtifact).toBeNull();
     expect(all.items.find((i) => i.ref === 'pr:acme/app#7')!.links.primaryArtifact).toBeNull();
+  });
+
+  // Gap 1 — the same parse `pipeline-service.evaluateQa` already ran is what
+  // populated `session.qa.verdict`; the attention item just carries it, it
+  // never re-parses QA.md.
+  it('carries the session’s own qa.verdict on a qa-mode session, and null otherwise', async () => {
+    await fx.h.store.save({
+      schemaVersion: 2,
+      id: 'qa-blocked',
+      createdAt: '2026-09-01T00:00:00.000Z',
+      mode: 'qa',
+      stageStatus: 'not_ready',
+      workspace: { repoUrl: 'git@github.com:acme/app.git', worktreePath: '/worktrees/qa-blocked', branch: 'b' },
+      lineage: { pipelineId: 'p3', parentSessionId: null, ticket: 'APP-9' },
+      agent: null,
+      lastRun: null,
+      pr: null,
+      qa: { verifiedSha: 'sha9', verdict: 'blocked' },
+    } as Session);
+    await fx.h.store.save(investigation('non-qa'));
+    const all = await fx.service.list({ all: true });
+    expect(all.items.find((i) => i.ref === 'session:qa-blocked')!.qaVerdict).toBe('blocked');
+    expect(all.items.find((i) => i.ref === 'session:non-qa')!.qaVerdict).toBeNull();
   });
 
   it('reports claimed: true for a session whose human-turn claim is still live', async () => {

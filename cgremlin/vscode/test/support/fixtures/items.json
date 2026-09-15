@@ -95,7 +95,8 @@
         ]
       },
       "dismissed": false,
-      "dismissedAt": null
+      "dismissedAt": null,
+      "qaAttempt": null
     },
     {
       "id": "pr:acme/api#56",
@@ -149,7 +150,8 @@
         ]
       },
       "dismissed": false,
-      "dismissedAt": null
+      "dismissedAt": null,
+      "qaAttempt": null
     },
     {
       "id": "pr:acme/api#77",
@@ -202,7 +204,8 @@
           "primaryArtifact": null,
           "worktreePath": "/tmp/cgremlin-fixture/worktrees/respond-acme-api-77",
           "ref": "session:respond-acme-api-77",
-          "repo": "acme/api"
+          "repo": "acme/api",
+          "qaVerdict": null
         },
         {
           "sessionId": "dev-acme-api-77",
@@ -214,7 +217,8 @@
           "primaryArtifact": "NOTES.md",
           "worktreePath": "/tmp/cgremlin-fixture/worktrees/dev-acme-api-77",
           "ref": "session:dev-acme-api-77",
-          "repo": "acme/api"
+          "repo": "acme/api",
+          "qaVerdict": null
         }
       ],
       "needsYou": false,
@@ -229,7 +233,8 @@
         ]
       },
       "dismissed": false,
-      "dismissedAt": null
+      "dismissedAt": null,
+      "qaAttempt": null
     },
     {
       "id": "pr:acme/legacy#9",
@@ -277,7 +282,8 @@
         ]
       },
       "dismissed": false,
-      "dismissedAt": null
+      "dismissedAt": null,
+      "qaAttempt": null
     },
     {
       "id": "pr:acme/web#101",
@@ -331,7 +337,8 @@
         ]
       },
       "dismissed": false,
-      "dismissedAt": null
+      "dismissedAt": null,
+      "qaAttempt": null
     },
     {
       "id": "pr:acme/web#102",
@@ -383,7 +390,8 @@
           "primaryArtifact": "REVIEW.md",
           "worktreePath": "/tmp/cgremlin-fixture/worktrees/pr-acme-web-102",
           "ref": "session:pr-acme-web-102",
-          "repo": "acme/web"
+          "repo": "acme/web",
+          "qaVerdict": null
         }
       ],
       "needsYou": true,
@@ -399,7 +407,8 @@
         ]
       },
       "dismissed": false,
-      "dismissedAt": null
+      "dismissedAt": null,
+      "qaAttempt": null
     },
     {
       "id": "pr:acme/web#200",
@@ -454,7 +463,8 @@
           "primaryArtifact": null,
           "worktreePath": "/tmp/cgremlin-fixture/worktrees/respond-acme-web-200",
           "ref": "session:respond-acme-web-200",
-          "repo": "acme/web"
+          "repo": "acme/web",
+          "qaVerdict": null
         }
       ],
       "needsYou": true,
@@ -471,7 +481,8 @@
         ]
       },
       "dismissed": false,
-      "dismissedAt": null
+      "dismissedAt": null,
+      "qaAttempt": null
     },
     {
       "id": "session:inv-stacktrace-1",
@@ -495,7 +506,8 @@
           "primaryArtifact": "FINDINGS.md",
           "worktreePath": "/tmp/cgremlin-fixture/worktrees/inv-stacktrace-1",
           "ref": "session:inv-stacktrace-1",
-          "repo": null
+          "repo": null,
+          "qaVerdict": null
         }
       ],
       "needsYou": false,
@@ -508,7 +520,8 @@
         ]
       },
       "dismissed": false,
-      "dismissedAt": null
+      "dismissedAt": null,
+      "qaAttempt": null
     },
     {
       "id": "ticket:HB-627",
@@ -598,7 +611,8 @@
           "primaryArtifact": "PLAN.md",
           "worktreePath": "/tmp/cgremlin-fixture/worktrees/inv-hb-627",
           "ref": "session:inv-hb-627",
-          "repo": "acme/web"
+          "repo": "acme/web",
+          "qaVerdict": null
         },
         {
           "sessionId": "dev-hb-627",
@@ -610,7 +624,8 @@
           "primaryArtifact": "NOTES.md",
           "worktreePath": "/tmp/cgremlin-fixture/worktrees/dev-hb-627",
           "ref": "session:dev-hb-627",
-          "repo": "acme/web"
+          "repo": "acme/web",
+          "qaVerdict": null
         }
       ],
       "needsYou": true,
@@ -629,7 +644,8 @@
         ]
       },
       "dismissed": false,
-      "dismissedAt": null
+      "dismissedAt": null,
+      "qaAttempt": null
     }
   ]
 }

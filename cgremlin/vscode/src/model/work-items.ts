@@ -19,6 +19,8 @@ export type WorkItemKind = 'pr' | 'ticket' | 'pr+ticket' | 'session';
 export type WorkListKind = 'parkingLot' | 'myWork' | 'investigations' | 'waitingForReview';
 export type ParkingLotGroup = 'reviewing' | 'untouched' | 'someoneOnIt';
 export type WorkAgentMode = 'review' | 'investigation' | 'development' | 'respond' | 'qa';
+/** The wire's `QA_VERDICTS` (core `schema/session.ts`), mirrored — Gap 1. */
+export type QaVerdict = 'ready' | 'not_ready' | 'blocked';
 export type CiStatus = 'success' | 'pending' | 'failure' | 'none';
 export type SizeTier = 'S' | 'M' | 'L' | 'XL';
 
@@ -106,6 +108,13 @@ export interface WorkItemAgent {
   worktreePath: string | null;
   ref: string;
   /**
+   * Gap 1 — the same parse `evaluateQa` ran, straight off the wire.
+   * **Optional**: an engine older than Gap 1 sends none, and a `not_ready`
+   * QA row then falls back to today's default wording, per `qaStateText`
+   * (the ONE composer this module never spells the words of itself).
+   */
+  qaVerdict?: QaVerdict | null;
+  /**
    * PANEL-LOCAL optimism, never on the wire: this window has just asked the
    * engine to start this stage and has not yet seen it in `/items`. It makes
    * the row say so at once — the defect it answers is a click on `Start
@@ -169,6 +178,15 @@ export interface WorkItem {
    */
   dismissed: boolean;
   dismissedAt: string | null;
+  /**
+   * Gap 2 — the trigger store's own record that an automatic verification
+   * reserved an attempt and then never reached a session (a create failed,
+   * or QA was unreachable). Read from the LAST such attempt for this item's
+   * ticket, and ONLY while no QA session currently exists for it — a real
+   * session supersedes the signal. **Optional**: an engine older than Gap 2
+   * sends neither field, which reads as "nothing abandoned".
+   */
+  qaAttempt?: { outcome: 'create-failed' | 'unreachable'; at: string } | null;
 }
 
 /** Tolerant of an engine that predates item 2: an absent field is not a dismissal. */
@@ -474,7 +492,9 @@ export type RowMetaKind =
   | 'ticketStatus'
   | 'prState'
   | 'agentPhase'
-  | 'running';
+  | 'running'
+  /** Gap 2 — an abandoned auto-verify attempt, muted, alongside the row's other tokens. */
+  | 'qaAttempt';
 
 export interface RowMetaCell {
   kind: RowMetaKind;

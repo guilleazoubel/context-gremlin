@@ -4,7 +4,7 @@ import type { EngineEvents } from '../engine/events';
 import type { Inventory } from '../inventory/inventory';
 import type { LocalAppStatus } from '../env/environment-service';
 import type { SessionWatchEvent, SessionWatcher } from '../fs/session-watcher';
-import type { Session, SessionMode } from '../schema/session';
+import type { QaVerdict, Session, SessionMode } from '../schema/session';
 import { repoSlugFromUrl } from '../gh/repo-slug';
 import { isClaimed } from '../pipeline/pipeline-service';
 import { pickPrimaryArtifact } from '../api/artifacts';
@@ -73,6 +73,14 @@ export interface AttentionItem extends Item {
    * that has no claim concept.
    */
   claimed: boolean;
+  /**
+   * Gap 1 — the SAME parse `pipeline-service.evaluateQa` already ran when it
+   * last evaluated QA.md, read back off `session.qa.verdict` (which is where
+   * that call persisted it). Never a second read of QA.md: `null` for a
+   * non-qa-mode session, or a qa session with no verdict yet. Optional so a
+   * source or a test fixture that predates Gap 1 need not supply it.
+   */
+  qaVerdict?: QaVerdict | null;
 }
 
 /** What an adapter collects: everything but the evaluated attention state. */
@@ -88,6 +96,8 @@ export interface CollectedItem {
   running: boolean;
   claimed: boolean;
   links: ItemLinks;
+  /** See `AttentionItem.qaVerdict` — carried straight through by `evaluate()`. */
+  qaVerdict?: QaVerdict | null;
 }
 
 /** One per ItemSource. Adding Jira/Slack = adding an adapter to the array. */
@@ -215,6 +225,9 @@ export class SessionSourceAdapter implements SourceAdapter {
       // R20: a claim counts only while it is unexpired, and `isClaimed` is
       // the one place that decides that — never `humanTurn !== null` here.
       claimed: isClaimed(session, this.deps.now ? this.deps.now() : new Date()),
+      // Gap 1: `session.qa` only exists on the qa-mode branch of the
+      // discriminated union — every other mode reads null.
+      qaVerdict: session.mode === 'qa' ? session.qa.verdict : null,
       links: {
         ...emptyLinks(),
         sessionId: session.id,
@@ -632,6 +645,7 @@ export class AttentionService {
       stageStatus: collected.stageStatus,
       running: collected.running,
       claimed: collected.claimed,
+      qaVerdict: collected.qaVerdict ?? null,
     };
   }
 }

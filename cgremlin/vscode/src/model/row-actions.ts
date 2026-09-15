@@ -23,6 +23,7 @@ import {
   chatTargetOfAgents,
   isLandedPr,
   WORK_LIST_KINDS,
+  type QaVerdict,
   type WorkItem,
   type WorkListKind,
 } from './work-items';
@@ -57,6 +58,8 @@ export interface ActionAgent {
   claimed: boolean;
   /** Panel-local: a start in flight. It counts for "this stage has begun" and for nothing else. */
   pending?: boolean;
+  /** Gap 1 — so `qaPart` can ask the ONE composer for the right word. */
+  qaVerdict?: QaVerdict | null;
 }
 
 export interface ActionPr {
