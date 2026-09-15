@@ -713,3 +713,50 @@ on. The drop is reported, and only a window that stays down for **8 s** (past th
 is said out loud. Anything that gets through — a request, a frame — clears it, pending or already
 said. Throughout, the **last snapshot stays on screen**: four empty lists claim something the
 extension does not know.
+
+### Phase 15 — QA verification: a rung outside the ladder (R70, R72, R74 amended, R75, R77 amended, R82)
+
+- **R70: QA sits after the forward-only ladder, not on it.** `STAGE_ORDER`/`nextStages` are
+  untouched — they already return `[]` on a landed item — and the QA verbs are their own rule,
+  allowed only when every PR on the item is `merged` (a change that was thrown away, closed
+  without merging, is not a change to verify). Grafting a fourth rung onto the existing ladder
+  would reopen `furthestStage` for every row already on it, for a mode that only ever runs after
+  the ladder is done.
+- **R72: `byNeedsYouThenRecent` compares `needsYou` before `byLanded`, and only there.** A
+  not-ready verdict on a merged item belongs at the top of my work; the other two list orders keep
+  `byLanded` first, because a landed-but-fine item is still background noise everywhere else. This
+  also lifts `run_failed`/`comments_ready` landed rows in `myWork`, which is the same reasoning
+  applied consistently rather than a special case for QA.
+- **R74, amended: one new secret, under the existing regime.** The ruling calls for QA auth kinds
+  `clerk-test` | `credentials` | `vercel-bypass` | `none`: `vercel-bypass` reuses
+  `vercel.bypassSecret` verbatim, and `credentials` adds exactly one new secret,
+  `qa.account.password`, under the *same* regime as everything else that already handles a
+  secret — 0600 `core.json`, `hasAnySecret`, `redactCoreConfig`, a 0600
+  `<sessionDir>/.qa-account` written before the run and removed in teardown, and the widened
+  redactor (R85) everywhere. **As of this task, only `clerk-test | vercel-bypass | none` are wired**
+  (`QaEnvironmentSchema` in `core-config.ts`, `QaAuthMode` in `prompts.ts`) — `credentials` and its
+  secret are not yet implemented; a repo with no Clerk test user and no Vercel bypass secret has no
+  auto-runnable auth kind today. Flagged for whichever task lands `credentials`.
+- **R75: the protocol lives in the brief, not in a cgremlin-repo file.** `qaSkillCommand`
+  (default `/cgremlin:qa-verify`) is an enhancement that degrades silently, exactly like
+  `reviewSkillCommand`/`renderUiCheckProtocol`. The agent runs in the *target* repo's worktree,
+  where a file that ships with cgremlin's own repo does not exist — so the skill's source ships at
+  `skills/qa-verify/SKILL.md` here, to be installed by the user into their own Claude Code skills
+  directory, and the brief carries the same protocol inlined so a missing install never leaves the
+  agent with nothing to do.
+- **R77, amended: a cold record seeds, it does not fire.** The original ruling would have had a
+  freshly-installed leg fire one verification per tick against an entire pre-existing QA backlog
+  forever — at a 60 s poll interval that is dozens of unasked-for agents in an hour, against the
+  standing no-burn rule. A record with no prior known status now seeds `lastStatus`/`ordinal:0`
+  and starts nothing; the backlog is surfaced instead with the manual `Verify in QA` action lit,
+  one human click each. `qa.backfillOnFirstRun` (default `false`) is the deliberate, explicit
+  opt-in for someone who wants the fleet anyway, still capped by `maxAutoStartsPerTick`.
+- **R82: one list, three places, checked by a guard test.** The permitted/forbidden list for a QA
+  agent is carried verbatim by the spec, `renderQaBrief`'s `QA_CONDUCT_RULE`, and
+  `skills/qa-verify/SKILL.md` — a guard test (`test/skills/qa-verify-skill.test.ts`) asserts the
+  skill's copy is byte-identical to the exported constant, so the three cannot drift apart
+  silently. The spec, the brief and the skill also all say the same true thing about enforcement:
+  the runner launches with `--permission-mode bypassPermissions`, and the `qa` deny list matches
+  Bash argv only — it stops `gh pr create`, it does not stop a `curl -X POST` or an MCP tool that
+  writes. The enforceable boundary is the test identity's own permissions, and pretending
+  otherwise would be worse than naming it.

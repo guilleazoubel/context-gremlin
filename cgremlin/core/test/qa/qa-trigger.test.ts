@@ -266,6 +266,39 @@ describe('single-flight and drain', () => {
   });
 });
 
+describe('MG-38 — the Done-category trap is surfaced, not silently fatal', () => {
+  it('warns when a configured qaStatus resolves to statusCategory Done in the snapshot', async () => {
+    const h = harness({
+      items: [item({ ticket: ticket({ status: 'UAT', statusCategory: 'Done' }) })],
+    });
+    await h.leg.run();
+    const warnings = h.leg.lastReport().warnings;
+    expect(warnings.length).toBe(1);
+    expect(warnings[0]).toContain('UAT');
+    expect(warnings[0]).toContain('Done');
+    expect(warnings[0]).toContain('never fire');
+    // It is a warning, not a failure.
+    expect(h.leg.lastReport().errors).toEqual([]);
+  });
+
+  it('warns once per status, not once per ticket', async () => {
+    const h = harness({
+      items: [
+        item({ ticket: ticket({ key: 'HB-1', status: 'UAT', statusCategory: 'Done' }) }),
+        item({ id: 'ticket:HB-2', ticket: ticket({ key: 'HB-2', status: 'UAT', statusCategory: 'Done' }) }),
+      ],
+    });
+    await h.leg.run();
+    expect(h.leg.lastReport().warnings.length).toBe(1);
+  });
+
+  it('is quiet when every qaStatus is outside the Done category', async () => {
+    const h = harness();
+    await h.leg.run();
+    expect(h.leg.lastReport().warnings).toEqual([]);
+  });
+});
+
 describe('E7/R78 — the Done close is not a bulldozer', () => {
   function doneItem(): WorkItem {
     return item({ ticket: ticket({ status: 'Done', statusCategory: 'Done' }) });

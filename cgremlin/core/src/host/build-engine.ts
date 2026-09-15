@@ -21,7 +21,7 @@ import { ReviewThreadScanner, ReviewThreadStore, threadCacheKey, type ReviewThre
 import { PrStateResolver, PrStateStore, prStateKey } from '../gh/pr-state';
 import { RespondSessionFactory } from '../pipeline/respond-session-factory';
 import { QaSessionFactory } from '../pipeline/qa-session-factory';
-import { QaTriggerLeg } from '../qa/qa-trigger';
+import { QaTriggerLeg, doneCategoryWarnings } from '../qa/qa-trigger';
 import { awaitRunStart } from '../pipeline/run-start';
 import { QaTriggerStore } from '../qa/qa-trigger-store';
 import type { WorkItem as WorkItemForQa } from '../work/work-item';
@@ -82,6 +82,14 @@ export interface Engine {
    * wiring with no `close()` answers 404 rather than accepting a stop it could not perform.
    */
   shutdown: ShutdownController;
+  /**
+   * E7(a) — the configuration trap the QA trigger cannot fix: a
+   * `jira.qaStatuses` entry Jira classifies as `Done` never reaches the
+   * snapshot, so the trigger can never fire for it. Read from the cached
+   * snapshot at boot and logged; the leg reports the same text on
+   * `ScanReport.qa.warnings`.
+   */
+  qaDoneStatusWarnings: () => Promise<string[]>;
 }
 
 export interface TickableParts {
@@ -592,5 +600,16 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     ...(environment ? { environment } : {}),
   });
 
-  return { server, scheduler, scanner, pipeline, events, store, lock, config, environment, attention, workItems, eventRing, engineInfo, shutdown };
+  /**
+   * E7(a) — read at BOOT, from the cached snapshot, so the trap that makes
+   * the QA trigger silently inert is said out loud somewhere a human looks.
+   * Tolerant: no cache, no Jira, no warning.
+   */
+  const qaDoneStatusWarnings = async (): Promise<string[]> => {
+    const report = await jiraScanner.lastReport().catch(() => null);
+    if (report === null || report.kind !== 'ok') return [];
+    return doneCategoryWarnings(config.jira?.qaStatuses ?? [], report.issues);
+  };
+
+  return { server, scheduler, scanner, pipeline, events, store, lock, config, environment, attention, workItems, eventRing, engineInfo, shutdown, qaDoneStatusWarnings };
 }

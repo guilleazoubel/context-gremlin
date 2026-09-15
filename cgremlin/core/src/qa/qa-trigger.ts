@@ -10,6 +10,15 @@ export interface QaScanReport {
   /** Every refusal, WITH its reason. Never an `errors` entry: a claimed session must not file an error every poll. */
   skipped: Array<{ ticket: string; why: string }>;
   errors: Array<{ ticket: string; error: string }>;
+  /**
+   * Configuration problems the leg can SEE but cannot fix — today, exactly
+   * one: a `jira.qaStatuses` entry that Jira classifies as `Done`. The
+   * default JQL is `statusCategory != Done`, so such a ticket never appears
+   * in the snapshot at all and the trigger can never fire for it. It is a
+   * warning, not an error: nothing is broken, the user has to widen either
+   * `qaStatuses` or `jira.jql`.
+   */
+  warnings: string[];
 }
 
 export interface QaTriggerConfig {
@@ -63,6 +72,36 @@ function errorMessage(err: unknown): string {
 }
 
 /**
+ * E7(a) — the trap that makes the whole leg silently inert. The default JQL
+ * is `assignee = currentUser() AND statusCategory != Done`, so a QA status
+ * that Jira classifies as `Done` means the ticket never appears in the
+ * snapshot at all and the trigger can never fire for it. Nothing is broken,
+ * so this is a WARNING: the user has to widen `qaStatuses` or `jira.jql`.
+ *
+ * Shared by the leg (which puts it on `ScanReport.qa.warnings`) and by the
+ * boot path (which logs it), so there is one wording.
+ */
+export function doneCategoryWarnings(
+  qaStatuses: readonly string[],
+  tickets: readonly { status: string; statusCategory: string }[],
+): string[] {
+  const seen = new Set<string>();
+  const warnings: string[] = [];
+  for (const ticket of tickets) {
+    if (ticket.statusCategory !== 'Done') continue;
+    if (!qaStatuses.includes(ticket.status)) continue;
+    if (seen.has(ticket.status)) continue;
+    seen.add(ticket.status);
+    warnings.push(
+      `jira.qaStatuses contains '${ticket.status}', which Jira classifies as statusCategory 'Done'. ` +
+        `The default JQL excludes Done, so tickets in that status never reach the snapshot and the QA trigger can never fire for them. ` +
+        `Remove it from jira.qaStatuses, or widen jira.jql.`,
+    );
+  }
+  return warnings;
+}
+
+/**
  * R34's leg discipline, applied to the ONLY new agent-start path: it runs
  * after `inventory.updated`, is not awaited by the tick, is single-flight,
  * and is budgeted — but the budget bounds CANDIDATE SELECTION AND THE GH
@@ -74,7 +113,7 @@ function errorMessage(err: unknown): string {
  */
 export class QaTriggerLeg {
   private flight: Promise<void> | null = null;
-  private report: QaScanReport = { scannedAt: null, started: [], skipped: [], errors: [] };
+  private report: QaScanReport = { scannedAt: null, started: [], skipped: [], errors: [], warnings: [] };
 
   constructor(private readonly deps: QaTriggerDeps) {}
 
@@ -258,6 +297,21 @@ export class QaTriggerLeg {
    * MG-38: a session with no `lineage.ticket` is never reached from here,
    * because `existingFor` is keyed on the ticket.
    */
+  /**
+   * E7(a) — the trap that makes the whole leg silently inert: a QA status
+   * Jira classifies as `Done` is filtered out by the default JQL, so the
+   * ticket never reaches the snapshot and nothing can ever fire. Warned once
+   * per STATUS, not once per ticket.
+   */
+  private warnAboutDoneStatuses(items: readonly WorkItem[]): void {
+    this.report.warnings.push(
+      ...doneCategoryWarnings(
+        this.deps.config.qaStatuses,
+        items.map((item) => item.ticket).filter((t): t is NonNullable<typeof t> => t !== null),
+      ),
+    );
+  }
+
   private async closeDoneTickets(items: readonly WorkItem[], jiraMe: string): Promise<void> {
     if (this.deps.closeSession === undefined) return;
     for (const item of items) {
@@ -320,7 +374,7 @@ export class QaTriggerLeg {
   private async scan(): Promise<void> {
     const { config, store, jira, now } = this.deps;
     const nowDate = (now ?? (() => new Date()))();
-    this.report = { scannedAt: nowDate.toISOString(), started: [], skipped: [], errors: [] };
+    this.report = { scannedAt: nowDate.toISOString(), started: [], skipped: [], errors: [], warnings: [] };
 
     // E3a — inert unless every precondition holds: nothing is read, nothing
     // is called. A Jira outage is E5's rule, not an error: a snapshot whose
@@ -332,6 +386,7 @@ export class QaTriggerLeg {
 
     const state = await store.load();
     const items = await this.deps.items();
+    this.warnAboutDoneStatuses(items);
     await this.closeDoneTickets(items, snapshot.me);
     const { taken, seed } = this.select(items, snapshot.me);
 

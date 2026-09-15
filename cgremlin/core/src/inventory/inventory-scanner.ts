@@ -234,7 +234,7 @@ export class InventoryScanner implements Tickable<ScanReport> {
       reconciliation,
       jira,
       threads: this.deps.threads?.lastReport() ?? { scannedAt: null, error: null, fetched: 0 },
-      qa: this.deps.qa?.lastReport() ?? { scannedAt: null, started: [], skipped: [], errors: [] },
+      qa: this.deps.qa?.lastReport() ?? { scannedAt: null, started: [], skipped: [], errors: [], warnings: [] },
     };
     this._lastReport = report;
     this.deps.events.emit('inventory.updated', { inventory });
