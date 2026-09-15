@@ -16,7 +16,7 @@ import { FakeHost, type FakeWebviewPanel } from '../support/fake-host';
 import { startStubServer, type StubServerHandle } from '../support/stub-server';
 import itemsFixture from '../support/fixtures/items.json';
 import type { ItemsResponse, WorkItem } from '../../src/model/work-items';
-import type { ItemTabState } from '../../src/model/item-tab-protocol';
+import { parseWebviewMessage, type ItemTabState } from '../../src/model/item-tab-protocol';
 
 const STATE_DIR = '/tmp/cgremlin-fixture';
 const MEDIA = '/ext/media';
@@ -494,5 +494,67 @@ describe('R42/R51 the button row', () => {
     expect(agent.mode).toBe('respond');
     expect(agent.phase).toBe('triaging');
     expect(agent.glyph).toBe('🔄');
+  });
+});
+
+/**
+ * Phase 17 §3 / task 11, host half — MG-17d. `openFile` is untrusted webview input, so all four
+ * clauses are required before a file is ever opened, and any failure is one warning and no open.
+ */
+describe('MG-17d openFile opens a file only inside the selected agent’s worktree', () => {
+  const ROOT = '/tmp/cgremlin-fixture/worktrees/pr-acme-web-102';
+
+  async function opened(): Promise<Harness> {
+    const h = await harness();
+    h.host.files.set(`${ROOT}/src/web-content.ts`, 'x');
+    await h.tab.open('pr/acme/web/102');
+    h.ready();
+    return h;
+  }
+
+  it('opens the file at the line, relative to the worktree', async () => {
+    const h = await opened();
+    h.panel().webview.emit({ type: 'openFile', path: 'src/web-content.ts', line: 88 });
+    await h.tab.settled();
+    expect(h.host.callsOf('openTextDocument')[0].args).toEqual([`${ROOT}/src/web-content.ts`, 88]);
+    expect(h.host.callsOf('showWarningMessage')).toEqual([]);
+  });
+
+  it('refuses an escape, an absolute path and a file that is not there — one warning, no open', async () => {
+    for (const path of ['../../etc/passwd', '/etc/passwd', 'src/missing.ts']) {
+      const h = await opened();
+      h.panel().webview.emit({ type: 'openFile', path, line: 1 });
+      await h.tab.settled();
+      expect(h.host.callsOf('openTextDocument')).toEqual([]);
+      expect(h.host.callsOf('showWarningMessage')).toHaveLength(1);
+      expect(h.host.callsOf('showWarningMessage')[0].args[0]).toContain(path);
+    }
+  });
+
+  it('refuses outright when the selected agent has no worktree', async () => {
+    const h = await harness();
+    await h.tab.open('pr/acme/web/101');
+    h.ready();
+    h.panel().webview.emit({ type: 'openFile', path: 'src/a.ts', line: 1 });
+    await h.tab.settled();
+    expect(h.host.callsOf('openTextDocument')).toEqual([]);
+    expect(h.host.callsOf('showWarningMessage')).toHaveLength(1);
+  });
+
+  it('rejects a malformed openFile at the parser, before the host sees it', () => {
+    for (const message of [
+      { type: 'openFile', path: '', line: 1 },
+      { type: 'openFile', path: 'a.ts' },
+      { type: 'openFile', path: 'a.ts', line: 0 },
+      { type: 'openFile', path: 'a.ts', line: 1.5 },
+      { type: 'openFile', path: 'a.ts', line: '1' },
+    ]) {
+      expect(parseWebviewMessage(message)).toBeNull();
+    }
+    expect(parseWebviewMessage({ type: 'openFile', path: 'a.ts', line: 3 })).toEqual({
+      type: 'openFile',
+      path: 'a.ts',
+      line: 3,
+    });
   });
 });

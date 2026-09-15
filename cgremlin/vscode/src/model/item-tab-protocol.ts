@@ -116,7 +116,9 @@ export type WebviewToHost =
   | { type: 'selectAgent'; sessionId: string }
   | { type: 'setFocus'; focus: ItemFocusMessage }
   | { type: 'command'; command: string; arg?: string }
-  | { type: 'openLink'; url: string };
+  | { type: 'openLink'; url: string }
+  /** Phase 17 §3 — a `path:line` clicked inside a review. The host decides whether it may open. */
+  | { type: 'openFile'; path: string; line: number };
 
 function record(value: unknown): Record<string, unknown> | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
@@ -190,6 +192,16 @@ export function parseWebviewMessage(raw: unknown): WebviewToHost | null {
     case 'openLink': {
       const url = parseUrl(message.url);
       return url === null ? null : { type: 'openLink', url };
+    }
+    case 'openFile': {
+      // The shape only. WHERE the path may point is the host's question, because only the host
+      // knows which worktree the selected agent is on.
+      const path = text(message.path);
+      const line = message.line;
+      if (path === null || typeof line !== 'number' || !Number.isInteger(line) || line < 1) {
+        return null;
+      }
+      return { type: 'openFile', path, line };
     }
     default:
       return null;

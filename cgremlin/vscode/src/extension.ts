@@ -424,9 +424,12 @@ function buildHost(output: vscode.OutputChannel, state: vscode.Memento): Host {
       await fs.promises.chmod(path, mode);
     },
 
-    async openTextDocument(path: string) {
+    async openTextDocument(path: string, line?: number) {
       const document = await vscode.workspace.openTextDocument(vscode.Uri.file(path));
-      await vscode.window.showTextDocument(document);
+      // Phase 17 §3: a review's `path:line` opens WHERE it points. The range is empty, so the
+      // editor reveals the line and puts the caret on it without selecting anything.
+      const at = line === undefined ? undefined : new vscode.Range(line - 1, 0, line - 1, 0);
+      await vscode.window.showTextDocument(document, at === undefined ? undefined : { selection: at });
     },
     spawnCapture(command, args, options) {
       return new Promise((resolve) => {

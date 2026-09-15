@@ -16,6 +16,7 @@ import { stripLeadingH1 } from '../../model/artifact-outline';
 import type { TabAgent, TabArtifact } from '../../model/item-tab-protocol';
 import { renderArtifact } from '../markdown';
 import { el, setHidden, setHtml, setText, walk } from './dom';
+import { linkFileRefs } from './file-refs';
 import { createVerdictStrip, patchVerdictStrip } from './verdict-strip';
 
 export interface ArtifactPaneData {
@@ -87,5 +88,6 @@ export function patchArtifactPane(pane: HTMLElement, data: ArtifactPaneData): vo
   if (parts.rendered === body) return;
   parts.rendered = body;
   setHtml(parts.body, renderArtifact(body));
+  linkFileRefs(parts.body);
   wireAnchors(parts.body);
 }

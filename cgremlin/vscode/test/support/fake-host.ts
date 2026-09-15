@@ -438,8 +438,9 @@ export class FakeHost implements Host {
     this.chmodHook?.(path, mode);
   }
 
-  async openTextDocument(path: string): Promise<void> {
-    this.record('openTextDocument', path);
+  async openTextDocument(path: string, line?: number): Promise<void> {
+    if (line === undefined) this.record('openTextDocument', path);
+    else this.record('openTextDocument', path, line);
   }
 
   async spawnCapture(

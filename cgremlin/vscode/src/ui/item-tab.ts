@@ -13,6 +13,7 @@
  * Takes its editor surface as a parameter (no editor import).
  */
 import crypto from 'node:crypto';
+import nodePath from 'node:path';
 import { CoreHttpError, engineErrorText, type CoreClient } from '../core-client';
 import { ciDot, itemPathOf, type WorkItem, type WorkItemPr, prState } from '../model/work-items';
 import { prLabel } from '../model/row-composition';
@@ -250,6 +251,9 @@ export class ItemTab {
       case 'openLink':
         await this.deps.host.openExternal(message.url);
         return;
+      case 'openFile':
+        await this.openFile(message.path, message.line);
+        return;
       case 'command': {
         // Chat is per *agent*; everything else is per item.
         const arg =
@@ -259,6 +263,30 @@ export class ItemTab {
         return;
       }
     }
+  }
+
+  /**
+   * §3 — a `path:line` clicked inside a review, opened only where all four clauses hold.
+   *
+   * The webview is untrusted input and a review is written by an agent, so neither is allowed to
+   * name a file: the path must be relative, must not climb out once normalised, must resolve
+   * inside the SELECTED agent's worktree, and must exist. Any failure is one warning that names
+   * the path the user clicked — never a silent no-op, and never a guess at what they meant.
+   */
+  private async openFile(path: string, line: number): Promise<void> {
+    const agent = this.detail?.item.agents.find((a) => a.sessionId === this.selected);
+    const root = agent?.worktreePath ?? null;
+    const refuse = async (): Promise<void> => {
+      await this.deps.host.showWarningMessage(
+        `cgremlin: ${path} is not a file in this agent's worktree.`,
+        undefined,
+      );
+    };
+    if (root === null || path === '' || nodePath.isAbsolute(path)) return refuse();
+    const resolved = nodePath.resolve(root, path);
+    if (resolved !== root && !resolved.startsWith(`${root}${nodePath.sep}`)) return refuse();
+    if (!this.deps.host.fileExists(resolved)) return refuse();
+    await this.deps.host.openTextDocument(resolved, line);
   }
 
   private post(message: HostToWebview): void {

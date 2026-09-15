@@ -221,8 +221,8 @@ export interface Host {
   /** Best-effort `chmod`; a failure is one logged line and never blocks a restart (R27). */
   chmod(path: string, mode: number): Promise<void>;
 
-  /** Opens the file in an editor tab. */
-  openTextDocument(path: string): Promise<void>;
+  /** Opens the file in an editor tab, at `line` (1-based) where one is given. */
+  openTextDocument(path: string, line?: number): Promise<void>;
   /** Runs a command to completion and captures its output — `gh api user`, `config init` (R5). */
   spawnCapture(
     command: string,
