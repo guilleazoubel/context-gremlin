@@ -529,25 +529,32 @@ export function buttonsFor(state: ItemTabState): TabButton[] {
   const selected = state.agents.find((agent) => agent.sessionId === state.selectedSessionId);
   const triaging =
     selected !== undefined && selected.mode === 'respond' && selected.phase === 'triaging';
-  const buttons: TabButton[] = [];
-  // §6: with no agent there is nothing to chat TO, so the button is not drawn — a disabled
-  // control with `reason: undefined` explained nothing and is what made Chat look broken.
-  if (selected !== undefined) {
-    buttons.push({
-      id: 'cgremlin.chat',
-      label: 'Chat',
-      enabled: !triaging,
-      placement: 'inline',
-      ...(triaging ? { reason: CHAT_TRIAGING_REASON } : {}),
-    });
-  }
   const facts: ActionFacts = {
     agents: state.agents,
     prs: state.prs,
     ticketKey: state.ticket?.key ?? null,
     needsYou: state.needsYou,
   };
-  for (const action of rowActionsForLists(facts, state.lists)) {
+  const actions = rowActionsForLists(facts, state.lists);
+  const buttons: TabButton[] = [];
+  // §6: with no agent there is nothing to chat TO, so the button is not drawn — a disabled
+  // control with `reason: undefined` explained nothing and is what made Chat look broken.
+  //
+  // Where it IS drawn, the rule decides its placement like every other verb's: an item whose
+  // ladder is finished (every PR landed) has Chat promoted to its one click, and re-adding it
+  // here as `inline` after the rule had already spent `primaryTaken` on it left the row with no
+  // filled button and no next step at all.
+  if (selected !== undefined) {
+    const ruled = actions.find((action) => action.command === 'cgremlin.chat');
+    buttons.push({
+      id: 'cgremlin.chat',
+      label: 'Chat',
+      enabled: !triaging,
+      placement: ruled?.placement === 'primary' ? 'primary' : 'inline',
+      ...(triaging ? { reason: CHAT_TRIAGING_REASON } : {}),
+    });
+  }
+  for (const action of actions) {
     if (action.command === 'cgremlin.chat') continue;
     // The chips above the row already ARE these links, and drawing them again is what made
     // three equal buttons out of one decision and two navigations (§6).
