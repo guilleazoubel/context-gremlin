@@ -240,6 +240,24 @@ describe('landed work sinks', () => {
   it('waitingForReview (created-at ascending) never lists a landed PR at all', () => {
     expect(listsWith().waitingForReview).not.toContain('ticket:HB-1489');
   });
+
+  it('R72: a landed item that NEEDS ME lifts back above live work — in myWork only', () => {
+    const needsMe = respondAgent({ stageStatus: 'not_ready' });
+    const lifted: AttentionItem = {
+      ...needsMe,
+      mode: 'qa',
+      attention: { ...needsMe.attention, reasons: ['qa_not_ready'], needsAttention: true, needsYou: true },
+    } as unknown as AttentionItem;
+    const items = groupWorkItems(
+      input({ items: [lifted], inventory: inventoryOf([live]), prStates: mergedCache() }),
+    );
+    const lists = workListsOf(items);
+    // The landed QA row is FIRST despite being landed — a not-ready verdict
+    // on merged work is the top of my work.
+    expect(lists.myWork[0]).toBe('ticket:HB-1489');
+    // The other two orders keep byLanded first, so it still sinks there.
+    expect(lists.waitingForReview).not.toContain('ticket:HB-1489');
+  });
 });
 
 /**

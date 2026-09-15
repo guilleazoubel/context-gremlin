@@ -699,10 +699,18 @@ function byCreatedAtAscending(a: WorkItem, b: WorkItem): number {
   return byLanded(a, b) || compareNullableAsc(createdAtOf(a), createdAtOf(b)) || a.id.localeCompare(b.id);
 }
 
+/**
+ * R72 — in THIS order only, `needsYou` is compared BEFORE `byLanded`. An
+ * item that wants something from me outranks the landed/live split: a
+ * not-ready QA verdict on merged work is the top of my work, and the same
+ * minimal rule also lifts a landed `run_failed` or `comments_ready` row,
+ * which is right. The other two orders keep `byLanded` first, so landed work
+ * still sinks everywhere it should.
+ */
 function byNeedsYouThenRecent(a: WorkItem, b: WorkItem): number {
+  if (a.needsYou !== b.needsYou) return a.needsYou ? -1 : 1;
   const landed = byLanded(a, b);
   if (landed !== 0) return landed;
-  if (a.needsYou !== b.needsYou) return a.needsYou ? -1 : 1;
   return compareNullableDesc(recencyOf(a), recencyOf(b)) || a.id.localeCompare(b.id);
 }
 
