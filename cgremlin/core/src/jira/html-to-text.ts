@@ -65,7 +65,45 @@ const BLOCK_TAGS = new Set(['p', 'div', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blo
 /** Everything HTML treats as horizontal whitespace, the non-breaking space included. */
 const HORIZONTAL_WHITESPACE = /[^\S\n]+/g;
 
-export function htmlToText(html: string): string {
+/**
+ * The markdown an `<img>` becomes. A Jira attachment is the reader's evidence,
+ * so it has to survive as something openable: `alt` when Jira gave one, the
+ * file name when it did not, and the bare word `[image]` ONLY when there is
+ * neither an alt nor a src to point at. R33 still holds — a URL is not HTML.
+ */
+function imageMarkdown(alt: string | null, rawSrc: string | null, siteUrl: string | null): string {
+  const src = rawSrc === null || rawSrc === '' ? null : absolutise(rawSrc, siteUrl);
+  const label = alt !== null && alt !== '' ? alt : src === null ? null : fileNameOf(src);
+  if (src === null) return label === null ? '[image]' : `[image: ${label}]`;
+  // A markdown destination ends at the first space or unbalanced paren, and
+  // Jira file names carry both — `<…>` keeps a whole URL one destination.
+  const dest = /[\s()]/.test(src) ? `<${src}>` : src;
+  return `[image: ${label ?? 'image'}](${dest})`;
+}
+
+/** A relative `src` is useless to a reader outside Jira; `siteUrl` is what makes it clickable. */
+function absolutise(src: string, siteUrl: string | null): string {
+  if (siteUrl === null || /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(src) || src.startsWith('//')) return src;
+  try {
+    return new URL(src, `${siteUrl.replace(/\/+$/, '')}/`).toString();
+  } catch {
+    return src;
+  }
+}
+
+/** The last path segment, query and fragment dropped — Jira's attachment name. */
+function fileNameOf(src: string): string | null {
+  const path = src.split(/[?#]/)[0];
+  const last = path.split('/').filter((p) => p !== '').pop();
+  if (last === undefined || last === '') return null;
+  try {
+    return decodeURIComponent(last);
+  } catch {
+    return last;
+  }
+}
+
+export function htmlToText(html: string, siteUrl: string | null = null): string {
   // Code blocks are pulled out first and re-inserted at the end, so the
   // whitespace collapsing and tag stripping below can never touch them.
   // Raw-text elements go first, so a `<pre>` or a stray `<` inside one can
@@ -95,8 +133,7 @@ export function htmlToText(html: string): string {
     if (name === 'br') {
       out.push('\n');
     } else if (name === 'img' && !closing) {
-      const alt = attr(rawAttrs, 'alt');
-      out.push(alt !== null && alt !== '' ? `[image: ${alt}]` : '[image]');
+      out.push(imageMarkdown(attr(rawAttrs, 'alt'), attr(rawAttrs, 'src'), siteUrl));
     } else if (name === 'a') {
       if (closing) {
         if (pendingHref !== null) out.push(` (${pendingHref})`);

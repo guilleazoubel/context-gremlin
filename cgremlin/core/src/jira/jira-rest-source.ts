@@ -304,11 +304,11 @@ export class JiraRestSource implements JiraSource {
 
     return {
       ...summary,
-      descriptionText: rendered === null ? null : htmlToText(rendered),
+      descriptionText: rendered === null ? null : htmlToText(rendered, this.opts.siteUrl),
       comments: rawComments.map((c) => ({
         author: c.author?.displayName ?? 'unknown',
         at: c.created ?? '',
-        bodyText: c.renderedBody === undefined ? null : htmlToText(c.renderedBody),
+        bodyText: c.renderedBody === undefined ? null : htmlToText(c.renderedBody, this.opts.siteUrl),
       })),
     };
   }
