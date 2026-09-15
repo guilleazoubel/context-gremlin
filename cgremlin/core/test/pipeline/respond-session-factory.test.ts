@@ -145,7 +145,9 @@ describe('the respond phases and their transitions (R51)', () => {
   });
 
   it("R56: STAGE_NAMES gains 'respond', APPENDED so no persisted lastRun.stage shifts meaning", () => {
-    expect([...STAGE_NAMES]).toEqual(['findings', 'plan', 'develop', 'review', 'rereview', 'respond']);
+    // Later phases APPEND further names; what R56 pins is that the first six
+    // never move, so no persisted `lastRun.stage` value shifts meaning.
+    expect([...STAGE_NAMES].slice(0, 6)).toEqual(['findings', 'plan', 'develop', 'review', 'rereview', 'respond']);
   });
 });
 

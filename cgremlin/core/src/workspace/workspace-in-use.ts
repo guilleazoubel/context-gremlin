@@ -6,6 +6,9 @@ export const TERMINAL_PHASES_BY_MODE: Record<Session['mode'], ReadonlySet<string
   development: new Set(['merged', 'abandoned']),
   review: new Set(['approved', 'dismissed']),
   respond: new Set(['closed', 'abandoned']),
+  // R69 — `ready` is deliberately absent: the user keeps chatting and keeps
+  // following the ticket until it is deployed.
+  qa: new Set(['closed', 'abandoned']),
 };
 
 function isTerminal(session: Session): boolean {

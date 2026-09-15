@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 2,
+  "id": "dev-2026-08-05-eeee",
+  "mode": "development",
+  "createdAt": "2026-08-05T10:00:00.000Z",
+  "workspace": { "repoUrl": "git@github.com:acme/app.git", "worktreePath": "/worktrees/dev-2026-08-05-eeee", "branch": "feature/HB-2" },
+  "lineage": { "pipelineId": "inv-2026-08-04-dddd", "parentSessionId": "inv-2026-08-04-dddd", "ticket": "HB-2" },
+  "agent": null,
+  "lastRun": {
+    "stage": "develop",
+    "startedAt": "2026-08-05T10:01:00.000Z",
+    "finishedAt": null,
+    "exitCode": null,
+    "signal": null,
+    "outcome": "running",
+    "error": null
+  },
+  "pr": null,
+  "stageStatus": "active"
+}

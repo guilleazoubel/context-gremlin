@@ -959,6 +959,9 @@ export class PipelineService {
         return this.runRereview(id);
       case 'respond':
         return this.runRespond(id);
+      case 'verify':
+        // Wired in A5 (runVerify). Named here so STAGE_NAMES stays exhaustive.
+        throw new UnsupportedStageError(`Stage 'verify' is not runnable yet`);
     }
   }
 

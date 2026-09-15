@@ -9,6 +9,7 @@ import {
   canTransition,
   type DevelopmentPhase,
   type InvestigationPhase,
+  type QaPhase,
   type RespondPhase,
   type ReviewPhase,
 } from '../schema/pipeline';
@@ -108,6 +109,8 @@ function canApplyTransition(mode: SessionMode, from: string, to: string): boolea
       return canTransition('respond', from as RespondPhase, to as RespondPhase);
     case 'investigation':
       return canTransition('investigation', from as InvestigationPhase, to as InvestigationPhase);
+    case 'qa':
+      return canTransition('qa', from as QaPhase, to as QaPhase);
   }
 }
 

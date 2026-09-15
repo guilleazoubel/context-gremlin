@@ -39,13 +39,35 @@ export type ReviewPhase = (typeof REVIEW_PHASES)[number];
 export const RESPOND_PHASES = ['triaging', 'addressing', 'ready', 'closed', 'abandoned'] as const;
 export type RespondPhase = (typeof RESPOND_PHASES)[number];
 
+/**
+ * R69 — seven phases. `ready` is NOT terminal: a terminal session may lose
+ * its worktree and leaves the live filters, but the user keeps chatting and
+ * keeps following the ticket until it is deployed. Terminal is
+ * `closed`/`abandoned` only.
+ */
+export const QA_PHASES = [
+  'queued',
+  'verifying',
+  'ready',
+  'not_ready',
+  'failed',
+  'closed',
+  'abandoned',
+] as const;
+export type QaPhase = (typeof QA_PHASES)[number];
+
+/** The phases a verification run may start from. */
+export const QA_RUNNABLE_FROM = ['queued', 'ready', 'not_ready', 'failed'] as const;
+
 export type PhaseFor<M extends SessionMode> = M extends 'investigation'
   ? InvestigationPhase
   : M extends 'development'
     ? DevelopmentPhase
     : M extends 'respond'
       ? RespondPhase
-      : ReviewPhase;
+      : M extends 'qa'
+        ? QaPhase
+        : ReviewPhase;
 
 const INVESTIGATION_TRANSITIONS: Record<InvestigationPhase, readonly InvestigationPhase[]> = {
   findings: ['planning', 'abandoned'],
@@ -94,11 +116,26 @@ const RESPOND_TRANSITIONS: Record<RespondPhase, readonly RespondPhase[]> = {
   abandoned: [],
 };
 
+// R69 — `closed` and `abandoned` are reachable from EVERY non-terminal
+// phase, for respond's reason: a ticket reaching Done (R78), or a human
+// giving up, is a fact regardless of our local phase. `queued` cannot jump
+// straight to a verdict — only a run produces one.
+const QA_TRANSITIONS: Record<QaPhase, readonly QaPhase[]> = {
+  queued: ['verifying', 'closed', 'abandoned'],
+  verifying: ['ready', 'not_ready', 'failed', 'closed', 'abandoned'],
+  ready: ['verifying', 'not_ready', 'closed', 'abandoned'],
+  not_ready: ['verifying', 'ready', 'closed', 'abandoned'],
+  failed: ['verifying', 'closed', 'abandoned'],
+  closed: [],
+  abandoned: [],
+};
+
 const TRANSITIONS = {
   investigation: INVESTIGATION_TRANSITIONS,
   development: DEVELOPMENT_TRANSITIONS,
   review: REVIEW_TRANSITIONS,
   respond: RESPOND_TRANSITIONS,
+  qa: QA_TRANSITIONS,
 } as const;
 
 export class IllegalTransitionError extends Error {

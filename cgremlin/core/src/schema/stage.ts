@@ -8,7 +8,15 @@ import { z } from 'zod';
  * cannot emit an event. The fourth mode's stage is APPENDED, so no existing
  * persisted `lastRun.stage` value shifts meaning.
  */
-export const STAGE_NAMES = ['findings', 'plan', 'develop', 'review', 'rereview', 'respond'] as const;
+export const STAGE_NAMES = [
+  'findings',
+  'plan',
+  'develop',
+  'review',
+  'rereview',
+  'respond',
+  'verify',
+] as const;
 export const StageNameSchema = z.enum(STAGE_NAMES);
 export type StageName = z.infer<typeof StageNameSchema>;
 

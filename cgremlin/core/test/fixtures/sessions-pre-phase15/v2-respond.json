@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 2,
+  "id": "pr-app-77-2026-09-01-eeee",
+  "mode": "respond",
+  "createdAt": "2026-09-01T10:00:00.000Z",
+  "workspace": { "repoUrl": "https://github.com/acme/app.git", "worktreePath": "/worktrees/respond-app-77", "branch": "respond/HB-77" },
+  "lineage": { "pipelineId": "pr-app-77-2026-09-01-eeee", "parentSessionId": null, "ticket": "HB-77", "selfReview": false },
+  "agent": { "runner": "claude-code", "resumeId": null, "humanTurn": null },
+  "lastRun": null,
+  "pr": {
+    "repo": "acme/app",
+    "number": 77,
+    "url": "https://github.com/acme/app/pull/77",
+    "headSha": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "reviewedSha": null,
+    "title": "PR seventy-seven",
+    "author": "me"
+  },
+  "stageStatus": "addressing"
+}
