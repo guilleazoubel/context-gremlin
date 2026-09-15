@@ -1215,6 +1215,33 @@ export class PipelineService {
     return { count: sessionIds.length, sessionIds };
   }
 
+  /**
+   * E8's boot recovery, beside `clearAllHumanTurns` and for the same reason:
+   * a `qa` session left at `verifying` with nothing actually running is a
+   * session the engine died under, not coverage. Left alone it wedges the
+   * ticket forever — the automatic leg would see a live QA session and never
+   * fire again. `failed` is in `QA_RUNNABLE_FROM` and already raises
+   * `run_failed`, so the row lights up and the user can click.
+   *
+   * The same reasoning `server.ts` already applies to a stale `reviewing`.
+   */
+  async failStaleVerifications(): Promise<{ count: number; sessionIds: string[] }> {
+    const active = new Set(this.deps.stageRunner.activeSessionIds());
+    const sessionIds: string[] = [];
+    for (const session of await this.deps.store.list()) {
+      if (session.mode !== 'qa' || session.stageStatus !== 'verifying') continue;
+      if (active.has(session.id)) continue;
+      await this.lock.withLock(session.id, async () => {
+        const fresh = await this.deps.store.load(session.id);
+        if (fresh.mode !== 'qa' || fresh.stageStatus !== 'verifying') return;
+        if (this.deps.stageRunner.activeSessionIds().includes(session.id)) return;
+        await this.transitionUnlocked(session.id, 'failed');
+        sessionIds.push(session.id);
+      });
+    }
+    return { count: sessionIds.length, sessionIds };
+  }
+
   async retry(id: string): Promise<Session> {
     const session = await this.deps.store.load(id);
     if (!session.lastRun) {

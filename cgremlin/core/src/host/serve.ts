@@ -323,6 +323,14 @@ export async function serve(config: CoreConfig, adapters: EngineAdapters, opts: 
       logLine(opts.log, 'conversation.claims_cleared', clearedClaims);
     }
 
+    // E8, the same boot-recovery reasoning: a `qa` session stuck at
+    // `verifying` with no run behind it would make the automatic leg believe
+    // the ticket is already covered, forever.
+    const sweptVerifications = await pipeline.failStaleVerifications();
+    if (sweptVerifications.count > 0) {
+      logLine(opts.log, 'qa.stale_verifications_failed', sweptVerifications);
+    }
+
     await listenOnSocket(server, socketPath);
   } catch (err) {
     await removeLock();

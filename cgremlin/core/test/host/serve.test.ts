@@ -643,6 +643,7 @@ describe('serve', () => {
           reconciliation: { reconciled: 0, actions: [], skipped: [], errors: [] },
         jira: { scannedAt: '2026-09-04T12:00:00.000Z', me: null, issues: [], error: null, kind: 'notConfigured' as const },
         threads: { scannedAt: null, error: null, fetched: 0 },
+    qa: { scannedAt: null, started: [], skipped: [], errors: [] },
         };
       },
     };

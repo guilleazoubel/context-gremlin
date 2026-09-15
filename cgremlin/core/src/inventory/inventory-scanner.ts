@@ -17,6 +17,7 @@ import type { Session } from '../schema/session';
 import type { JiraScanReport } from '../jira/jira-store';
 import type { ReviewThreadCache, ThreadScanCandidate, ThreadScanReport } from '../gh/review-threads';
 import type { PrStateCandidate, PrStateScanReport } from '../gh/pr-state';
+import type { QaScanReport } from '../qa/qa-trigger';
 
 export interface InventoryScannerDeps {
   gh: GhRunner;
@@ -70,6 +71,18 @@ export interface InventoryScannerDeps {
     inFlight(): Promise<void> | null;
     lastReport(): PrStateScanReport;
   };
+  /**
+   * Phase 15 — the QA verification leg, on the SAME R34 discipline as the
+   * other three: after `inventory.updated`, not awaited, single-flight,
+   * budgeted, drained by `stop()`. It is the only leg that can START an
+   * agent, which is why every refusal it makes is a `skipped` with a reason
+   * rather than an `errors` entry.
+   */
+  qa?: {
+    run(): Promise<void>;
+    inFlight(): Promise<void> | null;
+    lastReport(): QaScanReport;
+  };
 }
 
 export interface ScanReport {
@@ -78,6 +91,7 @@ export interface ScanReport {
   reconciliation: TickReport;
   jira: JiraScanReport;
   threads: ThreadScanReport;
+  qa: QaScanReport;
 }
 
 function errorMessage(err: unknown): string {
@@ -220,6 +234,7 @@ export class InventoryScanner implements Tickable<ScanReport> {
       reconciliation,
       jira,
       threads: this.deps.threads?.lastReport() ?? { scannedAt: null, error: null, fetched: 0 },
+      qa: this.deps.qa?.lastReport() ?? { scannedAt: null, started: [], skipped: [], errors: [] },
     };
     this._lastReport = report;
     this.deps.events.emit('inventory.updated', { inventory });
@@ -248,6 +263,9 @@ export class InventoryScanner implements Tickable<ScanReport> {
     if (this.deps.prStates !== undefined && this.deps.prStates.inFlight() === null) {
       void this.deps.prStates.run(unknownPrsOf(sessions, entries)).catch(() => undefined);
     }
+    if (this.deps.qa !== undefined && this.deps.qa.inFlight() === null) {
+      void this.deps.qa.run().catch(() => undefined);
+    }
     return report;
   }
 
@@ -256,6 +274,7 @@ export class InventoryScanner implements Tickable<ScanReport> {
     await this.deps.jira?.inFlight()?.catch(() => undefined);
     await this.deps.threads?.inFlight()?.catch(() => undefined);
     await this.deps.prStates?.inFlight()?.catch(() => undefined);
+    await this.deps.qa?.inFlight()?.catch(() => undefined);
   }
 }
 

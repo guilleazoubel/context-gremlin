@@ -21,6 +21,10 @@ import { ReviewThreadScanner, ReviewThreadStore, threadCacheKey, type ReviewThre
 import { PrStateResolver, PrStateStore } from '../gh/pr-state';
 import { RespondSessionFactory } from '../pipeline/respond-session-factory';
 import { QaSessionFactory } from '../pipeline/qa-session-factory';
+import { QaTriggerLeg } from '../qa/qa-trigger';
+import { awaitRunStart } from '../pipeline/run-start';
+import { QaTriggerStore } from '../qa/qa-trigger-store';
+import type { WorkItem as WorkItemForQa } from '../work/work-item';
 import { PR_VIEW_FIELDS, failingChecks, parsePrView } from '../gh/pr-view';
 import type { JiraSource } from '../jira/jira-source';
 import { InventoryStore } from '../inventory/inventory-store';
@@ -336,6 +340,47 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     projectKeys: config.jira?.projectKeys ?? [],
     now: adapters.now,
   });
+  // Phase 15 — the QA verification leg. It reads work items through a THUNK
+  // because `workItems` is built after the scanner, and it takes the SAME
+  // `lock` the API server and the pipeline hold, on the same key
+  // `handleItemAgents` takes, so a tick and a manual POST cannot both create.
+  // Assigned once `workItems` exists, a few dozen lines below: the leg is a
+  // constructor argument of the scanner, which is built first.
+  let workItemsForQa: { list(): Promise<{ items: readonly WorkItemForQa[] }> } | null = null;
+  const qaTrigger = new QaTriggerLeg({
+    gh: adapters.gh,
+    store: new QaTriggerStore(adapters.fs, config.qaVerificationsPath!, adapters.now),
+    lock,
+    items: async () => (await workItemsForQa?.list())?.items ?? [],
+    jira: async () => {
+      const report = await jiraScanner?.lastReport();
+      return { ok: report?.kind === 'ok', me: report?.me ?? null };
+    },
+    config: {
+      autoVerify: config.qa.autoVerify,
+      maxAutoStartsPerTick: config.qa.maxAutoStartsPerTick,
+      maxAttemptsPerEntry: config.qa.maxAttemptsPerEntry,
+      scanBudgetMs: config.qa.scanBudgetMs,
+      backfillOnFirstRun: config.qa.backfillOnFirstRun,
+      qaStatuses: config.jira?.qaStatuses ?? [],
+    },
+    qaFor: (slug) => ({
+      hasUrl: config.environments[slug]?.qa?.url !== undefined,
+      hasTestIdentity: environment?.hasQaTestIdentity(`https://github.com/${slug}.git`) ?? false,
+    }),
+    qaHealth: async (slug) =>
+      (await environment?.qaHealth(`https://github.com/${slug}.git`)) ?? {
+        ok: false,
+        reason: 'no environment service is configured',
+      },
+    sessions: {
+      existingFor: async (ticket) => qaFactory.existingFor(ticket),
+      activeSessionIds: () => pipeline.activeSessionIds(),
+    },
+    createSession: (ticket, slug, number) => qaFactory.createFromMergedPr(ticket, slug, number),
+    startRun: (id) => awaitRunStart(events, id, pipeline.runVerify(id)),
+    now: adapters.now,
+  });
   const scanner = new InventoryScanner({
     gh: adapters.gh,
     store,
@@ -354,6 +399,7 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     jira: jiraScanner,
     threads: threadScanner,
     prStates: prStateResolver,
+    qa: qaTrigger,
   });
 
   // The attention model: one adapter per source (R18), an ack store of its
@@ -404,6 +450,9 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
       ...(config.jira?.siteUrl !== undefined ? { jiraSiteUrl: config.jira.siteUrl } : {}),
     },
   });
+
+  // The thunk the QA leg reads work items through — see its declaration above.
+  workItemsForQa = workItems;
 
   const tickable = opts.makeTickable
     ? opts.makeTickable({ gh: adapters.gh, store, pipeline, events, lock, inventoryStore, scanner })

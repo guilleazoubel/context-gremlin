@@ -62,7 +62,15 @@ describe('the qa environment config', () => {
 describe('the top-level qa knobs', () => {
   it('default to on, one auto-start per tick, a 20s budget', () => {
     const c = cfg(undefined);
-    expect(c.qa).toEqual({ autoVerify: true, maxAutoStartsPerTick: 1, scanBudgetMs: 20_000 });
+    expect(c.qa).toEqual({
+      autoVerify: true,
+      maxAutoStartsPerTick: 1,
+      maxAttemptsPerEntry: 1,
+      scanBudgetMs: 20_000,
+      backfillOnFirstRun: false,
+      keepAttemptsPerTicket: 5,
+      forgetAfterDays: 90,
+    });
     expect(c.qaSkillCommand).toBe('/cgremlin:qa-verify');
   });
 

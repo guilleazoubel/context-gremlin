@@ -144,7 +144,13 @@ export const CoreConfigSchema = z.object({
     .object({
       autoVerify: z.boolean().default(true),
       maxAutoStartsPerTick: z.number().int().positive().default(1),
+      /** E2 — the attempt cap is DATA, not a hard-coded 1. */
+      maxAttemptsPerEntry: z.number().int().positive().default(1),
       scanBudgetMs: z.number().int().positive().default(20_000),
+      /** R77 as amended: a cold record is a SEED, not an entry, unless this is on. */
+      backfillOnFirstRun: z.boolean().default(false),
+      keepAttemptsPerTicket: z.number().int().positive().default(5),
+      forgetAfterDays: z.number().int().positive().default(90),
     })
     .default({}),
   includeLiveUiCheck: z.boolean().default(true),
@@ -177,6 +183,8 @@ export const CoreConfigSchema = z.object({
   reviewThreadsCachePath: z.string().optional(),
   /** The pr-state leg's cache, derived: <stateDir>/pr-states.json. */
   prStatesCachePath: z.string().optional(),
+  /** Phase 15, derived: <stateDir>/qa-verifications.json — the trigger's exactly-once record. */
+  qaVerificationsPath: z.string().optional(),
   // D2: when true the parking lot drops the watchAuthors filter. The isMine
   // exclusion is never dropped.
   showAllRepoPrs: z.boolean().default(false),
@@ -225,6 +233,7 @@ export function resolveCoreConfig(raw: unknown, home: string): CoreConfig {
     jiraCachePath: expandOrDerive(parsed.jiraCachePath, 'jira.json'),
     reviewThreadsCachePath: expandOrDerive(parsed.reviewThreadsCachePath, 'review-threads.json'),
     prStatesCachePath: expandOrDerive(parsed.prStatesCachePath, 'pr-states.json'),
+    qaVerificationsPath: expandOrDerive(parsed.qaVerificationsPath, 'qa-verifications.json'),
     // R37: `baseUrl` is injectable and falls back to `siteUrl`; `siteUrl`
     // stays separately readable, because every browse URL comes from it.
     ...(parsed.jira !== undefined
@@ -437,6 +446,7 @@ const DERIVED_PATH_SUFFIXES: Record<string, string> = {
   jiraCachePath: 'jira.json',
   reviewThreadsCachePath: 'review-threads.json',
   prStatesCachePath: 'pr-states.json',
+  qaVerificationsPath: 'qa-verifications.json',
 };
 
 export async function writeCoreConfig(
