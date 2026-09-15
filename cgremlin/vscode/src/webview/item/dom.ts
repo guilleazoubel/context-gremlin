@@ -40,3 +40,16 @@ export function setHtml(node: HTMLElement, html: string): void {
 export function idPart(key: string): string {
   return key.replace(/[^A-Za-z0-9_-]+/g, '-');
 }
+
+/**
+ * Every element under `node`, itself excluded.
+ *
+ * `children` is the one traversal both the editor's DOM and the tests' fake DOM agree on, and the
+ * tab only ever walks markdown-it's output — a shallow, well-formed tree.
+ */
+export function walk(node: HTMLElement, visit: (child: HTMLElement) => void): void {
+  for (const child of Array.from(node.children) as HTMLElement[]) {
+    visit(child);
+    walk(child, visit);
+  }
+}

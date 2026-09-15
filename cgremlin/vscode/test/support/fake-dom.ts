@@ -183,6 +183,21 @@ export class FakeElement {
     this.doc.activeElement = this;
   }
 
+  /** Phase 17: the item tab scrolls an intra-report anchor into view; the count is the assertion. */
+  scrolledIntoView = 0;
+  scrollIntoView(): void {
+    this.scrolledIntoView += 1;
+  }
+
+  get parentElement(): FakeElement | null {
+    return this.parentNode;
+  }
+
+  /** Construction-time attribute write — the fragment parser, which mutates nothing on screen. */
+  initAttribute(name: string, value: string): void {
+    this.attrs.set(name, value);
+  }
+
   /** Fire one listener type, with a stub event. */
   emit(type: string, event: Record<string, unknown> = {}): void {
     for (const handler of this.listeners.get(type) ?? []) {
@@ -214,7 +229,8 @@ export class FakeElement {
   }
 }
 
-const TAG = /<(\/?)([a-zA-Z][a-zA-Z0-9]*)(?:\s[^>]*)?(\/?)>/g;
+const TAG = /<(\/?)([a-zA-Z][a-zA-Z0-9]*)((?:\s[^>]*?)?)(\/?)>/g;
+const ATTR = /([a-zA-Z-]+)="([^"]*)"/g;
 const ENTITIES: Record<string, string> = {
   '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'", '&nbsp;': ' ',
 };
@@ -249,8 +265,14 @@ function parseFragment(html: string, doc: FakeDocument): FakeElement[] {
       continue;
     }
     const node = doc.createElement(m[2]);
+    // Attributes matter to phase 17: the tab reads `href` off a rendered anchor to keep an
+    // intra-report jump inside the pane, and `id` off the synthesised footnote targets.
+    for (let a = ATTR.exec(m[3]); a !== null; a = ATTR.exec(m[3])) {
+      if (a[1] === 'id') node.id = unescape(a[2]);
+      else node.initAttribute(a[1], unescape(a[2]));
+    }
     put(node);
-    if (m[3] !== '/' && !['br', 'hr', 'img', 'input'].includes(m[2].toLowerCase())) stack.push(node);
+    if (m[4] !== '/' && !['br', 'hr', 'img', 'input'].includes(m[2].toLowerCase())) stack.push(node);
   }
   text(html.slice(at));
   return top;

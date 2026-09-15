@@ -69,16 +69,18 @@ describe('an artifact renders as MARKDOWN, not as text', () => {
   it('a REVIEW.md body contains a real heading ELEMENT, not a text node', () => {
     webview.render(state(agent(['REVIEW.md'], { 'REVIEW.md': REVIEW })));
     expect(pane()).toBeDefined();
-    expect(pane().children.map((c) => c.tagName)).toContain('H1');
     expect(pane().find((c) => c.tagName === 'H2')?.textContent).toBe('Findings');
+    expect(pane().find((c) => c.tagName === 'LI')?.textContent).toBe('one thing');
+    // §5a: the artifact's own `# ` line is the THIRD copy of the item's title, so it is stripped.
+    expect(pane().findAll((c) => c.tagName === 'H1')).toEqual([]);
     // The characters `# Review` must NOT survive anywhere as literal text.
     expect(pane().textContent).not.toContain('# Review');
   });
 
   it('a BRIEF.md body renders as markdown too', () => {
     webview.render(state(agent(['BRIEF.md'], { 'BRIEF.md': BRIEF })));
-    expect(pane().children.map((c) => c.tagName)).toContain('H1');
     expect(pane().find((c) => c.tagName === 'STRONG')?.textContent).toBe('ticket');
+    expect(pane().findAll((c) => c.tagName === 'H1')).toEqual([]);
   });
 });
 
