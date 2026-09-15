@@ -10,8 +10,14 @@
  */
 
 body {
+  /*
+   * How far the sticky chrome reaches down the document. A jump to a finding has to clear it, so
+   * this is deliberately an OVER-estimate: a heading that lands a little low is read; one that
+   * lands under the chrome is invisible, which is the defect.
+   */
+  --sticky-chrome: 132px;
   margin: 0;
-  padding: 0 16px 32px;
+  padding: 0 12px 20px;
   font-family: var(--vscode-font-family);
   font-size: var(--vscode-font-size, 13px);
   color: var(--vscode-foreground);
@@ -20,14 +26,25 @@ body {
   line-height: 1.6;
 }
 
-/* --- header ------------------------------------------------------------- */
+/* --- the sticky chrome -------------------------------------------------- */
 
-.item-header {
+/*
+ * The header, the action row and the part switcher, as ONE sticky layer.
+ *
+ * They used to stick separately at `top: 0` with the header at the higher `z-index`, so the
+ * tablist was painted UNDER the header and was invisible the moment the document scrolled — which
+ * took the tab's only navigation with it.
+ */
+.item-chrome {
   position: sticky;
   top: 0;
   z-index: 3;
-  padding: 12px 0 8px;
   background: var(--vscode-editor-background);
+  border-bottom: 1px solid var(--vscode-panel-border);
+}
+
+.item-header {
+  padding: 12px 0 8px;
   border-bottom: 1px solid var(--vscode-panel-border);
 }
 
@@ -118,22 +135,36 @@ body {
 
 /* --- the part switcher -------------------------------------------------- */
 
-/* §2: ONE line. It never wraps — a switcher that reflows is a paragraph, not a strip. */
+/*
+ * §2: ONE line. It never wraps — a switcher that reflows is a paragraph, not a strip.
+ *
+ * The four backgrounds are scroll-attached shadows: two `local` washes in the chrome's own colour
+ * cover the shadows at rest, and the two `scroll` radials show through at whichever edge the
+ * strip actually runs past. macOS hides the overlay scrollbar until it is used, so without this
+ * nothing says there are more parts off the right-hand side.
+ */
 .part-switcher {
-  position: sticky;
-  top: 0;
-  z-index: 2;
   display: flex;
   flex-wrap: nowrap;
   gap: 4px;
   overflow-x: auto;
   white-space: nowrap;
-  background: var(--vscode-editor-background);
-  border-bottom: 1px solid var(--vscode-panel-border);
+  background:
+    linear-gradient(to right, var(--vscode-editor-background) 30%, transparent),
+    linear-gradient(to left, var(--vscode-editor-background) 30%, transparent) 100% 0,
+    radial-gradient(farthest-side at 0 50%, var(--vscode-panel-border), transparent),
+    radial-gradient(farthest-side at 100% 50%, var(--vscode-panel-border), transparent) 100% 0;
+  background-repeat: no-repeat;
+  background-size: 20px 100%, 20px 100%, 8px 100%, 8px 100%;
+  background-attachment: local, local, scroll, scroll;
 }
 
 .part-tab {
   flex: 0 0 auto;
+  /* One `other` artifact keeps its filename, and a long one may not eat the whole strip. */
+  max-width: 20ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
   padding: 4px 10px;
   border: none;
   border-bottom: 2px solid transparent;
@@ -188,6 +219,13 @@ body {
   outline: none;
 }
 
+/* §7: the dateline — one 11px line naming the document and its age. */
+.artifact-meta {
+  margin: 0 0 8px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+}
+
 /*
  * §3 — the verdict, above the fold. The tone is one custom property, set by the tone class, so
  * the rule, the label and the wash are the same colour by construction and not by repetition.
@@ -228,7 +266,12 @@ body {
   font-size: 11px;
 }
 
-/* §3: the chrome prints the WORD with a dot. Never the emoji — `font-src: none` (R38). */
+/*
+ * §3: the chrome prints the WORD with a dot. Never the emoji — `font-src: none` (R38).
+ *
+ * The ticket answer sits on the same line under `.verdict-answer` and deliberately has NO rule
+ * here: a dot beside `Ticket: mostly` made an answer read as one more severity.
+ */
 .verdict-count::before {
   content: '';
   display: inline-block;
@@ -287,11 +330,39 @@ body {
   margin-top: 0;
 }
 
-/* §7: a table and a code block are not prose, so they opt out of the measure and scroll. */
-.artifact-body table,
+/*
+ * §7: a table and a code block are not prose, so they opt out of the measure and scroll.
+ *
+ * The table scrolls inside `.table-scroll`, which the pane wraps around it: `overflow-x` on a
+ * `display: table` element establishes no scroll container, so the table used to take the whole
+ * document sideways instead.
+ */
+.artifact-body .table-scroll,
 .artifact-body pre {
   max-width: none;
   overflow-x: auto;
+}
+
+.artifact-body table {
+  max-width: none;
+}
+
+/*
+ * A jump inside a review — `[2]` to finding 2 — scrolls the heading to the top of the DOCUMENT,
+ * which is underneath the sticky chrome. The margin is what keeps the heading readable.
+ */
+.artifact-body :target,
+.artifact-body [id],
+.artifact-body h2,
+.artifact-body h3 {
+  scroll-margin-top: var(--sticky-chrome);
+}
+
+/* §7: a 100-character permalink is not a word, and may break anywhere rather than overflow. */
+.artifact-body,
+.ticket-description,
+.ticket-comment-body {
+  overflow-wrap: anywhere;
 }
 
 .artifact-body table {

@@ -325,6 +325,8 @@ export interface InstalledDom {
   document: FakeDocument;
   root: FakeElement;
   posted: unknown[];
+  /** Every `window.scrollTo` argument list — the item tab scrolls the DOCUMENT, not a pane. */
+  scrolledTo: unknown[][];
   /** Deliver a host message the way the editor's webview channel does. */
   send(message: unknown): void;
   uninstall(): void;
@@ -340,6 +342,7 @@ export function installDom(): InstalledDom {
   root.id = 'cgremlin-panel';
   document.body.appendChild(root);
   const posted: unknown[] = [];
+  const scrolledTo: unknown[][] = [];
   const windowListeners: ((event: unknown) => void)[] = [];
 
   const globals = globalThis as unknown as Record<string, unknown>;
@@ -353,6 +356,9 @@ export function installDom(): InstalledDom {
     addEventListener(type: string, handler: (event: unknown) => void) {
       if (type === 'message') windowListeners.push(handler);
     },
+    scrollTo(...args: unknown[]) {
+      scrolledTo.push(args);
+    },
   };
   globals.acquireVsCodeApi = () => ({
     postMessage(message: unknown) {
@@ -364,6 +370,7 @@ export function installDom(): InstalledDom {
     document,
     root,
     posted,
+    scrolledTo,
     send: (message) => {
       for (const handler of windowListeners) handler({ data: message });
     },

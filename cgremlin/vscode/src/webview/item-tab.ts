@@ -18,7 +18,17 @@ import { escapeHtml, escapeAttribute, safeHref } from '../model/escape-html';
 import type { HostToWebview, ItemTabState, TabArtifact } from '../model/item-tab-protocol';
 import { partOfFocus, type TabPart } from '../model/item-tab-parts';
 import { post } from './item/channel';
-import { el, reconcile, setAttr, setClass, setDisabled, setHidden, setText } from './item/dom';
+import {
+  el,
+  idPart,
+  reconcile,
+  setAttr,
+  setClass,
+  setDisabled,
+  setHidden,
+  setId,
+  setText,
+} from './item/dom';
 import { createSwitcher, tabIdOf, type Switcher } from './item/tablist';
 import { createArtifactPane, patchArtifactPane } from './item/artifact-pane';
 import { createTicketPane, patchTicketPane } from './item/ticket-pane';
@@ -72,9 +82,12 @@ function frameOf(): Frame {
   const switcher = createSwitcher();
   const agentTabs = el('div', 'agent-tabs');
   const paneHost = el('div', 'pane-host');
-  for (const node of [header, group, switcher.node, agentTabs, paneHost]) {
-    container.appendChild(node);
-  }
+  // ONE sticky layer. The header and the switcher used to stick independently at `top: 0`, with
+  // the header painted over the tablist — so the tab's only navigation disappeared as soon as the
+  // document scrolled. They stick together or not at all.
+  const chrome = el('div', 'item-chrome');
+  for (const node of [header, group, switcher.node]) chrome.appendChild(node);
+  for (const node of [chrome, agentTabs, paneHost]) container.appendChild(node);
   frame = { titleText, needsYou, chips, buttons, reasons, switcher, agentTabs, paneHost };
   return frame;
 }
@@ -113,6 +126,11 @@ function patchHeader(current: ItemTabState, f: Frame): void {
  * §3: the reason used to be the disabled button's `title`, which is the one tooltip a browser
  * will not even show on a disabled control in every engine.
  */
+/** The reason line's id, so a disabled button can point at it with `aria-describedby`. */
+function reasonIdOf(id: string): string {
+  return `button-reason-${idPart(id)}`;
+}
+
 function patchButtons(current: ItemTabState, f: Frame): void {
   reconcile(
     f.buttons,
@@ -130,6 +148,9 @@ function patchButtons(current: ItemTabState, f: Frame): void {
       // §6: exactly one filled button. The rule decided the placement; the tab only draws it.
       setClass(node, `action ${button.placement}`);
       setDisabled(node as HTMLButtonElement, !button.enabled);
+      // The reason is ink under the row; this is how a screen reader reaches it from the control.
+      const described = !button.enabled && button.reason !== undefined;
+      setAttr(node, 'aria-describedby', described ? reasonIdOf(button.id) : null);
     },
   );
   const reasons = current.buttons.filter((b) => !b.enabled && b.reason !== undefined);
@@ -137,7 +158,10 @@ function patchButtons(current: ItemTabState, f: Frame): void {
     f.reasons,
     reasons.map((button) => ({ key: button.id, data: button })),
     () => el('p', 'button-reason'),
-    (node, button) => setText(node, `${button.label}: ${button.reason ?? ''}`),
+    (node, button) => {
+      setId(node, reasonIdOf(button.id));
+      setText(node, `${button.label}: ${button.reason ?? ''}`);
+    },
   );
 }
 
@@ -189,8 +213,10 @@ function patchPane(current: ItemTabState, f: Frame): void {
   if (pane.tabIndex !== -1) pane.tabIndex = -1;
   if (showing === part?.key) return;
   showing = part?.key ?? null;
-  // A screen reader must land on the new content, and a new document starts at its top.
-  pane.scrollTop = 0;
+  // A screen reader must land on the new content, and a new document starts at its top. It is the
+  // DOCUMENT that scrolls — `.pane` is not a scroll container, so setting its `scrollTop` moved
+  // nothing at all and a new part opened halfway down the last one's scroll.
+  window.scrollTo(0, 0);
   pane.focus();
 }
 
@@ -203,7 +229,7 @@ function createPane(part: TabPart): HTMLElement {
 function patchPaneOf(pane: HTMLElement, part: TabPart, current: ItemTabState): void {
   const focus = part.focus;
   if (focus.kind === 'ticket') {
-    if (current.ticket !== null) patchTicketPane(pane, current.ticket);
+    patchTicketPane(pane, current.ticket, current.ticketError);
     return;
   }
   if (focus.kind === 'pr') {

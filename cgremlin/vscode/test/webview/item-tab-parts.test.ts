@@ -98,6 +98,45 @@ describe('the parts are a real tablist', () => {
   });
 });
 
+describe('the tablist survives a scroll', () => {
+  it('draws the header, the action row and the tablist inside ONE sticky container', () => {
+    webview.render(state());
+    const chrome = dom.document.body.byClass('item-chrome')[0];
+    expect(chrome).toBeDefined();
+    expect(chrome.children.map((c) => c.className)).toEqual([
+      'item-header',
+      'button-group',
+      'part-switcher',
+    ]);
+    expect(tablist()?.parentNode).toBe(chrome);
+  });
+});
+
+describe('the selected tab is on screen at 400px', () => {
+  it('scrolls it into view when the selection changes, and not otherwise', () => {
+    webview.render(state({ focus: { kind: 'ticket' } }));
+    const qa = () => tabs()[0];
+    const before = qa().scrolledIntoView;
+    webview.render(state());
+    expect(qa().scrolledIntoView).toBe(before + 1);
+    // A re-render over the same selection leaves a hand-scrolled strip where the user put it.
+    webview.render(state());
+    expect(qa().scrolledIntoView).toBe(before + 1);
+  });
+});
+
+describe('a new part starts at the top of the document', () => {
+  it('scrolls the DOCUMENT, because the pane is not what scrolls', () => {
+    webview.render(state({ focus: { kind: 'ticket' } }));
+    const before = dom.scrolledTo.length;
+    webview.render(state());
+    expect(dom.scrolledTo.slice(before)).toEqual([[0, 0]]);
+    // Staying on the same part leaves the reader where they were.
+    webview.render(state());
+    expect(dom.scrolledTo.slice(before)).toHaveLength(1);
+  });
+});
+
 describe('the keyboard model is roving, and arrow-select acts', () => {
   it('ArrowRight moves to the next part and selects it', () => {
     webview.render(state());
@@ -151,6 +190,40 @@ describe('§6 the action row draws one filled button', () => {
       'action primary',
       'action inline',
     ]);
+  });
+});
+
+describe('§3 a disabled button names its reason to a screen reader', () => {
+  it('points the button at the reason line under the row', () => {
+    webview.render(
+      state({
+        buttons: [
+          {
+            id: 'cgremlin.chat',
+            label: 'Chat',
+            enabled: false,
+            placement: 'inline',
+            reason: 'It is still triaging them.',
+          },
+        ],
+      } as unknown as Partial<ItemTabState>),
+    );
+    const button = dom.document.body.byClass('buttons')[0].children[0];
+    const reason = dom.document.body.byClass('button-reason')[0];
+    expect(reason.id).not.toBe('');
+    expect(button.getAttribute('aria-describedby')).toBe(reason.id);
+  });
+
+  it('describes nothing where the button is enabled', () => {
+    webview.render(
+      state({
+        buttons: [
+          { id: 'cgremlin.chat', label: 'Chat', enabled: true, placement: 'inline' },
+        ],
+      } as unknown as Partial<ItemTabState>),
+    );
+    const button = dom.document.body.byClass('buttons')[0].children[0];
+    expect(button.getAttribute('aria-describedby')).toBeNull();
   });
 });
 

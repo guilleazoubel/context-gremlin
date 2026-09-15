@@ -39,11 +39,22 @@ describe('§7 the reading measure', () => {
     }
     expect(css).toMatch(/max-width:\s*72ch/);
     expect(block('body')).toMatch(/line-height:\s*1\.6/);
+    // §7's spacing scale is `2 4 8 12 20`, and the body's own padding was off it.
+    expect(block('body')).toMatch(/padding:\s*0 12px 20px/);
   });
 
   it('lets tables and code opt out of the measure and scroll instead', () => {
     expect(css).toMatch(/max-width:\s*none/);
     expect(css).toMatch(/overflow-x:\s*auto/);
+  });
+
+  it('scrolls a wide table inside its own block, and breaks a long link anywhere', () => {
+    // `overflow-x` on a `display: table` element establishes no scroll container, so the five
+    // column findings table used to push the whole document sideways at 400px.
+    expect(block('.artifact-body .table-scroll,\n.artifact-body pre')).toMatch(
+      /overflow-x:\s*auto/,
+    );
+    expect(css).toMatch(/overflow-wrap:\s*anywhere/);
   });
 });
 
@@ -61,12 +72,35 @@ describe('§5b the code-block background applies to code, and only to code', () 
   });
 });
 
-describe('§2 the switcher is one sticky, scrollable line', () => {
-  it('never wraps, scrolls sideways, and sticks under the action row', () => {
+describe('§2 the switcher is one scrollable line inside the sticky chrome', () => {
+  it('never wraps and scrolls sideways', () => {
     const rule = block('.part-switcher');
-    expect(rule).toMatch(/position:\s*sticky/);
     expect(rule).toMatch(/overflow-x:\s*auto/);
     expect(rule).toMatch(/flex-wrap:\s*nowrap|white-space:\s*nowrap/);
+  });
+
+  /**
+   * The severe defect: the header and the switcher were BOTH `position: sticky; top: 0`, with the
+   * header at the higher `z-index` — so the tablist was painted under the header and vanished the
+   * moment you scrolled, taking the tab's only navigation with it. There is one sticky layer now,
+   * and it holds the header, the action row and the tablist together.
+   */
+  it('has exactly one sticky layer, and it is the chrome', () => {
+    expect(css.match(/position:\s*sticky/g)).toHaveLength(1);
+    expect(block('.item-chrome')).toMatch(/position:\s*sticky/);
+    expect(block('.item-chrome')).toMatch(/top:\s*0/);
+    expect(block('.item-header')).not.toMatch(/position:\s*sticky/);
+    expect(block('.part-switcher')).not.toMatch(/position:\s*sticky/);
+  });
+
+  it('shows a scroll affordance under an overlay scrollbar, and caps one long tab', () => {
+    const rule = block('.part-switcher');
+    // Scroll-attached shadows: they appear only where the strip actually overflows, which is the
+    // affordance macOS overlay scrollbars do not give.
+    expect(rule).toMatch(/background-attachment:\s*local/);
+    // One `other` artifact with a long filename may not eat the whole strip.
+    expect(block('.part-tab')).toMatch(/max-width:/);
+    expect(block('.part-tab')).toMatch(/text-overflow:\s*ellipsis/);
   });
 
   it('marks the selected tab with a 2px focusBorder rule', () => {
@@ -90,5 +124,12 @@ describe('§3 the verdict strip carries its tone', () => {
     expect(css).toContain('--vscode-errorForeground');
     expect(css).toContain('--vscode-notificationsWarningIcon-foreground');
     expect(css).toMatch(/color-mix\(in srgb, var\(--verdict-tone\) 10%, transparent\)/);
+  });
+});
+
+describe('a jump inside a review clears the sticky chrome', () => {
+  it('gives the anchors and the headings a scroll margin the chrome’s height', () => {
+    expect(css).toMatch(/--sticky-chrome:/);
+    expect(css).toMatch(/scroll-margin-top:\s*var\(--sticky-chrome\)/);
   });
 });

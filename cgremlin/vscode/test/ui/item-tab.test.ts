@@ -625,6 +625,44 @@ describe('§6 the action row', () => {
     }
   });
 
+  /**
+   * The HB-1489 row: every PR has landed, so the ladder offers nothing and the RULE promotes Chat
+   * to the item's one click. The tab used to re-add Chat as `inline` AFTER the rule had already
+   * spent `primaryTaken` on it, so the action row rendered with zero filled buttons.
+   */
+  it('honours the rule’s placement for Chat, which is sometimes the one primary', () => {
+    const landed = {
+      itemId: 'ticket:HB-1489',
+      title: 'HB-1489',
+      needsYou: false,
+      lists: ['myWork'],
+      chips: [],
+      focus: { kind: 'ticket' },
+      selectedSessionId: 's1',
+      agents: [
+        {
+          sessionId: 's1',
+          mode: 'review',
+          phase: 'reviewing',
+          running: false,
+          needsYou: false,
+          claimed: false,
+          glyph: '',
+          primaryArtifact: null,
+          artifacts: [],
+        },
+      ],
+      prs: [{ repo: 'acme/web', number: 1489, state: 'merged', isMine: true, isDraft: false }],
+      ticket: null,
+      ticketError: null,
+      buttons: [],
+      parts: [],
+    } as unknown as ItemTabState;
+    const buttons = buttonsFor(landed);
+    expect(buttons.filter((b) => b.placement === 'primary')).toHaveLength(1);
+    expect(buttons[0].id).toBe('cgremlin.chat');
+  });
+
   it('says WHY chat is shut, in the one case it is drawn shut', () => {
     const chat = buttonsFor(tabStateOf('pr:acme/web#200', 'respond-acme-web-200')).find(
       (b) => b.id === 'cgremlin.chat',

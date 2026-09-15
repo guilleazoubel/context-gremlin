@@ -16,6 +16,7 @@ import { renderInline } from '../markdown';
 import { el, reconcile, setHidden, setHtml, setText } from './dom';
 
 interface Parts {
+  error: HTMLElement;
   meta: HTMLElement;
   description: HTMLElement;
   newest: HTMLElement;
@@ -48,6 +49,8 @@ export function createTicketPane(): HTMLElement {
   earlier.appendChild(earlierSummary);
   earlier.appendChild(earlierList);
   const parts: Parts = {
+    // The failed read, where there was one. It is the whole pane in that case.
+    error: el('p', 'error'),
     meta: el('p', 'ticket-meta'),
     description: el('div', 'ticket-description'),
     // §1: the earlier comments read ABOVE the newest, so the column runs oldest to newest.
@@ -56,6 +59,7 @@ export function createTicketPane(): HTMLElement {
     earlierList,
     newest: el('div', 'newest-comment'),
   };
+  pane.appendChild(parts.error);
   pane.appendChild(parts.meta);
   pane.appendChild(parts.description);
   pane.appendChild(parts.earlier);
@@ -75,9 +79,28 @@ function metaOf(ticket: TabTicket): string {
   return who === '' ? ticket.status : `${ticket.status} · ${who}`;
 }
 
-export function patchTicketPane(pane: HTMLElement, ticket: TabTicket): void {
+/**
+ * The ticket, or — where the host could not read it — the reason, which IS the pane.
+ *
+ * `ticketError` used to reach the state and stop there: the Ticket part was dropped and nothing
+ * said why, so a Jira outage looked like an item with no ticket.
+ */
+export function patchTicketPane(
+  pane: HTMLElement,
+  ticket: TabTicket | null,
+  error: string | null,
+): void {
   const parts = PARTS.get(pane);
   if (parts === undefined) return;
+  setHidden(parts.error, error === null);
+  setText(parts.error, error ?? '');
+  for (const node of [parts.meta, parts.description, parts.newest]) {
+    setHidden(node, ticket === null);
+  }
+  if (ticket === null) {
+    setHidden(parts.earlier, true);
+    return;
+  }
   setText(parts.meta, metaOf(ticket));
   setHtml(parts.description, renderInline(ticket.descriptionText ?? ''));
 

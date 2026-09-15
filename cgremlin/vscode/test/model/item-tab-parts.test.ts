@@ -72,6 +72,27 @@ describe('partsOf — the selected agent’s artifacts, then the ticket, then on
     expect(partsOf(one)[4].focus).toEqual({ kind: 'pr', repo: 'acme/web', number: 2180 });
   });
 
+  /**
+   * §1 asked for a FIXED order with a separately chosen opening pane. The order was
+   * `orderArtifacts`, which hoists the PRIMARY to index 0 and leaves same-role files in the
+   * mtime order the host listed them in — so a tab's POSITION moved between items and between
+   * renders, and `Review` was the second tab on one item and the first on the next.
+   */
+  it('orders the tabs by role rank alone, never by mtime', () => {
+    const newestFirst = partsOf(state(agent(['REVIEW-v2.md', 'REVIEW.md', 'BRIEF.md'])));
+    const oldestFirst = partsOf(state(agent(['BRIEF.md', 'REVIEW.md', 'REVIEW-v2.md'])));
+    const named = (parts: ReturnType<typeof partsOf>): string[] =>
+      parts.map((part) => (part.focus as { name: string }).name);
+    expect(named(newestFirst)).toEqual(named(oldestFirst));
+  });
+
+  it('keeps the same relative order for two items with different artifact sets', () => {
+    const verified = partsOf(state(agent(['BRIEF.md', 'QA.md', 'REVIEW.md']))).map((p) => p.label);
+    const reviewed = partsOf(state(agent(['BRIEF.md', 'REVIEW.md']))).map((p) => p.label);
+    expect(verified).toEqual(['QA', 'Review', 'Brief']);
+    expect(reviewed).toEqual(verified.filter((label) => label !== 'QA'));
+  });
+
   it('gives every part a distinct key, so the tablist reconciles by identity', () => {
     const parts = partsOf(
       state(agent(['REVIEW.md']), { ticket: { key: 'HB-1' } as never }),

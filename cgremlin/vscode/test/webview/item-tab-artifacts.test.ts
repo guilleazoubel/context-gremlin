@@ -118,3 +118,55 @@ describe('the tab never presents the brief as the review', () => {
     expect(dom.document.body.byClass('artifact-body')).toHaveLength(1);
   });
 });
+
+/**
+ * §7 budgets one 11px line for the mtime and the pane printed none, so nothing on screen said
+ * whether a review was written five minutes ago or last month — which is the first thing a reader
+ * needs from a document an agent wrote while they were away.
+ */
+describe('the pane says what this document is and when it was written', () => {
+  const written = (agoMs: number): TabAgent => {
+    const one = agent(['REVIEW.md'], { 'REVIEW.md': REVIEW });
+    one.artifacts[0].mtime = new Date(Date.now() - agoMs).toISOString();
+    return one;
+  };
+
+  it('prints the role label and a relative mtime above the body', () => {
+    webview.render(state(written(3 * 60 * 60 * 1000)));
+    expect(dom.document.body.byClass('artifact-meta')[0]?.textContent).toBe('Review · 3h ago');
+  });
+
+  it('prints the label alone where the engine listed no mtime', () => {
+    const one = agent(['REVIEW.md'], { 'REVIEW.md': REVIEW });
+    one.artifacts[0].mtime = '';
+    webview.render(state(one));
+    expect(dom.document.body.byClass('artifact-meta')[0]?.textContent).toBe('Review');
+  });
+});
+
+/**
+ * §7 at 400px: `overflow-x: auto` on a `display: table` element creates no scroll container at
+ * all, so the five-column findings table and a 100-character permalink pushed the whole document
+ * sideways. The table gets a real scrolling block; the prose may break a link anywhere.
+ */
+describe('a wide table scrolls itself rather than the document', () => {
+  const TABLE = [
+    '# Review',
+    '',
+    '| # | Severity | Where | What | Status |',
+    '| --- | --- | --- | --- | --- |',
+    '| 1 | Critical | `a.ts:8` | dropped | open |',
+    '',
+    'See https://github.com/acme/web/blob/6f1c0d2e4b9a8c7d5e3f1a2b4c6d8e0f/src/a.ts#L88-L120',
+    '',
+  ].join('\n');
+
+  it('wraps the table in a scrolling block of its own', () => {
+    webview.render(state(agent(['REVIEW.md'], { 'REVIEW.md': TABLE })));
+    const body = dom.document.body.byClass('artifact-body')[0];
+    const table = body.find((el) => el.tagName === 'TABLE');
+    expect(table).toBeDefined();
+    expect(table?.parentNode?.className).toBe('table-scroll');
+    expect(body.byClass('table-scroll')).toHaveLength(1);
+  });
+});
