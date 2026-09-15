@@ -10,6 +10,7 @@
  *    `itemPathOf` from the item's id, never interpolated by hand, and a *child* click uses that
  *    child's own path — a PR child of a `ticket:` item opens `/items/pr/o/r/n`.
  */
+import { prRefOf } from '../model/row-composition';
 import { engineErrorText, type CoreClient, type HttpResult } from '../core-client';
 import { refreshBlockedMessage } from '../model/engine-trouble';
 import { readTitle, writeTitle } from '../model/item-title';
@@ -225,7 +226,7 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
         );
         return;
       }
-      const path = itemPathOf(`pr:${pr.repo}#${pr.number}`);
+      const path = itemPathOf(prRefOf(pr));
       if (path === null) return;
       panel.setPendingStart(item.id, 'respond');
       if (!surface(await send(() => client.startAgent(path, { mode: 'respond' })))) {
@@ -283,7 +284,7 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
       const pr =
         childId === null
           ? item.prs[0]
-          : (item.prs.find((candidate) => `pr:${candidate.repo}#${candidate.number}` === childId) ??
+          : (item.prs.find((candidate) => prRefOf(candidate) === childId) ??
             item.prs[0]);
       if (pr === undefined) return;
       await host.openExternal(pr.url);

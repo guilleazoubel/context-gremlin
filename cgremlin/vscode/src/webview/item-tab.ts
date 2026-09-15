@@ -18,6 +18,7 @@ import type {
   TabPr,
 } from '../model/item-tab-protocol';
 import { renderArtifact } from './markdown';
+import { prLabel } from '../model/row-composition';
 import { BRIEF_ONLY_NOTICE, artifactLabel, briefOnly, orderArtifacts } from '../model/artifact-labels';
 
 declare function acquireVsCodeApi(): { postMessage(message: unknown): void };
@@ -158,7 +159,7 @@ function agentFocus(agent: TabAgent): HTMLElement {
 
 function prFocus(pr: TabPr): HTMLElement {
   const box = el('section', 'focus pr-focus');
-  box.appendChild(el('h2', undefined, `${pr.repo}#${pr.number} — ${pr.title ?? ''}`.trim()));
+  box.appendChild(el('h2', undefined, `${prLabel(pr)} — ${pr.title ?? ''}`.trim()));
   const facts = el('ul', 'pr-facts');
   const add = (label: string, value: string): void => {
     if (value === '') return;
