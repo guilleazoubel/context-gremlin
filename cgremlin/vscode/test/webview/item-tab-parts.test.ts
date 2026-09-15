@@ -193,6 +193,40 @@ describe('§6 the action row draws one filled button', () => {
   });
 });
 
+describe('§3 a disabled button names its reason to a screen reader', () => {
+  it('points the button at the reason line under the row', () => {
+    webview.render(
+      state({
+        buttons: [
+          {
+            id: 'cgremlin.chat',
+            label: 'Chat',
+            enabled: false,
+            placement: 'inline',
+            reason: 'It is still triaging them.',
+          },
+        ],
+      } as unknown as Partial<ItemTabState>),
+    );
+    const button = dom.document.body.byClass('buttons')[0].children[0];
+    const reason = dom.document.body.byClass('button-reason')[0];
+    expect(reason.id).not.toBe('');
+    expect(button.getAttribute('aria-describedby')).toBe(reason.id);
+  });
+
+  it('describes nothing where the button is enabled', () => {
+    webview.render(
+      state({
+        buttons: [
+          { id: 'cgremlin.chat', label: 'Chat', enabled: true, placement: 'inline' },
+        ],
+      } as unknown as Partial<ItemTabState>),
+    );
+    const button = dom.document.body.byClass('buttons')[0].children[0];
+    expect(button.getAttribute('aria-describedby')).toBeNull();
+  });
+});
+
 describe('MG-17e the same data mutates nothing', () => {
   it('renders twice over identical data and writes nothing at all', () => {
     webview.render(state());

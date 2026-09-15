@@ -17,7 +17,7 @@ body {
    */
   --sticky-chrome: 132px;
   margin: 0;
-  padding: 0 16px 32px;
+  padding: 0 12px 20px;
   font-family: var(--vscode-font-family);
   font-size: var(--vscode-font-size, 13px);
   color: var(--vscode-foreground);

@@ -39,6 +39,8 @@ describe('§7 the reading measure', () => {
     }
     expect(css).toMatch(/max-width:\s*72ch/);
     expect(block('body')).toMatch(/line-height:\s*1\.6/);
+    // §7's spacing scale is `2 4 8 12 20`, and the body's own padding was off it.
+    expect(block('body')).toMatch(/padding:\s*0 12px 20px/);
   });
 
   it('lets tables and code opt out of the measure and scroll instead', () => {
