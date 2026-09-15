@@ -11,6 +11,7 @@ import { AttentionService, PrSourceAdapter, SessionSourceAdapter } from '../../s
 import { WorkItemService } from '../../src/work/work-item-service';
 import { createInventoryHarness, type InventoryHarness } from '../support/inventory-harness';
 import { RespondSessionFactory } from '../../src/pipeline/respond-session-factory';
+import { QaSessionFactory } from '../../src/pipeline/qa-session-factory';
 import { FIXED_NOW, SESSIONS_DIR, WORKTREES_DIR } from '../support/pipeline-harness';
 import type { JiraScanReport } from '../../src/jira/jira-store';
 import type { JiraIssueDetail } from '../../src/jira/jira-source';
@@ -145,6 +146,14 @@ async function start(opts: { withWorkItems?: boolean } = {}): Promise<void> {
       events: ih.h.events,
       worktreesDir: WORKTREES_DIR,
       me: 'me-user',
+    }),
+    qaFactory: new QaSessionFactory({
+      gh: ih.gh,
+      store: ih.h.store,
+      workspace: ih.h.workspace,
+      events: ih.h.events,
+      worktreesDir: WORKTREES_DIR,
+      defaultBaseRef: 'origin/main',
     }),
     ...(opts.withWorkItems === false ? {} : { workItems }),
   });
@@ -824,5 +833,104 @@ describe('GET /items/session/:id resolves for ANY session the store knows', () =
     const res = await request('GET', '/items/session/never-existed-20260915-000000');
     expect(res.status).toBe(404);
     expect(res.body.error).toContain('No work item found');
+  });
+});
+
+describe("POST /items/<path>/agents { mode: 'qa' } (§3)", () => {
+  const MERGE_SHA = 'abc1234def567890abc1234def567890abc12345';
+
+  function mergedPrViewJson(over: Record<string, unknown> = {}) {
+    return JSON.stringify({
+      number: 11,
+      title: 'PR #11',
+      author: { login: 'me-user' },
+      headRefName: 'feature/HB-6211-x',
+      headRefOid: 'a'.repeat(40),
+      baseRefName: 'main',
+      url: 'https://github.com/acme/app/pull/11',
+      state: 'MERGED',
+      isDraft: false,
+      reviewDecision: 'APPROVED',
+      mergedAt: '2026-09-09T00:00:00.000Z',
+      closedAt: '2026-09-09T00:00:00.000Z',
+      latestReviews: [],
+      statusCheckRollup: [],
+      mergeCommit: { oid: MERGE_SHA },
+      files: [{ path: 'src/a.tsx' }],
+      ...over,
+    });
+  }
+
+  it('creates AND starts the verification, exactly like respond', async () => {
+    await start();
+    await scan([prFixture(11, 'me-user')]);
+    ih.gh.queueResponse({ stdout: mergedPrViewJson() });
+    const res = await request('POST', '/items/pr/acme/app/11/agents', { mode: 'qa' });
+    expect(res.status).toBe(202);
+    expect(res.body).toMatchObject({ created: true, started: true });
+    expect(res.body.session.mode).toBe('qa');
+    expect(res.body.session.stageStatus).toBe('verifying');
+    expect(runStarts).toEqual(['verify']);
+    const brief = await ih.h.fs.readFile(`${SESSIONS_DIR}/${res.body.session.id}/BRIEF.md`);
+    expect(brief).toContain('# QA VERIFICATION — HB-6211');
+  });
+
+  it("start:false creates the session, writes BRIEF.md and starts NO run (MG-26)", async () => {
+    await start();
+    await scan([prFixture(11, 'me-user')]);
+    ih.gh.queueResponse({ stdout: mergedPrViewJson() });
+    const res = await request('POST', '/items/pr/acme/app/11/agents', { mode: 'qa', start: false });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ created: true, started: false });
+    expect(res.body.session.stageStatus).toBe('queued');
+    expect(runStarts).toEqual([]);
+    expect(agentStarts).toBe(0);
+    expect(await ih.h.fs.readFile(`${SESSIONS_DIR}/${res.body.session.id}/BRIEF.md`)).toContain('# QA VERIFICATION');
+  });
+
+  it('a second POST never creates a second session and re-runs instead', async () => {
+    await start();
+    await scan([prFixture(11, 'me-user')]);
+    ih.gh.queueResponse({ stdout: mergedPrViewJson() });
+    const first = await request('POST', '/items/pr/acme/app/11/agents', { mode: 'qa' });
+    await ih.h.finishRun({ 'QA.md': '## QA Verdict\n- Verdict: ✅ Ready to deploy\n' }, { code: 0, signal: null });
+    const second = await request('POST', '/items/pr/acme/app/11/agents', { mode: 'qa' });
+    expect(second.body).toMatchObject({ created: false, started: true });
+    expect(second.body.session.id).toBe(first.body.session.id);
+    expect((await ih.h.store.list()).filter((s) => s.mode === 'qa').length).toBe(1);
+  });
+
+  it('a run in flight and a live claim each refuse with a reason, never a second session', async () => {
+    await start();
+    await scan([prFixture(11, 'me-user')]);
+    ih.gh.queueResponse({ stdout: mergedPrViewJson() });
+    await request('POST', '/items/pr/acme/app/11/agents', { mode: 'qa' });
+    const inFlight = await request('POST', '/items/pr/acme/app/11/agents', { mode: 'qa' });
+    expect(inFlight.status).toBe(200);
+    expect(inFlight.body).toMatchObject({ created: false, started: false });
+    expect(inFlight.body.reason).toContain('in flight');
+
+    await ih.h.finishRun({ 'QA.md': '## QA Verdict\n- Verdict: ✅ Ready to deploy\n' }, { code: 0, signal: null });
+    await ih.h.service.claimConversation(inFlight.body.session.id);
+    const claimed = await request('POST', '/items/pr/acme/app/11/agents', { mode: 'qa' });
+    expect(claimed.body).toMatchObject({ created: false, started: false });
+    expect(claimed.body.reason).toContain('claim');
+  });
+
+  it('R70: an UNMERGED PR is refused, and nothing is created', async () => {
+    await start();
+    await scan([prFixture(11, 'me-user')]);
+    ih.gh.queueResponse({ stdout: mergedPrViewJson({ state: 'OPEN', mergeCommit: null }) });
+    const res = await request('POST', '/items/pr/acme/app/11/agents', { mode: 'qa' });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toContain('not merged');
+    expect((await ih.h.store.list()).filter((s) => s.mode === 'qa').length).toBe(0);
+  });
+
+  it("mode 'qa' is accepted by the request validator; a bogus mode is still a 400", async () => {
+    await start();
+    await scan([prFixture(11, 'me-user')]);
+    expect((await request('POST', '/items/pr/acme/app/11/agents', { mode: 'nope' })).status).toBe(400);
+    expect((await request('POST', '/items/pr/acme/app/11/agents', { mode: 'qa', start: 'yes' })).status).toBe(400);
   });
 });

@@ -9,17 +9,22 @@ import { WorkspaceManager } from '../workspace/workspace-manager';
 import { EngineEvents } from '../engine/events';
 import { KeyedLock } from '../api/keyed-lock';
 import { StageRunner } from '../pipeline/stage-runner';
-import { PipelineService } from '../pipeline/pipeline-service';
+import { PipelineService, isClaimed } from '../pipeline/pipeline-service';
 import { ReviewSessionFactory } from '../pipeline/review-session-factory';
 import { ReconciliationTick } from '../discovery/reconciliation';
 import { DiscoveryScheduler, type Clock, type Tickable } from '../discovery/scheduler';
 import { InventoryScanner, type ScanReport } from '../inventory/inventory-scanner';
 import { JiraRestSource } from '../jira/jira-rest-source';
 import { JiraScanner } from '../jira/jira-scanner';
-import { JiraStore, TicketDetailCache } from '../jira/jira-store';
+import { JiraStore, TicketDetailCache, type TicketDetailResult } from '../jira/jira-store';
 import { ReviewThreadScanner, ReviewThreadStore, threadCacheKey, type ReviewThreadCache } from '../gh/review-threads';
-import { PrStateResolver, PrStateStore } from '../gh/pr-state';
+import { PrStateResolver, PrStateStore, prStateKey } from '../gh/pr-state';
 import { RespondSessionFactory } from '../pipeline/respond-session-factory';
+import { QaSessionFactory } from '../pipeline/qa-session-factory';
+import { QaTriggerLeg, doneCategoryWarnings } from '../qa/qa-trigger';
+import { awaitRunStart } from '../pipeline/run-start';
+import { QaTriggerStore } from '../qa/qa-trigger-store';
+import type { WorkItem as WorkItemForQa } from '../work/work-item';
 import { PR_VIEW_FIELDS, failingChecks, parsePrView } from '../gh/pr-view';
 import type { JiraSource } from '../jira/jira-source';
 import { InventoryStore } from '../inventory/inventory-store';
@@ -77,6 +82,14 @@ export interface Engine {
    * wiring with no `close()` answers 404 rather than accepting a stop it could not perform.
    */
   shutdown: ShutdownController;
+  /**
+   * E7(a) — the configuration trap the QA trigger cannot fix: a
+   * `jira.qaStatuses` entry Jira classifies as `Done` never reaches the
+   * snapshot, so the trigger can never fire for it. Read from the cached
+   * snapshot at boot and logged; the leg reports the same text on
+   * `ScanReport.qa.warnings`.
+   */
+  qaDoneStatusWarnings: () => Promise<string[]>;
 }
 
 export interface TickableParts {
@@ -104,6 +117,41 @@ export interface BuildEngineOptions {
    * does). `null` forces R35's `notConfigured`.
    */
   jiraSource?: JiraSource | null;
+  /**
+   * Overrides the ticket-detail reader — a test seam only, so a brief that
+   * depends on the ticket text can be asserted without standing up a Jira.
+   */
+  ticketDetail?: { detail(key: string): Promise<TicketDetailResult> };
+}
+
+/** The artifacts an earlier session on this ticket may have left behind, in the order a reader wants them. */
+const QA_PRIOR_ARTIFACTS = ['REVIEW.md', 'FINDINGS.md', 'PLAN.md', 'COMMENTS.md'] as const;
+
+/**
+ * The ABSOLUTE paths of every artifact that ACTUALLY EXISTS in a session
+ * whose `lineage.ticket` is this ticket — the QA agent's "what we already
+ * know". Existence-checked, so the brief never hands it a path into nothing,
+ * and tolerant: an unreadable session store simply contributes nothing
+ * rather than failing the run.
+ */
+async function priorArtifactsFor(
+  fs: SessionFileSystem,
+  store: SessionStore,
+  sessionsDir: string,
+  ticket: string | null,
+  selfId: string,
+): Promise<string[]> {
+  if (ticket === null) return [];
+  const sessions = await store.list().catch(() => []);
+  const paths: string[] = [];
+  for (const session of sessions) {
+    if (session.id === selfId || session.lineage.ticket !== ticket) continue;
+    for (const name of QA_PRIOR_ARTIFACTS) {
+      const path = `${sessionsDir}/${session.id}/${name}`;
+      if (await fs.exists(path)) paths.push(path);
+    }
+  }
+  return paths;
 }
 
 /**
@@ -163,6 +211,7 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
       worktreesDir,
       defaultBaseRef: config.defaultBaseRef,
       reviewSkillCommand: config.reviewSkillCommand,
+      qaSkillCommand: config.qaSkillCommand,
       includeLiveUiCheck: config.includeLiveUiCheck,
       runnerKind: adapters.runnerKind,
       humanTurnTtlMs: config.humanTurnTtlMs,
@@ -219,6 +268,48 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
         return { ...empty, threads };
       }
     },
+    /**
+     * Phase 15 — everything the QA brief carries beyond the ticket. The user's
+     * ask was that the verification agent "have access to the jira with the
+     * ACs, the pr, and our review/findings/development files for reference",
+     * so: the merged PR from the pr-state cache (NO new gh call — that cache
+     * is exactly what survives a PR leaving the open-PR inventory), and the
+     * ABSOLUTE PATHS of every artifact an earlier session on this same ticket
+     * actually wrote. Paths, not contents: the agent reads what it needs and
+     * the brief stays inside its cap. A file that is not there is simply
+     * absent — never a path the agent would follow into nothing.
+     */
+    qaContext: async (session) => {
+      const pr = session.pr;
+      const base = {
+        prRepo: pr?.repo ?? null,
+        prNumber: pr?.number ?? null,
+        // The factory records the MERGE commit here — the thing QA is
+        // supposed to be running.
+        mergeSha: pr?.headSha ?? null,
+      };
+      const cache = pr === null ? {} : await prStateResolver.cached().catch(() => ({}));
+      const entry = pr === null ? undefined : cache[prStateKey(pr.repo, pr.number)];
+      const change =
+        pr === null
+          ? null
+          : {
+              title: entry?.title ?? pr.title,
+              author: entry?.author ?? pr.author,
+              mergedAt: entry?.mergedAt ?? null,
+              changedFiles: entry?.changedFiles ?? null,
+              additions: entry?.additions ?? null,
+              deletions: entry?.deletions ?? null,
+              // The pr-state cache is a row, not a diff: the brief tells the
+              // agent the three ways to read the file list itself.
+              files: [],
+            };
+      return {
+        ...base,
+        change,
+        priorArtifacts: await priorArtifactsFor(adapters.fs, store, sessionsDir, session.lineage.ticket, session.id),
+      };
+    },
     tickets: {
       forBrief: async (key) => {
         const { ticket } = await ticketDetail.detail(key);
@@ -241,6 +332,15 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     events,
     worktreesDir,
     me: config.me,
+    now: adapters.now,
+  });
+  const qaFactory = new QaSessionFactory({
+    gh: adapters.gh,
+    store,
+    workspace,
+    events,
+    worktreesDir,
+    defaultBaseRef: config.defaultBaseRef,
     now: adapters.now,
   });
   const factory = new ReviewSessionFactory({
@@ -271,11 +371,13 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
           extraFields: config.jira.extraFields,
         })
       : null);
-  const ticketDetail = new TicketDetailCache({
-    source: jiraSource,
-    snapshot: () => jiraScanner.lastReport(),
-    now: adapters.now,
-  });
+  const ticketDetail =
+    opts.ticketDetail ??
+    new TicketDetailCache({
+      source: jiraSource,
+      snapshot: () => jiraScanner.lastReport(),
+      now: adapters.now,
+    });
   const jiraProjectKeys = config.jira?.projectKeys ?? [];
   /**
    * R28 — every ticket key a PR branch or a session's lineage named, so the
@@ -325,6 +427,66 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     projectKeys: config.jira?.projectKeys ?? [],
     now: adapters.now,
   });
+  // Phase 15 — the QA verification leg. It reads work items through a THUNK
+  // because `workItems` is built after the scanner, and it takes the SAME
+  // `lock` the API server and the pipeline hold, on the same key
+  // `handleItemAgents` takes, so a tick and a manual POST cannot both create.
+  // Assigned once `workItems` exists, a few dozen lines below: the leg is a
+  // constructor argument of the scanner, which is built first.
+  let workItemsForQa: { list(): Promise<{ items: readonly WorkItemForQa[] }> } | null = null;
+  const qaTrigger = new QaTriggerLeg({
+    gh: adapters.gh,
+    store: new QaTriggerStore(adapters.fs, config.qaVerificationsPath!, adapters.now),
+    lock,
+    items: async () => (await workItemsForQa?.list())?.items ?? [],
+    jira: async () => {
+      const report = await jiraScanner?.lastReport();
+      return { ok: report?.kind === 'ok', me: report?.me ?? null };
+    },
+    config: {
+      autoVerify: config.qa.autoVerify,
+      maxAutoStartsPerTick: config.qa.maxAutoStartsPerTick,
+      maxAttemptsPerEntry: config.qa.maxAttemptsPerEntry,
+      scanBudgetMs: config.qa.scanBudgetMs,
+      backfillOnFirstRun: config.qa.backfillOnFirstRun,
+      qaStatuses: config.jira?.qaStatuses ?? [],
+    },
+    qaFor: (slug) => ({
+      hasUrl: config.environments[slug]?.qa?.url !== undefined,
+      hasTestIdentity: environment?.hasQaTestIdentity(`https://github.com/${slug}.git`) ?? false,
+    }),
+    qaHealth: async (slug) =>
+      (await environment?.qaHealth(`https://github.com/${slug}.git`)) ?? {
+        ok: false,
+        reason: 'no environment service is configured',
+      },
+    sessions: {
+      existingFor: async (ticket) => {
+        const session = await qaFactory.existingFor(ticket);
+        return session === null
+          ? null
+          : {
+              id: session.id,
+              stageStatus: session.stageStatus,
+              claimed: isClaimed(session, adapters.now?.() ?? new Date()),
+            };
+      },
+      activeSessionIds: () => pipeline.activeSessionIds(),
+    },
+    stopSession: async (id) => {
+      await pipeline.stop(id);
+    },
+    closeSession: async (id) => {
+      await pipeline.transition(id, 'closed');
+    },
+    qaRepos: () =>
+      Object.entries(config.environments)
+        .filter(([, env]) => env.qa?.url !== undefined)
+        .map(([slug]) => slug),
+    createSession: (ticket, slug, number) => qaFactory.createFromMergedPr(ticket, slug, number),
+    startRun: (id) => awaitRunStart(events, id, pipeline.runVerify(id)),
+    now: adapters.now,
+  });
   const scanner = new InventoryScanner({
     gh: adapters.gh,
     store,
@@ -343,6 +505,7 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     jira: jiraScanner,
     threads: threadScanner,
     prStates: prStateResolver,
+    qa: qaTrigger,
   });
 
   // The attention model: one adapter per source (R18), an ack store of its
@@ -394,6 +557,9 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     },
   });
 
+  // The thunk the QA leg reads work items through — see its declaration above.
+  workItemsForQa = workItems;
+
   const tickable = opts.makeTickable
     ? opts.makeTickable({ gh: adapters.gh, store, pipeline, events, lock, inventoryStore, scanner })
     : scanner;
@@ -424,6 +590,7 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     workItems,
     ticketDetail,
     respondFactory,
+    qaFactory,
     now: adapters.now,
     eventRing,
     lock,
@@ -433,5 +600,16 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     ...(environment ? { environment } : {}),
   });
 
-  return { server, scheduler, scanner, pipeline, events, store, lock, config, environment, attention, workItems, eventRing, engineInfo, shutdown };
+  /**
+   * E7(a) — read at BOOT, from the cached snapshot, so the trap that makes
+   * the QA trigger silently inert is said out loud somewhere a human looks.
+   * Tolerant: no cache, no Jira, no warning.
+   */
+  const qaDoneStatusWarnings = async (): Promise<string[]> => {
+    const report = await jiraScanner.lastReport().catch(() => null);
+    if (report === null || report.kind !== 'ok') return [];
+    return doneCategoryWarnings(config.jira?.qaStatuses ?? [], report.issues);
+  };
+
+  return { server, scheduler, scanner, pipeline, events, store, lock, config, environment, attention, workItems, eventRing, engineInfo, shutdown, qaDoneStatusWarnings };
 }

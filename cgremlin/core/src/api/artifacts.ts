@@ -30,6 +30,9 @@ const WORK_FALLBACK = 'BRIEF.md';
 // review session — open on the verdicts, fall back to the brief that listed
 // the threads while the agent is still triaging.
 const RESPOND_PREFERENCE = ['COMMENTS.md', 'BRIEF.md'] as const;
+// A qa session has one output and a fixed answer too — open on the verdict,
+// fall back to the brief while the agent is still verifying.
+const QA_PREFERENCE = ['QA.md', 'BRIEF.md'] as const;
 
 /**
  * R11: the core, not the UI, chooses the artifact a row opens. Pure over the
@@ -49,6 +52,10 @@ export function pickPrimaryArtifact(
 
   if (session.mode === 'respond') {
     return RESPOND_PREFERENCE.find((name) => byName.has(name)) ?? null;
+  }
+
+  if (session.mode === 'qa') {
+    return QA_PREFERENCE.find((name) => byName.has(name)) ?? null;
   }
 
   let best: { name: string; at: number } | null = null;

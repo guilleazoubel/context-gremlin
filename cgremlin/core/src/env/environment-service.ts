@@ -4,13 +4,18 @@ import type { GhRunner } from '../gh/gh-runner';
 import type { GitRunner } from '../git/git-runner';
 import type { KeyedLock } from '../api/keyed-lock';
 import type { CoreConfig, RepoEnvironment } from '../config/core-config';
-import { ClerkConfigSchema, redactBypassUrls } from '../config/core-config';
+import { ClerkConfigSchema, redactSecrets } from '../config/core-config';
 import { repoSlugFromUrl } from '../gh/repo-slug';
 import type { Session } from '../schema/session';
 import type { StageName } from '../schema/stage';
 import { PR_COMMENTS_FIELDS, parsePrComments } from '../gh/pr-view';
 import { parseVercelPreviewComment, pickPreviewProject } from './vercel-preview';
-import { EMPTY_ENVIRONMENT, type EnvironmentBriefContext } from '../pipeline/prompts';
+import {
+  EMPTY_ENVIRONMENT,
+  EMPTY_QA_ENVIRONMENT,
+  type EnvironmentBriefContext,
+  type QaEnvironmentBriefContext,
+} from '../pipeline/prompts';
 import {
   LocalAppPortBusyError,
   LocalAppPrereqError,
@@ -21,7 +26,12 @@ import {
   type LocalAppSetupStep,
 } from './local-app-runner';
 
-export { EMPTY_ENVIRONMENT, type EnvironmentBriefContext };
+export { EMPTY_ENVIRONMENT, EMPTY_QA_ENVIRONMENT, type EnvironmentBriefContext, type QaEnvironmentBriefContext };
+
+export interface QaHealth {
+  ok: boolean;
+  reason: string | null;
+}
 
 export interface LocalAppState {
   sessionId: string;
@@ -93,7 +103,7 @@ const STOPPED: LocalAppStatus = {
 };
 
 function unavailable(reason: string): LocalAppStatus {
-  return { ...STOPPED, state: 'unavailable', reason: redactBypassUrls(reason) };
+  return { ...STOPPED, state: 'unavailable', reason: redactSecrets(reason) };
 }
 
 function foreignListenerMessage(port: number, pid: number | undefined): string {
@@ -328,7 +338,7 @@ export class EnvironmentService {
   private async logTailOf(logPath: string | null, lines: number): Promise<string | null> {
     if (logPath === null) return null;
     const tail = await this.deps.local.tailLog(logPath, lines);
-    return tail === '' ? null : redactBypassUrls(tail);
+    return tail === '' ? null : redactSecrets(tail);
   }
 
   private async runningStatus(state: LocalAppState): Promise<LocalAppStatus> {
@@ -734,6 +744,84 @@ export class EnvironmentService {
     if (env.clerk !== undefined) {
       const clerk = ClerkConfigSchema.parse(env.clerk);
       ctx.clerk = { emailTemplate: clerk.testEmailTemplate, verificationCode: clerk.verificationCode };
+    }
+    return ctx;
+  }
+
+  // ---- QA (Phase 15) ----
+
+  /**
+   * One GET against `<qa.url><qa.healthPath>` within `qa.healthTimeoutMs`.
+   * Degrades, never throws (R5's posture): an unreachable QA becomes a
+   * REASON the brief states plainly, which the agent turns into a 🚧 Blocked
+   * verdict. There is deliberately no retry loop — a second attempt is a
+   * human click.
+   */
+  async qaHealth(repoUrl: string): Promise<QaHealth> {
+    const qa = this.environmentFor(repoUrl)?.qa;
+    if (qa === undefined) {
+      return { ok: false, reason: `no QA environment is configured for ${repoSlugFromUrl(repoUrl)}` };
+    }
+    const url = `${qa.url.replace(/\/$/, '')}${qa.healthPath}`;
+    try {
+      const health = await this.deps.local.healthcheck(url, {
+        timeoutMs: qa.healthTimeoutMs,
+        intervalMs: qa.healthTimeoutMs,
+        insecureTls: false,
+      });
+      if (health.ok) return { ok: true, reason: null };
+      return { ok: false, reason: redactSecrets(health.reason ?? `status ${health.status ?? '?'}`) };
+    } catch (err) {
+      return { ok: false, reason: redactSecrets((err as Error).message) };
+    }
+  }
+
+  /**
+   * Whether a TEST identity is configured for this repo's QA environment.
+   * The AUTOMATIC leg refuses to start without one: an unattended agent
+   * driving a shared app must be a known test account, and `auth:'none'`
+   * means nobody named one. A human clicking Verify is not bound by this —
+   * they can verify what is reachable signed out.
+   */
+  hasQaTestIdentity(repoUrl: string): boolean {
+    const env = this.environmentFor(repoUrl);
+    const qa = env?.qa;
+    if (env === undefined || qa === undefined) return false;
+    if (qa.auth === 'clerk-test') return env.clerk !== undefined;
+    if (qa.auth === 'vercel-bypass') return env.vercel?.bypassSecret !== undefined;
+    return false;
+  }
+
+  /** The `## QA environment` context (R14's gate: an unconfigured repo yields EMPTY). */
+  async qaBriefContext(session: Session): Promise<QaEnvironmentBriefContext> {
+    const repoUrl = session.workspace.repoUrl;
+    const env = this.environmentFor(repoUrl);
+    const qa = env?.qa;
+    if (env === undefined || qa === undefined) return { ...EMPTY_QA_ENVIRONMENT };
+
+    const health = await this.qaHealth(repoUrl);
+    const ctx: QaEnvironmentBriefContext = {
+      ...EMPTY_QA_ENVIRONMENT,
+      url: qa.url,
+      apiBaseUrl: qa.apiBaseUrl ?? qa.url,
+      auth: qa.auth,
+      featureFlags: qa.featureFlags,
+      posthog: qa.posthog ?? null,
+      unreachableReason: health.ok ? null : health.reason,
+    };
+    // The PATH only — the value never leaves the 0600 file (R74).
+    if (qa.auth === 'vercel-bypass' && env.vercel?.bypassSecret !== undefined) {
+      ctx.bypassSecretPath = `${this.deps.sessionsDir}/${session.id}/${BYPASS_SECRET_FILE}`;
+    }
+    if (qa.auth === 'clerk-test' && env.clerk !== undefined) {
+      const clerk = ClerkConfigSchema.parse(env.clerk);
+      // `{key}` is resolved HERE, to this session's id: the UI-check path
+      // leaves it to the agent to pick a name, but an unattended
+      // verification must not be able to collide with another run's account.
+      ctx.clerk = {
+        emailTemplate: clerk.testEmailTemplate.replace('{key}', session.id),
+        verificationCode: clerk.verificationCode,
+      };
     }
     return ctx;
   }

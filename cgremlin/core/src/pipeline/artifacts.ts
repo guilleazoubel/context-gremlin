@@ -1,5 +1,6 @@
 import type { SessionFileSystem } from '../fs/session-file-system';
 import type { AgentExitResult } from '../agent/agent-runner';
+import type { QaVerdict } from '../schema/session';
 
 export type PlanReviewStatus = 'approved' | 'unresolved' | 'missing';
 export interface RereviewSummary { resolved: number; total: number; newFindings: number }
@@ -64,8 +65,61 @@ export async function evaluateRereview(exit: AgentExitResult, fs: SessionFileSys
   return { outcome, summary: line === null ? null : parseRereviewSummary(line) };
 }
 
-export async function nextReviewVersion(fs: SessionFileSystem, sessionDir: string): Promise<number> {
+/** The first free `<stem>-v<N>.md` in `sessionDir`. */
+export async function nextVersion(fs: SessionFileSystem, sessionDir: string, stem: string): Promise<number> {
   let version = 1;
-  while (await fs.exists(`${sessionDir}/REVIEW-v${version}.md`)) version += 1;
+  while (await fs.exists(`${sessionDir}/${stem}-v${version}.md`)) version += 1;
   return version;
+}
+
+export async function nextReviewVersion(fs: SessionFileSystem, sessionDir: string): Promise<number> {
+  return nextVersion(fs, sessionDir, 'REVIEW');
+}
+
+const QA_VERDICT_HEADING = /^#{2,3} QA Verdict:?\s*$/gm;
+const VERDICT_LINE = /^\s*-\s*Verdict:\s*(✅|❌|🚧)/mu;
+
+/**
+ * The completion marker, twin of `parsePlanReviewStatus`: EXACTLY one
+ * `## QA Verdict` heading (two means a stale block from an earlier round is
+ * still present — never trust either, fail safe to 'missing'), read only to
+ * the next heading, and the glyph on the `- Verdict:` line decides. R79:
+ * 🚧 Blocked is a verdict in its own right; it maps to the `not_ready`
+ * PHASE in `evaluateQa`, not here.
+ */
+export function parseQaVerdict(qaText: string): QaVerdict | 'missing' {
+  const headings = [...qaText.matchAll(QA_VERDICT_HEADING)];
+  if (headings.length !== 1) return 'missing';
+  const start = headings[0].index ?? -1;
+  if (start < 0) return 'missing';
+  const rest = qaText.slice(start).split('\n').slice(1);
+  const end = rest.findIndex((l) => SECTION_END.test(l));
+  const section = (end < 0 ? rest : rest.slice(0, end)).join('\n');
+  const m = VERDICT_LINE.exec(section);
+  if (m === null) return 'missing';
+  return m[1] === '✅' ? 'ready' : m[1] === '❌' ? 'not_ready' : 'blocked';
+}
+
+export interface QaEvaluation {
+  outcome: 'ready' | 'not_ready' | 'failed';
+  verdict: QaVerdict | null;
+}
+
+/**
+ * A run counts only when it exited cleanly AND left a non-empty `QA.md` AND
+ * that file carries a parsable verdict — anything else is `failed`, so a
+ * half-written report never reads as a pass. R79 folds `blocked` into the
+ * `not_ready` phase: blocked means not ready AND needs me.
+ */
+export async function evaluateQa(
+  exit: AgentExitResult,
+  fs: SessionFileSystem,
+  sessionDir: string,
+): Promise<QaEvaluation> {
+  if (!exitedCleanly(exit)) return { outcome: 'failed', verdict: null };
+  const text = await readNonEmpty(fs, `${sessionDir}/QA.md`);
+  if (text === null) return { outcome: 'failed', verdict: null };
+  const verdict = parseQaVerdict(text);
+  if (verdict === 'missing') return { outcome: 'failed', verdict: null };
+  return { outcome: verdict === 'ready' ? 'ready' : 'not_ready', verdict };
 }

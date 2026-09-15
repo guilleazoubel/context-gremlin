@@ -26,9 +26,10 @@ import type { InventoryStore } from '../inventory/inventory-store';
 import { groupInventory, type Inventory, type InventoryEntry } from '../inventory/inventory';
 import type { ReviewSessionFactory, CandidatePR } from '../pipeline/review-session-factory';
 import type { RespondSessionFactory } from '../pipeline/respond-session-factory';
+import type { QaSessionFactory } from '../pipeline/qa-session-factory';
 import { isClaimed } from '../pipeline/pipeline-service';
 import type { EnvironmentService, LocalAppStatus } from '../env/environment-service';
-import { redactBypassUrls, redactCoreConfig, type CoreConfig } from '../config/core-config';
+import { redactSecrets, redactCoreConfig, type CoreConfig } from '../config/core-config';
 import { handleEventStream, type EventRing } from './event-stream';
 import type { WorkItemService } from '../work/work-item-service';
 import type { WorkItem, WorkListKind } from '../work/work-item';
@@ -91,6 +92,8 @@ export interface ApiServerDeps {
   ticketDetail?: { detail(key: string): Promise<{ ticket: unknown; ticketError: string | null }> };
   /** R51 — the respond-mode factory. Absent makes `{ mode: 'respond' }` a clean 404. */
   respondFactory?: RespondSessionFactory;
+  /** Phase 15 — absent means QA verification is not configured on this wiring (404, exactly like respond). */
+  qaFactory?: QaSessionFactory;
   /**
    * The clock the claim check reads. It MUST be the same one PipelineService
    * uses, or the route and the run disagree about whether a claim is live —
@@ -349,6 +352,62 @@ async function handleItemAgents(
     return;
   }
 
+  if (request.mode === 'qa') {
+    if (pr === undefined) {
+      throw new ValidationError('Invalid agent request: mode qa requires an item whose pull request has merged');
+    }
+    if (!deps.qaFactory) {
+      sendJson(res, 404, { error: 'qa mode not configured' });
+      return;
+    }
+    const factory = deps.qaFactory;
+    const ticket = item.ticket?.key ?? null;
+    if (ticket === null) {
+      throw new ValidationError('Invalid agent request: mode qa requires an item with a ticket');
+    }
+    const shouldStart = request.start ?? true;
+    // R70 puts QA off the ladder, but the LOCK stays on the ladder's key:
+    // `pr:<slug>#<n>` is what the review and respond routes take and what
+    // the automatic leg takes, so a click and a tick cannot both create.
+    await lock.withLock(`pr:${pr.repo}#${pr.number}`, async () => {
+      const existing = await factory.existingFor(ticket);
+      const session = existing ?? (await factory.createFromMergedPr(ticket, pr.repo, pr.number));
+      const created = existing === null;
+      if (existing !== null) {
+        // The parity rule, verbatim from respond: never a second session,
+        // and never a second agent writing one QA.md.
+        if (deps.pipeline.activeSessionIds().includes(existing.id)) {
+          sendJson(res, 200, {
+            session: existing, created: false, started: false,
+            reason: 'a qa run is already in flight for this session', item,
+          });
+          return;
+        }
+        if (isClaimed(existing, deps.now ? deps.now() : new Date())) {
+          sendJson(res, 200, {
+            session: existing, created: false, started: false,
+            reason: 'a human holds the conversation claim on this session', item,
+          });
+          return;
+        }
+      }
+      if (!shouldStart) {
+        // R73: no run, but BRIEF.md must exist — `Chat` lights up the moment
+        // the session does, and an empty session directory is a dead end.
+        await deps.pipeline.prepareQaSession(session.id);
+        sendJson(res, 200, {
+          session: await deps.sessionStore.load(session.id), created, started: false, item,
+        });
+        return;
+      }
+      await awaitRunStart(deps.events, session.id, deps.pipeline.runVerify(session.id));
+      sendJson(res, 202, {
+        session: await deps.sessionStore.load(session.id), created, started: true, item,
+      });
+    });
+    return;
+  }
+
   // investigation | development: a Jira ticket does not know which repo it
   // belongs to, and guessing would create a worktree in the wrong place.
   const repoUrl = request.repoUrl ?? (pr !== undefined ? `https://github.com/${pr.repo}.git` : undefined);
@@ -454,7 +513,11 @@ async function handleArtifactRead(
   if (!(await deps.fs.exists(filePath))) {
     throw new ArtifactNotFoundError(id, name);
   }
-  const content = await deps.fs.readFile(filePath);
+  // Belt-and-braces, exactly like `localStatusHttp`: an artifact is written
+  // by an AGENT, and Phase 15's QA agent talks to a real app with real
+  // headers and cookies. Redact on the way out rather than trusting every
+  // future agent never to paste one in.
+  const content = redactSecrets(await deps.fs.readFile(filePath));
   res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8' });
   res.end(content);
 }
@@ -540,8 +603,8 @@ function localStatusHttp(status: LocalAppStatus): { code: number; body: unknown 
   // and redaction is idempotent, so no bypass URL can leave through here.
   const safe: LocalAppStatus = {
     ...status,
-    reason: status.reason === null ? null : redactBypassUrls(status.reason),
-    logTail: status.logTail === null ? null : redactBypassUrls(status.logTail),
+    reason: status.reason === null ? null : redactSecrets(status.reason),
+    logTail: status.logTail === null ? null : redactSecrets(status.logTail),
   };
   return status.state === 'unavailable'
     ? { code: 409, body: { error: safe.reason ?? 'the local app is unavailable', status: safe } }
@@ -778,7 +841,7 @@ function findAddressedItem(items: readonly WorkItem[], parsed: ParsedWorkItemId)
   return items.find((i) => i.agents.some((a) => a.sessionId === parsed.id));
 }
 
-const AGENT_MODES = ['review', 'investigation', 'development', 'respond'] as const;
+const AGENT_MODES = ['review', 'investigation', 'development', 'respond', 'qa'] as const;
 
 interface AgentsRequest {
   mode: (typeof AGENT_MODES)[number];
@@ -787,6 +850,12 @@ interface AgentsRequest {
   driveToCompletion?: boolean;
   /** Phase 10 — mode 'review' only: deliberately review the caller's OWN PR, bypassing OwnPrError. */
   selfReview?: boolean;
+  /**
+   * Phase 15 — `false` creates the session and composes its BRIEF.md WITHOUT
+   * starting a run (R73's chat-only entry point). Defaults to `true`, which
+   * is every pre-Phase-15 caller's behaviour unchanged.
+   */
+  start?: boolean;
 }
 
 function parseAgentsRequest(body: unknown): AgentsRequest {
@@ -805,6 +874,12 @@ function parseAgentsRequest(body: unknown): AgentsRequest {
   if (raw.intent === 'investigate_only' || raw.intent === 'development') request.intent = raw.intent;
   if (typeof raw.driveToCompletion === 'boolean') request.driveToCompletion = raw.driveToCompletion;
   if (typeof raw.selfReview === 'boolean') request.selfReview = raw.selfReview;
+  if (raw.start !== undefined) {
+    if (typeof raw.start !== 'boolean') {
+      throw new ValidationError('Invalid agent request: start must be a boolean');
+    }
+    request.start = raw.start;
+  }
   return request;
 }
 

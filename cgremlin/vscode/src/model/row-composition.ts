@@ -148,11 +148,12 @@ export function repoTailOf(item: WorkItem): string {
   return repo === '' ? '' : (repo.split('/').pop() ?? '');
 }
 
-const MODE_LETTER: Record<WorkAgentMode, string> = {
+export const MODE_LETTER: Record<WorkAgentMode, string> = {
   review: 'R',
   respond: 'C',
   investigation: 'I',
   development: 'D',
+  qa: 'Q',
 };
 
 /** The same geometric marks the parts use (`model/item-parts`), and for the same reason. */
@@ -161,6 +162,7 @@ export const MODE_GLYPH: Record<WorkAgentMode, string> = {
   respond: '❝',
   investigation: '∴',
   development: '◆',
+  qa: '⛋',
 };
 
 export const MODE_NAME: Record<WorkAgentMode, string> = {
@@ -168,7 +170,32 @@ export const MODE_NAME: Record<WorkAgentMode, string> = {
   respond: 'Respond',
   investigation: 'Investigation',
   development: 'Development',
+  qa: 'QA verification',
 };
+
+/**
+ * Phase 15 §8 — the ONE place a QA phase becomes a word, so the collapsed row, the expanded
+ * part and the Item tab cannot disagree about what a verification is doing.
+ *
+ * The engine's phases are `queued | verifying | ready | not_ready | failed | closed | abandoned`
+ * (R69). Two of them are re-worded here and nowhere else:
+ *  - `not_ready` reads `not ready` — a row is prose, not an enum, and R79 folds the Blocked
+ *    verdict into this same phase, so "not ready" is the honest word for both;
+ *  - `failed` reads `blocked` — a run that died wrote no verdict at all, which is precisely
+ *    what the user needs to know before clicking again. The run failure itself is already said
+ *    by `run_failed` on the needs-you strip, so nothing is hidden by the softer word.
+ *
+ * The VERDICT is deliberately not read here: `WorkItemAgent` does not carry one, and inventing
+ * a second source for it is exactly what one composer exists to prevent.
+ */
+const QA_STATE_TEXT: Record<string, string> = {
+  not_ready: 'not ready',
+  failed: 'blocked',
+};
+
+export function qaStateText(phase: string): string {
+  return QA_STATE_TEXT[phase] ?? phase;
+}
 
 /** Claim, then a live run, then the gate — the precedence the tree used before the panel (R18). */
 export function agentGlyph(agent: WorkItemAgent): string {
@@ -351,7 +378,13 @@ export function rowMetaCells(
 }
 
 function phaseCell(agent: WorkItemAgent): RowMetaCell {
-  return { kind: 'agentPhase', text: `${MODE_GLYPH[agent.mode] ?? '•'} ${agent.phase}` };
+  const glyph = MODE_GLYPH[agent.mode] ?? '•';
+  if (agent.mode !== 'qa') return { kind: 'agentPhase', text: `${glyph} ${agent.phase}` };
+  // §8's one toned cell: a verification that came back short of ready is the top of my work,
+  // and the row has to say so without a second composition site (R72 does the ordering).
+  const bad = agent.phase === 'not_ready' || agent.phase === 'failed';
+  const cell: RowMetaCell = { kind: 'agentPhase', text: `${glyph} ${qaStateText(agent.phase)}` };
+  return bad ? { ...cell, tone: 'bad' } : cell;
 }
 
 /**

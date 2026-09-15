@@ -72,6 +72,18 @@
         "icon": "$(reply)"
       },
       {
+        "command": "cgremlin.verifyInQa",
+        "title": "Verify in QA",
+        "category": "cgremlin",
+        "icon": "$(beaker)"
+      },
+      {
+        "command": "cgremlin.askQa",
+        "title": "Ask about QA",
+        "category": "cgremlin",
+        "icon": "$(comment-discussion)"
+      },
+      {
         "command": "cgremlin.startInvestigation",
         "title": "Start investigation here",
         "category": "cgremlin"
@@ -213,6 +225,14 @@
         },
         {
           "command": "cgremlin.addressReview",
+          "when": "false"
+        },
+        {
+          "command": "cgremlin.verifyInQa",
+          "when": "false"
+        },
+        {
+          "command": "cgremlin.askQa",
           "when": "false"
         },
         {

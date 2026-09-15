@@ -1,5 +1,5 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { redactBypassUrls } from '../config/core-config';
+import { redactSecrets } from '../config/core-config';
 import { ENGINE_EVENT_TYPES, type EngineEventMap, type EngineEvents } from '../engine/events';
 
 export const EVENT_RING_CAPACITY = 256;
@@ -111,7 +111,7 @@ function redactRunOutput(data: unknown): unknown {
   if (payload === null || typeof payload !== 'object' || typeof payload.chunk?.data !== 'string') {
     return data;
   }
-  return { ...payload, chunk: { ...payload.chunk, data: redactBypassUrls(payload.chunk.data) } };
+  return { ...payload, chunk: { ...payload.chunk, data: redactSecrets(payload.chunk.data) } };
 }
 
 export interface EventStreamDeps {

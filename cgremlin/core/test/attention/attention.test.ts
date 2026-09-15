@@ -400,7 +400,10 @@ describe('MG-A1 attention-is-pure-and-source-agnostic', () => {
 
 describe('ATTENTION_REASONS is pinned verbatim (R63)', () => {
   it('matches R63 element-for-element, positions included', () => {
-    expect([...ATTENTION_REASONS]).toEqual([
+    // Later phases APPEND. What R63 pins is that positions 0-10 never move,
+    // because the array IS the stored ack signature — a reordering silently
+    // rewrites every acknowledgement on disk.
+    expect([...ATTENTION_REASONS].slice(0, 11)).toEqual([
       'plan_ready',
       'needs_input',
       'blocked',

@@ -643,6 +643,7 @@ describe('serve', () => {
           reconciliation: { reconciled: 0, actions: [], skipped: [], errors: [] },
         jira: { scannedAt: '2026-09-04T12:00:00.000Z', me: null, issues: [], error: null, kind: 'notConfigured' as const },
         threads: { scannedAt: null, error: null, fetched: 0 },
+    qa: { scannedAt: null, started: [], skipped: [], errors: [], warnings: [] },
         };
       },
     };
@@ -861,6 +862,57 @@ describe('serve — human-turn claims are cleared at boot (R20)', () => {
       expect(res.status).toBe(202);
     } finally {
       await handle.close();
+    }
+  });
+
+  it('warns at boot when a configured qaStatus is in Jira\'s Done category, and stays quiet otherwise', async () => {
+    const fs = new InMemoryFileSystem();
+    const config: CoreConfig = {
+      ...testConfig(),
+      jira: {
+        ...resolveCoreConfig(
+          { repos: [], me: 'm', jira: { siteUrl: 'https://x.atlassian.net', email: 'e@x', qaStatuses: ['UAT'] } },
+          '/home/e2e',
+        ).jira!,
+      },
+    };
+    await fs.mkdir(config.stateDir, { recursive: true });
+    await fs.writeFile(
+      config.jiraCachePath!,
+      JSON.stringify({
+        scannedAt: '2026-09-15T09:00:00.000Z',
+        me: 'Me Jira',
+        kind: 'ok',
+        error: null,
+        issues: [
+          {
+            key: 'HB-1', summary: 's', status: 'UAT', statusCategory: 'Done',
+            url: 'https://x/browse/HB-1', assignee: 'Me Jira', updated: '2026-09-15T08:00:00.000Z',
+          },
+        ],
+      }),
+    );
+    const lines: string[] = [];
+    const handle = await serve(config, testAdapters({ fs }), { log: (l) => lines.push(l) });
+    try {
+      const warned = lines
+        .map((l) => JSON.parse(l) as Record<string, unknown>)
+        .filter((e) => e.type === 'qa.done_status_warning');
+      expect(warned).toHaveLength(1);
+      expect(String(warned[0].warning)).toContain("'UAT'");
+      expect(String(warned[0].warning)).toContain('never fire');
+    } finally {
+      await handle.close();
+    }
+
+    const quiet: string[] = [];
+    const quietHandle = await serve(testConfig(), testAdapters({ fs: new InMemoryFileSystem() }), {
+      log: (l) => quiet.push(l),
+    });
+    try {
+      expect(quiet.filter((l) => l.includes('qa.done_status_warning'))).toEqual([]);
+    } finally {
+      await quietHandle.close();
     }
   });
 

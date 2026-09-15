@@ -28,6 +28,8 @@ export class FakeLocalAppRunner implements LocalAppRunner {
 
   private readonly execResponses: Array<ExecResult | Error> = [];
   private readonly healthResponses: Array<HealthResult | Error> = [];
+  /** How many times `healthcheck` was called — lets a test assert "no network call happened". */
+  healthCallCount = 0;
   private readonly pgidByPid = new Map<number, number>();
   private readonly callLog: string[] | undefined;
 
@@ -139,6 +141,7 @@ export class FakeLocalAppRunner implements LocalAppRunner {
       signal?: AbortSignal;
     },
   ): Promise<HealthResult> {
+    this.healthCallCount += 1;
     const deferred = this.deferredHealth;
     if (deferred !== null) {
       this.deferredHealth = null;

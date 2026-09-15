@@ -16,6 +16,7 @@ import { migrateV1ToV2 } from '../../src/schema/session';
 import { FakeLocalAppRunner } from '../support/fake-local-app-runner';
 import { EnvironmentService } from '../../src/env/environment-service';
 import { AttentionService } from '../../src/attention/attention-service';
+import { PR_STATE_ENTRY_DEFAULTS } from '../support/pr-state-entry';
 
 function testConfig(): CoreConfig {
   return resolveCoreConfig(
@@ -145,6 +146,7 @@ describe('buildEngine', () => {
       reconciliation: { reconciled: 0, actions: [], skipped: [], errors: [] },
       jira: { scannedAt: '2026-09-04T12:00:00.000Z', me: null, issues: [], error: null, kind: 'notConfigured' },
       threads: { scannedAt: null, error: null, fetched: 0 },
+    qa: { scannedAt: null, started: [], skipped: [], errors: [], warnings: [] },
     };
     const fakeTickable: Tickable<ScanReport> = { run: async () => fakeReport };
     const engine = buildEngine(testConfig(), testAdapters(), { makeTickable: () => fakeTickable });
@@ -299,5 +301,97 @@ describe('buildEngine', () => {
     const wired = (engine.pipeline as unknown as { deps: { environment?: unknown } }).deps.environment;
     expect(wired).toBeInstanceOf(EnvironmentService);
     expect(wired).toBe(engine.environment);
+  });
+});
+
+describe('the QA brief context (qaContext)', () => {
+  const REPO = 'acme/app';
+  const MERGE_SHA = 'abc1234def567890abc1234def567890abc12345';
+
+  async function seedQa(adapters: EngineAdapters, config: CoreConfig) {
+    const fs = adapters.fs as InMemoryFileSystem;
+    // A merged PR the open-PR inventory no longer has — exactly what the
+    // pr-state leg caches.
+    await fs.mkdir(config.stateDir, { recursive: true });
+    await fs.writeFile(
+      config.prStatesCachePath!,
+      JSON.stringify({
+        [`${REPO}#12`]: {
+          ...PR_STATE_ENTRY_DEFAULTS,
+          state: 'merged',
+          title: 'feat(HB-1489): web content',
+          url: `https://github.com/${REPO}/pull/12`,
+          mergedAt: '2026-09-14T09:00:00.000Z',
+          author: 'alice',
+          changedFiles: 3,
+          additions: 120,
+          deletions: 4,
+          ticketKeys: ['HB-1489'],
+          branch: 'HB-1489-web-content',
+          closedAt: null,
+          checkedAt: '2026-09-15T09:00:00.000Z',
+        },
+      }),
+    );
+    // An earlier review session on the SAME ticket, with two of the four
+    // artifacts actually written.
+    const review = {
+      schemaVersion: 2, id: 'rev-1', mode: 'review', createdAt: '2026-09-01T10:00:00.000Z',
+      workspace: { repoUrl: `https://github.com/${REPO}.git` },
+      lineage: { pipelineId: 'rev-1', parentSessionId: null, ticket: 'HB-1489', selfReview: false },
+      agent: null, lastRun: null, pr: null, stageStatus: 'ready', reviewVersion: 1, lastRereviewSummary: null,
+    };
+    await fs.mkdir('/sessions/rev-1', { recursive: true });
+    await fs.writeFile('/sessions/rev-1/session.json', JSON.stringify(review));
+    await fs.writeFile('/sessions/rev-1/REVIEW.md', '# review');
+    await fs.writeFile('/sessions/rev-1/FINDINGS.md', '# findings');
+
+    const qa = {
+      schemaVersion: 2, id: 'qa-1', mode: 'qa', createdAt: '2026-09-15T10:00:00.000Z',
+      workspace: { repoUrl: `https://github.com/${REPO}.git`, worktreePath: '/worktrees/qa-1', branch: 'qa/HB-1489-abc1234' },
+      lineage: { pipelineId: 'qa-1', parentSessionId: null, ticket: 'HB-1489', selfReview: false },
+      agent: null, lastRun: null,
+      pr: { repo: REPO, number: 12, url: `https://github.com/${REPO}/pull/12`, headSha: MERGE_SHA, reviewedSha: null, title: 'feat(HB-1489): web content', author: 'alice' },
+      stageStatus: 'queued', qa: { verifiedSha: null, verdict: null },
+    };
+    await fs.mkdir('/sessions/qa-1', { recursive: true });
+    await fs.writeFile('/sessions/qa-1/session.json', JSON.stringify(qa));
+  }
+
+  it('the brief names the ticket and its ACs, the merged PR, and every artifact that EXISTS', async () => {
+    const config = testConfig();
+    const adapters = testAdapters();
+    await seedQa(adapters, config);
+    const engine = buildEngine(config, adapters, {
+      ticketDetail: {
+        detail: async () => ({
+          ticket: {
+            key: 'HB-1489', summary: 'Web content', status: 'UAT',
+            statusCategory: 'In Progress', assignee: 'Me Jira',
+            updated: '2026-09-14T00:00:00.000Z',
+            url: 'https://jira.invalid/browse/HB-1489',
+            descriptionText: 'AC1: the block renders.\nAC2: the API returns 200.',
+            comments: [{ author: 'bob', at: '2026-09-13T00:00:00.000Z', bodyText: 'ready for QA' }],
+          },
+          ticketError: null,
+        }),
+      },
+    });
+    await engine.pipeline.prepareQaSession('qa-1');
+    const brief = await (adapters.fs as InMemoryFileSystem).readFile('/sessions/qa-1/BRIEF.md');
+
+    expect(brief).toContain('# QA VERIFICATION — HB-1489 (acme/app#12, merged abc1234)');
+    expect(brief).toContain('## Ticket HB-1489 — Web content');
+    expect(brief).toContain('AC1: the block renders.');
+    expect(brief).toContain('AC2: the API returns 200.');
+    expect(brief).toContain('## The change');
+    expect(brief).toContain('feat(HB-1489): web content');
+    expect(brief).toContain('3 files changed, +120/−4');
+    expect(brief).toContain('## What we already know');
+    expect(brief).toContain('/sessions/rev-1/REVIEW.md');
+    expect(brief).toContain('/sessions/rev-1/FINDINGS.md');
+    // Never a path to a file that is not there.
+    expect(brief).not.toContain('PLAN.md');
+    expect(brief).not.toContain('COMMENTS.md');
   });
 });

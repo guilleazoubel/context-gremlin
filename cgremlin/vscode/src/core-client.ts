@@ -236,6 +236,11 @@ export class CoreClient {
       /** A review of MY OWN change (the forward-only ladder's last stage) — the core would
        *  otherwise answer 409 `OwnPrError`. */
       selfReview?: boolean;
+      /**
+       * Phase 15 §3: `false` creates the QA session and writes its `BRIEF.md` WITHOUT running it
+       * (R73) — the chat-only entry. Absent means the engine's own default, which is `true`.
+       */
+      start?: boolean;
     },
   ): Promise<HttpResult> {
     return await this.request('POST', `/items/${assertItemPath(path)}/agents`, body);

@@ -8,7 +8,7 @@ import { ClaudeCodeRunner } from '../agent/claude-code-runner';
 import { CodexRunner } from '../agent/codex-runner';
 import type { AgentRunner } from '../agent/agent-runner';
 import type { CoreConfig } from '../config/core-config';
-import { redactBypassUrls } from '../config/core-config';
+import { redactSecrets } from '../config/core-config';
 import { NodeLocalAppRunner } from '../env/node-local-app-runner';
 import { isSocketLive, listenOnSocket, SocketInUseError } from '../api/listen';
 import { buildEngine, type BuildEngineOptions, type Engine, type EngineAdapters } from './build-engine';
@@ -264,7 +264,7 @@ export async function serve(config: CoreConfig, adapters: EngineAdapters, opts: 
         logLine(opts.log, 'run.output', {
           sessionId: e.sessionId,
           stage: e.stage,
-          chunk: { ...e.chunk, data: redactBypassUrls(e.chunk.data) },
+          chunk: { ...e.chunk, data: redactSecrets(e.chunk.data) },
         }),
       ),
     );
@@ -321,6 +321,18 @@ export async function serve(config: CoreConfig, adapters: EngineAdapters, opts: 
     const clearedClaims = await pipeline.clearAllHumanTurns();
     if (clearedClaims.count > 0) {
       logLine(opts.log, 'conversation.claims_cleared', clearedClaims);
+    }
+
+    for (const warning of await engine.qaDoneStatusWarnings()) {
+      logLine(opts.log, 'qa.done_status_warning', { warning });
+    }
+
+    // E8, the same boot-recovery reasoning: a `qa` session stuck at
+    // `verifying` with no run behind it would make the automatic leg believe
+    // the ticket is already covered, forever.
+    const sweptVerifications = await pipeline.failStaleVerifications();
+    if (sweptVerifications.count > 0) {
+      logLine(opts.log, 'qa.stale_verifications_failed', sweptVerifications);
     }
 
     await listenOnSocket(server, socketPath);

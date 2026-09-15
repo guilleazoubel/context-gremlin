@@ -11,10 +11,11 @@
  * all it has is the brief. Pure and DOM-free: the host composes the labels, the webview draws
  * them, and neither invents a second naming rule.
  */
-export type ArtifactRole = 'review' | 'findings' | 'plan' | 'comments' | 'brief' | 'other';
+export type ArtifactRole = 'qa' | 'review' | 'findings' | 'plan' | 'comments' | 'brief' | 'other';
 
 const ROLE_LABELS: Record<Exclude<ArtifactRole, 'other'>, string> = {
   brief: 'Brief — the instructions this agent was given',
+  qa: 'QA verification',
   review: 'Review',
   findings: 'Findings',
   plan: 'Plan',
@@ -27,6 +28,8 @@ const ROLE_LABELS: Record<Exclude<ArtifactRole, 'other'>, string> = {
  */
 export function artifactRole(name: string): ArtifactRole {
   const stem = name.replace(/\.[^.]+$/, '').toUpperCase();
+  // Phase 15 §5: `QA.md`, and `QA-v2.md` once a re-verification has archived the last one.
+  if (/^QA(-V\d+)?$/.test(stem)) return 'qa';
   if (/(^|-)RE-?REVIEW(-V\d+)?$/.test(stem) || /^REVIEW(-V\d+)?$/.test(stem)) return 'review';
   if (/^FINDINGS(-V\d+)?$/.test(stem)) return 'findings';
   if (/^PLAN(-V\d+)?$/.test(stem)) return 'plan';
@@ -46,7 +49,7 @@ export function artifactLabel(name: string): string {
  * written first and is often the NEWEST thing a stalled session has, which is exactly how it came
  * to be shown as the review.
  */
-const PRIMARY_ORDER: readonly ArtifactRole[] = ['review', 'findings', 'plan', 'comments', 'other', 'brief'];
+const PRIMARY_ORDER: readonly ArtifactRole[] = ['qa', 'review', 'findings', 'plan', 'comments', 'other', 'brief'];
 
 export function primaryArtifactName(names: readonly string[]): string | null {
   for (const role of PRIMARY_ORDER) {

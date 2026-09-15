@@ -82,15 +82,46 @@ export interface ActionFacts {
   prs: readonly ActionPr[];
   ticketKey: string | null;
   needsYou: boolean;
+  /**
+   * Phase 15 §8: the `owner/repo` slugs that have a `qa.url` in the engine's config, read from
+   * `GET /config`. **Optional**: a panel that has not resolved the config yet, or an engine
+   * older than Phase 15, offers no QA verb at all rather than one that would 404.
+   */
+  qaRepos?: readonly string[];
 }
 
-export function itemActionFacts(item: WorkItem): ActionFacts {
+export function itemActionFacts(item: WorkItem, qaRepos: readonly string[] = []): ActionFacts {
   return {
     agents: item.agents,
     prs: item.prs,
     ticketKey: item.ticket?.key ?? null,
     needsYou: item.needsYou,
+    qaRepos,
   };
+}
+
+/** A QA session that has not reached one of R69's two terminal phases. */
+export function liveQaAgent(facts: ActionFacts): ActionAgent | undefined {
+  return facts.agents.find(
+    (agent) => agent.mode === 'qa' && agent.phase !== 'closed' && agent.phase !== 'abandoned',
+  );
+}
+
+/**
+ * §8's gate, off the forward-only ladder entirely (R70) and asked in exactly one place.
+ *
+ * Every clause is a request the engine would otherwise refuse: `POST … {mode:'qa'}` needs a PR
+ * (`server.ts` throws without one), needs a ticket to hang the session's lineage on, and needs a
+ * repo whose `qa` block names a URL — nothing in the repo knows the QA address but the config.
+ * `merged` is asked rather than `isLandedPr`: a change that was thrown away is not a change to
+ * verify (E10), so a closed-only ticket offers nothing.
+ */
+export function canVerifyInQa(facts: ActionFacts, list: WorkListKind): boolean {
+  if (list !== 'myWork' && list !== 'waitingForReview') return false;
+  if (facts.ticketKey === null || facts.prs.length === 0) return false;
+  if (!facts.prs.every((pr) => pr.state === 'merged')) return false;
+  const qaRepos = facts.qaRepos ?? [];
+  return facts.prs.every((pr) => qaRepos.includes(pr.repo));
 }
 
 /**
@@ -173,8 +204,11 @@ export function rowActions(facts: ActionFacts, list: WorkListKind): RowAction[] 
     if (respondable) {
       push({ command: 'cgremlin.addressReview', label: 'Address review comments' }, 'primary');
       if (chatAction !== null) push(chatAction, 'inline');
-    } else if (chatAction !== null) {
-      push(chatAction, 'primary');
+    } else {
+      pushQa(facts, list, push);
+      // `push` downgrades a second `primary` to `inline` on its own, so this stays the row's one
+      // click wherever the QA verbs did not take it.
+      if (chatAction !== null) push(chatAction, 'primary');
     }
   } else {
     // My own work (`myWork`, `investigations`): the forward-only ladder.
@@ -197,6 +231,7 @@ export function rowActions(facts: ActionFacts, list: WorkListKind): RowAction[] 
         );
       }
     }
+    pushQa(facts, list, push);
     if (chatAction !== null) push(chatAction, 'inline');
   }
 
@@ -225,6 +260,22 @@ export function rowActions(facts: ActionFacts, list: WorkListKind): RowAction[] 
 
   if (!primaryTaken) promote(out);
   return out;
+}
+
+/**
+ * §8's two verbs, in the one place a verb is decided. They are withdrawn the moment a live QA
+ * session exists — `Chat` is then the verb, and a second `Verify in QA` would either 409 or
+ * re-run a verification nobody asked for.
+ */
+function pushQa(
+  facts: ActionFacts,
+  list: WorkListKind,
+  push: (action: Omit<RowAction, 'placement'>, want: ActionPlacement) => void,
+): void {
+  if (!canVerifyInQa(facts, list) || liveQaAgent(facts) !== undefined) return;
+  push({ command: 'cgremlin.verifyInQa', label: 'Verify in QA' }, 'primary');
+  // R73's chat-only entry: create the session, write its brief, start nothing.
+  push({ command: 'cgremlin.askQa', label: 'Ask about QA' }, 'inline');
 }
 
 /**

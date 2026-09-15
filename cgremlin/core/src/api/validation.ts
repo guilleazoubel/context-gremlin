@@ -101,9 +101,10 @@ export function parseRunStageRequest(body: unknown): { stage: StageName } {
 //
 // R51: `COMMENTS.md` is the respond mode's ONLY output — "the drafted replies
 // live in COMMENTS.md for a human to paste" — so leaving it off this list
-// makes the whole mode unreadable from the Item tab.
+// makes the whole mode unreadable from the Item tab. Phase 15 adds `QA.md`
+// and its archive for the same reason.
 const ARTIFACT_NAME_PATTERN =
-  /^(?:FINDINGS|PLAN|DEVELOPMENT|REVIEW|RE-REVIEW|BRIEF|COMMENTS|REVIEW-v\d+)\.md$|^AGENT_(?:NOTE|STATE)$|^rereview_summary$|^PR_URL$/;
+  /^(?:FINDINGS|PLAN|DEVELOPMENT|REVIEW|RE-REVIEW|BRIEF|COMMENTS|QA|REVIEW-v\d+|QA-v\d+)\.md$|^AGENT_(?:NOTE|STATE)$|^rereview_summary$|^PR_URL$/;
 
 export function parseArtifactName(name: string): string {
   if (!ARTIFACT_NAME_PATTERN.test(name)) {

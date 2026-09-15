@@ -1,6 +1,12 @@
 import { z } from 'zod';
 import { SessionModeSchema, type SessionMode } from './session-mode';
-import { INVESTIGATION_PHASES, DEVELOPMENT_PHASES, REVIEW_PHASES, RESPOND_PHASES } from './pipeline';
+import {
+  INVESTIGATION_PHASES,
+  DEVELOPMENT_PHASES,
+  REVIEW_PHASES,
+  RESPOND_PHASES,
+  QA_PHASES,
+} from './pipeline';
 import { AgentSchema, LastRunSchema, PrSchema } from './stage';
 
 export { SessionModeSchema };
@@ -68,6 +74,16 @@ const RereviewSummarySchema = z.object({
   newFindings: z.number().int(),
 });
 
+export const QA_VERDICTS = ['ready', 'not_ready', 'blocked'] as const;
+export const QaVerdictSchema = z.enum(QA_VERDICTS);
+export type QaVerdict = z.infer<typeof QaVerdictSchema>;
+
+const QaStateSchema = z.object({
+  /** The merge commit this session's verdict was reached against. */
+  verifiedSha: z.string().min(1).nullable().default(null),
+  verdict: QaVerdictSchema.nullable().default(null),
+});
+
 export const SessionSchema = z.discriminatedUnion('mode', [
   V2Base.extend({
     mode: z.literal('investigation'),
@@ -92,12 +108,23 @@ export const SessionSchema = z.discriminatedUnion('mode', [
     mode: z.literal('respond'),
     stageStatus: z.enum(RESPOND_PHASES),
   }),
+  // R68 — the fifth variant. Additive AND defaulted for the same reason the
+  // fourth was: the union is discriminated on `mode`, so every document
+  // already on disk keeps matching its own branch (MG-18), and a `qa`
+  // document written before the field existed cannot exist either — the
+  // default is there so a hand-written or partially-patched document loads.
+  V2Base.extend({
+    mode: z.literal('qa'),
+    stageStatus: z.enum(QA_PHASES),
+    qa: QaStateSchema.default({ verifiedSha: null, verdict: null }),
+  }),
 ]);
 export type Session = z.infer<typeof SessionSchema>;
 export type InvestigationSession = Extract<Session, { mode: 'investigation' }>;
 export type DevelopmentSession = Extract<Session, { mode: 'development' }>;
 export type ReviewSession = Extract<Session, { mode: 'review' }>;
 export type RespondSession = Extract<Session, { mode: 'respond' }>;
+export type QaSession = Extract<Session, { mode: 'qa' }>;
 
 export function migrateV1ToV2(v1: SessionV1): Session {
   const base = {

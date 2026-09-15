@@ -86,6 +86,7 @@ one-line error. Paths may start with `~`.
 | `reviewThreads.scanBudgetMs` | `20000` | the whole review-thread leg's budget for one tick |
 | `reviewThreadsCachePath` | `<stateDir>/review-threads.json` | review threads, keyed `"<repo>#<n>"` by the PR's `updatedAt` |
 | `environments` | `{}` | per-repo environment config, keyed by `owner/name` — see below |
+| `qaSkillCommand` | `'/cgremlin:qa-verify'` | slash command the QA-verification prompt invokes first — see "Installing the QA-verification skill" below |
 
 A field left unset in the file falls back to its default at load time; `config
 import-legacy` and any code that re-persists `core.json` omit a value that is exactly the
@@ -174,6 +175,17 @@ resolved").
 
 `localApp.stages` and `previewStages` are independent and can overlap; `findings` can opt
 into a local app too, it just isn't on by default.
+
+### Installing the QA-verification skill
+
+A `qa` session's brief carries its own protocol (`## How to verify`) so it works even in a target
+repo that has never heard of cgremlin — but if `qaSkillCommand` (default `/cgremlin:qa-verify`)
+resolves to an installed skill, the agent runs that first. The skill's source ships with the
+engine at `skills/qa-verify/SKILL.md`; install it by copying (or symlinking) that file to
+`~/.claude/skills/qa-verify/SKILL.md` (or your Claude Code skills directory of choice) so it is
+available as `/cgremlin:qa-verify` in every target repo's worktree. If it is absent, nothing
+breaks: the agent falls back to `BRIEF.md`'s `## How to verify` section, which is the same
+protocol, inlined.
 
 ### Secret handling
 

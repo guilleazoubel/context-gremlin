@@ -32,6 +32,7 @@ export function mapErrorToHttp(err: unknown): HttpError {
       return { status: 404, body: { error: message } };
     case 'OwnPrError':
     case 'NotMyPrError': // R51's mirror: respond mode refuses somebody else's PR.
+    case 'PrNotMergedError': // R70: QA verification only runs on merged work.
       return { status: 409, body: { error: message } };
     case 'NoScanYetError':
       return { status: 404, body: { error: message } };

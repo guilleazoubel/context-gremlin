@@ -27,6 +27,7 @@ export const ATTENTION_REASONS = [
   'changes_requested',     // 8  my own PR's reviewDecision is CHANGES_REQUESTED
   'review_arrived',        // 9  R50 — a non-bot human touched my own PR
   'approved',              // 10 R50 — my own PR's reviewDecision is APPROVED
+  'qa_not_ready',          // 11 Phase 15 — a qa session at 'not_ready' (R79 folds 🚧 Blocked in here)
 ] as const;
 export type AttentionReason = (typeof ATTENTION_REASONS)[number];
 
@@ -46,6 +47,7 @@ export const NEEDS_YOU_REASONS: readonly AttentionReason[] = [
   'changes_requested',
   'review_arrived',
   'approved',
+  'qa_not_ready',
 ];
 
 export interface AttentionState {
@@ -162,6 +164,13 @@ export function deriveSessionReasons(ev: SessionEvidence): DerivedReason[] {
   // fixes committed; the human is what it is waiting on.
   if (s.mode === 'respond' && s.stageStatus === 'ready') {
     derived.push({ reason: 'comments_ready', at: lastRun?.finishedAt ?? null });
+  }
+  // The twin of the respond clause. A `ready` verdict raises NOTHING — good
+  // news is quiet — and a `failed` run is already `run_failed` above, so
+  // `not_ready` (which R79 also folds 🚧 Blocked into) is the only phase
+  // here that wants me.
+  if (s.mode === 'qa' && s.stageStatus === 'not_ready') {
+    derived.push({ reason: 'qa_not_ready', at: lastRun?.finishedAt ?? null });
   }
   if (ev.localApp?.state === 'unavailable') {
     derived.push({ reason: 'local_prereq_failed', at: null });

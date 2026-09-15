@@ -23,7 +23,7 @@
  */
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { chmod, mkdir, mkdtemp, readdir, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
+import { chmod, copyFile, mkdir, mkdtemp, readdir, rm, stat, symlink, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { CoreClient } from '../../src/core-client';
@@ -33,6 +33,8 @@ import { NodeEngineProcess } from '../../src/engine/node-engine-process';
 import type { SessionView } from '../../src/model/items';
 
 const REPO_SLUG = 'fake/repo';
+/** The merged PRs the QA fixtures answer `gh pr view` for. */
+const QA_PR_NUMBERS = [900];
 const FAKE_GH_DIR = path.join(__dirname, 'fake-gh');
 
 /** The installed extension's root — where `engine/engine.js` and `engine/bridge.js` sit. */
@@ -148,6 +150,60 @@ export interface StartEngineOptions {
    * every other integration test.
    */
   ghFixtures?: string;
+  /**
+   * Phase 15 — the QA environment block for `fake/repo`, plus the `qa` trigger config. `url`
+   * is ALWAYS a loopback URL from `test/support/fake-qa`: no integration test may reach a real
+   * QA deployment. Giving this also generates a `pr-view-<n>.json` fixture whose `mergeCommit`
+   * is the local origin's REAL head sha, because the QA factory checks that commit out.
+   */
+  qa?: { url: string; auth: 'vercel-bypass' | 'clerk-test' | 'credentials' | 'none'; autoVerify?: boolean };
+  /** `<stateDir>/pr-states.json` — a PR that has merged and left the open-PR inventory. */
+  prStates?: Record<string, unknown>;
+  /** What the fake `claude` writes as `QA.md` when a QA run starts. */
+  qaVerdict?: string;
+}
+
+/** The merged-PR cache row a QA test seeds, linked to its ticket by `ticketKeys` (R28). */
+export function mergedPrState(number: number, ticket: string): Record<string, unknown> {
+  return {
+    state: 'merged',
+    title: `Fixture PR ${number} (merged, links ${ticket})`,
+    url: `https://github.com/${REPO_SLUG}/pull/${number}`,
+    mergedAt: '2026-09-14T10:00:00Z',
+    closedAt: null,
+    branch: `me/${ticket.toLowerCase()}`,
+    ticketKeys: [ticket],
+    author: 'me',
+    createdAt: '2026-09-10T10:00:00Z',
+    changedFiles: 3,
+    additions: 40,
+    deletions: 2,
+    isDraft: false,
+    labels: [],
+    checkedAt: '2026-09-14T10:05:00Z',
+  };
+}
+
+/** The `gh pr view` fixture a merged PR answers with — `PR_QA_VIEW_FIELDS`' extra two included. */
+function mergedPrView(number: number, ticket: string, mergeSha: string): unknown {
+  return {
+    number,
+    title: `Fixture PR ${number} (merged, links ${ticket})`,
+    author: { login: 'me' },
+    headRefName: `me/${ticket.toLowerCase()}`,
+    headRefOid: mergeSha,
+    baseRefName: 'main',
+    url: `https://github.com/${REPO_SLUG}/pull/${number}`,
+    state: 'MERGED',
+    isDraft: false,
+    reviewDecision: 'APPROVED',
+    mergedAt: '2026-09-14T10:00:00Z',
+    closedAt: null,
+    mergeCommit: { oid: mergeSha },
+    files: [{ path: 'README.md', additions: 40, deletions: 2 }],
+    latestReviews: [],
+    statusCheckRollup: [],
+  };
 }
 
 export async function seedStateDir(opts: StartEngineOptions = {}): Promise<SeededStateDir> {
@@ -166,7 +222,32 @@ export async function seedStateDir(opts: StartEngineOptions = {}): Promise<Seede
   // The agent runner, as a no-op that exits 0. Exactly ONE stage is started anywhere in this
   // suite — C1's respond run — and MG-8's accounting over `run.started` proves it; this script
   // is what guarantees that even that one can never reach the real agent CLI.
-  await writeFile(path.join(binDir, 'claude'), '#!/bin/bash\nexit 0\n', 'utf8');
+  // Phase 15 adds one thing it may do: when `$FAKE_QA_VERDICT` names a file, it copies that
+  // file into the session directory the runner passed as `--add-dir` — which is exactly what a
+  // verification agent does, and the only way an end-to-end test can drive `evaluateQa`.
+  await writeFile(
+    path.join(binDir, 'claude'),
+    [
+      '#!/bin/bash',
+      'set -u',
+      'verdict="${FAKE_QA_VERDICT:-}"',
+      '[ -z "$verdict" ] && exit 0',
+      '[ -f "$verdict" ] || exit 0',
+      'dir=""',
+      'prev=""',
+      'for arg in "$@"; do',
+      '  if [ "$prev" = "--add-dir" ]; then dir="$arg"; break; fi',
+      '  prev="$arg"',
+      'done',
+      '# Only a QA run: every other stage writes its own artifacts and must stay a no-op.',
+      'if [ -n "$dir" ] && [ -f "$dir/BRIEF.md" ] && grep -q "QA VERIFICATION" "$dir/BRIEF.md"; then',
+      '  cat "$verdict" > "$dir/QA.md"',
+      'fi',
+      'exit 0',
+      '',
+    ].join('\n'),
+    'utf8',
+  );
   await chmod(path.join(binDir, 'claude'), 0o755);
 
   // R20's login shell, faked so the engine's PATH really does come through `$SHELL -lic` and
@@ -238,14 +319,60 @@ export async function seedStateDir(opts: StartEngineOptions = {}): Promise<Seede
         environments: {
           [REPO_SLUG]: {
             vercel: { scope: 'fake-scope', project: 'fake', previewProject: 'fake', bypassSecret },
+            // Phase 15 §6. `url` is a loopback stub, never a real deployment.
+            ...(opts.qa !== undefined
+              ? { qa: { url: opts.qa.url, auth: opts.qa.auth, healthPath: '/', healthTimeoutMs: 3_000 } }
+              : {}),
           },
         },
+        ...(opts.qa !== undefined
+          ? {
+              qa: {
+                autoVerify: opts.qa.autoVerify ?? true,
+                maxAutoStartsPerTick: 1,
+                maxAttemptsPerEntry: 1,
+                scanBudgetMs: 10_000,
+                backfillOnFirstRun: false,
+              },
+            }
+          : {}),
       },
       null,
       2,
     ),
     { encoding: 'utf8', mode: 0o600 },
   );
+
+  if (opts.prStates !== undefined) {
+    await writeFile(
+      path.join(stateDir, 'pr-states.json'),
+      `${JSON.stringify(opts.prStates, null, 2)}\n`,
+      { encoding: 'utf8', mode: 0o600 },
+    );
+  }
+
+  // Phase 15: a fixtures dir of our own, because the merge commit the QA factory checks out has
+  // to be the local origin's REAL head sha — which only exists once `createOrigin` has run.
+  let ghFixtures = opts.ghFixtures ?? FAKE_GH_DIR;
+  let verdictPath: string | null = null;
+  if (opts.qa !== undefined) {
+    ghFixtures = path.join(stateDir, 'gh-fixtures');
+    await mkdir(ghFixtures, { recursive: true });
+    for (const name of await readdir(opts.ghFixtures ?? FAKE_GH_DIR)) {
+      await copyFile(path.join(opts.ghFixtures ?? FAKE_GH_DIR, name), path.join(ghFixtures, name));
+    }
+    const originPath = path.join(originsDir, `${REPO_SLUG}.git`);
+    const mergeSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: originPath, encoding: 'utf8' }).trim();
+    for (const number of QA_PR_NUMBERS) {
+      await writeFile(
+        path.join(ghFixtures, `pr-view-${number}.json`),
+        `${JSON.stringify(mergedPrView(number, 'APP-42', mergeSha), null, 2)}\n`,
+        'utf8',
+      );
+    }
+    verdictPath = path.join(stateDir, 'qa-verdict.md');
+    await writeFile(verdictPath, opts.qaVerdict ?? '', 'utf8');
+  }
 
   if (opts.inventory !== undefined) {
     await writeFile(
@@ -271,7 +398,8 @@ export async function seedStateDir(opts: StartEngineOptions = {}): Promise<Seede
       ...process.env,
       // The legacy state dir must be unreachable even by accident.
       HOME: stateDir,
-      FAKE_GH_FIXTURES: opts.ghFixtures ?? FAKE_GH_DIR,
+      FAKE_GH_FIXTURES: ghFixtures,
+      ...(verdictPath === null ? {} : { FAKE_QA_VERDICT: verdictPath }),
     },
     repoSlug: REPO_SLUG,
     bypassSecret,
