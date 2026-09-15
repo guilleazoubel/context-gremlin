@@ -100,6 +100,17 @@ describe('MG-17c the verdict is the first thing on the pane', () => {
     expect(counts.textContent).not.toContain('0 ');
   });
 
+  it('gives the ticket answer no dot — `Ticket: mostly` is an answer, not a severity', () => {
+    webview.render(state('REVIEW.md', REVIEW));
+    const counts = dom.document.body.byClass('verdict-counts')[0];
+    // The dot is drawn by `.verdict-count::before`, so the count of that class IS the dot count.
+    expect(counts.byClass('verdict-count').map((c) => c.textContent)).toEqual([
+      '1 critical',
+      '1 maintainability',
+    ]);
+    expect(counts.byClass('verdict-answer')[0]?.textContent).toBe('Ticket: mostly');
+  });
+
   it('lifts an old QA file’s frozen `- Verdict:` line the same way (MG-17j)', () => {
     webview.render(state('QA.md', QA));
     expect(strip().hidden).toBe(false);

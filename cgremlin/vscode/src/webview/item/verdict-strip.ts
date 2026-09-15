@@ -47,17 +47,22 @@ export function patchVerdictStrip(strip: HTMLElement, text: string): void {
   const answer = ticketAnswerOf(text);
   const counts = verdict === null ? [] : severityCountsOf(text);
   const cells = [
-    ...(answer === null ? [] : [{ key: 'ticket', label: `Ticket: ${answer}` }]),
+    // The ticket answer is an ANSWER, not a severity: it took `verdict-count`, so it drew a dot
+    // and read as one more severity on the line. It has its own class and no dot.
+    ...(answer === null
+      ? []
+      : [{ key: 'ticket', label: `Ticket: ${answer}`, className: 'verdict-answer' }]),
     // §3: gap-separated, no separator glyph, and a severity with no findings is simply absent.
     ...counts.map((count) => ({
       key: count.word,
       label: `${count.count} ${count.word.toLowerCase()}`,
+      className: `verdict-count severity-${count.word.toLowerCase().replace(/\W+/g, '-')}`,
     })),
   ];
   reconcile(
     parts.counts,
     cells.map((cell) => ({ key: cell.key, data: cell })),
-    (cell) => el('span', `verdict-count severity-${cell.key.toLowerCase().replace(/\W+/g, '-')}`),
+    (cell) => el('span', cell.className),
     (node, cell) => setText(node, cell.label),
   );
 }

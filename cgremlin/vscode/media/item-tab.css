@@ -235,7 +235,12 @@ body {
   font-size: 11px;
 }
 
-/* §3: the chrome prints the WORD with a dot. Never the emoji — `font-src: none` (R38). */
+/*
+ * §3: the chrome prints the WORD with a dot. Never the emoji — `font-src: none` (R38).
+ *
+ * The ticket answer sits on the same line under `.verdict-answer` and deliberately has NO rule
+ * here: a dot beside `Ticket: mostly` made an answer read as one more severity.
+ */
 .verdict-count::before {
   content: '';
   display: inline-block;
