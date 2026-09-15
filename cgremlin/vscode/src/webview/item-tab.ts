@@ -127,6 +127,8 @@ function patchButtons(current: ItemTabState, f: Frame): void {
     },
     (node, button) => {
       setText(node, button.label);
+      // §6: exactly one filled button. The rule decided the placement; the tab only draws it.
+      setClass(node, `action ${button.placement}`);
       setDisabled(node as HTMLButtonElement, !button.enabled);
     },
   );

@@ -78,7 +78,12 @@ export interface TabButton {
   id: string;
   label: string;
   enabled: boolean;
-  /** Why it is disabled, shown as the title — an inert button with no explanation is a bug. */
+  /**
+   * Phase 17 §6 — `primary` is the one filled button, `inline` is bordered. The rule already
+   * decided this (`model/row-actions`); the tab used to discard it and draw three equal buttons.
+   */
+  placement: 'primary' | 'inline';
+  /** Why it is disabled, shown as a line beneath the row — an inert, silent button is a bug. */
   reason?: string;
 }
 

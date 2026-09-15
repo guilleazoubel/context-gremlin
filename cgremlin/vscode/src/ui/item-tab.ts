@@ -522,23 +522,25 @@ function selectedFor(item: WorkItem | undefined, focus: ItemFocusMessage): strin
  * agent rather than about the item: a respond agent still at `triaging` renders a disabled
  * button with R50's reason, where a row simply has no Chat at all.
  */
+export const CHAT_TRIAGING_REASON =
+  'Chat opens once the respond agent has written up the review threads. It is still triaging them.';
+
 export function buttonsFor(state: ItemTabState): TabButton[] {
   const selected = state.agents.find((agent) => agent.sessionId === state.selectedSessionId);
   const triaging =
     selected !== undefined && selected.mode === 'respond' && selected.phase === 'triaging';
-  const buttons: TabButton[] = [
-    {
+  const buttons: TabButton[] = [];
+  // §6: with no agent there is nothing to chat TO, so the button is not drawn — a disabled
+  // control with `reason: undefined` explained nothing and is what made Chat look broken.
+  if (selected !== undefined) {
+    buttons.push({
       id: 'cgremlin.chat',
       label: 'Chat',
-      enabled: selected !== undefined && !triaging,
-      ...(triaging
-        ? {
-            reason:
-              'The respond agent is still triaging the review threads — chat opens once it has written them up.',
-          }
-        : {}),
-    },
-  ];
+      enabled: !triaging,
+      placement: 'inline',
+      ...(triaging ? { reason: CHAT_TRIAGING_REASON } : {}),
+    });
+  }
   const facts: ActionFacts = {
     agents: state.agents,
     prs: state.prs,
@@ -547,9 +549,23 @@ export function buttonsFor(state: ItemTabState): TabButton[] {
   };
   for (const action of rowActionsForLists(facts, state.lists)) {
     if (action.command === 'cgremlin.chat') continue;
-    buttons.push({ id: action.command, label: action.label, enabled: true });
+    // The chips above the row already ARE these links, and drawing them again is what made
+    // three equal buttons out of one decision and two navigations (§6).
+    if (action.command === 'cgremlin.openPr' || action.command === 'cgremlin.openTicket') continue;
+    // Ack is the only overflow verb the tab draws, and it draws it last.
+    if (action.placement === 'overflow' && action.command !== 'cgremlin.ack') continue;
+    buttons.push({
+      id: action.command,
+      label: action.label,
+      enabled: true,
+      placement: action.placement === 'primary' ? 'primary' : 'inline',
+    });
   }
-  return buttons;
+  const rank = (button: TabButton): number => {
+    if (button.placement === 'primary') return 0;
+    return button.id === 'cgremlin.ack' ? 2 : 1;
+  };
+  return buttons.sort((a, b) => rank(a) - rank(b));
 }
 
 /** The path an item id is addressed at, re-exported so callers never build one by hand (R65). */

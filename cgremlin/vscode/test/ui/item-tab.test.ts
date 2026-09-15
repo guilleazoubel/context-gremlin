@@ -558,3 +558,80 @@ describe('MG-17d openFile opens a file only inside the selected agent’s worktr
     });
   });
 });
+
+/**
+ * Phase 17 §6 / task 12 — the action row stops drawing three equal buttons.
+ *
+ * The screenshot: `Open <pr>` and `Open <ticket>` rendered as buttons beside the real verb, even
+ * though the chips above already are those links; and Chat looked broken because with no agent at
+ * all it was disabled with `reason: undefined`, so nothing explained it.
+ */
+describe('§6 the action row', () => {
+  const tabStateOf = (id: string, selected: string | null): ItemTabState => {
+    const item = itemOf(id);
+    return {
+      itemId: item.id,
+      title: item.title,
+      needsYou: item.needsYou,
+      lists: item.lists,
+      chips: [],
+      focus: { kind: 'ticket' },
+      selectedSessionId: selected,
+      agents: item.agents.map((a) => ({ ...a, glyph: '', artifacts: [] })),
+      prs: item.prs.map((pr) => ({ ...pr, state: 'open', ci: '', reviewers: [], checks: [] })),
+      ticket: null,
+      ticketError: null,
+      buttons: [],
+      parts: [],
+    } as unknown as ItemTabState;
+  };
+
+  it('never draws the chips a second time as buttons', () => {
+    for (const id of ['pr:acme/web#101', 'ticket:HB-627', 'pr:acme/web#200']) {
+      const ids = buttonsFor(tabStateOf(id, null)).map((b) => b.id);
+      expect(ids).not.toContain('cgremlin.openPr');
+      expect(ids).not.toContain('cgremlin.openTicket');
+    }
+  });
+
+  it('keeps the placement the rule decided, with exactly one filled button', () => {
+    const buttons = buttonsFor(tabStateOf('pr:acme/web#101', null));
+    expect(buttons.filter((b) => b.placement === 'primary')).toHaveLength(1);
+    expect(buttons.every((b) => b.placement === 'primary' || b.placement === 'inline')).toBe(true);
+    // Primary first, then the inline verbs — left to right is the order of the array.
+    expect(buttons[0].placement).toBe('primary');
+  });
+
+  it('does not draw Chat at all when there is no agent to chat to', () => {
+    const ticketOnly = buttonsFor(tabStateOf('ticket:HB-627', null));
+    expect(ticketOnly.map((b) => b.id)).not.toContain('cgremlin.chat');
+  });
+
+  it('draws Ack last, and only where the item needs you', () => {
+    const needed = buttonsFor(tabStateOf('ticket:HB-627', null));
+    expect(needed[needed.length - 1].id).toBe('cgremlin.ack');
+    expect(buttonsFor(tabStateOf('pr:acme/web#101', null)).map((b) => b.id)).not.toContain(
+      'cgremlin.ack',
+    );
+  });
+
+  it('never emits a disabled button without a reason to show under it', () => {
+    for (const id of ['pr:acme/web#101', 'ticket:HB-627', 'pr:acme/web#200']) {
+      for (const selected of [null, 'respond-acme-web-200']) {
+        for (const button of buttonsFor(tabStateOf(id, selected))) {
+          if (!button.enabled) expect(button.reason).toBeTypeOf('string');
+        }
+      }
+    }
+  });
+
+  it('says WHY chat is shut, in the one case it is drawn shut', () => {
+    const chat = buttonsFor(tabStateOf('pr:acme/web#200', 'respond-acme-web-200')).find(
+      (b) => b.id === 'cgremlin.chat',
+    );
+    expect(chat?.enabled).toBe(false);
+    expect(chat?.reason).toBe(
+      'Chat opens once the respond agent has written up the review threads. It is still triaging them.',
+    );
+  });
+});

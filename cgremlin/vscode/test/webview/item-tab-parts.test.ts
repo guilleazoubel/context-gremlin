@@ -137,6 +137,23 @@ describe('the keyboard model is roving, and arrow-select acts', () => {
   });
 });
 
+describe('§6 the action row draws one filled button', () => {
+  it('carries the placement the host decided onto the class', () => {
+    webview.render(
+      state({
+        buttons: [
+          { id: 'cgremlin.startReview', label: 'Start review', enabled: true, placement: 'primary' },
+          { id: 'cgremlin.chat', label: 'Chat', enabled: true, placement: 'inline' },
+        ],
+      } as unknown as Partial<ItemTabState>),
+    );
+    expect(dom.document.body.byClass('buttons')[0].children.map((b) => b.className)).toEqual([
+      'action primary',
+      'action inline',
+    ]);
+  });
+});
+
 describe('MG-17e the same data mutates nothing', () => {
   it('renders twice over identical data and writes nothing at all', () => {
     webview.render(state());
