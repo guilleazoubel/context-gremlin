@@ -100,18 +100,16 @@ export function primaryArtifactName(names: readonly string[]): string | null {
   return null;
 }
 
-/** Primary first, brief LAST — the brief is the context for the answer, never the answer. */
-export function orderArtifacts(names: readonly string[]): string[] {
-  const rank = (name: string): number => {
-    const at = PRIMARY_ORDER.indexOf(artifactRole(name));
-    return at === -1 ? PRIMARY_ORDER.length : at;
-  };
-  const primary = primaryArtifactName(names);
-  return [...names].sort((a, b) => {
-    if (a === primary) return -1;
-    if (b === primary) return 1;
-    return rank(a) - rank(b);
-  });
+/**
+ * Phase 17 §1 — the FIXED tab order: role rank, ties broken by name.
+ *
+ * It replaces an order that hoisted the primary to index 0 and left same-role files in the mtime
+ * order the host listed them in, so a tab's POSITION moved between items and between renders. A switcher is navigation, and navigation that relabels position 1 is unlearnable. The
+ * OPENING pane is chosen separately (`primaryArtifactName`), which is what §1 actually asked for.
+ */
+export function orderArtifactTabs(names: readonly string[]): string[] {
+  const rank = (name: string): number => PRIMARY_ORDER.indexOf(artifactRole(name));
+  return [...names].sort((a, b) => rank(a) - rank(b) || (a < b ? -1 : a > b ? 1 : 0));
 }
 
 /** One sentence, no emoji (the tab's CSP sets `font-src 'none'`, so glyphs degrade to boxes). */

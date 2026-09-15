@@ -3,13 +3,13 @@
  *
  * The defect this exists for is "one unbroken scroll": the tab appended the agent's artifacts AND
  * the ticket into a single document, and the focus union could not address one of them. So the
- * parts are named here — the selected agent's artifacts (primary first, brief last, the rule
- * `artifact-labels` already owns), then the ticket, then one per PR — and each carries the focus
- * that puts it on screen.
+ * parts are named here — the selected agent's artifacts in the fixed role order the rule
+ * `artifact-labels` owns, then the ticket, then one per PR — and each carries the focus that puts
+ * it on screen. WHICH of them opens is a separate question, answered host-side by `resolveFocus`.
  *
  * No verb, no DOM, no editor API (MG-B1). The switcher reads this list and nothing else.
  */
-import { artifactTabLabel, orderArtifacts } from './artifact-labels';
+import { artifactTabLabel, orderArtifactTabs } from './artifact-labels';
 import { prRefOf } from './row-composition';
 import type { ItemFocusMessage, ItemTabState } from './item-tab-protocol';
 
@@ -43,7 +43,7 @@ export function partsOf(state: ItemTabState): TabPart[] {
     state.agents[0];
   if (agent !== undefined) {
     const names = agent.artifacts.map((artifact) => artifact.name);
-    for (const name of orderArtifacts(names)) {
+    for (const name of orderArtifactTabs(names)) {
       parts.push({
         key: `artifact:${agent.sessionId}/${name}`,
         label: artifactTabLabel(name),

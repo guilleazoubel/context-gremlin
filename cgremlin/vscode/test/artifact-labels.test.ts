@@ -11,7 +11,7 @@ import {
   BRIEF_ONLY_NOTICE,
   artifactLabel,
   artifactRole,
-  orderArtifacts,
+  orderArtifactTabs,
   primaryArtifactName,
 } from '../src/model/artifact-labels';
 
@@ -46,12 +46,18 @@ describe('the primary artifact', () => {
     expect(primaryArtifactName([])).toBeNull();
   });
 
-  it('orders the primary first and the brief last — the brief is context, never the answer', () => {
-    expect(orderArtifacts(['BRIEF.md', 'NOTES.md', 'REVIEW.md'])).toEqual([
+  it('orders the tabs by role — the brief last, because it is context and not the answer', () => {
+    expect(orderArtifactTabs(['BRIEF.md', 'NOTES.md', 'REVIEW.md'])).toEqual([
       'REVIEW.md',
       'NOTES.md',
       'BRIEF.md',
     ]);
+  });
+
+  it('breaks a same-role tie by name, so the order does not follow the mtime', () => {
+    expect(orderArtifactTabs(['REVIEW.md', 'REVIEW-v2.md'])).toEqual(
+      orderArtifactTabs(['REVIEW-v2.md', 'REVIEW.md']),
+    );
   });
 });
 
