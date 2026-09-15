@@ -37,6 +37,12 @@ export interface FakeJira {
   requests(): readonly FakeJiraRequest[];
   clear(): void;
   setMode(mode: FakeJiraMode): void;
+  /**
+   * Phase 15: moves one issue into another status, for every route that reports one. The QA
+   * trigger fires on an OBSERVED non-QA to QA transition (E5), so a test has to be able to
+   * change Jira between two ticks — which a fixed fixture cannot express.
+   */
+  setStatus(key: string, name: string, category: string): void;
   stop(): Promise<void>;
 }
 
@@ -56,6 +62,28 @@ export async function startFakeJira(opts: StartFakeJiraOptions): Promise<FakeJir
   const expected = `Basic ${Buffer.from(`${email}:${opts.apiToken}`).toString('base64')}`;
   const seen: FakeJiraRequest[] = [];
   let mode: FakeJiraMode = opts.mode ?? 'ok';
+  /** Per-issue status overrides, applied over the fixtures on the way out. */
+  const statuses = new Map<string, { name: string; category: string }>();
+
+  /** Rewrites `fields.status` on whatever shape the fixture has, in place on the clone. */
+  const withStatus = (body: unknown): unknown => {
+    if (statuses.size === 0) return body;
+    const clone = JSON.parse(JSON.stringify(body)) as Record<string, unknown>;
+    const apply = (issue: Record<string, unknown>): void => {
+      const key = typeof issue.key === 'string' ? issue.key : '';
+      const override = statuses.get(key);
+      if (override === undefined) return;
+      const fields = issue.fields as Record<string, unknown> | undefined;
+      if (fields === undefined) return;
+      fields.status = { name: override.name, statusCategory: { key: override.category } };
+    };
+    if (Array.isArray(clone.issues)) {
+      for (const issue of clone.issues as Record<string, unknown>[]) apply(issue);
+    } else {
+      apply(clone);
+    }
+    return clone;
+  };
   /** Held open on purpose in `hang` mode; destroyed on stop so the server can close. */
   const hung = new Set<http.ServerResponse>();
 
@@ -102,12 +130,12 @@ export async function startFakeJira(opts: StartFakeJiraOptions): Promise<FakeJir
         return;
       }
       const token = url.searchParams.get('nextPageToken');
-      send(200, fixture(token === 'page-two' ? 'search-jql-page2.json' : 'search-jql-page1.json'));
+      send(200, withStatus(fixture(token === 'page-two' ? 'search-jql-page2.json' : 'search-jql-page1.json')));
       return;
     }
 
     if (url.pathname === '/rest/api/3/search') {
-      send(200, fixture('search-legacy.json'));
+      send(200, withStatus(fixture('search-legacy.json')));
       return;
     }
 
@@ -124,7 +152,7 @@ export async function startFakeJira(opts: StartFakeJiraOptions): Promise<FakeJir
         send(404, { errorMessages: [`Issue does not exist: ${decodeURIComponent(issue[1])}`], errors: {} });
         return;
       }
-      send(200, body);
+      send(200, withStatus(body));
       return;
     }
 
@@ -142,6 +170,9 @@ export async function startFakeJira(opts: StartFakeJiraOptions): Promise<FakeJir
     },
     setMode: (next) => {
       mode = next;
+    },
+    setStatus: (key, name, category) => {
+      statuses.set(key, { name, category });
     },
     stop: async () => {
       for (const res of hung) res.destroy();
