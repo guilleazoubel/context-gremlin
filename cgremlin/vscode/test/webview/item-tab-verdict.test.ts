@@ -76,7 +76,11 @@ const strip = () => dom.document.body.byClass('verdict-strip')[0];
 describe('MG-17c the verdict is the first thing on the pane', () => {
   it('lifts a review’s verdict, its sentence and its tone above the fold', () => {
     webview.render(state('REVIEW.md', REVIEW));
-    expect(pane().children[0].className).toContain('verdict-strip');
+    // The dateline is one 11px line; the verdict is still the first BLOCK, and above the body.
+    const order = pane().children.map((c) => c.className);
+    expect(order[0]).toBe('artifact-meta');
+    expect(order[1]).toContain('verdict-strip');
+    expect(order.indexOf('artifact-body')).toBeGreaterThan(1);
     expect(strip().getAttribute('role')).toBe('status');
     expect(strip().hidden).toBe(false);
     expect(strip().className).toContain('tone-mixed');

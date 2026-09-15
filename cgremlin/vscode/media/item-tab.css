@@ -188,6 +188,13 @@ body {
   outline: none;
 }
 
+/* §7: the dateline — one 11px line naming the document and its age. */
+.artifact-meta {
+  margin: 0 0 8px;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+}
+
 /*
  * §3 — the verdict, above the fold. The tone is one custom property, set by the tone class, so
  * the rule, the label and the wash are the same colour by construction and not by repetition.

@@ -11,7 +11,8 @@
  *
  * Runs in a browser context (R40).
  */
-import { BRIEF_ONLY_NOTICE, briefOnly } from '../../model/artifact-labels';
+import { artifactLabel, BRIEF_ONLY_NOTICE, briefOnly } from '../../model/artifact-labels';
+import { compactAge } from '../../model/row-composition';
 import { stripLeadingH1 } from '../../model/artifact-outline';
 import type { TabAgent, TabArtifact } from '../../model/item-tab-protocol';
 import { renderArtifact } from '../markdown';
@@ -25,6 +26,7 @@ export interface ArtifactPaneData {
 }
 
 interface Parts {
+  meta: HTMLElement;
   strip: HTMLElement;
   notice: HTMLElement;
   body: HTMLElement;
@@ -56,16 +58,27 @@ function wireAnchors(body: HTMLElement): void {
 export function createArtifactPane(): HTMLElement {
   const pane = el('section', 'pane artifact-pane');
   const parts: Parts = {
+    // §7 budgets one 11px line for this. Without it nothing on screen said whether the review was
+    // written five minutes ago or last month, which is the first thing a reader needs to know.
+    meta: el('p', 'artifact-meta'),
     strip: createVerdictStrip(),
     notice: el('p', 'artifact-notice', BRIEF_ONLY_NOTICE),
     body: el('div', 'artifact-body'),
     rendered: null,
   };
+  pane.appendChild(parts.meta);
   pane.appendChild(parts.strip);
   pane.appendChild(parts.notice);
   pane.appendChild(parts.body);
   PARTS.set(pane, parts);
   return pane;
+}
+
+/** `Review · 3h ago` — the role this document plays, and its age in the row's own wording. */
+function metaOf(artifact: TabArtifact): string {
+  const label = artifactLabel(artifact.name);
+  const age = compactAge(artifact.mtime === '' ? null : artifact.mtime, Date.now());
+  return age === '—' ? label : `${label} · ${age} ago`;
 }
 
 export function patchArtifactPane(pane: HTMLElement, data: ArtifactPaneData): void {
@@ -74,6 +87,7 @@ export function patchArtifactPane(pane: HTMLElement, data: ArtifactPaneData): vo
   // The brief is context, never the answer: when it is ALL there is, the pane says so BEFORE the
   // user starts reading an agent's ORDERS as its verdict.
   const names = data.agent.artifacts.map((artifact) => artifact.name);
+  setText(parts.meta, metaOf(data.artifact));
   setHidden(parts.notice, !briefOnly(names));
   const text = data.artifact.text;
   if (text === null) {
