@@ -124,3 +124,10 @@ describe('§3 the verdict strip carries its tone', () => {
     expect(css).toMatch(/color-mix\(in srgb, var\(--verdict-tone\) 10%, transparent\)/);
   });
 });
+
+describe('a jump inside a review clears the sticky chrome', () => {
+  it('gives the anchors and the headings a scroll margin the chrome’s height', () => {
+    expect(css).toMatch(/--sticky-chrome:/);
+    expect(css).toMatch(/scroll-margin-top:\s*var\(--sticky-chrome\)/);
+  });
+});

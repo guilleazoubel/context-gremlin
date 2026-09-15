@@ -192,8 +192,10 @@ function patchPane(current: ItemTabState, f: Frame): void {
   if (pane.tabIndex !== -1) pane.tabIndex = -1;
   if (showing === part?.key) return;
   showing = part?.key ?? null;
-  // A screen reader must land on the new content, and a new document starts at its top.
-  pane.scrollTop = 0;
+  // A screen reader must land on the new content, and a new document starts at its top. It is the
+  // DOCUMENT that scrolls — `.pane` is not a scroll container, so setting its `scrollTop` moved
+  // nothing at all and a new part opened halfway down the last one's scroll.
+  window.scrollTo(0, 0);
   pane.focus();
 }
 

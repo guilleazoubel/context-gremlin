@@ -10,6 +10,12 @@
  */
 
 body {
+  /*
+   * How far the sticky chrome reaches down the document. A jump to a finding has to clear it, so
+   * this is deliberately an OVER-estimate: a heading that lands a little low is read; one that
+   * lands under the chrome is invisible, which is the defect.
+   */
+  --sticky-chrome: 132px;
   margin: 0;
   padding: 0 16px 32px;
   font-family: var(--vscode-font-family);
@@ -339,6 +345,17 @@ body {
 
 .artifact-body table {
   max-width: none;
+}
+
+/*
+ * A jump inside a review — `[2]` to finding 2 — scrolls the heading to the top of the DOCUMENT,
+ * which is underneath the sticky chrome. The margin is what keeps the heading readable.
+ */
+.artifact-body :target,
+.artifact-body [id],
+.artifact-body h2,
+.artifact-body h3 {
+  scroll-margin-top: var(--sticky-chrome);
 }
 
 /* §7: a 100-character permalink is not a word, and may break anywhere rather than overflow. */

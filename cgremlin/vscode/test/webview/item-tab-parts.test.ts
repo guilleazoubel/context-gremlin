@@ -125,6 +125,18 @@ describe('the selected tab is on screen at 400px', () => {
   });
 });
 
+describe('a new part starts at the top of the document', () => {
+  it('scrolls the DOCUMENT, because the pane is not what scrolls', () => {
+    webview.render(state({ focus: { kind: 'ticket' } }));
+    const before = dom.scrolledTo.length;
+    webview.render(state());
+    expect(dom.scrolledTo.slice(before)).toEqual([[0, 0]]);
+    // Staying on the same part leaves the reader where they were.
+    webview.render(state());
+    expect(dom.scrolledTo.slice(before)).toHaveLength(1);
+  });
+});
+
 describe('the keyboard model is roving, and arrow-select acts', () => {
   it('ArrowRight moves to the next part and selects it', () => {
     webview.render(state());
