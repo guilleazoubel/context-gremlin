@@ -16,9 +16,9 @@ import { DiscoveryScheduler, type Clock, type Tickable } from '../discovery/sche
 import { InventoryScanner, type ScanReport } from '../inventory/inventory-scanner';
 import { JiraRestSource } from '../jira/jira-rest-source';
 import { JiraScanner } from '../jira/jira-scanner';
-import { JiraStore, TicketDetailCache } from '../jira/jira-store';
+import { JiraStore, TicketDetailCache, type TicketDetailResult } from '../jira/jira-store';
 import { ReviewThreadScanner, ReviewThreadStore, threadCacheKey, type ReviewThreadCache } from '../gh/review-threads';
-import { PrStateResolver, PrStateStore } from '../gh/pr-state';
+import { PrStateResolver, PrStateStore, prStateKey } from '../gh/pr-state';
 import { RespondSessionFactory } from '../pipeline/respond-session-factory';
 import { QaSessionFactory } from '../pipeline/qa-session-factory';
 import { QaTriggerLeg } from '../qa/qa-trigger';
@@ -109,6 +109,41 @@ export interface BuildEngineOptions {
    * does). `null` forces R35's `notConfigured`.
    */
   jiraSource?: JiraSource | null;
+  /**
+   * Overrides the ticket-detail reader — a test seam only, so a brief that
+   * depends on the ticket text can be asserted without standing up a Jira.
+   */
+  ticketDetail?: { detail(key: string): Promise<TicketDetailResult> };
+}
+
+/** The artifacts an earlier session on this ticket may have left behind, in the order a reader wants them. */
+const QA_PRIOR_ARTIFACTS = ['REVIEW.md', 'FINDINGS.md', 'PLAN.md', 'COMMENTS.md'] as const;
+
+/**
+ * The ABSOLUTE paths of every artifact that ACTUALLY EXISTS in a session
+ * whose `lineage.ticket` is this ticket — the QA agent's "what we already
+ * know". Existence-checked, so the brief never hands it a path into nothing,
+ * and tolerant: an unreadable session store simply contributes nothing
+ * rather than failing the run.
+ */
+async function priorArtifactsFor(
+  fs: SessionFileSystem,
+  store: SessionStore,
+  sessionsDir: string,
+  ticket: string | null,
+  selfId: string,
+): Promise<string[]> {
+  if (ticket === null) return [];
+  const sessions = await store.list().catch(() => []);
+  const paths: string[] = [];
+  for (const session of sessions) {
+    if (session.id === selfId || session.lineage.ticket !== ticket) continue;
+    for (const name of QA_PRIOR_ARTIFACTS) {
+      const path = `${sessionsDir}/${session.id}/${name}`;
+      if (await fs.exists(path)) paths.push(path);
+    }
+  }
+  return paths;
 }
 
 /**
@@ -225,6 +260,48 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
         return { ...empty, threads };
       }
     },
+    /**
+     * Phase 15 — everything the QA brief carries beyond the ticket. The user's
+     * ask was that the verification agent "have access to the jira with the
+     * ACs, the pr, and our review/findings/development files for reference",
+     * so: the merged PR from the pr-state cache (NO new gh call — that cache
+     * is exactly what survives a PR leaving the open-PR inventory), and the
+     * ABSOLUTE PATHS of every artifact an earlier session on this same ticket
+     * actually wrote. Paths, not contents: the agent reads what it needs and
+     * the brief stays inside its cap. A file that is not there is simply
+     * absent — never a path the agent would follow into nothing.
+     */
+    qaContext: async (session) => {
+      const pr = session.pr;
+      const base = {
+        prRepo: pr?.repo ?? null,
+        prNumber: pr?.number ?? null,
+        // The factory records the MERGE commit here — the thing QA is
+        // supposed to be running.
+        mergeSha: pr?.headSha ?? null,
+      };
+      const cache = pr === null ? {} : await prStateResolver.cached().catch(() => ({}));
+      const entry = pr === null ? undefined : cache[prStateKey(pr.repo, pr.number)];
+      const change =
+        pr === null
+          ? null
+          : {
+              title: entry?.title ?? pr.title,
+              author: entry?.author ?? pr.author,
+              mergedAt: entry?.mergedAt ?? null,
+              changedFiles: entry?.changedFiles ?? null,
+              additions: entry?.additions ?? null,
+              deletions: entry?.deletions ?? null,
+              // The pr-state cache is a row, not a diff: the brief tells the
+              // agent the three ways to read the file list itself.
+              files: [],
+            };
+      return {
+        ...base,
+        change,
+        priorArtifacts: await priorArtifactsFor(adapters.fs, store, sessionsDir, session.lineage.ticket, session.id),
+      };
+    },
     tickets: {
       forBrief: async (key) => {
         const { ticket } = await ticketDetail.detail(key);
@@ -286,11 +363,13 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
           extraFields: config.jira.extraFields,
         })
       : null);
-  const ticketDetail = new TicketDetailCache({
-    source: jiraSource,
-    snapshot: () => jiraScanner.lastReport(),
-    now: adapters.now,
-  });
+  const ticketDetail =
+    opts.ticketDetail ??
+    new TicketDetailCache({
+      source: jiraSource,
+      snapshot: () => jiraScanner.lastReport(),
+      now: adapters.now,
+    });
   const jiraProjectKeys = config.jira?.projectKeys ?? [];
   /**
    * R28 — every ticket key a PR branch or a session's lineage named, so the
