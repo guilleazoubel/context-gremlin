@@ -96,7 +96,8 @@
       },
       "dismissed": false,
       "dismissedAt": null,
-      "qaAttempt": null
+      "qaAttempt": null,
+      "qaDeploy": null
     },
     {
       "id": "pr:acme/api#56",
@@ -151,7 +152,8 @@
       },
       "dismissed": false,
       "dismissedAt": null,
-      "qaAttempt": null
+      "qaAttempt": null,
+      "qaDeploy": null
     },
     {
       "id": "pr:acme/api#77",
@@ -234,7 +236,8 @@
       },
       "dismissed": false,
       "dismissedAt": null,
-      "qaAttempt": null
+      "qaAttempt": null,
+      "qaDeploy": null
     },
     {
       "id": "pr:acme/legacy#9",
@@ -283,7 +286,8 @@
       },
       "dismissed": false,
       "dismissedAt": null,
-      "qaAttempt": null
+      "qaAttempt": null,
+      "qaDeploy": null
     },
     {
       "id": "pr:acme/web#101",
@@ -338,7 +342,8 @@
       },
       "dismissed": false,
       "dismissedAt": null,
-      "qaAttempt": null
+      "qaAttempt": null,
+      "qaDeploy": null
     },
     {
       "id": "pr:acme/web#102",
@@ -408,7 +413,8 @@
       },
       "dismissed": false,
       "dismissedAt": null,
-      "qaAttempt": null
+      "qaAttempt": null,
+      "qaDeploy": null
     },
     {
       "id": "pr:acme/web#200",
@@ -482,7 +488,8 @@
       },
       "dismissed": false,
       "dismissedAt": null,
-      "qaAttempt": null
+      "qaAttempt": null,
+      "qaDeploy": null
     },
     {
       "id": "session:inv-stacktrace-1",
@@ -521,7 +528,8 @@
       },
       "dismissed": false,
       "dismissedAt": null,
-      "qaAttempt": null
+      "qaAttempt": null,
+      "qaDeploy": null
     },
     {
       "id": "ticket:HB-627",
@@ -645,7 +653,8 @@
       },
       "dismissed": false,
       "dismissedAt": null,
-      "qaAttempt": null
+      "qaAttempt": null,
+      "qaDeploy": null
     }
   ]
 }
