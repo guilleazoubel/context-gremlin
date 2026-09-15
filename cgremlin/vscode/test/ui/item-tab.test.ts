@@ -347,6 +347,7 @@ describe('R48 the three focuses', () => {
     expect(state.agents.find((a) => a.sessionId === 'dev-hb-627')?.artifacts[0].name).toBe(
       'NOTES.md',
     );
+    expect(state.focus).toEqual({ kind: 'artifact', sessionId: 'dev-hb-627', name: 'NOTES.md' });
   });
 
   it('a ticket focus carries the ticket, as TEXT (R33)', async () => {
@@ -375,7 +376,9 @@ describe('R48 the three focuses', () => {
     h.ready();
     const state = h.state();
     expect(state.selectedSessionId).toBe('inv-hb-627');
-    expect(state.focus).toEqual({ kind: 'agent', sessionId: 'inv-hb-627' });
+    // Phase 17 §1: the fallback goes one step further than the agent — it opens the pane on that
+    // agent's primary artifact, because an agent is not a document and a tab shows a document.
+    expect(state.focus).toEqual({ kind: 'artifact', sessionId: 'inv-hb-627', name: 'PLAN.md' });
   });
 });
 
@@ -420,7 +423,8 @@ describe('R42/R51 the button row', () => {
       ticket: null,
       ticketError: null,
       buttons: [],
-    }) as ItemTabState;
+      parts: [],
+    }) as unknown as ItemTabState;
 
   it('offers Start review on a teammate PR, and only a SELF-review on mine', () => {
     const teammate = buttonsFor(tabState(itemOf('pr:acme/web#101'), null));

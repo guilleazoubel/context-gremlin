@@ -27,6 +27,8 @@ import {
 } from '../model/item-tab-protocol';
 import type { ItemDetailResponse } from '../model/work-items';
 import { rowActionsForLists, type ActionFacts } from '../model/row-actions';
+import { partsOf } from '../model/item-tab-parts';
+import { primaryArtifactName } from '../model/artifact-labels';
 import type { CoreConfigView } from '../model/items';
 import { withEngineRetry, type EngineRevival } from './engine-retry';
 import type { WorktreeSwapper } from './preview';
@@ -95,7 +97,7 @@ export class ItemTab {
     }
     this.path = path;
     this.detail = detail;
-    this.focus = resolveFocus(detail.item, focus);
+    this.focus = resolveFocus(detail.item, artifactNamesOf(detail), focus);
     this.selected = selectedFor(detail.item, this.focus);
     this.show();
     this.render();
@@ -108,7 +110,10 @@ export class ItemTab {
     if (this.detail === null) return;
     if (!this.detail.item.agents.some((agent) => agent.sessionId === sessionId)) return;
     this.selected = sessionId;
-    this.focus = { kind: 'agent', sessionId };
+    this.focus =
+      this.detail === null
+        ? { kind: 'agent', sessionId }
+        : resolveFocus(this.detail.item, artifactNamesOf(this.detail), { kind: 'agent', sessionId });
     this.render();
     this.track(this.loadArtifacts());
     await this.followWorktree();
@@ -295,8 +300,10 @@ export class ItemTab {
       ticketError: detail.ticketError,
       lists: [...item.lists],
       buttons: [],
+      parts: [],
     };
     state.buttons = buttonsFor(state);
+    state.parts = partsOf(state);
     return state;
   }
 
@@ -414,11 +421,39 @@ function prView(pr: WorkItemPr): TabPr {
   };
 }
 
-/** An unknown focus falls back to the primary agent rather than rendering blank (R48). */
-function resolveFocus(item: WorkItem, requested?: ItemFocusMessage): ItemFocusMessage {
+/** The artifact names the engine listed, per session — what an artifact focus is checked against. */
+function artifactNamesOf(detail: ItemDetailResponse): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  for (const [sessionId, listings] of Object.entries(detail.artifacts)) {
+    out[sessionId] = listings.map((listing) => listing.name);
+  }
+  return out;
+}
+
+/**
+ * An unknown focus falls back to the primary agent rather than rendering blank (R48).
+ *
+ * Phase 17 §1: an AGENT focus resolves one step further, to that agent's primary artifact, so the
+ * pane opens on the answer rather than on a pane that no longer exists. An artifact focus naming a
+ * file the engine did not list falls back the same way — the union is parsed from untrusted
+ * webview input and drives the worktree swap, so it may never resolve to nothing.
+ */
+function resolveFocus(
+  item: WorkItem,
+  names: Record<string, string[]>,
+  requested?: ItemFocusMessage,
+): ItemFocusMessage {
   if (requested !== undefined) {
     if (requested.kind === 'agent') {
-      if (item.agents.some((agent) => agent.sessionId === requested.sessionId)) return requested;
+      if (item.agents.some((agent) => agent.sessionId === requested.sessionId)) {
+        return openingFocusOf(requested.sessionId, names);
+      }
+    } else if (requested.kind === 'artifact') {
+      const known = names[requested.sessionId] ?? [];
+      if (known.includes(requested.name)) return requested;
+      if (item.agents.some((agent) => agent.sessionId === requested.sessionId)) {
+        return openingFocusOf(requested.sessionId, names);
+      }
     } else if (requested.kind === 'pr') {
       if (item.prs.some((pr) => pr.repo === requested.repo && pr.number === requested.number)) {
         return requested;
@@ -428,15 +463,23 @@ function resolveFocus(item: WorkItem, requested?: ItemFocusMessage): ItemFocusMe
     }
   }
   const primary = item.agents[0];
-  if (primary !== undefined) return { kind: 'agent', sessionId: primary.sessionId };
+  if (primary !== undefined) return openingFocusOf(primary.sessionId, names);
   const pr = item.prs[0];
   if (pr !== undefined) return { kind: 'pr', repo: pr.repo, number: pr.number };
   return { kind: 'ticket' };
 }
 
+/** The agent's primary artifact where it has one, and the agent itself where it has none. */
+function openingFocusOf(sessionId: string, names: Record<string, string[]>): ItemFocusMessage {
+  const primary = primaryArtifactName(names[sessionId] ?? []);
+  return primary === null
+    ? { kind: 'agent', sessionId }
+    : { kind: 'artifact', sessionId, name: primary };
+}
+
 function selectedFor(item: WorkItem | undefined, focus: ItemFocusMessage): string | null {
   if (item === undefined) return null;
-  if (focus.kind === 'agent') return focus.sessionId;
+  if (focus.kind === 'agent' || focus.kind === 'artifact') return focus.sessionId;
   return item.agents[0]?.sessionId ?? null;
 }
 

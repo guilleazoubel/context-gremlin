@@ -8,10 +8,13 @@
  * Pure module — no editor API (MG-B1).
  */
 
+import type { TabPart } from './item-tab-parts';
 import type { WorkListKind } from './work-items';
 
 export type ItemFocusMessage =
   | { kind: 'agent'; sessionId: string }
+  /** Phase 17 §2 — ONE artifact of one agent, which is what a part switcher addresses. */
+  | { kind: 'artifact'; sessionId: string; name: string }
   | { kind: 'ticket' }
   | { kind: 'pr'; repo: string; number: number };
 
@@ -91,6 +94,11 @@ export interface ItemTabState {
   ticketError: string | null;
   /** Decided by the host (R42/R51), rendered by the webview — the rule is not a style. */
   buttons: TabButton[];
+  /**
+   * Phase 17 §1 — the item's parts in their fixed order, which is what the tablist draws. Built
+   * host-side by `model/item-tab-parts` so the webview picks no order of its own.
+   */
+  parts: TabPart[];
 }
 
 export type HostToWebview =
@@ -124,6 +132,13 @@ function parseFocus(value: unknown): ItemFocusMessage | null {
   if (focus.kind === 'agent') {
     const sessionId = text(focus.sessionId);
     return sessionId === null ? null : { kind: 'agent', sessionId };
+  }
+  if (focus.kind === 'artifact') {
+    const sessionId = text(focus.sessionId);
+    const name = text(focus.name);
+    return sessionId === null || name === null
+      ? null
+      : { kind: 'artifact', sessionId, name };
   }
   if (focus.kind === 'pr') {
     const repo = text(focus.repo);
