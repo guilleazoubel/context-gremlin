@@ -185,3 +185,54 @@ describe('EnvironmentService.qaBriefContext', () => {
     expect((await service.qaBriefContext(qaSession())).unreachableReason).toBe('timeout after 15000ms');
   });
 });
+
+/**
+ * Phase 16 item 1 — what QA is actually RUNNING. Merging is not deploying: the
+ * only honest answer to "is my change in QA?" comes from the build QA serves,
+ * so this reads `<qa.url><qa.versionPath>` and pulls `qa.versionField` out of
+ * it. Every failure is a `null` — a missing, unparseable or unreachable
+ * endpoint degrades the feature, it never breaks a scan.
+ */
+describe('EnvironmentService.qaVersion', () => {
+  const SHA = '088ce5e07db734834e4948ad3365f4155cd1ae4e';
+
+  it('reads the sha off the default /api/health + version field', async () => {
+    const { service, local } = make(makeConfig({ qa: { url: 'https://qa.example.com' } }));
+    local.queueText({ status: 200, body: JSON.stringify({ status: 'ok', version: SHA }), reason: null });
+    expect(await service.qaVersion(REPO_URL)).toBe(SHA);
+    expect(local.textCalls[0].url).toBe('https://qa.example.com/api/health');
+  });
+
+  it('honours a configured versionPath and a dotted versionField', async () => {
+    const { service, local } = make(
+      makeConfig({ qa: { url: 'https://qa.example.com/', versionPath: '/__build', versionField: 'build.sha' } }),
+    );
+    local.queueText({ status: 200, body: JSON.stringify({ build: { sha: SHA } }), reason: null });
+    expect(await service.qaVersion(REPO_URL)).toBe(SHA);
+    expect(local.textCalls[0].url).toBe('https://qa.example.com/__build');
+  });
+
+  it.each([
+    ['a 404', { status: 404, body: 'not found', reason: 'status 404' }],
+    ['an unparseable body', { status: 200, body: '<html>nope</html>', reason: null }],
+    ['a missing field', { status: 200, body: JSON.stringify({ status: 'ok' }), reason: null }],
+    ['a value that is not a commit sha', { status: 200, body: JSON.stringify({ version: '1.4.2' }), reason: null }],
+    ['an unreachable host', { status: null, body: null, reason: 'connect ECONNREFUSED' }],
+  ])('is null on %s', async (_name, response) => {
+    const { service, local } = make(makeConfig({ qa: { url: 'https://qa.example.com' } }));
+    local.queueText(response);
+    expect(await service.qaVersion(REPO_URL)).toBeNull();
+  });
+
+  it('is null, with no network call at all, when the repo has no QA url', async () => {
+    const { service, local } = make(makeConfig({}));
+    expect(await service.qaVersion(REPO_URL)).toBeNull();
+    expect(local.textCalls.length).toBe(0);
+  });
+
+  it('degrades, never throws, when the fetch itself throws', async () => {
+    const { service, local } = make(makeConfig({ qa: { url: 'https://qa.example.com' } }));
+    local.queueText(new Error('boom'));
+    expect(await service.qaVersion(REPO_URL)).toBeNull();
+  });
+});

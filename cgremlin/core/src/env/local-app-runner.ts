@@ -35,6 +35,18 @@ export interface ExecResult {
   stderr: string;
 }
 
+/**
+ * Phase 16 — one GET whose BODY is the point (the QA version endpoint), as
+ * opposed to `healthcheck`, which polls and reads only the status code.
+ * `body` is null when nothing came back; `reason` is set whenever the request
+ * did not produce a 2xx body.
+ */
+export interface TextResult {
+  status: number | null;
+  body: string | null;
+  reason: string | null;
+}
+
 export interface LocalAppRunner {
   exec(
     command: string,
@@ -57,6 +69,13 @@ export interface LocalAppRunner {
       signal?: AbortSignal;
     },
   ): Promise<HealthResult>;
+  /**
+   * ONE GET, no polling, body capped — what `EnvironmentService.qaVersion`
+   * reads the deployed build sha out of. **Optional**: a harness that only
+   * exercises the local app need not implement it, and a caller that finds it
+   * missing degrades exactly as it degrades on an unreachable endpoint.
+   */
+  getText?(url: string, opts: { timeoutMs: number }): Promise<TextResult>;
   isAlive(proc: LocalAppProcess): Promise<boolean>;
   /** R6: kills only `proc`'s own group; a lingering listener from another group is reported, never killed. */
   stop(proc: LocalAppProcess, opts: { port: number }): Promise<LocalAppStopResult>;

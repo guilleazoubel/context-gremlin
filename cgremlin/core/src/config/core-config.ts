@@ -62,6 +62,16 @@ export const QaEnvironmentSchema = z.object({
   auth: z.enum(['clerk-test', 'vercel-bypass', 'none']).default('none'),
   healthPath: z.string().default('/'),
   healthTimeoutMs: z.number().int().positive().default(15_000),
+  /**
+   * Phase 16 — where QA says WHICH BUILD it is serving, and which field of
+   * that answer carries the commit sha. Merging is not deploying, so this is
+   * the only honest input to "is my change in QA yet?". A repo whose endpoint
+   * is absent degrades to the old merge-keyed behaviour; the default is the
+   * conventional Next.js health route, so a repo that has one needs no config.
+   */
+  versionPath: z.string().default('/api/health'),
+  /** Dotted paths are allowed (`build.sha`); the default is `version`. */
+  versionField: z.string().default('version'),
   posthog: z.object({ project: z.string().min(1), host: z.string().url() }).optional(),
   featureFlags: z.array(z.string().min(1)).default([]),
 });
