@@ -35,9 +35,14 @@ export interface QaTriggerDeps {
   qaFor: (repoSlug: string) => { hasUrl: boolean; hasTestIdentity: boolean };
   qaHealth: (repoSlug: string) => Promise<{ ok: boolean; reason: string | null }>;
   sessions: {
-    existingFor: (ticket: string) => Promise<{ id: string; stageStatus: string } | null>;
+    existingFor: (ticket: string) => Promise<{ id: string; stageStatus: string; claimed?: boolean } | null>;
     activeSessionIds: () => readonly string[];
   };
+  /** R78/E7 — stop the run, then transition to `closed`, once the ticket reaches Done. */
+  stopSession?: (sessionId: string) => Promise<void>;
+  closeSession?: (sessionId: string) => Promise<void>;
+  /** R84 — the repos that have a `qa.url`, for a ticket whose PR the engine never saw. */
+  qaRepos?: () => readonly string[];
   createSession: (ticket: string, slug: string, number: number) => Promise<{ id: string }>;
   startRun: (sessionId: string) => Promise<void>;
   now?: () => Date;
@@ -115,7 +120,14 @@ export class QaTriggerLeg {
         seed.push(this.candidateOf(item, ticket.key, ticket.status, ticket.updatedAt));
         continue;
       }
-      const slug = item.prs[0]?.repo ?? item.agents.find((a) => a.repo !== null)?.repo ?? null;
+      // R84 — a ticket whose PR was merged without a cgremlin session has no
+      // PRs at all. It is still a candidate when exactly one configured repo
+      // has a `qa.url`; anything ambiguous is left to the manual click.
+      const qaRepos = this.deps.qaRepos?.() ?? [];
+      const slug =
+        item.prs[0]?.repo ??
+        item.agents.find((a) => a.repo !== null)?.repo ??
+        (qaRepos.length === 1 ? qaRepos[0] : null);
       if (slug === null || !qaFor(slug).hasUrl) {
         seed.push(this.candidateOf(item, ticket.key, ticket.status, ticket.updatedAt));
         continue;
@@ -123,7 +135,7 @@ export class QaTriggerLeg {
       seed.push({ item, key: ticket.key, status: ticket.status, slug, prs: [...item.prs], updatedAt: ticket.updatedAt });
     }
     const taken = seed
-      .filter((c) => config.qaStatuses.includes(c.status) && c.prs.length > 0)
+      .filter((c) => config.qaStatuses.includes(c.status) && c.slug !== '')
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || a.key.localeCompare(b.key));
     return { taken, seed };
   }
@@ -167,9 +179,16 @@ export class QaTriggerLeg {
     const pr = candidate.prs[0];
     const lockKey = pr === undefined ? `ticket:${candidate.key}` : `pr:${pr.repo}#${pr.number}`;
 
-    // The merge shas — one `gh pr view` per PR on this ONE item, made only
-    // after the slice, so the per-tick ceiling is per slice, not per candidate.
+    // The merge shas — one `gh pr view` per PR on this ONE item (or R84's
+    // ONE `gh pr list --search` when the engine has never seen a PR for it),
+    // made only after the slice, so the per-tick ceiling is per slice, not
+    // per candidate.
     const merged: Array<{ repo: string; number: number; mergeSha: string }> = [];
+    if (candidate.prs.length === 0) {
+      const found = await this.searchMergedPrs(candidate, ordinal);
+      if (found === null) return false;
+      merged.push(...found);
+    }
     for (const item of candidate.prs) {
       const { stdout } = await gh.run([
         'pr', 'view', String(item.number), '--repo', item.repo, '--json', 'mergeCommit,mergedAt,state',
@@ -229,6 +248,75 @@ export class QaTriggerLeg {
     });
   }
 
+  /**
+   * R78/E7 — a ticket reaching `statusCategory: 'Done'` closes its QA
+   * session; otherwise a `ready` session pins the item in `myWork` forever.
+   * It goes through `stop` then a real transition, never a direct save, and
+   * a CLAIMED session is left alone and reported: a claim delays our
+   * housekeeping, never the truth about the ticket.
+   *
+   * MG-38: a session with no `lineage.ticket` is never reached from here,
+   * because `existingFor` is keyed on the ticket.
+   */
+  private async closeDoneTickets(items: readonly WorkItem[], jiraMe: string): Promise<void> {
+    if (this.deps.closeSession === undefined) return;
+    for (const item of items) {
+      const ticket = item.ticket;
+      if (ticket === null || ticket.statusCategory !== 'Done' || ticket.assignee !== jiraMe) continue;
+      const existing = await this.deps.sessions.existingFor(ticket.key);
+      if (existing === null) continue;
+      if (existing.claimed === true) {
+        this.skip(ticket.key, 'ticket is Done but a human holds the conversation claim — left open');
+        continue;
+      }
+      try {
+        await this.deps.stopSession?.(existing.id);
+        await this.deps.closeSession(existing.id);
+      } catch (err) {
+        this.skip(ticket.key, `could not close the qa session — ${errorMessage(err)}`);
+      }
+    }
+  }
+
+  /**
+   * R84/E10 — ONE `gh pr list --search` for a ticket whose PRs the engine has
+   * never seen. Bounded by the same once-per-`(key, identity, ordinal)`
+   * attempt record as everything else, so zero matches means one search and
+   * no retry until the next entry.
+   */
+  private async searchMergedPrs(
+    candidate: Candidate,
+    ordinal: number,
+  ): Promise<Array<{ repo: string; number: number; mergeSha: string }> | null> {
+    const nowIso = (this.deps.now ?? (() => new Date()))().toISOString();
+    const { stdout } = await this.deps.gh.run([
+      'pr', 'list', '--repo', candidate.slug, '--search', candidate.key, '--state', 'merged',
+      '--json', 'number,title,mergeCommit,mergedAt,headRefName,author',
+    ]);
+    const rows = JSON.parse(stdout.trim() === '' ? '[]' : stdout) as Array<{
+      number: number;
+      mergeCommit?: { oid: string } | null;
+    }>;
+    const merged = rows
+      .filter((row) => row.mergeCommit?.oid !== undefined && row.mergeCommit?.oid !== null)
+      .map((row) => ({ repo: candidate.slug, number: row.number, mergeSha: row.mergeCommit!.oid }));
+    if (merged.length === 0) {
+      // The attempt is recorded so the search is not repeated every tick.
+      await this.deps.store.reserve({
+        key: candidate.key,
+        identity: `search:${candidate.slug}`,
+        ordinal,
+        attempt: 1,
+        reservedAt: nowIso,
+        sessionId: null,
+        outcome: 'create-failed',
+      });
+      this.skip(candidate.key, `no merged pr for ${candidate.key}`);
+      return null;
+    }
+    return merged;
+  }
+
   private async scan(): Promise<void> {
     const { config, store, jira, now } = this.deps;
     const nowDate = (now ?? (() => new Date()))();
@@ -244,6 +332,7 @@ export class QaTriggerLeg {
 
     const state = await store.load();
     const items = await this.deps.items();
+    await this.closeDoneTickets(items, snapshot.me);
     const { taken, seed } = this.select(items, snapshot.me);
 
     // E1 — a corrupt store SEEDS ONLY. Not "nothing recorded, therefore

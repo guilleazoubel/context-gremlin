@@ -9,7 +9,7 @@ import { WorkspaceManager } from '../workspace/workspace-manager';
 import { EngineEvents } from '../engine/events';
 import { KeyedLock } from '../api/keyed-lock';
 import { StageRunner } from '../pipeline/stage-runner';
-import { PipelineService } from '../pipeline/pipeline-service';
+import { PipelineService, isClaimed } from '../pipeline/pipeline-service';
 import { ReviewSessionFactory } from '../pipeline/review-session-factory';
 import { ReconciliationTick } from '../discovery/reconciliation';
 import { DiscoveryScheduler, type Clock, type Tickable } from '../discovery/scheduler';
@@ -374,9 +374,28 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
         reason: 'no environment service is configured',
       },
     sessions: {
-      existingFor: async (ticket) => qaFactory.existingFor(ticket),
+      existingFor: async (ticket) => {
+        const session = await qaFactory.existingFor(ticket);
+        return session === null
+          ? null
+          : {
+              id: session.id,
+              stageStatus: session.stageStatus,
+              claimed: isClaimed(session, adapters.now?.() ?? new Date()),
+            };
+      },
       activeSessionIds: () => pipeline.activeSessionIds(),
     },
+    stopSession: async (id) => {
+      await pipeline.stop(id);
+    },
+    closeSession: async (id) => {
+      await pipeline.transition(id, 'closed');
+    },
+    qaRepos: () =>
+      Object.entries(config.environments)
+        .filter(([, env]) => env.qa?.url !== undefined)
+        .map(([slug]) => slug),
     createSession: (ticket, slug, number) => qaFactory.createFromMergedPr(ticket, slug, number),
     startRun: (id) => awaitRunStart(events, id, pipeline.runVerify(id)),
     now: adapters.now,

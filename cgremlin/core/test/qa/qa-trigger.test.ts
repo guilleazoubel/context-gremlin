@@ -265,3 +265,94 @@ describe('single-flight and drain', () => {
     expect(h.leg.inFlight()).toBe(null);
   });
 });
+
+describe('E7/R78 — the Done close is not a bulldozer', () => {
+  function doneItem(): WorkItem {
+    return item({ ticket: ticket({ status: 'Done', statusCategory: 'Done' }) });
+  }
+
+  it('stops the run and transitions a live qa session to closed', async () => {
+    const stopped: string[] = [];
+    const closed: string[] = [];
+    const h = harness({
+      items: [doneItem()],
+      sessions: { existingFor: async () => ({ id: 'qa-1', stageStatus: 'ready', claimed: false }), activeSessionIds: () => [] },
+      stopSession: async (id) => {
+        stopped.push(id);
+      },
+      closeSession: async (id) => {
+        closed.push(id);
+      },
+    });
+    await h.leg.run();
+    expect(stopped).toEqual(['qa-1']);
+    expect(closed).toEqual(['qa-1']);
+  });
+
+  it('leaves a CLAIMED session alone and reports it as skipped', async () => {
+    const closed: string[] = [];
+    const h = harness({
+      items: [doneItem()],
+      sessions: { existingFor: async () => ({ id: 'qa-1', stageStatus: 'ready', claimed: true }), activeSessionIds: () => [] },
+      closeSession: async (id) => {
+        closed.push(id);
+      },
+    });
+    await h.leg.run();
+    expect(closed).toEqual([]);
+    expect(h.leg.lastReport().skipped.some((s) => s.why.includes('claim'))).toBe(true);
+    expect(h.leg.lastReport().errors).toEqual([]);
+  });
+
+  it('a session with no ticket key is never auto-closed (MG-38)', async () => {
+    const closed: string[] = [];
+    const h = harness({
+      items: [item({ ticket: null })],
+      closeSession: async (id) => {
+        closed.push(id);
+      },
+    });
+    await h.leg.run();
+    expect(closed).toEqual([]);
+  });
+});
+
+describe('R84/E10 — the PR-less entry', () => {
+  function prless(): WorkItem {
+    return item({ prs: [] });
+  }
+
+  it('MG-31 — makes ONE gh pr list --search, and does not search again for the same ordinal', async () => {
+    const h = harness({ items: [prless()], qaRepos: () => [REPO] });
+    await h.store.observe('HB-1', 'In Progress');
+    h.gh.queueResponse({
+      stdout: JSON.stringify([{ number: 77, mergeCommit: { oid: MERGE_SHA }, mergedAt: '2026-09-14T00:00:00.000Z' }]),
+    });
+    await h.leg.run();
+    expect(h.gh.calls[0]).toEqual([
+      'pr', 'list', '--repo', REPO, '--search', 'HB-1', '--state', 'merged',
+      '--json', 'number,title,mergeCommit,mergedAt,headRefName,author',
+    ]);
+    expect(h.created).toEqual(['HB-1:acme/app#77']);
+    await h.leg.run();
+    expect(h.gh.calls.length).toBe(1);
+  });
+
+  it('zero matches is a skip with a reason, and the attempt is recorded', async () => {
+    const h = harness({ items: [prless()], qaRepos: () => [REPO] });
+    await h.store.observe('HB-1', 'In Progress');
+    h.gh.queueResponse({ stdout: '[]' });
+    await h.leg.run();
+    expect(h.created).toEqual([]);
+    expect(h.leg.lastReport().skipped[0].why).toContain('no merged pr for HB-1');
+    expect((await h.store.load()).tickets['HB-1'].attempts.length).toBe(1);
+  });
+
+  it('no repo can be named ⇒ nothing is searched at all', async () => {
+    const h = harness({ items: [prless()], qaRepos: () => [] });
+    await h.store.observe('HB-1', 'In Progress');
+    await h.leg.run();
+    expect(h.gh.calls).toEqual([]);
+    expect(h.created).toEqual([]);
+  });
+});
