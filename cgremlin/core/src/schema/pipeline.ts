@@ -57,7 +57,7 @@ export const QA_PHASES = [
 export type QaPhase = (typeof QA_PHASES)[number];
 
 /** The phases a verification run may start from. */
-export const QA_RUNNABLE_FROM = ['queued', 'ready', 'not_ready', 'failed'] as const;
+export const QA_RUNNABLE_FROM: readonly QaPhase[] = ['queued', 'ready', 'not_ready', 'failed'];
 
 export type PhaseFor<M extends SessionMode> = M extends 'investigation'
   ? InvestigationPhase

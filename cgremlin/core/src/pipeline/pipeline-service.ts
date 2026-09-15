@@ -21,6 +21,7 @@ import type { GitRunner } from '../git/git-runner';
 import type { EngineEvents } from '../engine/events';
 import type { DevelopmentSession, InvestigationSession, Session } from '../schema/session';
 import type { RespondPhase, ReviewPhase } from '../schema/pipeline';
+import { QA_RUNNABLE_FROM } from '../schema/pipeline';
 import type { LastRun, StageName } from '../schema/stage';
 import { KeyedLock } from '../api/keyed-lock';
 import { awaitRunStart } from './run-start';
@@ -37,10 +38,23 @@ import {
   renderReviewBrief,
   renderReviewPrompt,
   STAGE_ENTRY_PROMPT,
+  renderQaBrief,
+  renderQaPrompt,
+  EMPTY_QA_ENVIRONMENT,
   type EnvironmentBriefContext,
+  type QaBriefContext,
 } from './prompts';
 import { ABORTED_REASON, EnvironmentAbortedError, type EnvironmentService } from '../env/environment-service';
-import { evaluateFindings, evaluatePlan, evaluateRereview, evaluateReview, nextReviewVersion, readNonEmpty } from './artifacts';
+import {
+  evaluateFindings,
+  evaluatePlan,
+  evaluateQa,
+  evaluateRereview,
+  evaluateReview,
+  nextReviewVersion,
+  nextVersion,
+  readNonEmpty,
+} from './artifacts';
 import { assertCanPromote } from './plan-gate';
 import { RunInProgressError, WorkspaceMissingError, type StageRunResult } from './stage-runner';
 import { TERMINAL_PHASES_BY_MODE } from '../workspace/workspace-in-use';
@@ -51,6 +65,8 @@ export interface PipelineConfig {
   worktreesDir: string; // absolute; worktree = `${worktreesDir}/${sessionId}`
   defaultBaseRef: string; // e.g. 'origin/main'
   reviewSkillCommand?: string;
+  /** R75 — the QA skill, an enhancement that degrades silently when absent. */
+  qaSkillCommand?: string;
   includeLiveUiCheck?: boolean;
   /** The runner a claim on a never-run session records, so `claude --resume` knows what it is resuming (R20). */
   runnerKind: 'claude-code' | 'codex';
@@ -88,6 +104,15 @@ export interface PipelineServiceDeps {
   respondContext?: (
     session: Session,
   ) => Promise<Omit<RespondBriefContext, 'sessionDir' | 'prRepo' | 'prNumber' | 'ticketContext'>>;
+  /**
+   * Phase 15 — what the QA brief carries beyond the ticket: the merged PR's
+   * shape and the absolute paths of what earlier sessions on this ticket
+   * already wrote. Gathered by the host, which owns the inventory and the
+   * session list. Absent means a brief built from the session's own `pr`.
+   */
+  qaContext?: (
+    session: Session,
+  ) => Promise<Omit<QaBriefContext, 'sessionDir' | 'ticket' | 'ticketContext' | 'env'>>;
 }
 
 /** What `prepareEnvironment` hands back: the brief context, whether THIS call started the app, and the teardown that undoes both. */
@@ -725,6 +750,146 @@ export class PipelineService {
     }
   }
 
+  /**
+   * The QA brief's non-ticket context: the host's `qaContext` when one is
+   * wired, otherwise what the session itself already knows. Never throws —
+   * a context failure degrades the brief, exactly as `ticketContext` does.
+   */
+  private async qaContext(session: Session): Promise<Omit<QaBriefContext, 'sessionDir' | 'ticket' | 'ticketContext' | 'env'>> {
+    const fallback = {
+      prRepo: session.pr?.repo ?? null,
+      prNumber: session.pr?.number ?? null,
+      mergeSha: session.pr?.headSha ?? null,
+      change: null,
+      priorArtifacts: [],
+    };
+    if (this.deps.qaContext === undefined) return fallback;
+    return this.deps.qaContext(session).catch(() => fallback);
+  }
+
+  /** Composes the QA brief and its prompt. Pure of session state — used by both `runVerify` and `prepareQaSession`. */
+  private async composeQaBrief(session: Session): Promise<{ brief: string; prompt: string }> {
+    const sessionDir = this.sessionDir(session.id);
+    const env =
+      (await this.deps.environment?.qaBriefContext(session)) ?? { ...EMPTY_QA_ENVIRONMENT };
+    const brief = renderQaBrief({
+      sessionDir,
+      ticket: session.lineage.ticket ?? session.id,
+      ticketContext: await this.ticketContext(session.lineage.ticket),
+      env,
+      ...(await this.qaContext(session)),
+    });
+    return {
+      brief,
+      prompt: renderQaPrompt({ sessionDir, qaSkillCommand: this.deps.config.qaSkillCommand }),
+    };
+  }
+
+  /**
+   * R73 — the chat-only primitive. Composes and writes `BRIEF.md` with NO
+   * run: no `AGENT_STATE`, no `lastRun`, no phase change. `StageRunner` is
+   * otherwise the only writer of `BRIEF.md`, so without this a chat-only
+   * session hands the user an empty directory.
+   *
+   * Takes the per-session lock (nothing below it does), and refuses while a
+   * run is in flight — a live agent is reading that exact file.
+   */
+  async prepareQaSession(id: string): Promise<Session> {
+    const session = await this.deps.store.load(id);
+    if (session.mode !== 'qa') {
+      throw new UnsupportedStageError(`Session '${id}' is not a qa session (mode=${session.mode})`);
+    }
+    // Composed BEFORE the lock: it can reach Jira, gh and the QA health
+    // check, and the locking invariant keeps slow work out of the lock.
+    const { brief } = await this.composeQaBrief(session);
+    return this.lock.withLock(id, async () => {
+      const fresh = await this.deps.store.load(id);
+      if (this.deps.stageRunner.activeSessionIds().includes(id)) {
+        throw new RunInProgressError(id);
+      }
+      await this.deps.fs.mkdir(this.sessionDir(id), { recursive: true });
+      await this.deps.fs.writeFile(`${this.sessionDir(id)}/BRIEF.md`, brief);
+      return fresh;
+    });
+  }
+
+  /**
+   * The twin of `runReview` (R68): advisory unlocked claim check,
+   * `prepareEnvironment` BEFORE the lock, a fresh load inside it,
+   * `transitionUnlocked(id,'verifying')` in `preRun`, teardown in the outer
+   * `finally`. Nothing is ever committed, and nothing is ever posted.
+   */
+  async runVerify(id: string): Promise<Session> {
+    const session = await this.deps.store.load(id);
+    if (session.mode !== 'qa') {
+      throw new UnsupportedStageError(`Session '${id}' cannot run verify (mode=${session.mode})`);
+    }
+    // R19, advisory and UNLOCKED — see runFindings for why both sites exist.
+    if (isClaimed(session, this.now())) {
+      throw new HumanTurnInProgressError(id);
+    }
+    if (!QA_RUNNABLE_FROM.includes(session.stageStatus)) {
+      throw new UnsupportedStageError(`Session '${id}' cannot run verify (stage=${session.stageStatus})`);
+    }
+
+    const sessionDir = this.sessionDir(id);
+    const prep = await this.prepareEnvironment(id, 'verify', session);
+    const { brief, prompt } = await this.composeQaBrief(session);
+    // Archive BEFORE the run, unlocked, exactly as `runRereview` archives
+    // REVIEW.md: a re-verification must not let the agent read (or the
+    // parser see) the previous round's verdict.
+    const existing = await readNonEmpty(this.deps.fs, `${sessionDir}/QA.md`);
+    if (existing !== null) {
+      const version = await nextVersion(this.deps.fs, sessionDir, 'QA');
+      await this.deps.fs.writeFile(`${sessionDir}/QA-v${version}.md`, existing);
+      await this.deps.fs.remove(`${sessionDir}/QA.md`);
+    }
+    try {
+      let preRunCommitted = false;
+      let result: StageRunResult;
+      try {
+        result = await this.runStageLocked(id, 'verify', brief, prompt, async () => {
+          const fresh = await this.deps.store.load(id);
+          // Authoritative (R9/R19) — see runFindings.
+          await this.assertNoHumanTurn(fresh);
+          if (fresh.mode !== 'qa' || !QA_RUNNABLE_FROM.includes(fresh.stageStatus)) {
+            throw new UnsupportedStageError(
+              `Session '${id}' cannot run verify (mode=${fresh.mode}, stage=${fresh.stageStatus})`,
+            );
+          }
+          if (!fresh.workspace.worktreePath) {
+            throw new WorkspaceMissingError(id);
+          }
+          await this.transitionUnlocked(id, 'verifying');
+          preRunCommitted = true;
+        });
+      } catch (err) {
+        if (preRunCommitted) {
+          await this.transition(id, 'failed');
+        }
+        throw err;
+      }
+
+      const { outcome, verdict } = await evaluateQa(result.exit, this.deps.fs, sessionDir);
+      return await this.lock.withLock(id, async () => {
+        const before = await this.deps.store.load(id);
+        // ONE save (runReview's discipline): a reader between two separate
+        // writes could see `ready` with a stale verdict still attached.
+        let after = applyTransition(before, outcome);
+        if (after.mode === 'qa') {
+          const verifiedSha = verdict === null ? after.qa.verifiedSha : (after.pr?.headSha ?? null);
+          after = { ...after, qa: { verifiedSha, verdict } };
+        }
+        await this.deps.store.save(after);
+        this.deps.events.emit('session.transitioned', { session: after, from: before.stageStatus, to: outcome });
+        return after;
+      });
+    } finally {
+      // OUTSIDE the preRunCommitted try/catch (R4 AMENDED); takes no session lock.
+      await prep.teardown();
+    }
+  }
+
   async runReview(id: string): Promise<Session> {
     // Only the mode is checked here (immutable) — the actual eligibility
     // check (stageStatus/pr/worktree) is race-sensitive and must run on a
@@ -960,8 +1125,7 @@ export class PipelineService {
       case 'respond':
         return this.runRespond(id);
       case 'verify':
-        // Wired in A5 (runVerify). Named here so STAGE_NAMES stays exhaustive.
-        throw new UnsupportedStageError(`Stage 'verify' is not runnable yet`);
+        return this.runVerify(id);
     }
   }
 
