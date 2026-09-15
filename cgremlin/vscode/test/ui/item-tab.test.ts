@@ -16,7 +16,7 @@ import { FakeHost, type FakeWebviewPanel } from '../support/fake-host';
 import { startStubServer, type StubServerHandle } from '../support/stub-server';
 import itemsFixture from '../support/fixtures/items.json';
 import type { ItemsResponse, WorkItem } from '../../src/model/work-items';
-import type { ItemTabState } from '../../src/model/item-tab-protocol';
+import { parseWebviewMessage, type ItemTabState } from '../../src/model/item-tab-protocol';
 
 const STATE_DIR = '/tmp/cgremlin-fixture';
 const MEDIA = '/ext/media';
@@ -347,6 +347,7 @@ describe('R48 the three focuses', () => {
     expect(state.agents.find((a) => a.sessionId === 'dev-hb-627')?.artifacts[0].name).toBe(
       'NOTES.md',
     );
+    expect(state.focus).toEqual({ kind: 'artifact', sessionId: 'dev-hb-627', name: 'NOTES.md' });
   });
 
   it('a ticket focus carries the ticket, as TEXT (R33)', async () => {
@@ -375,7 +376,9 @@ describe('R48 the three focuses', () => {
     h.ready();
     const state = h.state();
     expect(state.selectedSessionId).toBe('inv-hb-627');
-    expect(state.focus).toEqual({ kind: 'agent', sessionId: 'inv-hb-627' });
+    // Phase 17 §1: the fallback goes one step further than the agent — it opens the pane on that
+    // agent's primary artifact, because an agent is not a document and a tab shows a document.
+    expect(state.focus).toEqual({ kind: 'artifact', sessionId: 'inv-hb-627', name: 'PLAN.md' });
   });
 });
 
@@ -420,7 +423,8 @@ describe('R42/R51 the button row', () => {
       ticket: null,
       ticketError: null,
       buttons: [],
-    }) as ItemTabState;
+      parts: [],
+    }) as unknown as ItemTabState;
 
   it('offers Start review on a teammate PR, and only a SELF-review on mine', () => {
     const teammate = buttonsFor(tabState(itemOf('pr:acme/web#101'), null));
@@ -490,5 +494,144 @@ describe('R42/R51 the button row', () => {
     expect(agent.mode).toBe('respond');
     expect(agent.phase).toBe('triaging');
     expect(agent.glyph).toBe('🔄');
+  });
+});
+
+/**
+ * Phase 17 §3 / task 11, host half — MG-17d. `openFile` is untrusted webview input, so all four
+ * clauses are required before a file is ever opened, and any failure is one warning and no open.
+ */
+describe('MG-17d openFile opens a file only inside the selected agent’s worktree', () => {
+  const ROOT = '/tmp/cgremlin-fixture/worktrees/pr-acme-web-102';
+
+  async function opened(): Promise<Harness> {
+    const h = await harness();
+    h.host.files.set(`${ROOT}/src/web-content.ts`, 'x');
+    await h.tab.open('pr/acme/web/102');
+    h.ready();
+    return h;
+  }
+
+  it('opens the file at the line, relative to the worktree', async () => {
+    const h = await opened();
+    h.panel().webview.emit({ type: 'openFile', path: 'src/web-content.ts', line: 88 });
+    await h.tab.settled();
+    expect(h.host.callsOf('openTextDocument')[0].args).toEqual([`${ROOT}/src/web-content.ts`, 88]);
+    expect(h.host.callsOf('showWarningMessage')).toEqual([]);
+  });
+
+  it('refuses an escape, an absolute path and a file that is not there — one warning, no open', async () => {
+    for (const path of ['../../etc/passwd', '/etc/passwd', 'src/missing.ts']) {
+      const h = await opened();
+      h.panel().webview.emit({ type: 'openFile', path, line: 1 });
+      await h.tab.settled();
+      expect(h.host.callsOf('openTextDocument')).toEqual([]);
+      expect(h.host.callsOf('showWarningMessage')).toHaveLength(1);
+      expect(h.host.callsOf('showWarningMessage')[0].args[0]).toContain(path);
+    }
+  });
+
+  it('refuses outright when the selected agent has no worktree', async () => {
+    const h = await harness();
+    await h.tab.open('pr/acme/web/101');
+    h.ready();
+    h.panel().webview.emit({ type: 'openFile', path: 'src/a.ts', line: 1 });
+    await h.tab.settled();
+    expect(h.host.callsOf('openTextDocument')).toEqual([]);
+    expect(h.host.callsOf('showWarningMessage')).toHaveLength(1);
+  });
+
+  it('rejects a malformed openFile at the parser, before the host sees it', () => {
+    for (const message of [
+      { type: 'openFile', path: '', line: 1 },
+      { type: 'openFile', path: 'a.ts' },
+      { type: 'openFile', path: 'a.ts', line: 0 },
+      { type: 'openFile', path: 'a.ts', line: 1.5 },
+      { type: 'openFile', path: 'a.ts', line: '1' },
+    ]) {
+      expect(parseWebviewMessage(message)).toBeNull();
+    }
+    expect(parseWebviewMessage({ type: 'openFile', path: 'a.ts', line: 3 })).toEqual({
+      type: 'openFile',
+      path: 'a.ts',
+      line: 3,
+    });
+  });
+});
+
+/**
+ * Phase 17 §6 / task 12 — the action row stops drawing three equal buttons.
+ *
+ * The screenshot: `Open <pr>` and `Open <ticket>` rendered as buttons beside the real verb, even
+ * though the chips above already are those links; and Chat looked broken because with no agent at
+ * all it was disabled with `reason: undefined`, so nothing explained it.
+ */
+describe('§6 the action row', () => {
+  const tabStateOf = (id: string, selected: string | null): ItemTabState => {
+    const item = itemOf(id);
+    return {
+      itemId: item.id,
+      title: item.title,
+      needsYou: item.needsYou,
+      lists: item.lists,
+      chips: [],
+      focus: { kind: 'ticket' },
+      selectedSessionId: selected,
+      agents: item.agents.map((a) => ({ ...a, glyph: '', artifacts: [] })),
+      prs: item.prs.map((pr) => ({ ...pr, state: 'open', ci: '', reviewers: [], checks: [] })),
+      ticket: null,
+      ticketError: null,
+      buttons: [],
+      parts: [],
+    } as unknown as ItemTabState;
+  };
+
+  it('never draws the chips a second time as buttons', () => {
+    for (const id of ['pr:acme/web#101', 'ticket:HB-627', 'pr:acme/web#200']) {
+      const ids = buttonsFor(tabStateOf(id, null)).map((b) => b.id);
+      expect(ids).not.toContain('cgremlin.openPr');
+      expect(ids).not.toContain('cgremlin.openTicket');
+    }
+  });
+
+  it('keeps the placement the rule decided, with exactly one filled button', () => {
+    const buttons = buttonsFor(tabStateOf('pr:acme/web#101', null));
+    expect(buttons.filter((b) => b.placement === 'primary')).toHaveLength(1);
+    expect(buttons.every((b) => b.placement === 'primary' || b.placement === 'inline')).toBe(true);
+    // Primary first, then the inline verbs — left to right is the order of the array.
+    expect(buttons[0].placement).toBe('primary');
+  });
+
+  it('does not draw Chat at all when there is no agent to chat to', () => {
+    const ticketOnly = buttonsFor(tabStateOf('ticket:HB-627', null));
+    expect(ticketOnly.map((b) => b.id)).not.toContain('cgremlin.chat');
+  });
+
+  it('draws Ack last, and only where the item needs you', () => {
+    const needed = buttonsFor(tabStateOf('ticket:HB-627', null));
+    expect(needed[needed.length - 1].id).toBe('cgremlin.ack');
+    expect(buttonsFor(tabStateOf('pr:acme/web#101', null)).map((b) => b.id)).not.toContain(
+      'cgremlin.ack',
+    );
+  });
+
+  it('never emits a disabled button without a reason to show under it', () => {
+    for (const id of ['pr:acme/web#101', 'ticket:HB-627', 'pr:acme/web#200']) {
+      for (const selected of [null, 'respond-acme-web-200']) {
+        for (const button of buttonsFor(tabStateOf(id, selected))) {
+          if (!button.enabled) expect(button.reason).toBeTypeOf('string');
+        }
+      }
+    }
+  });
+
+  it('says WHY chat is shut, in the one case it is drawn shut', () => {
+    const chat = buttonsFor(tabStateOf('pr:acme/web#200', 'respond-acme-web-200')).find(
+      (b) => b.id === 'cgremlin.chat',
+    );
+    expect(chat?.enabled).toBe(false);
+    expect(chat?.reason).toBe(
+      'Chat opens once the respond agent has written up the review threads. It is still triaging them.',
+    );
   });
 });

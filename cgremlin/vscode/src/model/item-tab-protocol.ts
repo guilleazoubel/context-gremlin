@@ -8,10 +8,13 @@
  * Pure module — no editor API (MG-B1).
  */
 
+import type { TabPart } from './item-tab-parts';
 import type { WorkListKind } from './work-items';
 
 export type ItemFocusMessage =
   | { kind: 'agent'; sessionId: string }
+  /** Phase 17 §2 — ONE artifact of one agent, which is what a part switcher addresses. */
+  | { kind: 'artifact'; sessionId: string; name: string }
   | { kind: 'ticket' }
   | { kind: 'pr'; repo: string; number: number };
 
@@ -60,7 +63,13 @@ export interface TabTicket {
   summary: string;
   status: string;
   url: string;
+  /** The account id — compared against `jira.me` upstream, so it stays the id. */
   assignee: string | null;
+  /**
+   * Phase 17 §5d — the assignee's display name. Optional on the wire: an engine built before the
+   * field existed simply does not send it, and the pane falls back to the id rather than to ''.
+   */
+  assigneeName?: string | null;
   descriptionText: string | null;
   comments: { author: string; at: string; bodyText: string | null }[];
 }
@@ -69,7 +78,12 @@ export interface TabButton {
   id: string;
   label: string;
   enabled: boolean;
-  /** Why it is disabled, shown as the title — an inert button with no explanation is a bug. */
+  /**
+   * Phase 17 §6 — `primary` is the one filled button, `inline` is bordered. The rule already
+   * decided this (`model/row-actions`); the tab used to discard it and draw three equal buttons.
+   */
+  placement: 'primary' | 'inline';
+  /** Why it is disabled, shown as a line beneath the row — an inert, silent button is a bug. */
   reason?: string;
 }
 
@@ -91,6 +105,11 @@ export interface ItemTabState {
   ticketError: string | null;
   /** Decided by the host (R42/R51), rendered by the webview — the rule is not a style. */
   buttons: TabButton[];
+  /**
+   * Phase 17 §1 — the item's parts in their fixed order, which is what the tablist draws. Built
+   * host-side by `model/item-tab-parts` so the webview picks no order of its own.
+   */
+  parts: TabPart[];
 }
 
 export type HostToWebview =
@@ -102,7 +121,9 @@ export type WebviewToHost =
   | { type: 'selectAgent'; sessionId: string }
   | { type: 'setFocus'; focus: ItemFocusMessage }
   | { type: 'command'; command: string; arg?: string }
-  | { type: 'openLink'; url: string };
+  | { type: 'openLink'; url: string }
+  /** Phase 17 §3 — a `path:line` clicked inside a review. The host decides whether it may open. */
+  | { type: 'openFile'; path: string; line: number };
 
 function record(value: unknown): Record<string, unknown> | null {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
@@ -124,6 +145,13 @@ function parseFocus(value: unknown): ItemFocusMessage | null {
   if (focus.kind === 'agent') {
     const sessionId = text(focus.sessionId);
     return sessionId === null ? null : { kind: 'agent', sessionId };
+  }
+  if (focus.kind === 'artifact') {
+    const sessionId = text(focus.sessionId);
+    const name = text(focus.name);
+    return sessionId === null || name === null
+      ? null
+      : { kind: 'artifact', sessionId, name };
   }
   if (focus.kind === 'pr') {
     const repo = text(focus.repo);
@@ -169,6 +197,16 @@ export function parseWebviewMessage(raw: unknown): WebviewToHost | null {
     case 'openLink': {
       const url = parseUrl(message.url);
       return url === null ? null : { type: 'openLink', url };
+    }
+    case 'openFile': {
+      // The shape only. WHERE the path may point is the host's question, because only the host
+      // knows which worktree the selected agent is on.
+      const path = text(message.path);
+      const line = message.line;
+      if (path === null || typeof line !== 'number' || !Number.isInteger(line) || line < 1) {
+        return null;
+      }
+      return { type: 'openFile', path, line };
     }
     default:
       return null;

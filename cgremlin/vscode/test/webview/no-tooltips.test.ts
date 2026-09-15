@@ -40,6 +40,25 @@ describe('tasks 1 and 8 — no tooltip anywhere in either bundle', () => {
     expect(offenders).toEqual([]);
   });
 
+  /**
+   * MG-17f — phase 17 added a switcher, a verdict strip and a `file-ref` button, every one of
+   * which is a control a tooltip would have been "cheap" on. The recursive scan above already
+   * covers them; this pins that they are actually IN it, so deleting a module cannot quietly
+   * shrink the guard.
+   */
+  it('covers every module phase 17 added under src/webview/item', () => {
+    const covered = everyFileUnder(webviewDir).map((file) => path.relative(webviewDir, file));
+    for (const name of [
+      'item/tablist.ts',
+      'item/verdict-strip.ts',
+      'item/file-refs.ts',
+      'item/artifact-pane.ts',
+      'item/ticket-pane.ts',
+    ]) {
+      expect(covered).toContain(name);
+    }
+  });
+
   it('still sets the window title, which is not a tooltip', () => {
     const source = fs.readFileSync(path.join(webviewDir, 'item-tab.ts'), 'utf8');
     expect(source).toContain('document.title =');

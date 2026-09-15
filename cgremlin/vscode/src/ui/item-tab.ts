@@ -13,6 +13,7 @@
  * Takes its editor surface as a parameter (no editor import).
  */
 import crypto from 'node:crypto';
+import nodePath from 'node:path';
 import { CoreHttpError, engineErrorText, type CoreClient } from '../core-client';
 import { ciDot, itemPathOf, type WorkItem, type WorkItemPr, prState } from '../model/work-items';
 import { prLabel } from '../model/row-composition';
@@ -27,6 +28,8 @@ import {
 } from '../model/item-tab-protocol';
 import type { ItemDetailResponse } from '../model/work-items';
 import { rowActionsForLists, type ActionFacts } from '../model/row-actions';
+import { partsOf } from '../model/item-tab-parts';
+import { primaryArtifactName } from '../model/artifact-labels';
 import type { CoreConfigView } from '../model/items';
 import { withEngineRetry, type EngineRevival } from './engine-retry';
 import type { WorktreeSwapper } from './preview';
@@ -95,7 +98,7 @@ export class ItemTab {
     }
     this.path = path;
     this.detail = detail;
-    this.focus = resolveFocus(detail.item, focus);
+    this.focus = resolveFocus(detail.item, artifactNamesOf(detail), focus);
     this.selected = selectedFor(detail.item, this.focus);
     this.show();
     this.render();
@@ -108,7 +111,10 @@ export class ItemTab {
     if (this.detail === null) return;
     if (!this.detail.item.agents.some((agent) => agent.sessionId === sessionId)) return;
     this.selected = sessionId;
-    this.focus = { kind: 'agent', sessionId };
+    this.focus =
+      this.detail === null
+        ? { kind: 'agent', sessionId }
+        : resolveFocus(this.detail.item, artifactNamesOf(this.detail), { kind: 'agent', sessionId });
     this.render();
     this.track(this.loadArtifacts());
     await this.followWorktree();
@@ -245,6 +251,9 @@ export class ItemTab {
       case 'openLink':
         await this.deps.host.openExternal(message.url);
         return;
+      case 'openFile':
+        await this.openFile(message.path, message.line);
+        return;
       case 'command': {
         // Chat is per *agent*; everything else is per item.
         const arg =
@@ -254,6 +263,30 @@ export class ItemTab {
         return;
       }
     }
+  }
+
+  /**
+   * §3 — a `path:line` clicked inside a review, opened only where all four clauses hold.
+   *
+   * The webview is untrusted input and a review is written by an agent, so neither is allowed to
+   * name a file: the path must be relative, must not climb out once normalised, must resolve
+   * inside the SELECTED agent's worktree, and must exist. Any failure is one warning that names
+   * the path the user clicked — never a silent no-op, and never a guess at what they meant.
+   */
+  private async openFile(path: string, line: number): Promise<void> {
+    const agent = this.detail?.item.agents.find((a) => a.sessionId === this.selected);
+    const root = agent?.worktreePath ?? null;
+    const refuse = async (): Promise<void> => {
+      await this.deps.host.showWarningMessage(
+        `cgremlin: ${path} is not a file in this agent's worktree.`,
+        undefined,
+      );
+    };
+    if (root === null || path === '' || nodePath.isAbsolute(path)) return refuse();
+    const resolved = nodePath.resolve(root, path);
+    if (resolved !== root && !resolved.startsWith(`${root}${nodePath.sep}`)) return refuse();
+    if (!this.deps.host.fileExists(resolved)) return refuse();
+    await this.deps.host.openTextDocument(resolved, line);
   }
 
   private post(message: HostToWebview): void {
@@ -289,14 +322,18 @@ export class ItemTab {
               status: detail.ticket.status,
               url: detail.ticket.url,
               assignee: detail.ticket.assignee,
+              assigneeName:
+                (detail.ticket as { assigneeName?: string | null }).assigneeName ?? null,
               descriptionText: detail.ticket.descriptionText,
               comments: detail.ticket.comments,
             },
       ticketError: detail.ticketError,
       lists: [...item.lists],
       buttons: [],
+      parts: [],
     };
     state.buttons = buttonsFor(state);
+    state.parts = partsOf(state);
     return state;
   }
 
@@ -414,11 +451,39 @@ function prView(pr: WorkItemPr): TabPr {
   };
 }
 
-/** An unknown focus falls back to the primary agent rather than rendering blank (R48). */
-function resolveFocus(item: WorkItem, requested?: ItemFocusMessage): ItemFocusMessage {
+/** The artifact names the engine listed, per session — what an artifact focus is checked against. */
+function artifactNamesOf(detail: ItemDetailResponse): Record<string, string[]> {
+  const out: Record<string, string[]> = {};
+  for (const [sessionId, listings] of Object.entries(detail.artifacts)) {
+    out[sessionId] = listings.map((listing) => listing.name);
+  }
+  return out;
+}
+
+/**
+ * An unknown focus falls back to the primary agent rather than rendering blank (R48).
+ *
+ * Phase 17 §1: an AGENT focus resolves one step further, to that agent's primary artifact, so the
+ * pane opens on the answer rather than on a pane that no longer exists. An artifact focus naming a
+ * file the engine did not list falls back the same way — the union is parsed from untrusted
+ * webview input and drives the worktree swap, so it may never resolve to nothing.
+ */
+function resolveFocus(
+  item: WorkItem,
+  names: Record<string, string[]>,
+  requested?: ItemFocusMessage,
+): ItemFocusMessage {
   if (requested !== undefined) {
     if (requested.kind === 'agent') {
-      if (item.agents.some((agent) => agent.sessionId === requested.sessionId)) return requested;
+      if (item.agents.some((agent) => agent.sessionId === requested.sessionId)) {
+        return openingFocusOf(requested.sessionId, names);
+      }
+    } else if (requested.kind === 'artifact') {
+      const known = names[requested.sessionId] ?? [];
+      if (known.includes(requested.name)) return requested;
+      if (item.agents.some((agent) => agent.sessionId === requested.sessionId)) {
+        return openingFocusOf(requested.sessionId, names);
+      }
     } else if (requested.kind === 'pr') {
       if (item.prs.some((pr) => pr.repo === requested.repo && pr.number === requested.number)) {
         return requested;
@@ -428,15 +493,23 @@ function resolveFocus(item: WorkItem, requested?: ItemFocusMessage): ItemFocusMe
     }
   }
   const primary = item.agents[0];
-  if (primary !== undefined) return { kind: 'agent', sessionId: primary.sessionId };
+  if (primary !== undefined) return openingFocusOf(primary.sessionId, names);
   const pr = item.prs[0];
   if (pr !== undefined) return { kind: 'pr', repo: pr.repo, number: pr.number };
   return { kind: 'ticket' };
 }
 
+/** The agent's primary artifact where it has one, and the agent itself where it has none. */
+function openingFocusOf(sessionId: string, names: Record<string, string[]>): ItemFocusMessage {
+  const primary = primaryArtifactName(names[sessionId] ?? []);
+  return primary === null
+    ? { kind: 'agent', sessionId }
+    : { kind: 'artifact', sessionId, name: primary };
+}
+
 function selectedFor(item: WorkItem | undefined, focus: ItemFocusMessage): string | null {
   if (item === undefined) return null;
-  if (focus.kind === 'agent') return focus.sessionId;
+  if (focus.kind === 'agent' || focus.kind === 'artifact') return focus.sessionId;
   return item.agents[0]?.sessionId ?? null;
 }
 
@@ -449,23 +522,25 @@ function selectedFor(item: WorkItem | undefined, focus: ItemFocusMessage): strin
  * agent rather than about the item: a respond agent still at `triaging` renders a disabled
  * button with R50's reason, where a row simply has no Chat at all.
  */
+export const CHAT_TRIAGING_REASON =
+  'Chat opens once the respond agent has written up the review threads. It is still triaging them.';
+
 export function buttonsFor(state: ItemTabState): TabButton[] {
   const selected = state.agents.find((agent) => agent.sessionId === state.selectedSessionId);
   const triaging =
     selected !== undefined && selected.mode === 'respond' && selected.phase === 'triaging';
-  const buttons: TabButton[] = [
-    {
+  const buttons: TabButton[] = [];
+  // §6: with no agent there is nothing to chat TO, so the button is not drawn — a disabled
+  // control with `reason: undefined` explained nothing and is what made Chat look broken.
+  if (selected !== undefined) {
+    buttons.push({
       id: 'cgremlin.chat',
       label: 'Chat',
-      enabled: selected !== undefined && !triaging,
-      ...(triaging
-        ? {
-            reason:
-              'The respond agent is still triaging the review threads — chat opens once it has written them up.',
-          }
-        : {}),
-    },
-  ];
+      enabled: !triaging,
+      placement: 'inline',
+      ...(triaging ? { reason: CHAT_TRIAGING_REASON } : {}),
+    });
+  }
   const facts: ActionFacts = {
     agents: state.agents,
     prs: state.prs,
@@ -474,9 +549,23 @@ export function buttonsFor(state: ItemTabState): TabButton[] {
   };
   for (const action of rowActionsForLists(facts, state.lists)) {
     if (action.command === 'cgremlin.chat') continue;
-    buttons.push({ id: action.command, label: action.label, enabled: true });
+    // The chips above the row already ARE these links, and drawing them again is what made
+    // three equal buttons out of one decision and two navigations (§6).
+    if (action.command === 'cgremlin.openPr' || action.command === 'cgremlin.openTicket') continue;
+    // Ack is the only overflow verb the tab draws, and it draws it last.
+    if (action.placement === 'overflow' && action.command !== 'cgremlin.ack') continue;
+    buttons.push({
+      id: action.command,
+      label: action.label,
+      enabled: true,
+      placement: action.placement === 'primary' ? 'primary' : 'inline',
+    });
   }
-  return buttons;
+  const rank = (button: TabButton): number => {
+    if (button.placement === 'primary') return 0;
+    return button.id === 'cgremlin.ack' ? 2 : 1;
+  };
+  return buttons.sort((a, b) => rank(a) - rank(b));
 }
 
 /** The path an item id is addressed at, re-exported so callers never build one by hand (R65). */
