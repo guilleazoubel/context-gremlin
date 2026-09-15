@@ -155,10 +155,13 @@ function qaPart(facts: ActionFacts, input: ItemPartsInput): ItemPart | null {
   if (childId !== null) {
     actions.push(...openAction(childId));
     actions.push({ command: 'cgremlin.chat', label: 'Chat', childId, placement: 'inline' });
-  } else {
-    actions.push(...find(input.actions, 'cgremlin.verifyInQa', undefined, null));
-    actions.push(...find(input.actions, 'cgremlin.askQa', undefined, null));
   }
+  // Phase 16 — and the re-verification, wherever the row's own rule table
+  // allows it: a verdict is about ONE build, so a finished verification is
+  // never a reason to take the ask away (P0-2 still holds — no verb is
+  // invented here, both are looked up in the actions the list allows).
+  actions.push(...find(input.actions, 'cgremlin.verifyInQa', undefined, null));
+  actions.push(...find(input.actions, 'cgremlin.askQa', undefined, null));
   return {
     key: 'qa',
     kind: 'qa',
