@@ -1,41 +1,45 @@
 /**
- * The Item tab's webview entry (R19, R39, R40, R48).
+ * The Item tab's webview entry (R19, R39, R40, R48; Phase 17 §1-§2).
  *
  * It owns no data: it posts `ready`, renders whatever `render` hands it, and patches one artifact
- * body on `patch`. Every non-markdown string goes through `escapeHtml` or `textContent`; the only
- * `innerHTML` assignment is the markdown-it output, tagged SAFE_HTML so MG-B7's grep can see the
- * difference.
+ * body on `patch`. Phase 17 changed HOW it renders: the document used to be torn down and rebuilt
+ * on every message (`container.textContent = ''`), which is why a background refresh moved the
+ * scroll and dropped the caret. The frame is built once and reconciled by key after that, so a
+ * render over identical data performs no write at all.
+ *
+ * One part is on screen at a time — the tablist of `item/tablist` chooses it. Every non-markdown
+ * string reaches the DOM through `textContent`; the only `innerHTML` assignment is `dom.setHtml`,
+ * which is only ever handed markdown-it's output (MG-B7).
  *
  * esbuild bundles this file (with `markdown-it`) into `media/item-tab.js`; the host inlines that
  * text under the CSP of R38. It runs in a browser context, so it never imports the editor module.
  */
 import { escapeHtml, escapeAttribute, safeHref } from '../model/escape-html';
-import type {
-  HostToWebview,
-  ItemTabState,
-  TabAgent,
-  TabArtifact,
-  TabPr,
-} from '../model/item-tab-protocol';
-import { renderArtifact } from './markdown';
-import { prLabel } from '../model/row-composition';
-import { BRIEF_ONLY_NOTICE, artifactLabel, briefOnly, orderArtifacts } from '../model/artifact-labels';
+import type { HostToWebview, ItemTabState, TabArtifact } from '../model/item-tab-protocol';
+import { partOfFocus, type TabPart } from '../model/item-tab-parts';
+import { post } from './item/channel';
+import { el, reconcile, setAttr, setClass, setDisabled, setHidden, setText } from './item/dom';
+import { createSwitcher, tabIdOf, type Switcher } from './item/tablist';
+import { createArtifactPane, patchArtifactPane } from './item/artifact-pane';
+import { createTicketPane, patchTicketPane } from './item/ticket-pane';
+import { createPrPane, patchPrPane } from './item/pr-pane';
 
-declare function acquireVsCodeApi(): { postMessage(message: unknown): void };
-
-const api = acquireVsCodeApi();
 let state: ItemTabState | null = null;
+/** The part the pane is currently showing, so the caret moves only when it actually changes. */
+let showing: string | null = null;
 
-function post(message: unknown): void {
-  api.postMessage(message);
+interface Frame {
+  titleText: HTMLElement;
+  needsYou: HTMLElement;
+  chips: HTMLElement;
+  buttons: HTMLElement;
+  reasons: HTMLElement;
+  switcher: Switcher;
+  agentTabs: HTMLElement;
+  paneHost: HTMLElement;
 }
 
-function el(tag: string, className?: string, textContent?: string): HTMLElement {
-  const node = document.createElement(tag);
-  if (className !== undefined) node.className = className;
-  if (textContent !== undefined) node.textContent = textContent;
-  return node;
-}
+let frame: Frame | null = null;
 
 function root(): HTMLElement {
   let node = document.getElementById('cgremlin-item');
@@ -47,218 +51,181 @@ function root(): HTMLElement {
   return node;
 }
 
-function header(current: ItemTabState): HTMLElement {
-  const box = el('header', 'item-header');
-  const title = el('h1', 'item-title', current.title);
-  if (current.needsYou) title.appendChild(el('span', 'badge needs-you', '❗'));
-  box.appendChild(title);
+/** Built exactly once. Everything after this is a patch, which is the whole of MG-17e. */
+function frameOf(): Frame {
+  if (frame !== null) return frame;
+  const container = root();
+  const header = el('header', 'item-header');
+  const title = el('h1', 'item-title');
+  const titleText = el('span', 'item-title-text');
+  const needsYou = el('span', 'badge needs-you', '❗');
   const chips = el('div', 'chips');
-  for (const chip of current.chips) {
-    const href = safeHref(chip.url);
-    if (href === null) {
-      chips.appendChild(el('span', 'chip', chip.label));
-      continue;
-    }
-    const link = document.createElement('a');
-    link.className = 'chip';
-    link.href = '#';
-    link.textContent = chip.label;
-    // §3: the chip already names the PR, so the URL behind it was a tooltip saying nothing new.
-    // What a screen reader lacked was where the link GOES, and that is said as a name, not a hover.
-    link.setAttribute('aria-label', `Open ${chip.label} on GitHub`);
-    link.addEventListener('click', (event) => {
-      event.preventDefault();
-      post({ type: 'openLink', url: href });
-    });
-    chips.appendChild(link);
+  title.appendChild(titleText);
+  title.appendChild(needsYou);
+  header.appendChild(title);
+  header.appendChild(chips);
+  const group = el('div', 'button-group');
+  const buttons = el('div', 'buttons');
+  const reasons = el('div', 'button-reasons');
+  group.appendChild(buttons);
+  group.appendChild(reasons);
+  const switcher = createSwitcher();
+  const agentTabs = el('div', 'agent-tabs');
+  const paneHost = el('div', 'pane-host');
+  for (const node of [header, group, switcher.node, agentTabs, paneHost]) {
+    container.appendChild(node);
   }
-  box.appendChild(chips);
-  return box;
+  frame = { titleText, needsYou, chips, buttons, reasons, switcher, agentTabs, paneHost };
+  return frame;
+}
+
+function patchHeader(current: ItemTabState, f: Frame): void {
+  // MG-17a: this is the ONE title in the document. The ticket pane prints no second one, and
+  // every artifact body has its own `# ` line stripped before it is rendered.
+  setText(f.titleText, current.title);
+  setHidden(f.needsYou, !current.needsYou);
+  reconcile(
+    f.chips,
+    current.chips.map((chip) => ({ key: chip.label, data: chip })),
+    (chip) => {
+      const node = document.createElement('a');
+      node.className = 'chip';
+      node.href = '#';
+      node.addEventListener('click', (event: Event) => {
+        event.preventDefault();
+        const href = safeHref(chip.url);
+        if (href !== null) post({ type: 'openLink', url: href });
+      });
+      return node;
+    },
+    (node, chip) => {
+      setText(node, chip.label);
+      // §3: the chip already names the PR, so the URL behind it was a tooltip saying nothing new.
+      // What a screen reader lacked was where the link GOES, said as a name and not as a hover.
+      setAttr(node, 'aria-label', `Open ${chip.label} on GitHub`);
+    },
+  );
 }
 
 /**
  * The buttons, and — under them — why any of them is disabled.
  *
  * §3: the reason used to be the disabled button's `title`, which is the one tooltip a browser
- * will not even show on a disabled control in every engine. A disabled button with no readable
- * reason is the worst of both, so the reasons are a line of text beneath the group.
+ * will not even show on a disabled control in every engine.
  */
-function buttons(current: ItemTabState): HTMLElement {
-  const box = el('div', 'button-group');
-  const row = el('div', 'buttons');
-  for (const button of current.buttons) {
-    const node = document.createElement('button');
-    node.textContent = button.label;
-    node.disabled = !button.enabled;
-    node.addEventListener('click', () =>
-      post({ type: 'command', command: button.id, arg: current.itemId }),
-    );
-    row.appendChild(node);
-  }
-  box.appendChild(row);
-  for (const button of current.buttons) {
-    if (button.enabled || button.reason === undefined) continue;
-    box.appendChild(el('p', 'button-reason', `${button.label}: ${button.reason}`));
-  }
-  return box;
+function patchButtons(current: ItemTabState, f: Frame): void {
+  reconcile(
+    f.buttons,
+    current.buttons.map((button) => ({ key: button.id, data: button })),
+    (button) => {
+      const node = document.createElement('button');
+      node.type = 'button';
+      node.addEventListener('click', () =>
+        post({ type: 'command', command: button.id, arg: state?.itemId }),
+      );
+      return node;
+    },
+    (node, button) => {
+      setText(node, button.label);
+      setDisabled(node as HTMLButtonElement, !button.enabled);
+    },
+  );
+  const reasons = current.buttons.filter((b) => !b.enabled && b.reason !== undefined);
+  reconcile(
+    f.reasons,
+    reasons.map((button) => ({ key: button.id, data: button })),
+    () => el('p', 'button-reason'),
+    (node, button) => setText(node, `${button.label}: ${button.reason ?? ''}`),
+  );
 }
 
-function agentTabs(current: ItemTabState): HTMLElement {
-  const tabs = el('div', 'agent-tabs');
-  for (const agent of current.agents) {
-    const tab = document.createElement('button');
-    tab.className = agent.sessionId === current.selectedSessionId ? 'agent-tab selected' : 'agent-tab';
-    tab.textContent = `${agent.glyph} ${agent.mode} · ${agent.phase}`;
-    tab.addEventListener('click', () => post({ type: 'selectAgent', sessionId: agent.sessionId }));
-    tabs.appendChild(tab);
-  }
-  return tabs;
+/** §1: the agent switcher is drawn only where there is more than one agent to switch between. */
+function patchAgentTabs(current: ItemTabState, f: Frame): void {
+  const agents = current.agents.length > 1 ? current.agents : [];
+  setHidden(f.agentTabs, agents.length === 0);
+  reconcile(
+    f.agentTabs,
+    agents.map((agent) => ({ key: agent.sessionId, data: agent })),
+    (agent) => {
+      const node = document.createElement('button');
+      node.type = 'button';
+      node.addEventListener('click', () =>
+        post({ type: 'selectAgent', sessionId: agent.sessionId }),
+      );
+      return node;
+    },
+    (node, agent) => {
+      setText(node, `${agent.glyph} ${agent.mode} · ${agent.phase}`);
+      setClass(
+        node,
+        agent.sessionId === current.selectedSessionId ? 'agent-tab selected' : 'agent-tab',
+      );
+    },
+  );
 }
 
 /**
- * §14: the block says WHAT this artifact is before it says what it is called.
+ * §1/§2 — ONE pane, chosen by the tablist.
  *
- * A brief's own first line is `# REVIEW — PR #2061`, because it is the brief FOR a review — so a
- * block headed `BRIEF.md · <iso>` and filled with rendered instructions reads as the verdict. The
- * role label is the heading; the filename and the mtime stay, underneath, as provenance.
- * `model/artifact-labels` is the ONE place that decides a role (no second naming rule here).
+ * Keyed on the part, so switching parts replaces the pane wholesale and staying on one part
+ * patches it in place. A previous pane's scroll offset is not restored: a different document is a
+ * different place.
  */
-function artifactBlock(artifact: TabArtifact): HTMLElement {
-  const box = el('details', 'artifact');
-  box.setAttribute('open', '');
-  box.id = `artifact-${artifact.sessionId}-${artifact.name}`;
-  const summary = el('summary');
-  summary.appendChild(el('span', 'artifact-label', artifactLabel(artifact.name)));
-  summary.appendChild(el('span', 'artifact-file', `${artifact.name} · ${artifact.mtime}`));
-  box.appendChild(summary);
-  const body = el('div', 'artifact-body');
-  if (artifact.text === null) body.textContent = 'Loading…';
-  else body.innerHTML = renderArtifact(artifact.text); // SAFE_HTML: markdown-it, html:false (R40)
-  box.appendChild(body);
-  return box;
-}
-
-function agentFocus(agent: TabAgent): HTMLElement {
-  const box = el('section', 'focus agent-focus');
-  // §3: the session id was the tab's tooltip. It is the one string a user needs when talking to
-  // the engine about a run, so it is written down — once, on the pane it identifies.
-  box.appendChild(el('p', 'agent-session', `${agent.mode} · ${agent.phase} · ${agent.sessionId}`));
-  if (agent.artifacts.length === 0) {
-    box.appendChild(el('p', 'empty', 'This agent has written no artifact yet.'));
-    return box;
-  }
-  const names = agent.artifacts.map((a) => a.name);
-  // The brief is context, never the answer: the real output leads, the brief comes last, and when
-  // the brief is ALL there is the pane says so BEFORE the user starts reading it as a review.
-  if (briefOnly(names)) box.appendChild(el('p', 'artifact-notice', BRIEF_ONLY_NOTICE));
-  const order = orderArtifacts(names);
-  const sorted = [...agent.artifacts].sort((a, b) => order.indexOf(a.name) - order.indexOf(b.name));
-  for (const artifact of sorted) box.appendChild(artifactBlock(artifact));
-  return box;
-}
-
-function prFocus(pr: TabPr): HTMLElement {
-  const box = el('section', 'focus pr-focus');
-  box.appendChild(el('h2', undefined, `${prLabel(pr)} — ${pr.title ?? ''}`.trim()));
-  const facts = el('ul', 'pr-facts');
-  const add = (label: string, value: string): void => {
-    if (value === '') return;
-    facts.appendChild(el('li', undefined, `${label}: ${value}`));
-  };
-  add('State', pr.state);
-  add('Review decision', pr.reviewDecision ?? '');
-  add('CI', pr.ci);
-  add(
-    'Diff',
-    pr.changedFiles === null
-      ? ''
-      : `${pr.changedFiles} files +${pr.additions ?? 0}/−${pr.deletions ?? 0}`,
+function patchPane(current: ItemTabState, f: Frame): void {
+  const part = partOfFocus(current.parts, current.focus) ?? current.parts[0] ?? null;
+  f.switcher.render(current.parts, part?.key ?? null);
+  const items = part === null ? [] : [{ key: part.key, data: part }];
+  const [pane] = reconcile(f.paneHost, items, createPane, (node, data) =>
+    patchPaneOf(node, data, current),
   );
-  add('Open threads', pr.openThreads === null ? '' : String(pr.openThreads));
-  box.appendChild(facts);
-  if (pr.reviewers.length > 0) {
-    box.appendChild(el('h3', undefined, 'Reviews'));
-    const list = el('ul', 'reviewers');
-    for (const reviewer of pr.reviewers) {
-      list.appendChild(
-        el('li', undefined, `@${reviewer.login} — ${reviewer.state}${reviewer.body === null ? '' : `: ${reviewer.body}`}`),
-      );
-    }
-    box.appendChild(list);
+  if (pane === undefined) {
+    showing = null;
+    return;
   }
-  if (pr.checks.length > 0) {
-    box.appendChild(el('h3', undefined, 'Checks'));
-    const list = el('ul', 'checks');
-    for (const check of pr.checks) list.appendChild(el('li', undefined, `${check.name} — ${check.state}`));
-    box.appendChild(list);
-  }
-  const href = safeHref(pr.url);
-  if (href !== null) {
-    const link = document.createElement('a');
-    link.href = '#';
-    link.textContent = 'Open on GitHub';
-    link.addEventListener('click', (event) => {
-      event.preventDefault();
-      post({ type: 'openLink', url: href });
-    });
-    box.appendChild(link);
-  }
-  return box;
+  setAttr(pane, 'role', 'tabpanel');
+  setAttr(pane, 'aria-labelledby', tabIdOf(part?.key ?? ''));
+  if (pane.tabIndex !== -1) pane.tabIndex = -1;
+  if (showing === part?.key) return;
+  showing = part?.key ?? null;
+  // A screen reader must land on the new content, and a new document starts at its top.
+  pane.scrollTop = 0;
+  pane.focus();
 }
 
-function ticketSection(current: ItemTabState): HTMLElement | null {
-  if (current.ticket === null) {
-    if (current.ticketError === null) return null;
-    const box = el('section', 'focus ticket-focus');
-    box.appendChild(el('p', 'error', current.ticketError));
-    return box;
+function createPane(part: TabPart): HTMLElement {
+  if (part.focus.kind === 'ticket') return createTicketPane();
+  if (part.focus.kind === 'pr') return createPrPane();
+  return createArtifactPane();
+}
+
+function patchPaneOf(pane: HTMLElement, part: TabPart, current: ItemTabState): void {
+  const focus = part.focus;
+  if (focus.kind === 'ticket') {
+    if (current.ticket !== null) patchTicketPane(pane, current.ticket);
+    return;
   }
-  const ticket = current.ticket;
-  const box = el('section', 'focus ticket-focus');
-  box.id = 'ticket-section';
-  box.appendChild(el('h2', undefined, `${ticket.key} — ${ticket.summary}`));
-  box.appendChild(
-    el('p', 'ticket-meta', `${ticket.status}${ticket.assignee === null ? '' : ` · ${ticket.assignee}`}`),
-  );
-  // R33: the description is TEXT by the time it gets here, and it is shown as text.
-  box.appendChild(el('pre', 'ticket-description', ticket.descriptionText ?? ''));
-  for (const comment of ticket.comments) {
-    const entry = el('div', 'ticket-comment');
-    entry.appendChild(el('div', 'ticket-comment-author', `${comment.author} · ${comment.at}`));
-    entry.appendChild(el('pre', undefined, comment.bodyText ?? ''));
-    box.appendChild(entry);
+  if (focus.kind === 'pr') {
+    const pr = current.prs.find((one) => one.repo === focus.repo && one.number === focus.number);
+    if (pr !== undefined) patchPrPane(pane, pr);
+    return;
   }
-  return box;
+  if (focus.kind !== 'artifact') return;
+  const agent = current.agents.find((one) => one.sessionId === focus.sessionId);
+  const artifact = agent?.artifacts.find((one) => one.name === focus.name);
+  if (agent === undefined || artifact === undefined) return;
+  patchArtifactPane(pane, { agent, artifact });
 }
 
 export function render(current: ItemTabState): void {
   state = current;
-  const container = root();
-  container.textContent = '';
-  container.appendChild(header(current));
-  container.appendChild(buttons(current));
-  container.appendChild(agentTabs(current));
-
-  const focus = current.focus;
-  if (focus.kind === 'pr') {
-    const pr = current.prs.find(
-      (candidate) => candidate.repo === focus.repo && candidate.number === focus.number,
-    );
-    // An unknown focus falls back to the primary agent rather than rendering blank (R48).
-    if (pr !== undefined) container.appendChild(prFocus(pr));
-    else if (current.agents[0] !== undefined) container.appendChild(agentFocus(current.agents[0]));
-  } else {
-    const agent =
-      current.agents.find((a) => a.sessionId === current.selectedSessionId) ?? current.agents[0];
-    if (agent !== undefined) container.appendChild(agentFocus(agent));
-  }
-  const ticket = ticketSection(current);
-  if (ticket !== null) {
-    container.appendChild(ticket);
-    if (focus.kind === 'ticket') ticket.scrollIntoView();
-  }
+  const f = frameOf();
+  patchHeader(current, f);
+  patchButtons(current, f);
+  patchAgentTabs(current, f);
+  patchPane(current, f);
   // A title carrying markup must be inert in the document, not merely escaped in a string.
-  document.title = escapeHtml(current.title).length === 0 ? 'cgremlin' : current.title;
+  const title = escapeHtml(current.title).length === 0 ? 'cgremlin' : current.title;
+  if (document.title !== title) document.title = title;
 }
 
 function patch(artifact: TabArtifact): void {
