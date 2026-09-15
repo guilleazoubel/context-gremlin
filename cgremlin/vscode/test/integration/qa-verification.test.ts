@@ -17,6 +17,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import {
+  commitOnOrigin,
   coreIsBuilt,
   mergedPrState,
   startEngineViaManager,
@@ -287,4 +288,75 @@ describe.skipIf(!coreIsBuilt())('QA verification end to end', () => {
     await settle(h);
     expect(await qaSessions(h)).toEqual([]);
   }, 90_000);
+});
+
+/**
+ * Phase 16 — merging is not deploying, end to end against the real engine.
+ *
+ * The QA stub now serves `/api/health` with the sha it is "running", exactly
+ * as the real one does. The origin's `main` carries two commits: the merged
+ * PR's own sha, and the commit before it — a build cut before the change
+ * landed. Nothing here talks to a real QA deployment; `qa.url` is loopback.
+ */
+describe.skipIf(!coreIsBuilt())('QA verification follows the deployed build', () => {
+  const sessionFile = async (h: CoreHarness, id: string, name: string): Promise<string | null> => {
+    try {
+      return await readFile(path.join(h.sessionsDir, id, name), 'utf8');
+    } catch {
+      return null;
+    }
+  };
+
+  it('waits for the build that contains the change, then verifies once per build', async () => {
+    const { h, jira, qa } = await boot();
+    // A build cut BEFORE the change landed.
+    qa.setVersion(h.originShas.parent);
+    await settle(h);
+    jira.setStatus(TICKET, 'UAT', 'indeterminate');
+
+    const waiting = await pump(h, (r) => r.skipped.some((s) => s.why.includes('not in the qa build yet')));
+    expect(waiting.errors).toEqual([]);
+    expect(await qaSessions(h)).toEqual([]);
+    const awaitingRow = toRow(await itemOf(h), 'myWork', Date.now()).meta;
+    expect(awaitingRow.find((c) => c.kind === 'qaDeploy')?.text).toBe('awaiting qa deploy');
+
+    // The build that contains it: exactly one verification.
+    qa.setVersion(h.originShas.head);
+    await pump(h, async () => (await qaSessions(h)).length > 0);
+    const session = (await qaSessions(h))[0];
+    await waitForPhase(h, session.id, 'ready');
+    await settle(h);
+    await settle(h);
+    expect((await qaSessions(h)).map((s) => s.id)).toEqual([session.id]);
+    const verifiedRow = toRow(await itemOf(h), 'myWork', Date.now()).meta;
+    expect(verifiedRow.find((c) => c.kind === 'qaDeploy')?.text).toBe(`build ${h.originShas.head.slice(0, 7)}`);
+
+    // A NEW cut is a new question: one more verification, on the same session,
+    // and the previous QA.md is still readable as QA-v1.md.
+    qa.setVersion(commitOnOrigin(h.originPath, 'a later build'));
+    await pump(h, async () => (await sessionFile(h, session.id, 'QA-v1.md')) !== null, 60_000);
+    await waitForPhase(h, session.id, 'ready');
+    expect((await qaSessions(h)).map((s) => s.id)).toEqual([session.id]);
+    expect(await sessionFile(h, session.id, 'QA-v1.md')).toContain('Ready to deploy');
+  }, 180_000);
+
+  it('a manual re-verify after a ✅ runs again and keeps the previous QA.md', async () => {
+    const { h, qa } = await boot();
+    qa.setVersion(h.originShas.head);
+    await settle(h);
+    await h.client.startAgent(`pr/fake/repo/${PR_NUMBER}`, { mode: 'qa' });
+    const session = await waitForQaSession(h);
+    await waitForPhase(h, session.id, 'ready');
+
+    // The row still offers it — a verdict is never a reason to hide the ask.
+    const item = await itemOf(h);
+    expect(rowActions(itemActionFacts(item, QA_REPOS), 'myWork').map((a) => a.label))
+      .toContain('Verify in QA again');
+
+    const again = await h.client.startAgent(`pr/fake/repo/${PR_NUMBER}`, { mode: 'qa' });
+    expect(again.status).toBe(202);
+    await waitForPhase(h, session.id, 'ready');
+    expect(await sessionFile(h, session.id, 'QA-v1.md')).toContain('Ready to deploy');
+    expect(await sessionFile(h, session.id, 'QA.md')).toContain('Ready to deploy');
+  }, 180_000);
 });
