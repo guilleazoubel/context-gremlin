@@ -161,3 +161,46 @@ describe('Phase 18 — discovering a ticket’s merged PRs', () => {
     expect(said.some((text) => text.includes('No merged pull request mentions HB-900.'))).toBe(true);
   });
 });
+
+/**
+ * Phase 18 item 3 — the `aplaceformom/grace` case, made actionable.
+ *
+ * The reason names the exact key to add; the remedy opens the file it names, AT the place the
+ * key goes. Reading a sentence that says `environments["x"].qa.url` and then hunting for
+ * core.json is two thirds of a fix.
+ */
+describe('Phase 18 — Open core.json, at the environments block', () => {
+  const CONFIG = [
+    '{',
+    '  "me": "guille",',
+    '  "repos": ["acme/web"],',
+    '  "environments": {',
+    '    "acme/web": {}',
+    '  }',
+    '}',
+  ].join('\n');
+
+  it('opens the config on the repo whose qa block is missing', async () => {
+    const { host } = await harness();
+    host.writeFile('/tmp/cgremlin-fixture/core.json', CONFIG);
+    await host.executeCommand('cgremlin.openCoreConfig', ITEM);
+    const opened = host.callsOf('openTextDocument').at(-1);
+    expect(opened?.args[0]).toBe('/tmp/cgremlin-fixture/core.json');
+    // `acme/web` is on line 5 (1-based) — the line the `qa` block goes inside.
+    expect(opened?.args[1]).toBe(5);
+  });
+
+  it('falls back to the environments block when the repo is not in it yet', async () => {
+    const { host } = await harness();
+    host.writeFile('/tmp/cgremlin-fixture/core.json', CONFIG.replace('"acme/web": {}', '"other/repo": {}'));
+    await host.executeCommand('cgremlin.openCoreConfig', ITEM);
+    expect(host.callsOf('openTextDocument').at(-1)?.args[1]).toBe(4);
+  });
+
+  it('opens the file with no line at all when it has no environments block', async () => {
+    const { host } = await harness();
+    host.writeFile('/tmp/cgremlin-fixture/core.json', '{ "me": "guille" }');
+    await host.executeCommand('cgremlin.openCoreConfig', ITEM);
+    expect(host.callsOf('openTextDocument').at(-1)?.args.length).toBe(1);
+  });
+});

@@ -90,6 +90,12 @@
         "icon": "$(search)"
       },
       {
+        "command": "cgremlin.openCoreConfig",
+        "title": "Open core.json",
+        "category": "cgremlin",
+        "icon": "$(gear)"
+      },
+      {
         "command": "cgremlin.startInvestigation",
         "title": "Start investigation here",
         "category": "cgremlin"
@@ -243,6 +249,10 @@
         },
         {
           "command": "cgremlin.discoverPrs",
+          "when": "false"
+        },
+        {
+          "command": "cgremlin.openCoreConfig",
           "when": "false"
         },
         {

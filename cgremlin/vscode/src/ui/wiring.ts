@@ -160,6 +160,8 @@ export function createUi(options: UiOptions): Ui {
       chat,
       swapper,
       engine: options.engine,
+      // Phase 18 — the `Open core.json` remedy opens the engine surface's OWN config path.
+      ...(options.engine === undefined ? {} : { configPath: () => options.engine!.configPath() }),
     }),
   ];
   if (options.engine !== undefined) {
