@@ -152,6 +152,13 @@ export const MANAGED_WORKSPACE_HINT =
 export const OFFLINE_DETAIL = 'Engine offline — showing what was last loaded';
 const OPEN_MANAGED_LABEL = 'Open';
 const DISMISS_LABEL = 'Not now';
+/**
+ * What the panel says when it could not build its own state. The sentence names the two ways out
+ * and nothing else: the exception's own text is ours, not the user's, so it goes to the log.
+ */
+export const PANEL_RENDER_FAILURE =
+  'cgremlin could not draw your work. The log says what went wrong, and reloading the window is ' +
+  'the way back.';
 
 export class PanelView implements WebviewViewProviderLike {
   private view: WebviewViewLike | null = null;
@@ -720,12 +727,47 @@ export class PanelView implements WebviewViewProviderLike {
    * rather than merely harmless.
    */
   private flush(): void {
-    const state = this.state();
+    const state = this.drawableState();
     this.paintBadge(state.needsYou.length);
     const encoded = JSON.stringify(state);
     if (encoded === this.lastPosted) return;
     this.lastPosted = encoded;
     this.post({ type: 'render', state });
+  }
+
+  /**
+   * `state()`, and a state that SAYS SO when it cannot be built.
+   *
+   * Building it touches every pure model there is, and an unexpected throw anywhere in that chain
+   * used to travel up through `setItems` into `refresh.ts`'s catch, which writes one line to an
+   * output channel nobody has open. Nothing reached the webview, so a panel that had never
+   * rendered stayed empty: a blank sidebar beside a healthy engine, explaining nothing. Silence
+   * is the bug (Phase 8), so the failure is ink — here, on the same trouble row an unusable
+   * engine already uses.
+   */
+  private drawableState(): PanelState {
+    try {
+      return this.state();
+    } catch (err) {
+      this.deps.host.log(`cgremlin: the panel could not be drawn: ${String(err)}`);
+      return {
+        sections: [],
+        focus: FOCUS_ALL,
+        focusOptions: [],
+        needsYou: [],
+        dismissedCount: 0,
+        showDismissed: false,
+        banner: null,
+        trouble: {
+          message: PANEL_RENDER_FAILURE,
+          command: 'cgremlin.engine.showLog',
+          actionLabel: 'Show log',
+          secondary: { command: 'workbench.action.reloadWindow', actionLabel: 'Reload window' },
+        },
+        notice: null,
+        connected: this.connected,
+      };
+    }
   }
 
   /**
