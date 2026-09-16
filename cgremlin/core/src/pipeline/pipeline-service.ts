@@ -57,6 +57,7 @@ import {
 } from './artifacts';
 import { assertCanPromote } from './plan-gate';
 import { RunInProgressError, WorkspaceMissingError, type StageRunResult } from './stage-runner';
+import { runLiveness, type RunLiveness } from './run-liveness';
 import { TERMINAL_PHASES_BY_MODE } from '../workspace/workspace-in-use';
 import { repoSlugFromUrl } from '../gh/repo-slug';
 
@@ -804,7 +805,7 @@ export class PipelineService {
     const { brief } = await this.composeQaBrief(session);
     return this.lock.withLock(id, async () => {
       const fresh = await this.deps.store.load(id);
-      if (this.deps.stageRunner.activeSessionIds().includes(id)) {
+      if (this.runLivenessOf(fresh) === 'live') {
         throw new RunInProgressError(id);
       }
       await this.deps.fs.mkdir(this.sessionDir(id), { recursive: true });
@@ -1139,6 +1140,24 @@ export class PipelineService {
   }
 
   /**
+   * THE one place the raw runner membership is asked. Everything that decides
+   * "is a run in progress?" goes through `runLivenessOf` instead, so the
+   * attention layer and every write path cannot drift apart (Phase 18).
+   */
+  isRunningNow(id: string): boolean {
+    return this.deps.stageRunner.activeSessionIds().includes(id);
+  }
+
+  /**
+   * The ONE liveness verdict, for any caller holding a session snapshot. Only
+   * the runner can say `live`; a snapshot that still says `running` while the
+   * runner holds nothing is `crashed` — a dead run, never a live one.
+   */
+  runLivenessOf(session: Session): RunLiveness {
+    return runLiveness(session.lastRun, this.isRunningNow(session.id));
+  }
+
+  /**
    * Claims the agent conversation for a human (R9, R20). Refused while a run
    * is in flight: two `claude --resume <same id>` processes on one transcript
    * is unrecoverable corruption, so the caller must `stop` first. Idempotent
@@ -1150,8 +1169,10 @@ export class PipelineService {
       const fresh = await this.deps.store.load(id);
       // Read inside the lock, so a run that started while this call queued is
       // still seen. A live run has already released the lock (it releases at
-      // `run.started`), so the lock alone cannot exclude it.
-      if (this.activeSessionIds().includes(id)) {
+      // `run.started`), so the lock alone cannot exclude it. A CRASHED run
+      // (the file says `running`, the runner holds nothing) is not a reason
+      // to refuse: that is the wedge this replaces.
+      if (this.runLivenessOf(fresh) === 'live') {
         throw new RunInProgressError(id);
       }
       const now = this.now();
@@ -1226,15 +1247,14 @@ export class PipelineService {
    * The same reasoning `server.ts` already applies to a stale `reviewing`.
    */
   async failStaleVerifications(): Promise<{ count: number; sessionIds: string[] }> {
-    const active = new Set(this.deps.stageRunner.activeSessionIds());
     const sessionIds: string[] = [];
     for (const session of await this.deps.store.list()) {
       if (session.mode !== 'qa' || session.stageStatus !== 'verifying') continue;
-      if (active.has(session.id)) continue;
+      if (this.isRunningNow(session.id)) continue;
       await this.lock.withLock(session.id, async () => {
         const fresh = await this.deps.store.load(session.id);
         if (fresh.mode !== 'qa' || fresh.stageStatus !== 'verifying') return;
-        if (this.deps.stageRunner.activeSessionIds().includes(session.id)) return;
+        if (this.isRunningNow(session.id)) return;
         await this.transitionUnlocked(session.id, 'failed');
         sessionIds.push(session.id);
       });

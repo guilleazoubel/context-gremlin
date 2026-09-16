@@ -1,4 +1,5 @@
 import type { Session } from '../schema/session';
+import { runLiveness } from '../pipeline/run-liveness';
 import type { InventoryEntry } from '../inventory/inventory';
 
 /**
@@ -114,7 +115,7 @@ export interface SessionEvidence {
   agentState: 'working' | 'ready' | 'needs-input' | 'blocked' | null;
   /** ISO; null when AGENT_STATE is absent (or its mtime is unavailable). */
   agentStateMtime: string | null;
-  /** From PipelineService.activeSessionIds(). */
+  /** From PipelineService.isRunningNow() — the RUNNER's answer, never the session file's. */
   running: boolean;
   /**
    * ONLY this session's own local app: the adapter passes null unless the
@@ -147,10 +148,11 @@ export function deriveSessionReasons(ev: SessionEvidence): DerivedReason[] {
   // R22: an on-disk 'running' record with nothing actually running means the
   // host died mid-run — a failure, not a silence. Such a record has no
   // finishedAt by construction, so startedAt is its only timestamp.
-  if (lastRun !== null && !ev.running && (lastRun.outcome === 'failed' || lastRun.outcome === 'running')) {
+  const liveness = runLiveness(lastRun, ev.running);
+  if (lastRun !== null && liveness !== 'live' && (lastRun.outcome === 'failed' || liveness === 'crashed')) {
     derived.push({
       reason: 'run_failed',
-      at: lastRun.outcome === 'running' ? lastRun.startedAt : lastRun.finishedAt,
+      at: liveness === 'crashed' ? lastRun.startedAt : lastRun.finishedAt,
     });
   }
   if (s.mode === 'review' && s.stageStatus === 'ready') {
