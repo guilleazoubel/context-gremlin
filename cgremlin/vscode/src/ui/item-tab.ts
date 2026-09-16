@@ -28,6 +28,7 @@ import {
 } from '../model/item-tab-protocol';
 import type { ItemDetailResponse } from '../model/work-items';
 import { rowActionsForLists, type ActionFacts } from '../model/row-actions';
+import { qaReposOf, qaStatusesOf } from '../model/items';
 import { partsOf } from '../model/item-tab-parts';
 import { primaryArtifactName } from '../model/artifact-labels';
 import type { CoreConfigView } from '../model/items';
@@ -329,6 +330,9 @@ export class ItemTab {
             },
       ticketError: detail.ticketError,
       lists: [...item.lists],
+      qaRepos: qaReposOf(this.deps.config()),
+      qaStatuses: qaStatusesOf(this.deps.config()),
+      qaUnreachable: item.qaAttempt?.outcome === 'unreachable',
       buttons: [],
       parts: [],
     };
@@ -529,11 +533,17 @@ export function buttonsFor(state: ItemTabState): TabButton[] {
   const selected = state.agents.find((agent) => agent.sessionId === state.selectedSessionId);
   const triaging =
     selected !== undefined && selected.mode === 'respond' && selected.phase === 'triaging';
+  // Phase 18 — the tab used to build these facts WITHOUT `qaRepos`, so §8's gate could never
+  // pass here and the QA verbs existed on the panel rows alone. The tab reads the same config.
   const facts: ActionFacts = {
     agents: state.agents,
     prs: state.prs,
     ticketKey: state.ticket?.key ?? null,
     needsYou: state.needsYou,
+    qaRepos: state.qaRepos ?? [],
+    ticketStatus: state.ticket?.status ?? null,
+    qaStatuses: state.qaStatuses ?? [],
+    qaUnreachable: state.qaUnreachable === true,
   };
   const actions = rowActionsForLists(facts, state.lists);
   const buttons: TabButton[] = [];
@@ -564,8 +574,11 @@ export function buttonsFor(state: ItemTabState): TabButton[] {
     buttons.push({
       id: action.command,
       label: action.label,
-      enabled: true,
+      // Phase 18 — a verb the rule disabled arrives disabled here too, with its sentence: the
+      // tab and the row say the same thing about the same item, or one of them is lying.
+      enabled: action.enabled !== false,
       placement: action.placement === 'primary' ? 'primary' : 'inline',
+      ...(action.reason === undefined ? {} : { reason: action.reason }),
     });
   }
   const rank = (button: TabButton): number => {

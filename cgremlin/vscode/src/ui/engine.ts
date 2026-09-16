@@ -131,6 +131,14 @@ export class EngineSurface {
     return this.resolved;
   }
 
+  /**
+   * Where `core.json` is — the same thunk `firstRun` opens on activation. Phase 18's
+   * `Open core.json` remedy reuses that path rather than deriving a second one.
+   */
+  configPath(): string {
+    return this.deps.configPath();
+  }
+
   onState(cb: (status: EngineStatus) => void): () => void {
     this.stateListeners.add(cb);
     return () => this.stateListeners.delete(cb);

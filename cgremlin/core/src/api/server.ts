@@ -27,6 +27,7 @@ import { groupInventory, type Inventory, type InventoryEntry } from '../inventor
 import type { ReviewSessionFactory, CandidatePR } from '../pipeline/review-session-factory';
 import type { RespondSessionFactory } from '../pipeline/respond-session-factory';
 import type { QaSessionFactory } from '../pipeline/qa-session-factory';
+import type { QaDiscoverResult } from '../qa/qa-trigger';
 import { isClaimed } from '../pipeline/pipeline-service';
 import type { EnvironmentService, LocalAppStatus } from '../env/environment-service';
 import { redactSecrets, redactCoreConfig, type CoreConfig } from '../config/core-config';
@@ -90,6 +91,12 @@ export interface ApiServerDeps {
   workItems?: WorkItemService;
   /** R36 — the 60 s / `updated`-keyed ticket detail cache. Absent means `ticket: null`, never a 5xx. */
   ticketDetail?: { detail(key: string): Promise<{ ticket: unknown; ticketError: string | null }> };
+  /**
+   * Phase 18 — R84's per-entry PR lookup, reachable deliberately:
+   * `POST /items/ticket/<KEY>/prs/discover`. Absent makes that route a clean 404, and the
+   * panel's disabled QA verb then simply offers no discovery.
+   */
+  qaDiscovery?: { discover(ticketKey: string): Promise<QaDiscoverResult> };
   /** R51 — the respond-mode factory. Absent makes `{ mode: 'respond' }` a clean 404. */
   respondFactory?: RespondSessionFactory;
   /** Phase 15 — absent means QA verification is not configured on this wiring (404, exactly like respond). */
@@ -1034,6 +1041,33 @@ async function handleRequest(
       }
 
       const addressed = parseWorkItemPath(parts.slice(1));
+
+      /**
+       * Phase 18 — "find the PRs of a ticket that has none", which is the user's normal case:
+       * his teammates merge without cgremlin sessions, so nothing links the ticket to the
+       * change and §8's gate can only refuse. ONE `gh pr list --search`, written straight into
+       * the pr-state cache, and the REFRESHED item comes back with the answer so the panel
+       * re-evaluates from the same response rather than guessing when to poll.
+       */
+      if (
+        method === 'POST' &&
+        addressed !== null &&
+        addressed.parsed.kind === 'ticket' &&
+        addressed.rest.length === 2 &&
+        addressed.rest[0] === 'prs' &&
+        addressed.rest[1] === 'discover'
+      ) {
+        if (!deps.qaDiscovery) {
+          sendJson(res, 404, { error: 'qa discovery not configured' });
+          return;
+        }
+        const parsed = addressed.parsed;
+        const result = await deps.qaDiscovery.discover(parsed.key);
+        const refreshed = await workItems.list();
+        sendJson(res, 200, { ...result, item: findAddressedItem(refreshed.items, parsed) ?? null });
+        return;
+      }
+
       if (addressed !== null && (addressed.rest.length === 0 || addressed.rest.length === 1)) {
         const { parsed, rest } = addressed;
         const tail = rest[0];

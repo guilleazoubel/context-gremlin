@@ -241,6 +241,12 @@ export interface CoreConfigView {
    * **Optional**: an engine older than Phase 15 sends no `environments` at all.
    */
   environments?: Record<string, { qa?: { url?: string } | null } | null>;
+  /**
+   * Phase 18: `jira.qaStatuses` — the statuses that mean "this ticket is in QA". The panel reads
+   * it for ONE question: does a row that cannot be verified plausibly WANT to be? **Optional**:
+   * an engine with no Jira configured sends no `jira` block at all.
+   */
+  jira?: { qaStatuses?: string[] } | null;
   [key: string]: unknown;
 }
 
@@ -254,6 +260,16 @@ export function qaReposOf(config: CoreConfigView | null | undefined): string[] {
   return Object.entries(environments)
     .filter(([, env]) => typeof env?.qa?.url === 'string' && env.qa.url !== '')
     .map(([slug]) => slug);
+}
+
+/**
+ * Phase 18 — the statuses that mean "in QA". A missing or malformed block is an empty list
+ * rather than an error: the panel then says nothing about QA, exactly as it does today.
+ */
+export function qaStatusesOf(config: CoreConfigView | null | undefined): string[] {
+  const statuses = config?.jira?.qaStatuses;
+  if (!Array.isArray(statuses)) return [];
+  return statuses.filter((status): status is string => typeof status === 'string' && status !== '');
 }
 
 // ---------------------------------------------------------------------------

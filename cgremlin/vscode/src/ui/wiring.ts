@@ -7,7 +7,7 @@
  */
 import { CoreHttpError, EngineNotRunningError, type CoreClient } from '../core-client';
 import { troubleOf } from '../model/engine-trouble';
-import { qaReposOf } from '../model/items';
+import { qaReposOf, qaStatusesOf } from '../model/items';
 import { currentAgentOf } from '../model/lifecycle';
 import { itemPathOf, type ItemArtifactListing } from '../model/work-items';
 import type { NotificationLevel } from '../model/notify-policy';
@@ -87,6 +87,8 @@ export function createUi(options: UiOptions): Ui {
      */
     /** §8's gate: which repos have a `qa.url`, straight off the resolved `GET /config`. */
     qaRepos: () => qaReposOf(coordinator.config()),
+    /** Phase 18 — and which statuses mean "in QA", so a blocked row knows it wants one. */
+    qaStatuses: () => qaStatusesOf(coordinator.config()),
     onSelect: async (id) => {
       const agent = currentAgentOf(coordinator.itemOf(id)?.agents ?? []);
       if (agent?.worktreePath == null) return;
@@ -158,6 +160,8 @@ export function createUi(options: UiOptions): Ui {
       chat,
       swapper,
       engine: options.engine,
+      // Phase 18 — the `Open core.json` remedy opens the engine surface's OWN config path.
+      ...(options.engine === undefined ? {} : { configPath: () => options.engine!.configPath() }),
     }),
   ];
   if (options.engine !== undefined) {

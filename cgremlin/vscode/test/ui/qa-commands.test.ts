@@ -52,7 +52,9 @@ afterEach(async () => {
   for (const server of servers.splice(0)) await server.dispose();
 });
 
-async function harness(): Promise<{ host: FakeHost; server: StubServerHandle; ui: Ui }> {
+async function harness(
+  over: { discover?: unknown } = {},
+): Promise<{ host: FakeHost; server: StubServerHandle; ui: Ui }> {
   const config = JSON.parse(JSON.stringify(fixtures.config)) as {
     config: Record<string, unknown>;
   };
@@ -61,6 +63,9 @@ async function harness(): Promise<{ host: FakeHost; server: StubServerHandle; ui
     handler: (req) => {
       if (req.method === 'GET' && req.path === '/config') return { status: 200, body: config };
       if (req.method === 'GET' && req.path === '/items') return { status: 200, body: ITEMS };
+      if (req.method === 'POST' && req.path.endsWith('/prs/discover')) {
+        return { status: 200, body: { ...(over.discover as object), item: MERGED_ITEM } };
+      }
       if (req.method === 'POST' && req.path.endsWith('/agents')) {
         return { status: 202, body: { session: { id: SESSION }, created: true, started: true } };
       }
@@ -119,5 +124,83 @@ describe('§3/R73 — Ask about QA', () => {
     expect(
       server.requests.some((r) => r.path === `/sessions/${SESSION}/conversation/claim`),
     ).toBe(true);
+  });
+});
+
+/**
+ * Phase 18 item 2 — `Find merged PRs`, the remedy beside "No pull request is linked to this
+ * ticket yet." One POST, addressed by the TICKET (there is no PR to address it by), and the
+ * answer is said in words: what it found, or that it found nothing.
+ */
+describe('Phase 18 — discovering a ticket’s merged PRs', () => {
+  const discovers = (server: StubServerHandle): string[] =>
+    server.requests.filter((r) => r.method === 'POST' && r.path.endsWith('/prs/discover')).map((r) => r.path);
+
+  it('POSTs to the ticket’s discover route and reports what it found', async () => {
+    const { host, server } = await harness({
+      discover: { searched: true, repos: [REPO], found: [{ repo: REPO, number: 900 }], reason: null },
+    });
+    await host.executeCommand('cgremlin.discoverPrs', ITEM);
+    expect(discovers(server)).toEqual(['/items/ticket/HB-900/prs/discover']);
+    const said = host
+      .callsOf('showInformationMessage')
+      .concat(host.callsOf('showWarningMessage'))
+      .map((c) => String(c.args[0]));
+    expect(said.some((text) => text.includes('acme/web#900'))).toBe(true);
+  });
+
+  it('says plainly when nothing was found', async () => {
+    const { host } = await harness({
+      discover: { searched: true, repos: [REPO], found: [], reason: 'No merged pull request mentions HB-900.' },
+    });
+    await host.executeCommand('cgremlin.discoverPrs', ITEM);
+    const said = host
+      .callsOf('showInformationMessage')
+      .concat(host.callsOf('showWarningMessage'))
+      .map((c) => String(c.args[0]));
+    expect(said.some((text) => text.includes('No merged pull request mentions HB-900.'))).toBe(true);
+  });
+});
+
+/**
+ * Phase 18 item 3 — the `aplaceformom/grace` case, made actionable.
+ *
+ * The reason names the exact key to add; the remedy opens the file it names, AT the place the
+ * key goes. Reading a sentence that says `environments["x"].qa.url` and then hunting for
+ * core.json is two thirds of a fix.
+ */
+describe('Phase 18 — Open core.json, at the environments block', () => {
+  const CONFIG = [
+    '{',
+    '  "me": "guille",',
+    '  "repos": ["acme/web"],',
+    '  "environments": {',
+    '    "acme/web": {}',
+    '  }',
+    '}',
+  ].join('\n');
+
+  it('opens the config on the repo whose qa block is missing', async () => {
+    const { host } = await harness();
+    host.writeFile('/tmp/cgremlin-fixture/core.json', CONFIG);
+    await host.executeCommand('cgremlin.openCoreConfig', ITEM);
+    const opened = host.callsOf('openTextDocument').at(-1);
+    expect(opened?.args[0]).toBe('/tmp/cgremlin-fixture/core.json');
+    // `acme/web` is on line 5 (1-based) — the line the `qa` block goes inside.
+    expect(opened?.args[1]).toBe(5);
+  });
+
+  it('falls back to the environments block when the repo is not in it yet', async () => {
+    const { host } = await harness();
+    host.writeFile('/tmp/cgremlin-fixture/core.json', CONFIG.replace('"acme/web": {}', '"other/repo": {}'));
+    await host.executeCommand('cgremlin.openCoreConfig', ITEM);
+    expect(host.callsOf('openTextDocument').at(-1)?.args[1]).toBe(4);
+  });
+
+  it('opens the file with no line at all when it has no environments block', async () => {
+    const { host } = await harness();
+    host.writeFile('/tmp/cgremlin-fixture/core.json', '{ "me": "guille" }');
+    await host.executeCommand('cgremlin.openCoreConfig', ITEM);
+    expect(host.callsOf('openTextDocument').at(-1)?.args.length).toBe(1);
   });
 });

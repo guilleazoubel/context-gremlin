@@ -493,6 +493,11 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
       Object.entries(config.environments)
         .filter(([, env]) => env.qa?.url !== undefined)
         .map(([slug]) => slug),
+    // Phase 18 — ONE search fills the pr-state cache, so the item re-evaluates with no gh call
+    // of its own. It is the same cache the tick's own leg writes, through the same resolver.
+    absorbPrs: async (repo, stdout) => {
+      await prStateResolver.absorbList(repo, stdout);
+    },
     createSession: (ticket, slug, number) => qaFactory.createFromMergedPr(ticket, slug, number),
     startRun: (id) => awaitRunStart(events, id, pipeline.runVerify(id)),
     now: adapters.now,
@@ -602,6 +607,8 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     ticketDetail,
     respondFactory,
     qaFactory,
+    // Phase 18 — R84's lookup, asked deliberately: `POST /items/ticket/<KEY>/prs/discover`.
+    qaDiscovery: qaTrigger,
     now: adapters.now,
     eventRing,
     lock,

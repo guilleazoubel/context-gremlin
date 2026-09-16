@@ -667,6 +667,7 @@ body {
 .part {
   display: flex;
   align-items: flex-start;
+  flex-wrap: wrap;
   gap: 6px;
   padding: 6px 0;
   cursor: pointer;
@@ -726,6 +727,30 @@ body {
   flex: 0 0 auto;
   flex-wrap: wrap;
   gap: 2px;
+}
+
+/*
+ * Phase 18 — why a verb is inert, in ink, on its own line under the part it belongs to.
+ *
+ * Never a `title`: a browser will not show a tooltip on a disabled control, which is how the QA
+ * verb came to be a button that was simply absent and explained nothing.
+ */
+.part-reasons,
+.action-reasons {
+  flex: 1 0 100%;
+  margin: 2px 0 0;
+}
+
+.action-reason {
+  margin: 2px 0 0;
+  color: var(--vscode-descriptionForeground);
+  font-size: 11px;
+}
+
+.part-action:disabled,
+.row-action:disabled {
+  opacity: 0.55;
+  cursor: default;
 }
 
 .changes {

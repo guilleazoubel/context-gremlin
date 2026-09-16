@@ -10,7 +10,7 @@
  *    `itemPathOf` from the item's id, never interpolated by hand, and a *child* click uses that
  *    child's own path — a PR child of a `ticket:` item opens `/items/pr/o/r/n`.
  */
-import { prRefOf } from '../model/row-composition';
+import { prLabel, prRefOf } from '../model/row-composition';
 import { engineErrorText, type CoreClient, type HttpResult } from '../core-client';
 import { refreshBlockedMessage } from '../model/engine-trouble';
 import { readTitle, writeTitle } from '../model/item-title';
@@ -76,6 +76,32 @@ export interface CommandDeps {
    * socket with no usable engine on it fails invisibly, and the panel simply stays as it was.
    */
   engine?: EngineHealthSource;
+  /**
+   * Phase 18 — where `core.json` is, so the `Open core.json` remedy can open the very file the
+   * reason names. Absent makes that command say so rather than guess at a path.
+   */
+  configPath?: () => string;
+}
+
+/**
+ * Phase 18 — which LINE of `core.json` a missing `environments["<slug>"].qa.url` goes on, 1-based.
+ *
+ * Deliberately textual: the file is the user's, comments and formatting and all, and re-parsing
+ * it to find a position would throw away exactly the layout the caret is supposed to land in.
+ * The repo's own line first, then the `environments` block, then nothing — an `undefined` opens
+ * the file at the top, which is still better than not opening it.
+ */
+export function configLineFor(text: string, slug: string | null): number | undefined {
+  const lines = text.split('\n');
+  const block = lines.findIndex((line) => line.includes('"environments"'));
+  if (block === -1) return undefined;
+  if (slug !== null) {
+    // Only BELOW the block: every slug is also in `repos`, and landing the caret there would
+    // point at the one place a `qa` block must not go.
+    const at = lines.findIndex((line, index) => index > block && line.includes(`"${slug}"`));
+    if (at !== -1) return at + 1;
+  }
+  return block + 1;
 }
 
 export function registerCommands(deps: CommandDeps): DisposableLike[] {
@@ -282,6 +308,70 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
       }
       coordinator.schedule();
       panel.reveal(item.id);
+    }),
+
+    /**
+     * Phase 18 item 3 — `Open core.json`, the remedy beside "This repo has no QA environment
+     * configured". It opens the file the reason NAMES, at the line the key goes on: a sentence
+     * that names a config key and then leaves the user to find the file is two thirds of a fix.
+     */
+    host.registerCommand('cgremlin.openCoreConfig', async (arg) => {
+      const path = deps.configPath?.() ?? null;
+      if (path === null || !host.fileExists(path)) {
+        void host.showWarningMessage(
+          path === null ? 'cgremlin has no core.json path to open.' : `${path} is not there yet.`,
+          undefined,
+        );
+        return;
+      }
+      const slug = itemOf(arg)?.prs[0]?.repo ?? null;
+      const line = configLineFor(host.readFileSlice(path, 0).text, slug);
+      if (line === undefined) await host.openTextDocument(path);
+      else await host.openTextDocument(path, line);
+    }),
+
+    /**
+     * Phase 18 item 2 — `Find merged PRs`, the remedy beside "No pull request is linked to this
+     * ticket yet."
+     *
+     * The user's normal case: his teammates merge without cgremlin sessions, so the engine has
+     * never seen the PR and §8's gate can only refuse. This is ONE `gh pr list --search`
+     * engine-side, bounded exactly as the automatic leg's own lookup is, and its answer is said
+     * in words — a search that found nothing has to SAY so, or it is the same silence again.
+     */
+    host.registerCommand('cgremlin.discoverPrs', async (arg) => {
+      const item = needsItem(arg);
+      if (item === null) return;
+      const key = item.ticket?.key ?? null;
+      if (key === null) {
+        void host.showWarningMessage(
+          `'${item.title}' has no ticket to search pull requests for.`,
+          undefined,
+        );
+        return;
+      }
+      const result = await send(() => client.discoverPrs(key));
+      if (!surface(result)) return;
+      coordinator.schedule();
+      const body = result?.body as
+        | { found?: { repo?: unknown; number?: unknown }[]; reason?: unknown }
+        | undefined;
+      const found = (body?.found ?? [])
+        .filter((pr) => typeof pr.repo === 'string' && typeof pr.number === 'number')
+        .map((pr) => prLabel({ repo: String(pr.repo), number: Number(pr.number) }));
+      if (found.length > 0) {
+        void host.showInformationMessage(
+          `${key}: found ${found.join(', ')}.`,
+          undefined,
+        );
+        return;
+      }
+      void host.showInformationMessage(
+        typeof body?.reason === 'string' && body.reason !== ''
+          ? body.reason
+          : `No merged pull request mentions ${key}.`,
+        undefined,
+      );
     }),
 
     /**

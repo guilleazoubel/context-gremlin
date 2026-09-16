@@ -236,3 +236,61 @@ describe('EnvironmentService.qaVersion', () => {
     expect(await service.qaVersion(REPO_URL)).toBeNull();
   });
 });
+
+/**
+ * Phase 18 — `qa.versionField` as a DOTTED PATH.
+ *
+ * The live case: `aplaceformom/grace`'s health endpoint answers
+ * `{"meta":{"version":"v0.2.4-rc.2","build":"<sha>","env":"qa"},"data":[…]}`,
+ * so the deployed COMMIT is at `meta.build` while grace-frontend's is the
+ * top-level `version`. The path is resolved SAFELY — every segment an own
+ * property of a plain object, the final value a string — because the body is
+ * a remote JSON document, and every other answer degrades exactly as an
+ * unreadable version does today (null, merge-keyed, one line in the log).
+ */
+describe('Phase 18 — qa.versionField accepts a dotted path', () => {
+  const SHA = 'f49aaabf8ea7daf94ab8e755f23a1a5b793458d3';
+  /** The real grace shape, verbatim (it is public). */
+  const GRACE = JSON.stringify({
+    meta: { version: 'v0.2.4-rc.2', name: 'grace', build: SHA, env: 'qa' },
+    data: [{ id: 1 }],
+  });
+
+  const readField = async (versionField: string, body: string): Promise<string | null> => {
+    const { service, local } = make(
+      makeConfig({ qa: { url: 'https://qa.example.com', versionField } }),
+    );
+    local.queueText({ status: 200, body, reason: null });
+    return service.qaVersion(REPO_URL);
+  };
+
+  it('resolves meta.build out of the real grace payload', async () => {
+    expect(await readField('meta.build', GRACE)).toBe(SHA);
+  });
+
+  it('is null when a segment is missing, so the repo degrades to merge-keyed', async () => {
+    expect(await readField('meta.build', JSON.stringify({ data: [] }))).toBeNull();
+  });
+
+  it('still resolves the flat field for the frontend shape', async () => {
+    expect(await readField('version', JSON.stringify({ status: 'ok', version: SHA }))).toBe(SHA);
+  });
+
+  it('is null when the path ends on an object rather than a string', async () => {
+    expect(await readField('meta', GRACE)).toBeNull();
+  });
+
+  it('is null when a segment indexes an array rather than a plain object', async () => {
+    expect(await readField('data.0', GRACE)).toBeNull();
+  });
+
+  it('never resolves a prototype segment', async () => {
+    expect(await readField('__proto__.polluted', GRACE)).toBeNull();
+    expect(await readField('constructor.prototype.build', GRACE)).toBeNull();
+  });
+
+  it('prefers a literal key that contains a dot over the path of the same name', async () => {
+    const both = JSON.stringify({ 'meta.build': SHA, meta: { build: '0'.repeat(40) } });
+    expect(await readField('meta.build', both)).toBe(SHA);
+  });
+});

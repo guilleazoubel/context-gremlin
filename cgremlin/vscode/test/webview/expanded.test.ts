@@ -306,3 +306,63 @@ describe('an expanded row with no engine behind it', () => {
     expect(build().byClass('expanded-offline')[0]?.hidden).toBe(true);
   });
 });
+
+/**
+ * Phase 18 item 1 — a verb whose gate failed is DRAWN, inert, with one sentence under it.
+ *
+ * The defect it replaces is silence: `Verify in QA` simply was not there on three of the user's
+ * four QA tickets. A tooltip would not fix that (a browser will not show one on a disabled
+ * control, and the panel ships no `title` at all), so the reason is ink and the button points at
+ * it with `aria-describedby`.
+ */
+describe('Phase 18 — a disabled part verb names its reason', () => {
+  const REASON = 'No pull request is linked to this ticket yet.';
+  const qaPart = (actions: PanelActionView[]): PanelPartView =>
+    part({ key: 'qa', kind: 'qa', name: 'QA verification', stateText: 'not started', actions });
+
+  it('disables the button and points it at the reason line under the part', () => {
+    const node = build({
+      parts: [
+        qaPart([
+          { command: 'cgremlin.verifyInQa', label: 'Verify in QA', placement: 'inline', enabled: false, reason: REASON },
+        ]),
+      ],
+    });
+    const qa = node.byClass('part').find((p) => p.dataset.key?.endsWith(':qa'))!;
+    const button = qa.byClass('part-actions')[0].children[0];
+    const reason = qa.byClass('action-reason')[0];
+    expect(button.disabled).toBe(true);
+    expect(reason.id).not.toBe('');
+    expect(button.getAttribute('aria-describedby')).toBe(reason.id);
+    expect(reason.textContent).toBe(`Verify in QA: ${REASON}`);
+    // Never a tooltip, and never an emoji.
+    expect(button.getAttribute('title')).toBeNull();
+  });
+
+  it('leaves an enabled verb undescribed, and draws no reason line at all', () => {
+    const node = build({
+      parts: [qaPart([{ command: 'cgremlin.verifyInQa', label: 'Verify in QA', placement: 'inline' }])],
+    });
+    const qa = node.byClass('part').find((p) => p.dataset.key?.endsWith(':qa'))!;
+    const button = qa.byClass('part-actions')[0].children[0];
+    expect(button.disabled).toBe(false);
+    expect(button.getAttribute('aria-describedby')).toBeNull();
+    expect(qa.byClass('action-reason').length).toBe(0);
+  });
+
+  it('mutates nothing on a re-render over the same data (P0-4)', () => {
+    const row = rowView({
+      parts: [
+        qaPart([
+          { command: 'cgremlin.verifyInQa', label: 'Verify in QA', placement: 'inline', enabled: false, reason: REASON },
+          { command: 'cgremlin.discoverPrs', label: 'Find merged PRs', placement: 'inline' },
+        ]),
+      ],
+    });
+    const node = createExpanded() as unknown as FakeElement;
+    patchExpanded(node as unknown as HTMLElement, row, null);
+    doc.clearLog();
+    patchExpanded(node as unknown as HTMLElement, row, null);
+    expect(doc.log).toEqual([]);
+  });
+});

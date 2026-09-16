@@ -84,6 +84,18 @@
         "icon": "$(comment-discussion)"
       },
       {
+        "command": "cgremlin.discoverPrs",
+        "title": "Find merged PRs",
+        "category": "cgremlin",
+        "icon": "$(search)"
+      },
+      {
+        "command": "cgremlin.openCoreConfig",
+        "title": "Open core.json",
+        "category": "cgremlin",
+        "icon": "$(gear)"
+      },
+      {
         "command": "cgremlin.startInvestigation",
         "title": "Start investigation here",
         "category": "cgremlin"
@@ -233,6 +245,14 @@
         },
         {
           "command": "cgremlin.askQa",
+          "when": "false"
+        },
+        {
+          "command": "cgremlin.discoverPrs",
+          "when": "false"
+        },
+        {
+          "command": "cgremlin.openCoreConfig",
           "when": "false"
         },
         {

@@ -106,6 +106,14 @@ export interface ItemTabState {
   /** Decided by the host (R42/R51), rendered by the webview — the rule is not a style. */
   buttons: TabButton[];
   /**
+   * Phase 18 §8's gate, the same two inputs the panel rows read off `GET /config`. Optional:
+   * a tab rendered before the config resolved offers no QA verb at all, as it did before.
+   */
+  qaRepos?: string[];
+  qaStatuses?: string[];
+  /** The last automatic QA attempt could not reach the environment (`qaAttempt.outcome`). */
+  qaUnreachable?: boolean;
+  /**
    * Phase 17 §1 — the item's parts in their fixed order, which is what the tablist draws. Built
    * host-side by `model/item-tab-parts` so the webview picks no order of its own.
    */

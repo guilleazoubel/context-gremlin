@@ -18,7 +18,7 @@ import { MODE_GLYPH, MODE_NAME, prLabel, prRefOf, qaDeployText, qaStateText } fr
 import type { LifecycleSlot } from './lifecycle';
 import { chatTargetOfAgents, isLandedPr, prState, sizeOf, type WorkItem, type WorkListKind } from './work-items';
 import {
-  canVerifyInQa,
+  showsQa,
   liveQaAgent,
   nextStages,
   type ActionAgent,
@@ -68,6 +68,8 @@ export interface ItemPartsInput {
   list: WorkListKind;
   /** §8's gate needs the repos that have a `qa.url`; absent means no QA part and no QA verb. */
   qaRepos?: readonly string[];
+  /** Phase 18 — `jira.qaStatuses`, so a blocked QA part knows the item wants QA at all. */
+  qaStatuses?: readonly string[];
   /** Already built by `lifecycleSlots`, so the state wording is said in exactly one place. */
   slots: readonly LifecycleSlot[];
   /** The list's own rule table — the only source of a verb (P0-2). */
@@ -83,6 +85,9 @@ export function itemParts(input: ItemPartsInput): ItemPart[] {
     ticketKey: item.ticket?.key ?? null,
     needsYou: item.needsYou,
     qaRepos: input.qaRepos ?? [],
+    ticketStatus: item.ticket?.status ?? null,
+    qaStatuses: input.qaStatuses ?? [],
+    qaUnreachable: item.qaAttempt?.outcome === 'unreachable',
   };
   const allowed = new Set(nextStages(facts));
   const parts: ItemPart[] = [];
@@ -148,7 +153,9 @@ export function itemParts(input: ItemPartsInput): ItemPart[] {
  */
 function qaPart(facts: ActionFacts, input: ItemPartsInput): ItemPart | null {
   const agent = liveQaAgent(facts) ?? lastQaAgent(facts);
-  const startable = canVerifyInQa(facts, input.list);
+  // Phase 18 — the part exists wherever the gate has something to SAY, which now includes a
+  // gate that fails: the reason belongs beside the verb it disabled, not nowhere.
+  const startable = showsQa(facts, input.list);
   if (agent === undefined && !startable) return null;
   // Phase 16 — a change nobody has deployed yet has no verdict to report, and
   // the part says exactly what the collapsed row says (same composer).
@@ -165,6 +172,9 @@ function qaPart(facts: ActionFacts, input: ItemPartsInput): ItemPart | null {
   // invented here, both are looked up in the actions the list allows).
   actions.push(...find(input.actions, 'cgremlin.verifyInQa', undefined, null));
   actions.push(...find(input.actions, 'cgremlin.askQa', undefined, null));
+  // Phase 18 — and the remedy for whichever clause failed, where one exists.
+  actions.push(...find(input.actions, 'cgremlin.discoverPrs', undefined, null));
+  actions.push(...find(input.actions, 'cgremlin.openCoreConfig', undefined, null));
   return {
     key: 'qa',
     kind: 'qa',

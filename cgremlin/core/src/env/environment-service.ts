@@ -864,6 +864,36 @@ export class EnvironmentService {
 /** A commit sha, and nothing else — see {@link EnvironmentService.qaVersion}. */
 const COMMIT_SHA = /^[0-9a-f]{7,40}$/i;
 
+/** A segment that would walk off the document and onto the prototype chain. */
+const PROTOTYPE_SEGMENTS = new Set(['__proto__', 'constructor', 'prototype']);
+
+/** JSON gives plain objects and arrays; only the first is something a path may descend into. */
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * One string at `segments`, or `null`. Every segment must be an OWN property of a plain
+ * object — the body is a remote JSON document, so an array index, a missing key, a prototype
+ * segment and a non-string leaf are all the same answer: "this repo will not say".
+ */
+function stringAt(root: unknown, segments: readonly string[]): string | null {
+  let value: unknown = root;
+  for (const segment of segments) {
+    if (PROTOTYPE_SEGMENTS.has(segment)) return null;
+    if (!isPlainObject(value)) return null;
+    if (!Object.prototype.hasOwnProperty.call(value, segment)) return null;
+    value = value[segment];
+  }
+  return typeof value === 'string' ? value : null;
+}
+
+/**
+ * Phase 18 — `qa.versionField` is a DOTTED PATH as well as a flat key: grace-frontend reports
+ * the commit at the top-level `version`, grace reports it at `meta.build`. The LITERAL key is
+ * tried first, so a payload that really does have a key with a dot in it still resolves; the
+ * path is the fallback, which is what the two live repos need.
+ */
 function shaFromVersionBody(body: string, field: string): string | null {
   let parsed: unknown;
   try {
@@ -871,12 +901,8 @@ function shaFromVersionBody(body: string, field: string): string | null {
   } catch {
     return null;
   }
-  let value: unknown = parsed;
-  for (const segment of field.split('.')) {
-    if (typeof value !== 'object' || value === null) return null;
-    value = (value as Record<string, unknown>)[segment];
-  }
-  if (typeof value !== 'string') return null;
+  const value = stringAt(parsed, [field]) ?? stringAt(parsed, field.split('.'));
+  if (value === null) return null;
   const sha = value.trim();
   return COMMIT_SHA.test(sha) ? sha : null;
 }

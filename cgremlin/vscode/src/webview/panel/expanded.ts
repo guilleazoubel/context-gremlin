@@ -14,7 +14,9 @@
  */
 import { post } from './channel';
 import { button, el } from './dom';
-import { reconcile, setAttr, setClass, setHidden, setTabStop, setText } from './reconcile';
+import {
+  reconcile, setAttr, setClass, setDisabled, setHidden, setId, setTabStop, setText,
+} from './reconcile';
 import { child, commandOf } from './row';
 import type { PanelActionView, PanelPartView, PanelRowView } from '../../model/panel-protocol';
 
@@ -45,6 +47,7 @@ export function createExpanded(): HTMLElement {
   actions.setAttribute('role', 'group');
   actions.setAttribute('aria-label', 'Actions');
   node.appendChild(actions);
+  node.appendChild(el('div', 'action-reasons'));
   return node;
 }
 
@@ -68,6 +71,7 @@ export function patchExpanded(node: HTMLElement, row: PanelRowView, focusedKey: 
   setText(child(node, '.committed-value'), row.changes?.committed ?? '—');
   setText(child(node, '.working-value'), row.changes?.workingTree ?? '—');
   patchActions(child(node, '.actions'), node, row);
+  patchReasons(child(node, '.action-reasons'), leftoverActions(row), 'row');
 }
 
 function keyOf(command: string, childId?: string): string {
@@ -99,7 +103,40 @@ function patchActions(parent: HTMLElement, root: HTMLElement, row: PanelRowView)
         label: action.label,
         message: () => commandOf(root, action.command, action.childId),
       }),
-    (node, action) => setText(node, action.label),
+    (node, action) => patchAction(node, action, 'row'),
+  );
+}
+
+/**
+ * Phase 18 — the id of the line that says why THIS button is inert, so the button can point at
+ * it with `aria-describedby`. A tooltip is not an option: a browser will not show one on a
+ * disabled control, and the panel ships no `title` at all (§3).
+ */
+function reasonIdOf(scope: string, action: PanelActionView): string {
+  return `action-reason-${scope}-${keyOf(action.command, action.childId).replace(/[^\w-]/g, '-')}`;
+}
+
+/** One button, enabled or not. `enabled: undefined` is enabled — the shape most actions have. */
+function patchAction(node: HTMLElement, action: PanelActionView, scope: string): void {
+  setText(node, action.label);
+  const disabled = action.enabled === false;
+  setDisabled(node, disabled);
+  const described = disabled && action.reason !== undefined;
+  setAttr(node, 'aria-describedby', described ? reasonIdOf(scope, action) : null);
+}
+
+/** The reasons under a group of buttons — ink, in the reading order of the buttons themselves. */
+function patchReasons(parent: HTMLElement, actions: readonly PanelActionView[], scope: string): void {
+  const reasons = actions.filter((a) => a.enabled === false && a.reason !== undefined);
+  setHidden(parent, reasons.length === 0);
+  reconcile(
+    parent,
+    reasons.map((action) => ({ key: keyOf(action.command, action.childId), data: action })),
+    () => el('p', 'action-reason'),
+    (node, action) => {
+      setId(node, reasonIdOf(scope, action));
+      setText(node, `${action.label}: ${action.reason ?? ''}`);
+    },
   );
 }
 
@@ -153,8 +190,9 @@ function patchPartActions(
               }
             : commandOf(root, action.command, action.childId),
       }),
-    (node, action) => setText(node, action.label),
+    (node, action) => patchAction(node, action, part.key),
   );
+  patchReasons(child(partNode, '.part-reasons'), part.actions, part.key);
 }
 
 function createPart(root: HTMLElement, part: PanelPartView, key: string): HTMLElement {
@@ -174,6 +212,8 @@ function createPart(root: HTMLElement, part: PanelPartView, key: string): HTMLEl
   node.appendChild(text);
   const actions = el('div', 'part-actions');
   node.appendChild(actions);
+  // Phase 18 — the reason lives with the part whose verb it explains, under its buttons.
+  node.appendChild(el('div', 'part-reasons'));
   node.addEventListener('click', () => {
     // A stage that never ran opens nothing: there is no session behind it to open (§4).
     const childId = node.dataset.childId ?? '';
