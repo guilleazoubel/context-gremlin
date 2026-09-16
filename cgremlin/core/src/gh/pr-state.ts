@@ -43,8 +43,17 @@ export function isLandedState(state: PrState | null | undefined): boolean {
 export const PR_STATE_FIELDS =
   'state,mergedAt,closedAt,title,url,headRefName,author,createdAt,changedFiles,additions,deletions,isDraft,labels';
 
+/**
+ * Phase 18 — the same projection off `gh pr list`, which answers about MANY PRs at once and so
+ * has to say which row is which (`number`), plus the merge commit the QA leg keys on. One
+ * search therefore fills the pr-state cache outright: no `gh pr view` follows it.
+ */
+export const PR_SEARCH_FIELDS = `number,mergeCommit,${PR_STATE_FIELDS}`;
+
 const PrStateViewSchema = z.object({
   state: z.string(),
+  /** Present only on the `gh pr list` projection — a single `gh pr view` already knows which PR it asked about. */
+  number: z.number().int().optional(),
   mergedAt: z.string().nullable().optional(),
   closedAt: z.string().nullable().optional(),
   title: z.string().optional(),
@@ -255,8 +264,43 @@ export class PrStateResolver {
     this.report = { scannedAt: nowIso, error, fetched };
   }
 
+  /**
+   * Phase 18 — rows that came out of ONE `gh pr list --search`, written into the cache as they
+   * are. It is the same projection `gh pr view` yields, so nothing here needs a second call.
+   *
+   * It waits on a scan in flight rather than racing it: both write the whole cache at once, and
+   * the loser of that race would silently drop the other's fetches.
+   */
+  async absorbList(repo: string, stdout: string): Promise<Array<{ repo: string; number: number }>> {
+    if (this.flight !== null) await this.flight.catch(() => undefined);
+    const nowIso = (this.deps.now ?? (() => new Date()))().toISOString();
+    let rows: unknown;
+    try {
+      rows = JSON.parse(stdout.trim() === '' ? '[]' : stdout);
+    } catch {
+      return [];
+    }
+    if (!Array.isArray(rows)) return [];
+    const previous = await this.cached();
+    const next: PrStateCache = { ...previous };
+    const written: Array<{ repo: string; number: number }> = [];
+    for (const row of rows) {
+      const view = PrStateViewSchema.safeParse(row);
+      if (!view.success || view.data.number === undefined) continue;
+      next[prStateKey(repo, view.data.number)] = this.entryFrom(view.data, nowIso);
+      written.push({ repo, number: view.data.number });
+    }
+    if (written.length === 0) return [];
+    await this.deps.store.save(next);
+    this.cache = next;
+    return written;
+  }
+
   private entryOf(stdout: string, checkedAt: string): PrStateEntry {
-    const view = PrStateViewSchema.parse(JSON.parse(stdout.trim() === '' ? '{}' : stdout));
+    return this.entryFrom(PrStateViewSchema.parse(JSON.parse(stdout.trim() === '' ? '{}' : stdout)), checkedAt);
+  }
+
+  private entryFrom(view: z.infer<typeof PrStateViewSchema>, checkedAt: string): PrStateEntry {
     const title = view.title ?? null;
     const branch = view.headRefName ?? null;
     const keys: string[] = [];

@@ -246,6 +246,15 @@ export class CoreClient {
     return await this.request('POST', `/items/${assertItemPath(path)}/agents`, body);
   }
 
+  /**
+   * Phase 18 — "find the PRs of this ticket". ONE `gh pr list --search` engine-side, written
+   * into the pr-state cache, with the refreshed item in the answer. Addressed by the TICKET
+   * because the whole point is that there is no PR to address it by.
+   */
+  async discoverPrs(ticketKey: string): Promise<HttpResult> {
+    return await this.request('POST', `/items/${assertItemPath(`ticket/${ticketKey}`)}/prs/discover`);
+  }
+
   /** R31: one request; the core fans out over every ref the item contributes. */
   async ackItem(path: string): Promise<HttpResult> {
     return await this.request('POST', `/items/${assertItemPath(path)}/ack`);

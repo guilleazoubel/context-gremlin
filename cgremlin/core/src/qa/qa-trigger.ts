@@ -1,4 +1,5 @@
 import type { GhRunner } from '../gh/gh-runner';
+import { PR_SEARCH_FIELDS } from '../gh/pr-state';
 import type { KeyedLock } from '../api/keyed-lock';
 import type { WorkItem, WorkItemPr } from '../work/work-item';
 import { QaTriggerStore, qaIdentityOf, type QaAttempt } from './qa-trigger-store';
@@ -64,9 +65,28 @@ export interface QaTriggerDeps {
   closeSession?: (sessionId: string) => Promise<void>;
   /** R84 — the repos that have a `qa.url`, for a ticket whose PR the engine never saw. */
   qaRepos?: () => readonly string[];
+  /**
+   * Phase 18 — where the rows of a `gh pr list --search` are WRITTEN: the pr-state cache, which
+   * is what makes `/items` re-evaluate without any further gh call. Optional: a wiring without
+   * it still searches, it just forgets what it found between ticks.
+   */
+  absorbPrs?: (repo: string, stdout: string) => Promise<void>;
   createSession: (ticket: string, slug: string, number: number) => Promise<{ id: string }>;
   startRun: (sessionId: string) => Promise<void>;
   now?: () => Date;
+}
+
+/**
+ * Phase 18 — what ONE manual discovery did. `searched: false` is never an error: it is the
+ * bound doing its job (a scan in flight, an entry already searched, no repo to search).
+ */
+export interface QaDiscoverResult {
+  searched: boolean;
+  /** The repos a `gh pr list --search` actually ran against, in order. */
+  repos: string[];
+  found: Array<{ repo: string; number: number }>;
+  /** One sentence for the panel — why nothing ran, or that nothing was found. */
+  reason: string | null;
 }
 
 /** One surviving candidate, before any network call has been made for it. */
@@ -395,33 +415,111 @@ export class QaTriggerLeg {
     candidate: Candidate,
     ordinal: number,
   ): Promise<Array<{ repo: string; number: number; mergeSha: string }> | null> {
-    const nowIso = (this.deps.now ?? (() => new Date()))().toISOString();
-    const { stdout } = await this.deps.gh.run([
-      'pr', 'list', '--repo', candidate.slug, '--search', candidate.key, '--state', 'merged',
-      '--json', 'number,title,mergeCommit,mergedAt,headRefName,author',
-    ]);
-    const rows = JSON.parse(stdout.trim() === '' ? '[]' : stdout) as Array<{
-      number: number;
-      mergeCommit?: { oid: string } | null;
-    }>;
-    const merged = rows
-      .filter((row) => row.mergeCommit?.oid !== undefined && row.mergeCommit?.oid !== null)
-      .map((row) => ({ repo: candidate.slug, number: row.number, mergeSha: row.mergeCommit!.oid }));
+    const merged = await this.searchRepo(candidate.key, candidate.slug, ordinal);
     if (merged.length === 0) {
-      // The attempt is recorded so the search is not repeated every tick.
-      await this.deps.store.reserve({
-        key: candidate.key,
-        identity: `search:${candidate.slug}`,
-        ordinal,
-        attempt: 1,
-        reservedAt: nowIso,
-        sessionId: null,
-        outcome: 'create-failed',
-      });
       this.skip(candidate.key, `no merged pr for ${candidate.key}`);
       return null;
     }
     return merged;
+  }
+
+  /** The per-entry record that stops one `(ticket, repo, ordinal)` being searched twice. */
+  private static searchIdentity(slug: string): string {
+    return `search:${slug}`;
+  }
+
+  /**
+   * The ONE `gh pr list --search`, shared by the automatic leg and the manual route (Phase 18).
+   *
+   * It writes the rows into the pr-state cache on the way past, which is what lets `/items`
+   * re-evaluate the ticket with no further gh call, and it records the attempt WHATEVER it
+   * found — that record is the whole bound.
+   */
+  private async searchRepo(
+    key: string,
+    slug: string,
+    ordinal: number,
+  ): Promise<Array<{ repo: string; number: number; mergeSha: string }>> {
+    const nowIso = (this.deps.now ?? (() => new Date()))().toISOString();
+    const { stdout } = await this.deps.gh.run([
+      'pr', 'list', '--repo', slug, '--search', key, '--state', 'merged',
+      '--json', PR_SEARCH_FIELDS,
+    ]);
+    let rows: Array<{ number: number; mergeCommit?: { oid: string } | null }> = [];
+    try {
+      const parsed: unknown = JSON.parse(stdout.trim() === '' ? '[]' : stdout);
+      if (Array.isArray(parsed)) rows = parsed as typeof rows;
+    } catch {
+      rows = [];
+    }
+    const merged = rows
+      .filter((row) => typeof row.mergeCommit?.oid === 'string')
+      .map((row) => ({ repo: slug, number: row.number, mergeSha: row.mergeCommit!.oid }));
+    if (merged.length > 0) await this.deps.absorbPrs?.(slug, stdout);
+    await this.deps.store.reserve({
+      key,
+      identity: QaTriggerLeg.searchIdentity(slug),
+      ordinal,
+      attempt: 1,
+      reservedAt: nowIso,
+      sessionId: null,
+      // Zero matches keeps the wording the leg has always recorded, so the panel's
+      // abandoned-attempt token means exactly what it did before.
+      outcome: merged.length === 0 ? 'create-failed' : 'reserved',
+    });
+    return merged;
+  }
+
+  /**
+   * Phase 18 — the manual leg of R84's lookup: `POST /items/ticket/<KEY>/prs/discover`.
+   *
+   * A ticket in a QA status with no PR the engine has ever seen is the user's NORMAL case (his
+   * teammates merge without cgremlin sessions), and the automatic leg only reaches it when
+   * exactly one repo could hold it. This is the same search, asked deliberately, and bounded the
+   * same three ways: once per `(ticket, repo, ordinal)`, inside the scan budget, and never while
+   * a tick is in flight — a tick that has already spent its gh call must not have a second spent
+   * behind its back.
+   *
+   * Where the ticket names no repo of its own it walks the configured QA repos IN ORDER and
+   * stops at the first that answers, so the common case is still exactly one call.
+   */
+  async discover(key: string): Promise<QaDiscoverResult> {
+    const nothing = (reason: string): QaDiscoverResult => ({ searched: false, repos: [], found: [], reason });
+    if (this.flight !== null) return nothing('A QA scan is already running — try again in a moment.');
+    const items = await this.deps.items();
+    const item = items.find((candidate) => candidate.ticket?.key === key);
+    const named =
+      item?.prs[0]?.repo ?? item?.agents.find((agent) => agent.repo !== null)?.repo ?? null;
+    const repos = named === null ? [...(this.deps.qaRepos?.() ?? [])] : [named];
+    if (repos.length === 0) {
+      return nothing('No repo is configured with a QA environment to search.');
+    }
+    const state = await this.deps.store.load();
+    const ordinal = state.tickets[key]?.ordinal ?? 0;
+    const budgetUntil = Date.now() + this.deps.config.scanBudgetMs;
+    const searched: string[] = [];
+    const found: Array<{ repo: string; number: number }> = [];
+    for (const slug of repos) {
+      if (Date.now() > budgetUntil) break;
+      const already = (state.tickets[key]?.attempts ?? []).some(
+        (attempt) =>
+          attempt.identity === QaTriggerLeg.searchIdentity(slug) && attempt.ordinal === ordinal,
+      );
+      if (already) continue;
+      searched.push(slug);
+      const merged = await this.searchRepo(key, slug, ordinal);
+      found.push(...merged.map((pr) => ({ repo: pr.repo, number: pr.number })));
+      if (found.length > 0) break;
+    }
+    if (searched.length === 0) {
+      return nothing('This ticket has already been searched for — nothing new to look up.');
+    }
+    return {
+      searched: true,
+      repos: searched,
+      found,
+      reason: found.length === 0 ? `No merged pull request mentions ${key}.` : null,
+    };
   }
 
   /**

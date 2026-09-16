@@ -10,7 +10,7 @@
  *    `itemPathOf` from the item's id, never interpolated by hand, and a *child* click uses that
  *    child's own path — a PR child of a `ticket:` item opens `/items/pr/o/r/n`.
  */
-import { prRefOf } from '../model/row-composition';
+import { prLabel, prRefOf } from '../model/row-composition';
 import { engineErrorText, type CoreClient, type HttpResult } from '../core-client';
 import { refreshBlockedMessage } from '../model/engine-trouble';
 import { readTitle, writeTitle } from '../model/item-title';
@@ -282,6 +282,50 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
       }
       coordinator.schedule();
       panel.reveal(item.id);
+    }),
+
+    /**
+     * Phase 18 item 2 — `Find merged PRs`, the remedy beside "No pull request is linked to this
+     * ticket yet."
+     *
+     * The user's normal case: his teammates merge without cgremlin sessions, so the engine has
+     * never seen the PR and §8's gate can only refuse. This is ONE `gh pr list --search`
+     * engine-side, bounded exactly as the automatic leg's own lookup is, and its answer is said
+     * in words — a search that found nothing has to SAY so, or it is the same silence again.
+     */
+    host.registerCommand('cgremlin.discoverPrs', async (arg) => {
+      const item = needsItem(arg);
+      if (item === null) return;
+      const key = item.ticket?.key ?? null;
+      if (key === null) {
+        void host.showWarningMessage(
+          `'${item.title}' has no ticket to search pull requests for.`,
+          undefined,
+        );
+        return;
+      }
+      const result = await send(() => client.discoverPrs(key));
+      if (!surface(result)) return;
+      coordinator.schedule();
+      const body = result?.body as
+        | { found?: { repo?: unknown; number?: unknown }[]; reason?: unknown }
+        | undefined;
+      const found = (body?.found ?? [])
+        .filter((pr) => typeof pr.repo === 'string' && typeof pr.number === 'number')
+        .map((pr) => prLabel({ repo: String(pr.repo), number: Number(pr.number) }));
+      if (found.length > 0) {
+        void host.showInformationMessage(
+          `${key}: found ${found.join(', ')}.`,
+          undefined,
+        );
+        return;
+      }
+      void host.showInformationMessage(
+        typeof body?.reason === 'string' && body.reason !== ''
+          ? body.reason
+          : `No merged pull request mentions ${key}.`,
+        undefined,
+      );
     }),
 
     /**

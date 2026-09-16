@@ -84,6 +84,12 @@
         "icon": "$(comment-discussion)"
       },
       {
+        "command": "cgremlin.discoverPrs",
+        "title": "Find merged PRs",
+        "category": "cgremlin",
+        "icon": "$(search)"
+      },
+      {
         "command": "cgremlin.startInvestigation",
         "title": "Start investigation here",
         "category": "cgremlin"
@@ -233,6 +239,10 @@
         },
         {
           "command": "cgremlin.askQa",
+          "when": "false"
+        },
+        {
+          "command": "cgremlin.discoverPrs",
           "when": "false"
         },
         {

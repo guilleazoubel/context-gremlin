@@ -4,6 +4,7 @@ import { KeyedLock } from '../../src/api/keyed-lock';
 import { QaTriggerStore } from '../../src/qa/qa-trigger-store';
 import { QaTriggerLeg, type QaTriggerDeps } from '../../src/qa/qa-trigger';
 import { FakeGhRunner } from '../support/fake-gh-runner';
+import { PrStateResolver, PrStateStore, prStateKey } from '../../src/gh/pr-state';
 import type { WorkItem, WorkItemPr, WorkItemTicket } from '../../src/work/work-item';
 
 const NOW = new Date('2026-09-15T12:00:00.000Z');
@@ -362,10 +363,12 @@ describe('R84/E10 — the PR-less entry', () => {
       stdout: JSON.stringify([{ number: 77, mergeCommit: { oid: MERGE_SHA }, mergedAt: '2026-09-14T00:00:00.000Z' }]),
     });
     await h.leg.run();
-    expect(h.gh.calls[0]).toEqual([
+    // Phase 18 widens the projection to the whole pr-state row, so ONE search also FILLS the
+    // cache — the manual leg needs the state, the title and the branch, not just the merge sha.
+    expect(h.gh.calls[0].slice(0, 8)).toEqual([
       'pr', 'list', '--repo', REPO, '--search', 'HB-1', '--state', 'merged',
-      '--json', 'number,title,mergeCommit,mergedAt,headRefName,author',
     ]);
+    expect(h.gh.calls[0][9]).toContain('mergeCommit');
     expect(h.created).toEqual(['HB-1:acme/app#77']);
     await h.leg.run();
     expect(h.gh.calls.length).toBe(1);
@@ -513,5 +516,144 @@ describe('a new qa build re-verifies', () => {
     await tick(h);
     expect(h.ran).toEqual([]);
     expect(h.created).toEqual([]);
+  });
+});
+
+/**
+ * Phase 18 item 2 — R84's lookup, on the MANUAL path.
+ *
+ * A ticket in a QA status with no PR the engine has ever seen is the user's NORMAL case: his
+ * teammates merge without cgremlin sessions, so nothing links the ticket to the change and the
+ * QA verb has nothing to run on. The same per-entry search the automatic leg makes is now
+ * reachable from the panel, bounded exactly as the automatic one is — once per (ticket,
+ * ordinal), inside the scan budget, and never on a tick that has already spent its gh call.
+ */
+describe('Phase 18 — discovering the PRs of a ticket that has none', () => {
+  const ROW = {
+    number: 77,
+    state: 'MERGED',
+    mergeCommit: { oid: MERGE_SHA },
+    mergedAt: '2026-09-14T00:00:00.000Z',
+    headRefName: 'feature/HB-1-x',
+    title: 'feat(HB-1): the landed change',
+  };
+
+  function discoverHarness(
+    over: Omit<Partial<QaTriggerDeps>, 'items'> & { items?: WorkItem[] } = {},
+  ) {
+    const absorbed: Array<{ repo: string; stdout: string }> = [];
+    const h = harness({
+      items: [item({ prs: [] })],
+      qaRepos: () => [REPO],
+      absorbPrs: async (repo: string, stdout: string) => {
+        absorbed.push({ repo, stdout });
+      },
+      ...over,
+    });
+    return { ...h, absorbed };
+  }
+
+  it('makes ONE gh pr list --search and writes what it found into the pr-state cache', async () => {
+    const h = discoverHarness();
+    h.gh.queueResponse({ stdout: JSON.stringify([ROW]) });
+    const result = await h.leg.discover('HB-1');
+    expect(h.gh.calls.length).toBe(1);
+    expect(h.gh.calls[0].slice(0, 8)).toEqual([
+      'pr', 'list', '--repo', REPO, '--search', 'HB-1', '--state', 'merged',
+    ]);
+    expect(result).toMatchObject({ searched: true, found: [{ repo: REPO, number: 77 }], reason: null });
+    expect(h.absorbed).toEqual([{ repo: REPO, stdout: JSON.stringify([ROW]) }]);
+  });
+
+  it('says so, once, when nothing mentions the ticket', async () => {
+    const h = discoverHarness();
+    h.gh.queueResponse({ stdout: '[]' });
+    const result = await h.leg.discover('HB-1');
+    expect(result.found).toEqual([]);
+    expect(result.reason).toBe('No merged pull request mentions HB-1.');
+  });
+
+  it('is not repeated for the same entry', async () => {
+    const h = discoverHarness();
+    h.gh.queueResponse({ stdout: '[]' });
+    await h.leg.discover('HB-1');
+    const again = await h.leg.discover('HB-1');
+    expect(h.gh.calls.length).toBe(1);
+    expect(again.searched).toBe(false);
+    expect(again.reason).toContain('already');
+  });
+
+  it('searches again once the ticket re-enters QA on a new ordinal', async () => {
+    const h = discoverHarness();
+    h.gh.queueResponse({ stdout: '[]' });
+    await h.leg.discover('HB-1');
+    await h.store.enterQa('HB-1', 'UAT');
+    h.gh.queueResponse({ stdout: JSON.stringify([ROW]) });
+    expect((await h.leg.discover('HB-1')).found).toEqual([{ repo: REPO, number: 77 }]);
+  });
+
+  it('refuses while a scan is in flight rather than spending a second gh call', async () => {
+    const h = discoverHarness({ jira: () => ({ ok: false, me: null }) });
+    const flight = h.leg.run();
+    const result = await h.leg.discover('HB-1');
+    await flight;
+    expect(result.searched).toBe(false);
+    expect(h.gh.calls).toEqual([]);
+  });
+
+  it('searches nothing at all when no repo can be named', async () => {
+    const h = discoverHarness({ qaRepos: () => [] });
+    const result = await h.leg.discover('HB-1');
+    expect(h.gh.calls).toEqual([]);
+    expect(result).toMatchObject({ searched: false, found: [] });
+    expect(result.reason).not.toBeNull();
+  });
+});
+
+/**
+ * Phase 18 — the discovery is only useful if what it finds SURVIVES: the whole point is that
+ * `/items` re-evaluates the ticket, and it re-evaluates off the pr-state cache. This wires the
+ * leg to the real resolver, so one search really does leave a merged PR behind.
+ */
+describe('Phase 18 — a discovered PR lands in the pr-state cache', () => {
+  it('writes the row, state and ticket keys, with no second gh call', async () => {
+    const fs = new InMemoryFileSystem();
+    const gh = new FakeGhRunner();
+    const resolver = new PrStateResolver({
+      gh,
+      store: new PrStateStore(fs, '/state/pr-states.json'),
+      projectKeys: ['HB'],
+      now: () => NOW,
+    });
+    const h = harness({
+      items: [item({ prs: [] })],
+      qaRepos: () => [REPO],
+      gh,
+      absorbPrs: async (repo, stdout) => {
+        await resolver.absorbList(repo, stdout);
+      },
+    });
+    gh.queueResponse({
+      stdout: JSON.stringify([
+        {
+          number: 77, state: 'MERGED', mergeCommit: { oid: MERGE_SHA },
+          mergedAt: '2026-09-14T00:00:00.000Z', closedAt: null,
+          title: 'feat(HB-1): the landed change', url: `https://github.com/${REPO}/pull/77`,
+          headRefName: 'feature/HB-1-x', author: { login: 'gennaro' },
+          createdAt: '2026-09-01T00:00:00.000Z', changedFiles: 7, additions: 120, deletions: 30,
+          isDraft: false, labels: [{ name: 'backend' }],
+        },
+      ]),
+    });
+    await h.leg.discover('HB-1');
+    expect(gh.calls.length).toBe(1);
+    const cached = (await resolver.cached())[prStateKey(REPO, 77)];
+    expect(cached).toMatchObject({
+      state: 'merged',
+      title: 'feat(HB-1): the landed change',
+      author: 'gennaro',
+      ticketKeys: ['HB-1'],
+      labels: ['backend'],
+    });
   });
 });

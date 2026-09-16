@@ -32,6 +32,10 @@ let ticketDetailCalls: string[];
 let ticketDetailAnswer: { ticket: JiraIssueDetail | null; ticketError: string | null };
 let threadReport: { scannedAt: string | null; error: string | null; fetched: number };
 let prStates: PrStateCache;
+/** Phase 18 — what `POST /items/ticket/<KEY>/prs/discover` is wired to, per test. */
+let discoverCalls: string[];
+let discoverAnswer: { searched: boolean; repos: string[]; found: { repo: string; number: number }[]; reason: string | null };
+let withDiscovery: boolean;
 
 function prFixture(number: number, author: string, overrides: Record<string, unknown> = {}) {
   return {
@@ -155,6 +159,16 @@ async function start(opts: { withWorkItems?: boolean } = {}): Promise<void> {
       worktreesDir: WORKTREES_DIR,
       defaultBaseRef: 'origin/main',
     }),
+    ...(withDiscovery
+      ? {
+          qaDiscovery: {
+            discover: async (key: string) => {
+              discoverCalls.push(key);
+              return discoverAnswer;
+            },
+          },
+        }
+      : {}),
     ...(opts.withWorkItems === false ? {} : { workItems }),
   });
   socketPath = path.join(dir, `items-${Math.random().toString(36).slice(2)}.sock`);
@@ -173,6 +187,9 @@ beforeEach(async () => {
   ticketDetailAnswer = { ticket: null, ticketError: null };
   threadReport = { scannedAt: null, error: null, fetched: 0 };
   prStates = {};
+  discoverCalls = [];
+  discoverAnswer = { searched: true, repos: ['acme/app'], found: [], reason: null };
+  withDiscovery = true;
 });
 
 afterEach(async () => {
@@ -940,5 +957,76 @@ describe("POST /items/<path>/agents { mode: 'qa' } (§3)", () => {
     await scan([prFixture(11, 'me-user')]);
     expect((await request('POST', '/items/pr/acme/app/11/agents', { mode: 'nope' })).status).toBe(400);
     expect((await request('POST', '/items/pr/acme/app/11/agents', { mode: 'qa', start: 'yes' })).status).toBe(400);
+  });
+});
+
+/**
+ * Phase 18 item 2 — the manual leg of R84's lookup.
+ *
+ * A ticket in a QA status with no PR the engine has ever seen is the user's normal case, and
+ * §8's gate can only refuse it. This route is what the disabled verb's remedy calls: ONE
+ * `gh pr list --search`, written into the pr-state cache, and the REFRESHED item back in the
+ * same response so the panel re-evaluates without guessing when to poll.
+ */
+describe('POST /items/ticket/:key/prs/discover (Phase 18)', () => {
+  it('runs the discovery for that ticket and answers with the refreshed item', async () => {
+    jira = {
+      ...jira,
+      issues: [
+        {
+          key: 'HB-9001', summary: 'Ready for QA', status: 'Ready for QA',
+          statusCategory: 'indeterminate', assignee: '712020:me', assigneeName: null,
+          updated: '2026-09-09T00:00:00.000Z', url: 'https://example.atlassian.net/browse/HB-9001',
+        },
+      ],
+    };
+    await start();
+    await scan([prFixture(10, 'bob')]);
+    prStates = {
+      'acme/app#77': {
+        ...PR_STATE_ENTRY_DEFAULTS,
+        state: 'merged',
+        ticketKeys: ['HB-9001'],
+        title: 'feat(HB-9001): the landed change',
+        url: 'https://github.com/acme/app/pull/77',
+        mergedAt: '2026-09-09T00:00:00.000Z',
+        closedAt: null,
+        branch: 'feature/HB-9001',
+        checkedAt: '2026-09-10T00:00:00.000Z',
+      },
+    };
+    discoverAnswer = { searched: true, repos: ['acme/app'], found: [{ repo: 'acme/app', number: 77 }], reason: null };
+    const res = await request('POST', '/items/ticket/HB-9001/prs/discover');
+    expect(res.status).toBe(200);
+    expect(discoverCalls).toEqual(['HB-9001']);
+    expect(res.body.found).toEqual([{ repo: 'acme/app', number: 77 }]);
+    // The ticket had no PR the engine knew of; it has one now, in the same response.
+    expect(res.body.item?.prs?.map((p: Json) => p.number)).toEqual([77]);
+  });
+
+  it('says plainly when nothing was found, and the item is still returned', async () => {
+    await start();
+    await scan([prFixture(10, 'bob')]);
+    discoverAnswer = { searched: true, repos: ['acme/app'], found: [], reason: 'No merged pull request mentions HB-4242.' };
+    const res = await request('POST', '/items/ticket/HB-4242/prs/discover');
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ searched: true, found: [], reason: 'No merged pull request mentions HB-4242.' });
+    expect(res.body.item).toBeNull();
+  });
+
+  it('is a clean 404 on a wiring with no discovery', async () => {
+    withDiscovery = false;
+    await start();
+    await scan([prFixture(10, 'bob')]);
+    const res = await request('POST', '/items/ticket/HB-9001/prs/discover');
+    expect(res.status).toBe(404);
+    expect(res.body.error).toContain('qa discovery');
+  });
+
+  it('is not offered on a PR or a session address', async () => {
+    await start();
+    await scan([prFixture(10, 'bob')]);
+    expect((await request('POST', '/items/pr/acme/app/10/prs/discover')).status).toBe(404);
+    expect(discoverCalls).toEqual([]);
   });
 });
