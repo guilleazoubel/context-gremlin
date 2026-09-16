@@ -168,6 +168,12 @@ export interface StartEngineOptions {
   prStates?: Record<string, unknown>;
   /** What the fake `claude` writes as `QA.md` when a QA run starts. */
   qaVerdict?: string;
+  /**
+   * Phase 18 — the fake agent HANGS for this many seconds instead of exiting,
+   * so a test can catch a run mid-flight. Bounded on purpose: an engine killed
+   * under it orphans the child, and this is what reaps it.
+   */
+  agentHangsForSeconds?: number;
 }
 
 /** The merged-PR cache row a QA test seeds, linked to its ticket by `ticketKeys` (R28). */
@@ -234,7 +240,9 @@ export async function seedStateDir(opts: StartEngineOptions = {}): Promise<Seede
   // verification agent does, and the only way an end-to-end test can drive `evaluateQa`.
   await writeFile(
     path.join(binDir, 'claude'),
-    [
+    opts.agentHangsForSeconds !== undefined
+    ? ['#!/bin/bash', `exec sleep ${opts.agentHangsForSeconds}`, ''].join('\n')
+    : [
       '#!/bin/bash',
       'set -u',
       'verdict="${FAKE_QA_VERDICT:-}"',

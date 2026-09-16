@@ -181,7 +181,9 @@ async function respondForExistingReviewSession(
   deps: ApiServerDeps,
   existing: Session,
 ): Promise<void> {
-  const isLive = deps.pipeline.activeSessionIds().includes(existing.id);
+  // Phase 18: the ONE predicate. A session whose file still says `running`
+  // while the runner holds nothing is a CRASHED run, not a live one.
+  const isLive = deps.pipeline.runLivenessOf(existing) === 'live';
   if (!isLive) {
     if (existing.stageStatus === 'queued' || existing.stageStatus === 'failed') {
       await awaitRunStart(deps.events, existing.id, deps.pipeline.runReview(existing.id));
@@ -314,7 +316,7 @@ async function handleItemAgents(
         // session, and a RESTART on a recomposed brief — unless a run is
         // already in flight or the session is claimed, which is what stops
         // two agents writing one COMMENTS.md.
-        if (deps.pipeline.activeSessionIds().includes(existing.id)) {
+        if (deps.pipeline.runLivenessOf(existing) === 'live') {
           sendJson(res, 200, {
             session: existing,
             created: false,
@@ -383,7 +385,7 @@ async function handleItemAgents(
       if (existing !== null) {
         // The parity rule, verbatim from respond: never a second session,
         // and never a second agent writing one QA.md.
-        if (deps.pipeline.activeSessionIds().includes(existing.id)) {
+        if (deps.pipeline.runLivenessOf(existing) === 'live') {
           sendJson(res, 200, {
             session: existing, created: false, started: false,
             reason: 'a qa run is already in flight for this session', item,

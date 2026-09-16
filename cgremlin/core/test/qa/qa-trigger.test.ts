@@ -62,7 +62,7 @@ function harness(over: Omit<Partial<QaTriggerDeps>, 'items'> & { items?: WorkIte
     config: { autoVerify: true, maxAutoStartsPerTick: 1, maxAttemptsPerEntry: 1, scanBudgetMs: 20_000, backfillOnFirstRun: false, qaStatuses: ['QA', 'UAT'] },
     qaFor: () => ({ hasUrl: true, hasTestIdentity: true }),
     qaHealth: async () => ({ ok: true, reason: null }),
-    sessions: { existingFor: async () => null, activeSessionIds: () => [] },
+    sessions: { existingFor: async () => null, isRunningNow: () => false },
     createSession: async (ticketKey, slug, number) => {
       created.push(`${ticketKey}:${slug}#${number}`);
       return { id: `qa-${ticketKey}` };
@@ -144,7 +144,7 @@ describe('the refusals are all skipped, never errors', () => {
     ['no qa url', { qaFor: () => ({ hasUrl: false, hasTestIdentity: false }) }],
     ['a jira outage', { jiraOk: false }],
     ['a closed PR', { items: [item({ prs: [pr({ state: 'closed' })] })] }],
-    ['a session already running', { sessions: { existingFor: async () => ({ id: 'qa-HB-1', stageStatus: 'verifying' }), activeSessionIds: () => ['qa-HB-1'] } }],
+    ['a session already running', { sessions: { existingFor: async () => ({ id: 'qa-HB-1', stageStatus: 'verifying' }), isRunningNow: (id: string) => id === 'qa-HB-1' } }],
   ])('%s creates nothing and files no error', async (_name, over) => {
     const h = harness(over as Parameters<typeof harness>[0]);
     await h.store.observe('HB-1', 'In Progress');
@@ -238,7 +238,7 @@ describe('E2 — reserve, then run', () => {
 describe('E8 — a crashed verifying session is not coverage', () => {
   it('a non-terminal qa session whose run IS live blocks a second start', async () => {
     const h = harness({
-      sessions: { existingFor: async () => ({ id: 'qa-live', stageStatus: 'verifying' }), activeSessionIds: () => ['qa-live'] },
+      sessions: { existingFor: async () => ({ id: 'qa-live', stageStatus: 'verifying' }), isRunningNow: (id: string) => id === 'qa-live' },
     });
     await h.store.observe('HB-1', 'In Progress');
     await tick(h);
@@ -247,7 +247,7 @@ describe('E8 — a crashed verifying session is not coverage', () => {
 
   it('a verifying session the engine died under does NOT block it', async () => {
     const h = harness({
-      sessions: { existingFor: async () => ({ id: 'qa-dead', stageStatus: 'verifying' }), activeSessionIds: () => [] },
+      sessions: { existingFor: async () => ({ id: 'qa-dead', stageStatus: 'verifying' }), isRunningNow: () => false },
     });
     await h.store.observe('HB-1', 'In Progress');
     await tick(h);
@@ -310,7 +310,7 @@ describe('E7/R78 — the Done close is not a bulldozer', () => {
     const closed: string[] = [];
     const h = harness({
       items: [doneItem()],
-      sessions: { existingFor: async () => ({ id: 'qa-1', stageStatus: 'ready', claimed: false }), activeSessionIds: () => [] },
+      sessions: { existingFor: async () => ({ id: 'qa-1', stageStatus: 'ready', claimed: false }), isRunningNow: () => false },
       stopSession: async (id) => {
         stopped.push(id);
       },
@@ -327,7 +327,7 @@ describe('E7/R78 — the Done close is not a bulldozer', () => {
     const closed: string[] = [];
     const h = harness({
       items: [doneItem()],
-      sessions: { existingFor: async () => ({ id: 'qa-1', stageStatus: 'ready', claimed: true }), activeSessionIds: () => [] },
+      sessions: { existingFor: async () => ({ id: 'qa-1', stageStatus: 'ready', claimed: true }), isRunningNow: () => false },
       closeSession: async (id) => {
         closed.push(id);
       },
@@ -468,7 +468,7 @@ describe('a new qa build re-verifies', () => {
     const h = harness({
       qaVersion: async () => builds[0],
       isAncestor: async () => true,
-      sessions: { existingFor: async () => existing, activeSessionIds: () => [] },
+      sessions: { existingFor: async () => existing, isRunningNow: () => false },
       ...over,
     });
     return {
@@ -507,7 +507,7 @@ describe('a new qa build re-verifies', () => {
     const { h, cut } = rebuilding(builds, {
       sessions: {
         existingFor: async () => ({ id: 'qa-live', stageStatus: 'verifying' }),
-        activeSessionIds: () => ['qa-live'],
+        isRunningNow: (id: string) => id === 'qa-live',
       },
     });
     await h.store.observe('HB-1', 'In Progress');

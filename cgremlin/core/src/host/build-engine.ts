@@ -481,7 +481,7 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
               claimed: isClaimed(session, adapters.now?.() ?? new Date()),
             };
       },
-      activeSessionIds: () => pipeline.activeSessionIds(),
+      isRunningNow: (id) => pipeline.isRunningNow(id),
     },
     stopSession: async (id) => {
       await pipeline.stop(id);
@@ -539,7 +539,7 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
         store,
         fs: adapters.fs,
         sessionsDir,
-        isRunning: (id) => pipeline.activeSessionIds().includes(id),
+        isRunning: (id) => pipeline.isRunningNow(id),
         ...(environment ? { localStatus: () => environment.status() } : {}),
       }),
       new PrSourceAdapter({ inventory: inventoryStore }),

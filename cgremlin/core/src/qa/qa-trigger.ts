@@ -58,7 +58,8 @@ export interface QaTriggerDeps {
   log?: (line: string) => void;
   sessions: {
     existingFor: (ticket: string) => Promise<{ id: string; stageStatus: string; claimed?: boolean } | null>;
-    activeSessionIds: () => readonly string[];
+    /** Phase 18 — the ONE liveness question, asked of the RUNNER (see pipeline/run-liveness.ts). */
+    isRunningNow: (sessionId: string) => boolean;
   };
   /** R78/E7 — stop the run, then transition to `closed`, once the ticket reaches Done. */
   stopSession?: (sessionId: string) => Promise<void>;
@@ -224,7 +225,7 @@ export class QaTriggerLeg {
   }
 
   /**
-   * E8 — a `verifying` session whose id is NOT in `activeSessionIds()` is a
+   * E8 — a `verifying` session the runner is not holding is a
    * session the engine died under, not coverage. Counting it would wedge the
    * ticket forever; a boot sweep moves it to `failed`, which is runnable and
    * already raises `run_failed`.
@@ -232,7 +233,7 @@ export class QaTriggerLeg {
   private async coverage(key: string): Promise<{ blocked: boolean; reuse: string | null }> {
     const existing = await this.deps.sessions.existingFor(key);
     if (existing === null) return { blocked: false, reuse: null };
-    if (this.deps.sessions.activeSessionIds().includes(existing.id)) {
+    if (this.deps.sessions.isRunningNow(existing.id)) {
       this.skip(key, 'a qa run is already in flight');
       return { blocked: true, reuse: null };
     }

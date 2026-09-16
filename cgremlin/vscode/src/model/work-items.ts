@@ -102,6 +102,12 @@ export interface WorkItemAgent {
   mode: WorkAgentMode;
   phase: string;
   running: boolean;
+  /**
+   * Phase 18 — this session's last run failed (the engine's own `run_failed`
+   * reason). **Optional**: an engine older than this contract sends none, and
+   * the row then offers no Retry, exactly as before.
+   */
+  runFailed?: boolean;
   needsYou: boolean;
   claimed: boolean;
   primaryArtifact: string | null;

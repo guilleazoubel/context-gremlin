@@ -97,6 +97,13 @@ export interface WorkItemAgent {
   mode: SessionMode;
   phase: string;
   running: boolean;
+  /**
+   * Phase 18 — this session's last run FAILED, straight off the attention
+   * item's own `run_failed` reason (which R22 raises for a crashed run too,
+   * via the ONE liveness predicate). The panel needs it to offer a way
+   * forward: the wedge left the user with an error and no verb.
+   */
+  runFailed: boolean;
   needsYou: boolean;
   claimed: boolean;
   primaryArtifact: string | null;
@@ -447,6 +454,7 @@ export function groupWorkItems(input: GroupWorkItemsInput): WorkItem[] {
       mode: item.mode,
       phase: item.stageStatus ?? '',
       running: item.running,
+      runFailed: item.attention.reasons.includes('run_failed'),
       needsYou: item.attention.needsYou,
       claimed: item.claimed,
       primaryArtifact: item.links.primaryArtifact,

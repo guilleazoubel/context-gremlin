@@ -327,12 +327,14 @@ export async function serve(config: CoreConfig, adapters: EngineAdapters, opts: 
       logLine(opts.log, 'qa.done_status_warning', { warning });
     }
 
-    // E8, the same boot-recovery reasoning: a `qa` session stuck at
-    // `verifying` with no run behind it would make the automatic leg believe
-    // the ticket is already covered, forever.
-    const sweptVerifications = await pipeline.failStaleVerifications();
-    if (sweptVerifications.count > 0) {
-      logLine(opts.log, 'qa.stale_verifications_failed', sweptVerifications);
+    // E8, the same boot-recovery reasoning, generalised in Phase 18: ANY
+    // session whose `lastRun` still says `running` — plus a `qa` session
+    // stuck at `verifying` — is a session the engine died under. Left alone
+    // an investigation wedges every action on it, and a qa session makes the
+    // automatic leg believe the ticket is already covered, forever. One line
+    // per session, so the log names what it healed.
+    for (const sessionId of (await pipeline.failStaleRuns()).sessionIds) {
+      logLine(opts.log, 'run.stale_run_failed', { sessionId });
     }
 
     await listenOnSocket(server, socketPath);

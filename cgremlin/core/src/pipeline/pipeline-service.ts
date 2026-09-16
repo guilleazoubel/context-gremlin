@@ -21,7 +21,7 @@ import type { GitRunner } from '../git/git-runner';
 import type { EngineEvents } from '../engine/events';
 import type { DevelopmentSession, InvestigationSession, Session } from '../schema/session';
 import type { RespondPhase, ReviewPhase } from '../schema/pipeline';
-import { QA_RUNNABLE_FROM } from '../schema/pipeline';
+import { canTransition, QA_RUNNABLE_FROM } from '../schema/pipeline';
 import type { LastRun, StageName } from '../schema/stage';
 import { KeyedLock } from '../api/keyed-lock';
 import { awaitRunStart } from './run-start';
@@ -57,6 +57,7 @@ import {
 } from './artifacts';
 import { assertCanPromote } from './plan-gate';
 import { RunInProgressError, WorkspaceMissingError, type StageRunResult } from './stage-runner';
+import { CRASHED_RUN_ERROR, runLiveness, type RunLiveness } from './run-liveness';
 import { TERMINAL_PHASES_BY_MODE } from '../workspace/workspace-in-use';
 import { repoSlugFromUrl } from '../gh/repo-slug';
 
@@ -804,7 +805,7 @@ export class PipelineService {
     const { brief } = await this.composeQaBrief(session);
     return this.lock.withLock(id, async () => {
       const fresh = await this.deps.store.load(id);
-      if (this.deps.stageRunner.activeSessionIds().includes(id)) {
+      if (this.runLivenessOf(fresh) === 'live') {
         throw new RunInProgressError(id);
       }
       await this.deps.fs.mkdir(this.sessionDir(id), { recursive: true });
@@ -1139,6 +1140,24 @@ export class PipelineService {
   }
 
   /**
+   * THE one place the raw runner membership is asked. Everything that decides
+   * "is a run in progress?" goes through `runLivenessOf` instead, so the
+   * attention layer and every write path cannot drift apart (Phase 18).
+   */
+  isRunningNow(id: string): boolean {
+    return this.deps.stageRunner.activeSessionIds().includes(id);
+  }
+
+  /**
+   * The ONE liveness verdict, for any caller holding a session snapshot. Only
+   * the runner can say `live`; a snapshot that still says `running` while the
+   * runner holds nothing is `crashed` — a dead run, never a live one.
+   */
+  runLivenessOf(session: Session): RunLiveness {
+    return runLiveness(session.lastRun, this.isRunningNow(session.id));
+  }
+
+  /**
    * Claims the agent conversation for a human (R9, R20). Refused while a run
    * is in flight: two `claude --resume <same id>` processes on one transcript
    * is unrecoverable corruption, so the caller must `stop` first. Idempotent
@@ -1150,8 +1169,10 @@ export class PipelineService {
       const fresh = await this.deps.store.load(id);
       // Read inside the lock, so a run that started while this call queued is
       // still seen. A live run has already released the lock (it releases at
-      // `run.started`), so the lock alone cannot exclude it.
-      if (this.activeSessionIds().includes(id)) {
+      // `run.started`), so the lock alone cannot exclude it. A CRASHED run
+      // (the file says `running`, the runner holds nothing) is not a reason
+      // to refuse: that is the wedge this replaces.
+      if (this.runLivenessOf(fresh) === 'live') {
         throw new RunInProgressError(id);
       }
       const now = this.now();
@@ -1186,6 +1207,10 @@ export class PipelineService {
     worktreePath: string | null;
     claimed: boolean;
   }> {
+    // Phase 18 — the lazy heal. This is the read the panel makes before it
+    // offers Chat, so it is the first place a crashed run is SEEN; fixing it
+    // here means the user never waits for a restart to get unstuck.
+    await this.reconcileCrashedRun(id);
     const session = await this.deps.store.load(id);
     return {
       runner: session.agent?.runner ?? null,
@@ -1215,34 +1240,69 @@ export class PipelineService {
     return { count: sessionIds.length, sessionIds };
   }
 
+  /** A session that needs healing: a crashed run, or E8's stale `verifying`. */
+  private isStale(session: Session): boolean {
+    if (this.isRunningNow(session.id)) return false;
+    if (session.mode === 'qa' && session.stageStatus === 'verifying') return true;
+    return this.runLivenessOf(session) === 'crashed';
+  }
+
+  /**
+   * Phase 18 — the heal, and the ONE writer of it. A `lastRun` still saying
+   * `running` with nothing running is a run the engine died under: it is
+   * reconciled to `failed`, with the sentence saying so, and the phase moves
+   * to `failed` too wherever the mode HAS one (review, qa — investigation and
+   * development do not, and their resting phase is already re-runnable).
+   *
+   * One locked read-then-save, one `session.transitioned`, and `false` when
+   * there was nothing to heal — so a read path may call it freely.
+   */
+  async reconcileCrashedRun(id: string): Promise<boolean> {
+    return this.lock.withLock(id, async () => {
+      const fresh = await this.deps.store.load(id);
+      if (!this.isStale(fresh)) return false;
+      const lastRun = fresh.lastRun;
+      let next: Session =
+        lastRun !== null && lastRun.outcome === 'running'
+          ? { ...fresh, lastRun: { ...lastRun, finishedAt: this.now().toISOString(), outcome: 'failed', error: CRASHED_RUN_ERROR } }
+          : fresh;
+      if (canTransition(next.mode, next.stageStatus as never, 'failed' as never)) {
+        next = applyTransition(next, 'failed');
+      }
+      await this.deps.store.save(next);
+      const cleared = await this.clearHumanTurnIfTerminal(next);
+      this.deps.events.emit('session.transitioned', {
+        session: cleared,
+        from: fresh.stageStatus,
+        to: cleared.stageStatus,
+      });
+      return true;
+    });
+  }
+
   /**
    * E8's boot recovery, beside `clearAllHumanTurns` and for the same reason:
-   * a `qa` session left at `verifying` with nothing actually running is a
-   * session the engine died under, not coverage. Left alone it wedges the
-   * ticket forever — the automatic leg would see a live QA session and never
-   * fire again. `failed` is in `QA_RUNNABLE_FROM` and already raises
+   * a session the engine died under is not work in flight. Phase 15 swept
+   * only `qa`/`verifying`; the live wedge was an investigation whose
+   * `findings` run died the same way, so the sweep is now every stale
+   * session. `failed` is in `QA_RUNNABLE_FROM` and already raises
    * `run_failed`, so the row lights up and the user can click.
    *
    * The same reasoning `server.ts` already applies to a stale `reviewing`.
    */
-  async failStaleVerifications(): Promise<{ count: number; sessionIds: string[] }> {
-    const active = new Set(this.deps.stageRunner.activeSessionIds());
+  async failStaleRuns(): Promise<{ count: number; sessionIds: string[] }> {
     const sessionIds: string[] = [];
     for (const session of await this.deps.store.list()) {
-      if (session.mode !== 'qa' || session.stageStatus !== 'verifying') continue;
-      if (active.has(session.id)) continue;
-      await this.lock.withLock(session.id, async () => {
-        const fresh = await this.deps.store.load(session.id);
-        if (fresh.mode !== 'qa' || fresh.stageStatus !== 'verifying') return;
-        if (this.deps.stageRunner.activeSessionIds().includes(session.id)) return;
-        await this.transitionUnlocked(session.id, 'failed');
-        sessionIds.push(session.id);
-      });
+      if (!this.isStale(session)) continue;
+      if (await this.reconcileCrashedRun(session.id)) sessionIds.push(session.id);
     }
     return { count: sessionIds.length, sessionIds };
   }
 
   async retry(id: string): Promise<Session> {
+    // Lazy heal: a retry on a session whose file still claims `running` must
+    // start from the truth, not from the contradiction.
+    await this.reconcileCrashedRun(id);
     const session = await this.deps.store.load(id);
     if (!session.lastRun) {
       throw new UnsupportedStageError(`Session '${id}' has no previous run to retry`);
