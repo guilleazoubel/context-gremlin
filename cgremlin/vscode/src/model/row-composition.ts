@@ -336,13 +336,14 @@ export function rowMetaCells(
   item: WorkItem,
   list: WorkListKind,
   parts: { age: string; size: string; tier: string; activity: string; repo: string },
+  now: number,
 ): RowMetaCell[] {
   const primary = item.prs[0];
   const cells: RowMetaCell[] = [];
 
   const pushAgent = (agent: WorkItemAgent): void => {
     cells.push(phaseCell(agent));
-    if (agent.running) cells.push(runningCell());
+    if (agent.running) cells.push(runningCell(agent, now));
   };
 
   if (list === 'investigations') {
@@ -441,12 +442,65 @@ function phaseCell(agent: WorkItemAgent): RowMetaCell {
 }
 
 /**
- * The one token that says an agent is WORKING right now, beside the stage it
- * is working on. A word, not a spinner and not an emoji: the user's complaint
- * was that a started review was indistinguishable from one that never began.
+ * Phase 19 — the engine's own `lastRun.stage` names (`findings | plan | develop | review |
+ * rereview | respond | verify`), reworded to the six words a user reads on the row. The defect
+ * this replaces: a run genuinely in flight said only the bare `running`, and clicking Chat mid-run
+ * answered with the raw engine sentence `session '…' already has a stage run in progress` — the
+ * refusal was correct, the silence was the bug. `review` and `rereview` share one word: a
+ * re-review is still "reviewing" from the row's point of view.
  */
-function runningCell(): RowMetaCell {
-  return { kind: 'running', text: 'running', label: 'an agent is running', tone: 'active' };
+const STAGE_BUSY_TEXT: Record<string, string> = {
+  findings: 'investigating…',
+  plan: 'planning…',
+  develop: 'developing…',
+  review: 'reviewing…',
+  rereview: 'reviewing…',
+  respond: 'addressing…',
+  verify: 'verifying…',
+};
+
+/**
+ * Phase 19 — elapsed time since a run began, coarse enough to read at a glance and fine enough to
+ * tell "just started" from "been at it a while": `3m`, `1h`, `1h 4m`. Never the `compactAge`
+ * buckets (`<1h`, `2d`) — those exist to compress a long, mostly-irrelevant age down to one
+ * character class; a run in progress is the opposite case, where the first hour is exactly the
+ * part the user is watching.
+ */
+export function elapsedSince(startedAt: string, now: number): string {
+  const at = Date.parse(startedAt);
+  const elapsed = Math.max(0, now - (Number.isNaN(at) ? now : at));
+  const minutes = Math.floor(elapsed / 60000);
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  if (hours === 0) return `${minutes}m`;
+  return mins === 0 ? `${hours}h` : `${hours}h ${mins}m`;
+}
+
+/**
+ * The ONE place a live run becomes a word: `investigating… 3m`. `agent.lastRun` is optional (an
+ * engine older than Phase 19 sends none), so a row an older engine describes falls back to the
+ * bare `running` it always drew — no regression, just no upgrade yet.
+ */
+export function agentBusyText(agent: WorkItemAgent, now: number): string {
+  const stage = agent.lastRun?.stage;
+  const word = stage === undefined || stage === null ? undefined : STAGE_BUSY_TEXT[stage];
+  if (word === undefined) return 'running';
+  const startedAt = agent.lastRun?.startedAt;
+  if (startedAt === undefined || startedAt === null) return word;
+  return `${word} ${elapsedSince(startedAt, now)}`;
+}
+
+/**
+ * The one cell that says an agent is WORKING right now, and — Phase 19 — which stage and for how
+ * long. Tokens only: no emoji, no `title` attribute (the row already has a `label` for that).
+ */
+function runningCell(agent: WorkItemAgent, now: number): RowMetaCell {
+  return {
+    kind: 'running',
+    text: agentBusyText(agent, now),
+    label: 'an agent is running',
+    tone: 'active',
+  };
 }
 
 const CI_CELLS: Record<CiStatus, RowMetaCell | null> = {

@@ -67,3 +67,27 @@ describe('no module outside the composer spells a QA state', () => {
     expect(QA_TOKEN.test(readFileSync(COMPOSER, 'utf8'))).toBe(true);
   });
 });
+
+/**
+ * Phase 19 — the same rule, applied to the six words a live run reads as.
+ *
+ * The user's complaint: a run genuinely in flight read only the bare `running`, no different
+ * from a row that had just been clicked. The fix is the stage word plus elapsed time, built in
+ * `agentBusyText` — and, same as the QA words, nowhere else may spell one of them out, or the
+ * collapsed row and the expanded part (which read the very same `meta` cells) could start to
+ * disagree about what a running agent is doing.
+ */
+const BUSY_TOKEN = /investigating…|planning…|developing…|reviewing…|addressing…|verifying…/;
+
+describe('no module outside the composer spells a live run’s stage word', () => {
+  it('has exactly one file containing the busy stage words', () => {
+    const offenders = sources(SRC).filter(
+      (file) => file !== COMPOSER && BUSY_TOKEN.test(readFileSync(file, 'utf8')),
+    );
+    expect(offenders.map((f) => path.relative(SRC, f))).toEqual([]);
+  });
+
+  it('the composer really is where they live', () => {
+    expect(BUSY_TOKEN.test(readFileSync(COMPOSER, 'utf8'))).toBe(true);
+  });
+});
