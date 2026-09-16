@@ -673,3 +673,56 @@ describe('§6 the action row', () => {
     );
   });
 });
+
+/**
+ * Phase 18 item 1, on the tab's action row.
+ *
+ * `buttonsFor` used to build its facts WITHOUT `qaRepos`, so §8's gate could never pass here at
+ * all: the QA verbs existed on the panel rows and nowhere else. The tab reads the same two
+ * config values now, and says the same thing about the same item — enabled where the gate
+ * passes, disabled with its sentence where it does not.
+ */
+describe('Phase 18 — the QA verb reaches the item tab, enabled or explained', () => {
+  const QA_REPO = 'aplaceformom/grace-frontend';
+  const state = (over: Partial<ItemTabState>): ItemTabState =>
+    ({
+      itemId: 'ticket:HB-1490',
+      title: 'HB-1490',
+      needsYou: false,
+      lists: ['myWork'],
+      chips: [],
+      focus: { kind: 'ticket' },
+      selectedSessionId: null,
+      agents: [],
+      prs: [{ repo: QA_REPO, number: 2037, state: 'merged' }],
+      ticket: { key: 'HB-1490', status: 'UAT' },
+      ticketError: null,
+      qaRepos: [QA_REPO],
+      qaStatuses: ['QA', 'UAT', 'Ready for QA'],
+      buttons: [],
+      parts: [],
+      ...over,
+    }) as unknown as ItemTabState;
+
+  it('offers the enabled verb where the gate passes', () => {
+    const qa = buttonsFor(state({})).find((b) => b.id === 'cgremlin.verifyInQa');
+    expect(qa).toMatchObject({ label: 'Verify in QA', enabled: true });
+    expect(qa?.reason).toBeUndefined();
+  });
+
+  it("carries the reason when the PR's repo has no qa block", () => {
+    const qa = buttonsFor(state({ qaRepos: [] })).find((b) => b.id === 'cgremlin.verifyInQa');
+    expect(qa?.enabled).toBe(false);
+    expect(qa?.reason).toBe(
+      'This repo has no QA environment configured — add `environments["aplaceformom/grace-frontend"].qa.url` to core.json.',
+    );
+  });
+
+  it('carries the no-PR reason, and the discovery beside it', () => {
+    const buttons = buttonsFor(state({ prs: [] }));
+    const qa = buttons.find((b) => b.id === 'cgremlin.verifyInQa');
+    expect(qa?.enabled).toBe(false);
+    expect(qa?.reason).toBe('No pull request is linked to this ticket yet.');
+    expect(buttons.map((b) => b.id)).toContain('cgremlin.discoverPrs');
+  });
+});

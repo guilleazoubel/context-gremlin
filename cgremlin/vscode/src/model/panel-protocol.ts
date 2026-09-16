@@ -116,6 +116,10 @@ export interface PanelActionView {
   childId?: string;
   /** Where it renders: the one primary button, an inline button, or the `⋯` menu (P1-5). */
   placement: ActionPlacement;
+  /** Phase 18 — absent means enabled. A disabled button always carries a `reason` with it. */
+  enabled?: boolean;
+  /** The one sentence under the buttons that says why. Ink, never a tooltip (§3). */
+  reason?: string;
 }
 
 /**

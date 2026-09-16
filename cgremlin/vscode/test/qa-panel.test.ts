@@ -174,11 +174,17 @@ describe('§8 — the two verbs, offered only when the gate passes', () => {
     expect(closed.join(' ')).not.toContain('QA');
   });
 
-  it('offers neither while a PR is still open, nor when the repo has no qa.url', () => {
+  it('offers neither while a PR is still open', () => {
     expect(labels({ prs: [pr({ state: 'open' })] }).join(' ')).not.toContain('QA');
-    expect(
-      rowActions(itemActionFacts(item(), []), 'myWork').map((a) => a.label).join(' '),
-    ).not.toContain('QA');
+  });
+
+  // Phase 18 amends the second half of this: a repo with no `qa.url` used to remove the button,
+  // which is the live defect. The verb is still not RUNNABLE — it is drawn disabled instead.
+  it('never RUNS on a repo with no qa.url, and says so instead of vanishing', () => {
+    const actions = rowActions(itemActionFacts(item(), []), 'myWork');
+    const verb = actions.find((a) => a.command === 'cgremlin.verifyInQa');
+    expect(verb?.enabled).toBe(false);
+    expect(actions.some((a) => a.command === 'cgremlin.askQa')).toBe(false);
   });
 
   it('offers neither on a parking-lot row, nor on an item with no ticket', () => {
@@ -361,5 +367,105 @@ describe('Phase 16 §5 — merged, but not in QA yet', () => {
       actions: rowActions(f, 'myWork'), now: NOW, qaRepos: QA_REPOS,
     });
     expect(parts.find((p) => p.kind === 'qa')?.stateText).toBe('awaiting qa deploy');
+  });
+});
+
+/**
+ * Phase 18 item 1 — the QA verb is never hidden SILENTLY.
+ *
+ * The defect, in the user's words: "where should i see to start a qa review? i dont see that
+ * anywhere." Every clause of §8's gate used to remove the button outright, so three of his four
+ * QA-status tickets offered nothing at all and nothing said why. The gate is unchanged as a
+ * PREDICATE — a click that would 404 is still refused — but a row that plausibly wants QA now
+ * renders the verb DISABLED with one sentence the user can act on.
+ */
+describe('Phase 18 §1 — a blocked QA verb says why', () => {
+  const QA_STATUSES = ['QA', 'UAT', 'Ready for QA'];
+  const facts = (over: Partial<WorkItem> = {}, repos: readonly string[] = QA_REPOS) =>
+    itemActionFacts(item(over), repos, QA_STATUSES);
+  const qaAction = (over: Partial<WorkItem> = {}, repos: readonly string[] = QA_REPOS) =>
+    rowActions(facts(over, repos), 'myWork').find((a) => a.command === 'cgremlin.verifyInQa');
+
+  it('an item that fully qualifies still shows the enabled verb, exactly as today', () => {
+    expect(qaAction()).toMatchObject({ label: 'Verify in QA', placement: 'primary' });
+    expect(qaAction()?.enabled).not.toBe(false);
+    expect(qaAction()?.reason).toBeUndefined();
+  });
+
+  it("names the exact config key when the PR's repo has no qa block", () => {
+    const blocked = qaAction({}, []);
+    expect(blocked?.enabled).toBe(false);
+    expect(blocked?.reason).toBe(
+      'This repo has no QA environment configured — add `environments["aplaceformom/grace-frontend"].qa.url` to core.json.',
+    );
+    // Never the row's one click: a button that does nothing must not take it.
+    expect(blocked?.placement).toBe('inline');
+  });
+
+  it('says nothing is merged when the ticket sits in QA behind an unmerged PR', () => {
+    expect(qaAction({ prs: [pr({ state: 'open' })] })?.reason).toBe(
+      'Nothing is merged yet — QA verifies code that has landed.',
+    );
+    expect(qaAction({ prs: [pr({ state: 'closed' })] })?.reason).toBe(
+      'Nothing is merged yet — QA verifies code that has landed.',
+    );
+  });
+
+  it('says no PR is linked when the engine knows of none', () => {
+    expect(qaAction({ prs: [] })?.reason).toBe('No pull request is linked to this ticket yet.');
+  });
+
+  it('says QA is unreachable when the last attempt could not reach it', () => {
+    const unreachable = { outcome: 'unreachable' as const, at: '2026-09-15T09:00:00.000Z' };
+    expect(qaAction({ qaAttempt: unreachable })?.reason).toBe('QA is unreachable right now.');
+  });
+
+  it('each reason appears for its own cause and never for another', () => {
+    const reasons = [
+      qaAction({}, [])?.reason,
+      qaAction({ prs: [pr({ state: 'open' })] })?.reason,
+      qaAction({ prs: [] })?.reason,
+      qaAction({ qaAttempt: { outcome: 'unreachable', at: '2026-09-15T09:00:00.000Z' } })?.reason,
+    ];
+    expect(new Set(reasons).size).toBe(4);
+    expect(reasons.every((r) => typeof r === 'string' && r !== '')).toBe(true);
+  });
+
+  it('offers the remedy beside the reason: a discovery, and the config file', () => {
+    const noPr = rowActions(facts({ prs: [] }), 'myWork').map((a) => a.command);
+    expect(noPr).toContain('cgremlin.discoverPrs');
+    const noEnv = rowActions(facts({}, []), 'myWork').map((a) => a.command);
+    expect(noEnv).toContain('cgremlin.openCoreConfig');
+  });
+
+  it('stays hidden where QA could never apply: no ticket, a parking-lot row, a live run', () => {
+    expect(qaAction({ ticket: null })).toBeUndefined();
+    expect(
+      rowActions(facts(), 'parkingLot').some((a) => a.command === 'cgremlin.verifyInQa'),
+    ).toBe(false);
+    expect(qaAction({ agents: [qaAgent()] })).toBeUndefined();
+  });
+
+  it('stays hidden on a ticket that is not in a QA status and has nothing merged', () => {
+    const away = itemActionFacts(
+      item({ ticket: { ...item().ticket!, status: 'In Progress' }, prs: [pr({ state: 'open' })] }),
+      QA_REPOS,
+      QA_STATUSES,
+    );
+    expect(rowActions(away, 'myWork').some((a) => a.command === 'cgremlin.verifyInQa')).toBe(false);
+  });
+
+  it('carries the disabled verb and its reason into the QA part of the expanded row', () => {
+    const it_ = item({ prs: [] });
+    const f = itemActionFacts(it_, QA_REPOS, QA_STATUSES);
+    const parts = itemParts({
+      item: it_, list: 'myWork', slots: lifecycleSlots({ agents: it_.agents, facts: f, now: NOW }),
+      actions: rowActions(f, 'myWork'), now: NOW, qaRepos: QA_REPOS, qaStatuses: QA_STATUSES,
+    });
+    const qa = parts.find((p) => p.kind === 'qa');
+    const verb = qa?.actions.find((a) => a.command === 'cgremlin.verifyInQa');
+    expect(verb?.enabled).toBe(false);
+    expect(verb?.reason).toBe('No pull request is linked to this ticket yet.');
+    expect(qa?.actions.map((a) => a.command)).toContain('cgremlin.discoverPrs');
   });
 });

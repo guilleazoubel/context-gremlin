@@ -85,6 +85,16 @@ export class FakeElement {
     this.props.set('title', value);
   }
 
+  get disabled(): boolean {
+    return this.props.get('disabled') === true;
+  }
+  set disabled(value: boolean) {
+    this.wrote('prop', `disabled=${value}`);
+    if (this.disabled === value) return;
+    this.log('prop', `disabled=${value}`);
+    this.props.set('disabled', value);
+  }
+
   get hidden(): boolean {
     return this.props.get('hidden') === true;
   }

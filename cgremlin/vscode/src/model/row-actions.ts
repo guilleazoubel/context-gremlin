@@ -47,6 +47,14 @@ export interface RowAction {
   /** Which part of the row the action is about, when the row has more than one (R26). */
   childId?: string;
   placement: ActionPlacement;
+  /**
+   * Phase 18 — absent means enabled. A verb whose gate fails is rendered DISABLED with a
+   * `reason` rather than removed, because a button that silently is not there is the defect:
+   * "where should i see to start a qa review? i dont see that anywhere."
+   */
+  enabled?: boolean;
+  /** One sentence the user can act on. Shown as ink under the buttons, never as a tooltip. */
+  reason?: string;
 }
 
 /** The subset of an agent the rule needs — so the Item tab's `TabAgent` satisfies it too. */
@@ -91,15 +99,28 @@ export interface ActionFacts {
    * older than Phase 15, offers no QA verb at all rather than one that would 404.
    */
   qaRepos?: readonly string[];
+  /** The ticket's Jira status, compared against `qaStatuses` — "does this item WANT QA?". */
+  ticketStatus?: string | null;
+  /** `jira.qaStatuses` from `GET /config`. Absent means the panel cannot tell, so it stays quiet. */
+  qaStatuses?: readonly string[];
+  /** The last automatic attempt could not reach QA (`qaAttempt.outcome === 'unreachable'`). */
+  qaUnreachable?: boolean;
 }
 
-export function itemActionFacts(item: WorkItem, qaRepos: readonly string[] = []): ActionFacts {
+export function itemActionFacts(
+  item: WorkItem,
+  qaRepos: readonly string[] = [],
+  qaStatuses: readonly string[] = [],
+): ActionFacts {
   return {
     agents: item.agents,
     prs: item.prs,
     ticketKey: item.ticket?.key ?? null,
     needsYou: item.needsYou,
     qaRepos,
+    ticketStatus: item.ticket?.status ?? null,
+    qaStatuses,
+    qaUnreachable: item.qaAttempt?.outcome === 'unreachable',
   };
 }
 
@@ -126,6 +147,34 @@ export function qaVerbLabel(facts: ActionFacts): string {
   return facts.agents.some((agent) => agent.mode === 'qa') ? 'Verify in QA again' : 'Verify in QA';
 }
 
+/** Phase 18 — the four sentences, said in ONE place so a reason cannot drift from its cause. */
+export const QA_NOTHING_MERGED_REASON = 'Nothing is merged yet — QA verifies code that has landed.';
+export const QA_NO_PR_REASON = 'No pull request is linked to this ticket yet.';
+export const QA_UNREACHABLE_REASON = 'QA is unreachable right now.';
+export function qaNoEnvironmentReason(slug: string): string {
+  return (
+    'This repo has no QA environment configured — ' +
+    `add \`environments["${slug}"].qa.url\` to core.json.`
+  );
+}
+
+/**
+ * Phase 18 — the remedy that belongs beside each reason. A sentence the user cannot act on is
+ * half a fix, so the two reasons with an obvious next step carry one.
+ */
+export const QA_DISCOVER_COMMAND = 'cgremlin.discoverPrs';
+export const QA_OPEN_CONFIG_COMMAND = 'cgremlin.openCoreConfig';
+
+export type QaGate =
+  /** The gate passes: the verbs are live, exactly as they were. */
+  | { kind: 'ok' }
+  /** QA can never apply to this row, so nothing is drawn — the only silence left. */
+  | { kind: 'hidden' }
+  /** The row plausibly wants QA and cannot have it: the verb is drawn DISABLED, with the why. */
+  | { kind: 'blocked'; reason: string; remedy: Omit<RowAction, 'placement'> | null };
+
+const HIDDEN: QaGate = { kind: 'hidden' };
+
 /**
  * §8's gate, off the forward-only ladder entirely (R70) and asked in exactly one place.
  *
@@ -133,14 +182,54 @@ export function qaVerbLabel(facts: ActionFacts): string {
  * (`server.ts` throws without one), needs a ticket to hang the session's lineage on, and needs a
  * repo whose `qa` block names a URL — nothing in the repo knows the QA address but the config.
  * `merged` is asked rather than `isLandedPr`: a change that was thrown away is not a change to
- * verify (E10), so a closed-only ticket offers nothing.
+ * verify (E10), so a closed-only ticket offers nothing to run.
+ *
+ * Phase 18 amends what a FAILING clause does. It used to remove the button, which is the live
+ * defect — three of the user's four QA tickets offered nothing and said nothing. So a row that
+ * PLAUSIBLY WANTS QA (its ticket is in a configured `jira.qaStatuses`, or something of it has
+ * merged) gets the verb disabled with one actionable sentence instead. A ticket that is in
+ * neither position is still hidden: an item nobody has proposed for QA is not a QA failure.
  */
-export function canVerifyInQa(facts: ActionFacts, list: WorkListKind): boolean {
-  if (list !== 'myWork' && list !== 'waitingForReview') return false;
-  if (facts.ticketKey === null || facts.prs.length === 0) return false;
-  if (!facts.prs.every((pr) => pr.state === 'merged')) return false;
+export function qaGate(facts: ActionFacts, list: WorkListKind): QaGate {
+  if (list !== 'myWork' && list !== 'waitingForReview') return HIDDEN;
+  // Every sentence below is about a ticket ("...linked to this ticket yet"), and the engine
+  // needs one for the session's lineage, so an item without one has nothing to say.
+  if (facts.ticketKey === null) return HIDDEN;
+  const qaStatuses = facts.qaStatuses ?? [];
+  const wantsQa =
+    (facts.ticketStatus !== null &&
+      facts.ticketStatus !== undefined &&
+      qaStatuses.includes(facts.ticketStatus)) ||
+    facts.prs.some((pr) => pr.state === 'merged');
+  const blocked = (reason: string, remedy: Omit<RowAction, 'placement'> | null = null): QaGate =>
+    wantsQa ? { kind: 'blocked', reason, remedy } : HIDDEN;
+
+  if (facts.prs.length === 0) {
+    // R84's case, and the user's normal one: teammates merge without a cgremlin session, so the
+    // engine has never seen the PR. The remedy goes and looks for it.
+    return blocked(QA_NO_PR_REASON, { command: QA_DISCOVER_COMMAND, label: 'Find merged PRs' });
+  }
+  if (!facts.prs.every((pr) => pr.state === 'merged')) return blocked(QA_NOTHING_MERGED_REASON);
   const qaRepos = facts.qaRepos ?? [];
-  return facts.prs.every((pr) => qaRepos.includes(pr.repo));
+  const missing = facts.prs.find((pr) => !qaRepos.includes(pr.repo));
+  if (missing !== undefined) {
+    return blocked(qaNoEnvironmentReason(missing.repo), {
+      command: QA_OPEN_CONFIG_COMMAND,
+      label: 'Open core.json',
+    });
+  }
+  if (facts.qaUnreachable === true) return blocked(QA_UNREACHABLE_REASON);
+  return { kind: 'ok' };
+}
+
+/** The predicate the rest of the panel asks, unchanged in meaning: may this item be verified? */
+export function canVerifyInQa(facts: ActionFacts, list: WorkListKind): boolean {
+  return qaGate(facts, list).kind === 'ok';
+}
+
+/** Phase 18 — is there anything to DRAW for QA here, live verb or disabled one? */
+export function showsQa(facts: ActionFacts, list: WorkListKind): boolean {
+  return qaGate(facts, list).kind !== 'hidden';
 }
 
 /**
@@ -293,7 +382,21 @@ function pushQa(
   list: WorkListKind,
   push: (action: Omit<RowAction, 'placement'>, want: ActionPlacement) => void,
 ): void {
-  if (!canVerifyInQa(facts, list) || runningQaAgent(facts) !== undefined) return;
+  // A run in flight is the ONE silence that stays: there is nothing to explain and nothing to
+  // fix — the row is already showing the verification it would start.
+  if (runningQaAgent(facts) !== undefined) return;
+  const gate = qaGate(facts, list);
+  if (gate.kind === 'hidden') return;
+  if (gate.kind === 'blocked') {
+    // Never `primary`: a disabled control must not be the row's one click. `Ask about QA` is
+    // withdrawn with it — it POSTs the same session the engine would refuse.
+    push(
+      { command: 'cgremlin.verifyInQa', label: qaVerbLabel(facts), enabled: false, reason: gate.reason },
+      'inline',
+    );
+    if (gate.remedy !== null) push(gate.remedy, 'inline');
+    return;
+  }
   const again = qaVerbLabel(facts) !== 'Verify in QA';
   push({ command: 'cgremlin.verifyInQa', label: qaVerbLabel(facts) }, again ? 'inline' : 'primary');
   // R73's chat-only entry: create the session, write its brief, start nothing.

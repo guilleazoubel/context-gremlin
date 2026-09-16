@@ -44,6 +44,16 @@ export function setAttr(node: HTMLElement, name: string, value: string | null): 
   if (node.getAttribute(name) !== value) node.setAttribute(name, value);
 }
 
+/** Phase 18 — a verb whose gate failed, inert but present, with its reason beside it. */
+export function setDisabled(node: HTMLElement, disabled: boolean): void {
+  const button = node as HTMLButtonElement;
+  if (button.disabled !== disabled) button.disabled = disabled;
+}
+
+export function setId(node: HTMLElement, id: string): void {
+  if (node.id !== id) node.id = id;
+}
+
 /** The roving tab stop (R66): exactly one node in the tree is reachable by <kbd>Tab</kbd>. */
 export function setTabStop(node: HTMLElement, focused: boolean): void {
   const value = focused ? 0 : -1;
