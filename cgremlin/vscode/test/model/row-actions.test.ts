@@ -8,6 +8,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  CHAT_BUSY_REASON,
   furthestStage,
   itemActionFacts,
   nextStages,
@@ -244,5 +245,39 @@ describe('P0-2 the Item tab shares the rule', () => {
     const union = rowActionsForLists(itemActionFacts(item), item.lists);
     const keys = union.map((a) => `${a.command}:${a.childId ?? ''}`);
     expect(new Set(keys).size).toBe(keys.length);
+  });
+});
+
+/**
+ * Phase 19 — the user's actual complaint: an investigation was genuinely in flight, he clicked
+ * Chat, and the engine answered the raw sentence `session '…' already has a stage run in
+ * progress` — no explanation, no next step ("I cant do anything"). The refusal was correct; the
+ * silence was the bug. Chat must never reach the engine for this case at all: it is disabled,
+ * with a sentence the user can act on, using the same disabled + `reason` mechanism the QA verbs
+ * already use (`aria-describedby` is wired generically off `enabled === false` — see
+ * `webview/panel/expanded.ts`).
+ */
+describe('P0-2 — Chat while a run is live on the target session', () => {
+  it('disables Chat, with the exact sentence, while its target session is running', () => {
+    const running = facts({
+      prs: [teammatePr],
+      agents: [agent('review', { running: true })],
+    });
+    const chat = rowActions(running, 'parkingLot').find((a) => a.command === 'cgremlin.chat');
+    expect(chat?.enabled).toBe(false);
+    expect(chat?.reason).toBe(
+      'The agent is working on this now — chat opens when it finishes.',
+    );
+    expect(chat?.reason).toBe(CHAT_BUSY_REASON);
+  });
+
+  it('leaves Chat enabled, with no reason, when nothing is running', () => {
+    const idle = facts({
+      prs: [teammatePr],
+      agents: [agent('review', { running: false })],
+    });
+    const chat = rowActions(idle, 'parkingLot').find((a) => a.command === 'cgremlin.chat');
+    expect(chat?.enabled).toBeUndefined();
+    expect(chat?.reason).toBeUndefined();
   });
 });
