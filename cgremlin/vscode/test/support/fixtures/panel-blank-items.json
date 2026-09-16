@@ -1,0 +1,622 @@
+{
+ "evaluatedAt": "2026-09-16T21:06:11.706Z",
+ "lists": {
+  "parkingLot": {
+   "reviewing": [],
+   "untouched": [
+    "pr:aplaceformom/grace-frontend#2086",
+    "pr:aplaceformom/grace#2238"
+   ],
+   "someoneOnIt": [
+    "pr:aplaceformom/grace#2126",
+    "pr:aplaceformom/grace-frontend#1974"
+   ]
+  },
+  "myWork": [
+   "ticket:HB-1354",
+   "ticket:HB-1350",
+   "ticket:HB-1502",
+   "ticket:HB-1490"
+  ],
+  "investigations": [
+   "session:inv-aplaceformom-grace-frontend-SMOKE-5-20260910-115132"
+  ],
+  "waitingForReview": [
+   "ticket:HB-1350"
+  ]
+ },
+ "dismissed": [],
+ "items": [
+  {
+   "id": "pr:aplaceformom/grace-frontend#2086",
+   "kind": "pr",
+   "lists": [
+    "parkingLot"
+   ],
+   "demoted": false,
+   "parkingLotGroup": "untouched",
+   "title": "aplaceformom/grace-frontend#2086 — feat(GS-181): portal and ops production alert stacks (+ GS-183 limiter conditions)",
+   "prs": [
+    {
+     "repo": "aplaceformom/grace-frontend",
+     "number": 2086,
+     "url": "https://github.com/aplaceformom/grace-frontend/pull/2086",
+     "title": "feat(GS-181): portal and ops production alert stacks (+ GS-183 limiter conditions)",
+     "author": "dbeacham-afpm",
+     "branch": "feat/GS-181-portal-ops-alerts",
+     "isDraft": false,
+     "isMine": false,
+     "reviewDecision": "REVIEW_REQUIRED",
+     "humanActivity": {
+      "reviewedBy": [],
+      "commentedBy": [],
+      "lastAt": null
+     },
+     "reviewRequests": [
+      "aplaceformom/grace-b2b",
+      "aplaceformom/grace-b2c",
+      "aplaceformom/grace-data",
+      "aplaceformom/principal-engineers"
+     ],
+     "teamActivity": [],
+     "updatedAt": "2026-09-16T19:18:07Z",
+     "createdAt": "2026-09-15T19:31:24Z",
+     "changedFiles": 6,
+     "additions": 579,
+     "deletions": 19,
+     "ci": "success",
+     "labels": [
+      "30 min review",
+      "missing-tests"
+     ],
+     "sizeTier": "L",
+     "state": "open"
+    }
+   ],
+   "ticket": null,
+   "agents": [],
+   "needsYou": false,
+   "dismissed": false,
+   "dismissedAt": null,
+   "attention": {
+    "reasons": [],
+    "since": "2026-09-15T19:31:26.609Z",
+    "acked": false,
+    "refs": [
+     "pr:aplaceformom/grace-frontend#2086"
+    ]
+   },
+   "qaAttempt": null,
+   "qaDeploy": null
+  },
+  {
+   "id": "pr:aplaceformom/grace#2238",
+   "kind": "pr",
+   "lists": [
+    "parkingLot"
+   ],
+   "demoted": false,
+   "parkingLotGroup": "untouched",
+   "title": "aplaceformom/grace#2238 — docs(HB-927): debrief, prod consent publish grant was not applied before release",
+   "prs": [
+    {
+     "repo": "aplaceformom/grace",
+     "number": 2238,
+     "url": "https://github.com/aplaceformom/grace/pull/2238",
+     "title": "docs(HB-927): debrief, prod consent publish grant was not applied before release",
+     "author": "ebubae",
+     "branch": "hb-927-release-prereq-debrief",
+     "isDraft": false,
+     "isMine": false,
+     "reviewDecision": "REVIEW_REQUIRED",
+     "humanActivity": {
+      "reviewedBy": [],
+      "commentedBy": [],
+      "lastAt": null
+     },
+     "reviewRequests": [
+      "austinbrownapfm",
+      "mattsmith-apfm",
+      "aplaceformom/grace-b2b",
+      "aplaceformom/grace-b2c",
+      "aplaceformom/grace-data"
+     ],
+     "teamActivity": [],
+     "updatedAt": "2026-09-16T15:05:38Z",
+     "createdAt": "2026-09-16T14:54:59Z",
+     "changedFiles": 1,
+     "additions": 67,
+     "deletions": 0,
+     "ci": "success",
+     "labels": [
+      "missing-tests",
+      "1 min review"
+     ],
+     "sizeTier": "M",
+     "state": "open"
+    }
+   ],
+   "ticket": null,
+   "agents": [],
+   "needsYou": false,
+   "dismissed": false,
+   "dismissedAt": null,
+   "attention": {
+    "reasons": [],
+    "since": "2026-09-16T14:55:13.171Z",
+    "acked": false,
+    "refs": [
+     "pr:aplaceformom/grace#2238"
+    ]
+   },
+   "qaAttempt": null,
+   "qaDeploy": null
+  },
+  {
+   "id": "pr:aplaceformom/grace#2126",
+   "kind": "pr",
+   "lists": [
+    "parkingLot"
+   ],
+   "demoted": true,
+   "parkingLotGroup": "someoneOnIt",
+   "title": "aplaceformom/grace#2126 — feat(GS-175): point invitation links at the standalone Portal host",
+   "prs": [
+    {
+     "repo": "aplaceformom/grace",
+     "number": 2126,
+     "url": "https://github.com/aplaceformom/grace/pull/2126",
+     "title": "feat(GS-175): point invitation links at the standalone Portal host",
+     "author": "dbeacham-afpm",
+     "branch": "feat/GS-175-invitation-portal-url",
+     "isDraft": false,
+     "isMine": false,
+     "reviewDecision": "APPROVED",
+     "humanActivity": {
+      "reviewedBy": [
+       "DavidAPFM"
+      ],
+      "commentedBy": [
+       "DavidAPFM"
+      ],
+      "lastAt": "2026-09-11T15:04:48Z"
+     },
+     "reviewRequests": [
+      "aplaceformom/grace-b2b",
+      "aplaceformom/grace-data"
+     ],
+     "teamActivity": [
+      {
+       "login": "DavidAPFM",
+       "kind": "comment",
+       "at": "2026-09-11T14:56:36Z"
+      },
+      {
+       "login": "DavidAPFM",
+       "kind": "comment",
+       "at": "2026-09-11T14:58:35Z"
+      },
+      {
+       "login": "DavidAPFM",
+       "kind": "review",
+       "state": "APPROVED",
+       "at": "2026-09-11T15:04:48Z"
+      }
+     ],
+     "updatedAt": "2026-09-11T15:04:49Z",
+     "createdAt": "2026-08-26T21:49:47Z",
+     "changedFiles": 18,
+     "additions": 103,
+     "deletions": 35,
+     "ci": "success",
+     "labels": [
+      "10 min review"
+     ],
+     "sizeTier": "L",
+     "state": "open"
+    }
+   ],
+   "ticket": null,
+   "agents": [],
+   "needsYou": false,
+   "dismissed": false,
+   "dismissedAt": null,
+   "attention": {
+    "reasons": [],
+    "since": "2026-09-14T13:48:21.577Z",
+    "acked": false,
+    "refs": [
+     "pr:aplaceformom/grace#2126"
+    ]
+   },
+   "qaAttempt": null,
+   "qaDeploy": null
+  },
+  {
+   "id": "pr:aplaceformom/grace-frontend#1974",
+   "kind": "pr",
+   "lists": [
+    "parkingLot"
+   ],
+   "demoted": true,
+   "parkingLotGroup": "someoneOnIt",
+   "title": "aplaceformom/grace-frontend#1974 — feat(HB-1245): four-channel consent controls and total opt-out in Account Settings",
+   "prs": [
+    {
+     "repo": "aplaceformom/grace-frontend",
+     "number": 1974,
+     "url": "https://github.com/aplaceformom/grace-frontend/pull/1974",
+     "title": "feat(HB-1245): four-channel consent controls and total opt-out in Account Settings",
+     "author": "ebubae",
+     "branch": "hb-1245-total-opt-out",
+     "isDraft": false,
+     "isMine": false,
+     "reviewDecision": "CHANGES_REQUESTED",
+     "humanActivity": {
+      "reviewedBy": [
+       "austinbrownapfm",
+       "aplaceformom-bot"
+      ],
+      "commentedBy": [],
+      "lastAt": "2026-09-03T19:18:13Z"
+     },
+     "reviewRequests": [
+      "aplaceformom/grace-data",
+      "aplaceformom/principal-engineers",
+      "austinbrownapfm",
+      "DavidAPFM"
+     ],
+     "teamActivity": [
+      {
+       "login": "austinbrownapfm",
+       "kind": "review",
+       "state": "CHANGES_REQUESTED",
+       "at": "2026-09-03T18:27:35Z"
+      }
+     ],
+     "updatedAt": "2026-09-16T20:00:42Z",
+     "createdAt": "2026-08-27T15:29:26Z",
+     "changedFiles": 24,
+     "additions": 2380,
+     "deletions": 230,
+     "ci": "failure",
+     "labels": [
+      "30 min review"
+     ],
+     "sizeTier": "XL",
+     "state": "open"
+    }
+   ],
+   "ticket": null,
+   "agents": [],
+   "needsYou": false,
+   "dismissed": false,
+   "dismissedAt": null,
+   "attention": {
+    "reasons": [],
+    "since": "2026-09-14T13:48:21.577Z",
+    "acked": false,
+    "refs": [
+     "pr:aplaceformom/grace-frontend#1974"
+    ]
+   },
+   "qaAttempt": null,
+   "qaDeploy": null
+  },
+  {
+   "id": "ticket:HB-1354",
+   "kind": "ticket",
+   "lists": [
+    "myWork"
+   ],
+   "demoted": false,
+   "parkingLotGroup": null,
+   "title": "HB-1354 — Build extensible Care Guide content resolver",
+   "prs": [],
+   "ticket": {
+    "key": "HB-1354",
+    "summary": "Build extensible Care Guide content resolver",
+    "status": "Ready for QA",
+    "statusCategory": "indeterminate",
+    "url": "https://aplaceformom.atlassian.net/browse/HB-1354",
+    "assignee": "712020:f0acd024-8d3a-4b87-9d4b-768ee3eb3f74",
+    "updatedAt": ""
+   },
+   "agents": [],
+   "needsYou": false,
+   "dismissed": false,
+   "dismissedAt": null,
+   "attention": {
+    "reasons": [],
+    "since": "",
+    "acked": false,
+    "refs": []
+   },
+   "qaAttempt": null,
+   "qaDeploy": {
+    "state": "awaiting",
+    "sha": "088ce5e07db734834e4948ad3365f4155cd1ae4e"
+   }
+  },
+  {
+   "id": "ticket:HB-1350",
+   "kind": "pr+ticket",
+   "lists": [
+    "waitingForReview",
+    "myWork"
+   ],
+   "demoted": false,
+   "parkingLotGroup": null,
+   "title": "HB-1350 — Low-intent user routing to Care Guide",
+   "prs": [
+    {
+     "repo": "aplaceformom/grace-frontend",
+     "number": 2060,
+     "url": "https://github.com/aplaceformom/grace-frontend/pull/2060",
+     "title": "Care Guide V1: resolver, components, page assembly (HB-1350)",
+     "author": "guilleazoubel",
+     "branch": "feature/HB-1350",
+     "isDraft": false,
+     "isMine": true,
+     "reviewDecision": "REVIEW_REQUIRED",
+     "humanActivity": {
+      "reviewedBy": [],
+      "commentedBy": [],
+      "lastAt": null
+     },
+     "reviewRequests": [
+      "aplaceformom/grace-b2c"
+     ],
+     "teamActivity": [],
+     "updatedAt": "2026-09-16T20:25:23Z",
+     "createdAt": "2026-09-14T19:56:44Z",
+     "changedFiles": 8,
+     "additions": 89,
+     "deletions": 57,
+     "ci": "failure",
+     "labels": [
+      "10 min review"
+     ],
+     "sizeTier": "M",
+     "state": "open"
+    }
+   ],
+   "ticket": {
+    "key": "HB-1350",
+    "summary": "Low-intent user routing to Care Guide",
+    "status": "In Progress",
+    "statusCategory": "indeterminate",
+    "url": "https://aplaceformom.atlassian.net/browse/HB-1350",
+    "assignee": "712020:f0acd024-8d3a-4b87-9d4b-768ee3eb3f74",
+    "updatedAt": ""
+   },
+   "agents": [],
+   "needsYou": false,
+   "dismissed": false,
+   "dismissedAt": null,
+   "attention": {
+    "reasons": [],
+    "since": "2026-09-14T19:57:08.398Z",
+    "acked": false,
+    "refs": [
+     "pr:aplaceformom/grace-frontend#2060"
+    ]
+   },
+   "qaAttempt": null,
+   "qaDeploy": null
+  },
+  {
+   "id": "ticket:HB-1502",
+   "kind": "ticket",
+   "lists": [
+    "myWork"
+   ],
+   "demoted": false,
+   "parkingLotGroup": null,
+   "title": "HB-1502 — CareGuide component — assemble the guide page against fixtures",
+   "prs": [],
+   "ticket": {
+    "key": "HB-1502",
+    "summary": "CareGuide component — assemble the guide page against fixtures",
+    "status": "Ready for QA",
+    "statusCategory": "indeterminate",
+    "url": "https://aplaceformom.atlassian.net/browse/HB-1502",
+    "assignee": "712020:f0acd024-8d3a-4b87-9d4b-768ee3eb3f74",
+    "updatedAt": ""
+   },
+   "agents": [],
+   "needsYou": false,
+   "dismissed": false,
+   "dismissedAt": null,
+   "attention": {
+    "reasons": [],
+    "since": "",
+    "acked": false,
+    "refs": []
+   },
+   "qaAttempt": null,
+   "qaDeploy": null
+  },
+  {
+   "id": "ticket:HB-1490",
+   "kind": "pr+ticket",
+   "lists": [
+    "myWork"
+   ],
+   "demoted": false,
+   "parkingLotGroup": null,
+   "title": "HB-1490 — Fetch Care Guide content through the Grace backend and reshape it to the guide contract",
+   "prs": [
+    {
+     "repo": "aplaceformom/grace-frontend",
+     "number": 2037,
+     "url": "https://github.com/aplaceformom/grace-frontend/pull/2037",
+     "title": "feat(HB-1490): fetch Care Guide content through Grace and reshape to GuideContent",
+     "author": "guilleazoubel",
+     "branch": "feature/HB-1490",
+     "isDraft": false,
+     "isMine": null,
+     "reviewDecision": null,
+     "humanActivity": null,
+     "reviewRequests": null,
+     "teamActivity": null,
+     "updatedAt": null,
+     "createdAt": "2026-09-09T17:13:03Z",
+     "changedFiles": 14,
+     "additions": 4684,
+     "deletions": 0,
+     "ci": null,
+     "labels": [
+      "30 min review"
+     ],
+     "sizeTier": "XL",
+     "state": "merged"
+    }
+   ],
+   "ticket": {
+    "key": "HB-1490",
+    "summary": "Fetch Care Guide content through the Grace backend and reshape it to the guide contract",
+    "status": "UAT",
+    "statusCategory": "indeterminate",
+    "url": "https://aplaceformom.atlassian.net/browse/HB-1490",
+    "assignee": "712020:f0acd024-8d3a-4b87-9d4b-768ee3eb3f74",
+    "updatedAt": ""
+   },
+   "agents": [
+    {
+     "sessionId": "qa-grace-frontend-HB-1490-20260915-200744",
+     "repo": "aplaceformom/grace-frontend",
+     "mode": "qa",
+     "phase": "not_ready",
+     "running": false,
+     "needsYou": true,
+     "claimed": false,
+     "primaryArtifact": "QA.md",
+     "worktreePath": "/Users/guilherme.azoubel/.cgremlin-core-smoke/worktrees/qa-grace-frontend-HB-1490-20260915-200744",
+     "ref": "session:qa-grace-frontend-HB-1490-20260915-200744",
+     "qaVerdict": "blocked"
+    }
+   ],
+   "needsYou": true,
+   "dismissed": false,
+   "dismissedAt": null,
+   "attention": {
+    "reasons": [
+     "blocked",
+     "qa_not_ready"
+    ],
+    "since": "2026-09-15T20:48:10.357Z",
+    "acked": false,
+    "refs": [
+     "session:qa-grace-frontend-HB-1490-20260915-200744"
+    ]
+   },
+   "qaAttempt": null,
+   "qaDeploy": {
+    "state": "verified",
+    "sha": "088ce5e07db734834e4948ad3365f4155cd1ae4e"
+   }
+  },
+  {
+   "id": "session:inv-aplaceformom-grace-frontend-SMOKE-5-20260910-115132",
+   "kind": "session",
+   "lists": [
+    "investigations"
+   ],
+   "demoted": false,
+   "parkingLotGroup": null,
+   "title": "SMOKE-5",
+   "prs": [],
+   "ticket": null,
+   "agents": [
+    {
+     "sessionId": "inv-aplaceformom-grace-frontend-SMOKE-5-20260910-115132",
+     "repo": "aplaceformom/grace-frontend",
+     "mode": "investigation",
+     "phase": "findings",
+     "running": false,
+     "needsYou": false,
+     "claimed": false,
+     "primaryArtifact": null,
+     "worktreePath": "/Users/guilherme.azoubel/.cgremlin-core-smoke/worktrees/inv-aplaceformom-grace-frontend-SMOKE-5-20260910-115132",
+     "ref": "session:inv-aplaceformom-grace-frontend-SMOKE-5-20260910-115132",
+     "qaVerdict": null
+    }
+   ],
+   "needsYou": false,
+   "dismissed": false,
+   "dismissedAt": null,
+   "attention": {
+    "reasons": [],
+    "since": "2026-09-10T11:51:49.292Z",
+    "acked": false,
+    "refs": [
+     "session:inv-aplaceformom-grace-frontend-SMOKE-5-20260910-115132"
+    ]
+   },
+   "qaAttempt": null,
+   "qaDeploy": null
+  },
+  {
+   "id": "pr:aplaceformom/grace-frontend#1228",
+   "kind": "pr",
+   "lists": [],
+   "demoted": false,
+   "parkingLotGroup": null,
+   "title": "aplaceformom/grace-frontend#1228 — [HB-657] HITL/Gong correlation script",
+   "prs": [
+    {
+     "repo": "aplaceformom/grace-frontend",
+     "number": 1228,
+     "url": "https://github.com/aplaceformom/grace-frontend/pull/1228",
+     "title": "[HB-657] HITL/Gong correlation script",
+     "author": "dinasoudah1",
+     "branch": "feat/HB-657-hitl-gong-correlation",
+     "isDraft": true,
+     "isMine": false,
+     "reviewDecision": "REVIEW_REQUIRED",
+     "humanActivity": {
+      "reviewedBy": [],
+      "commentedBy": [],
+      "lastAt": null
+     },
+     "reviewRequests": [],
+     "teamActivity": [],
+     "updatedAt": "2026-04-09T14:23:36Z",
+     "createdAt": "2026-04-09T13:12:23Z",
+     "changedFiles": 4,
+     "additions": 905,
+     "deletions": 3,
+     "ci": "failure",
+     "labels": [],
+     "sizeTier": "L",
+     "state": "draft"
+    }
+   ],
+   "ticket": null,
+   "agents": [],
+   "needsYou": false,
+   "dismissed": false,
+   "dismissedAt": null,
+   "attention": {
+    "reasons": [],
+    "since": "2026-09-14T13:48:21.577Z",
+    "acked": false,
+    "refs": [
+     "pr:aplaceformom/grace-frontend#1228"
+    ]
+   },
+   "qaAttempt": null,
+   "qaDeploy": null
+  }
+ ],
+ "ticketSource": {
+  "kind": "ok",
+  "error": null,
+  "scannedAt": "2026-09-16T21:06:04.937Z"
+ },
+ "threadSource": {
+  "error": null,
+  "scannedAt": "2026-09-16T21:05:52.542Z"
+ }
+}
