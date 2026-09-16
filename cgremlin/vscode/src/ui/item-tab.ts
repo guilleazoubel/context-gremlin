@@ -351,6 +351,7 @@ export class ItemTab {
       mode: agent?.mode ?? 'review',
       phase: agent?.phase ?? '',
       running: agent?.running ?? false,
+      runFailed: agent?.runFailed ?? false,
       needsYou: agent?.needsYou ?? false,
       claimed: agent?.claimed ?? false,
       glyph: agent === undefined ? '' : glyphOf(agent),

@@ -31,6 +31,8 @@ export interface TabAgent {
   mode: string;
   phase: string;
   running: boolean;
+  /** Phase 18 — the last run failed, so the tab offers Retry beside Chat. */
+  runFailed?: boolean;
   needsYou: boolean;
   claimed: boolean;
   /** The unicode badge glyph; there is no icon font under `font-src 'none'` (R54). */

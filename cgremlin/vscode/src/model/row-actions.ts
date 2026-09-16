@@ -66,6 +66,8 @@ export interface ActionAgent {
   claimed: boolean;
   /** Panel-local: a start in flight. It counts for "this stage has begun" and for nothing else. */
   pending?: boolean;
+  /** Phase 18 — this session's last run failed, so the row owes the user a way forward. */
+  runFailed?: boolean;
   /** Gap 1 — so `qaPart` can ask the ONE composer for the right word. */
   qaVerdict?: QaVerdict | null;
 }
@@ -140,6 +142,14 @@ export function liveQaAgent(facts: ActionFacts): ActionAgent | undefined {
  */
 function runningQaAgent(facts: ActionFacts): ActionAgent | undefined {
   return facts.agents.find((agent) => agent.mode === 'qa' && agent.running);
+}
+
+/**
+ * Phase 18 — the agent whose run died. A PENDING agent is excluded for the
+ * reason `chatTargetOfAgents` excludes it: it has no session to act on yet.
+ */
+function failedAgent(facts: ActionFacts): ActionAgent | undefined {
+  return facts.agents.find((agent) => agent.runFailed === true && agent.pending !== true);
 }
 
 /** Phase 16 — a verification has been run before, so the verb says `again`. */
@@ -287,6 +297,19 @@ export function rowActions(facts: ActionFacts, list: WorkListKind): RowAction[] 
     chat === null
       ? null
       : { command: 'cgremlin.chat', label: 'Chat', childId: agentChildId(chat) };
+
+  // Phase 18 — the escape hatch, on every list. A run that died used to leave
+  // the row with an error and no verb ("I can't do anything"); the engine now
+  // heals the session, and this is the click that starts it over. Pushed
+  // FIRST, so it takes the row's one primary wherever nothing else has: a
+  // failed run is the most urgent thing the row has to say.
+  const failed = failedAgent(facts);
+  if (failed !== undefined) {
+    push(
+      { command: 'cgremlin.retry', label: 'Retry', childId: agentChildId(failed.sessionId) },
+      'primary',
+    );
+  }
 
   if (list === 'parkingLot') {
     // A teammate's PR. Reviewing it is the only verb that belongs here at all.
