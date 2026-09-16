@@ -281,3 +281,37 @@ describe('P0-2 — Chat while a run is live on the target session', () => {
     expect(chat?.reason).toBeUndefined();
   });
 });
+
+/**
+ * Phase 19 — a way forward while an agent works: beside the disabled Chat, `Stop` is offered
+ * through the very same rule table (not a second site), on any list the busy agent's row appears
+ * in, and disappears the moment nothing is running.
+ */
+describe('P0-2 — Stop beside a live run', () => {
+  it('offers Stop, targeting the running session, while a run is live', () => {
+    const running = facts({
+      prs: [teammatePr],
+      agents: [agent('review', { running: true })],
+    });
+    const stop = rowActions(running, 'parkingLot').find((a) => a.command === 'cgremlin.stop');
+    expect(stop).toBeDefined();
+    expect(stop?.childId).toBe('agent:s-review');
+  });
+
+  it('offers no Stop when nothing is running', () => {
+    const idle = facts({
+      prs: [teammatePr],
+      agents: [agent('review', { running: false })],
+    });
+    expect(rowActions(idle, 'parkingLot').map((a) => a.command)).not.toContain('cgremlin.stop');
+  });
+
+  it('offers Stop through the Item tab union too', () => {
+    const running = facts({
+      prs: [myPr],
+      agents: [agent('respond', { phase: 'addressing', running: true })],
+    });
+    const union = rowActionsForLists(running, ['waitingForReview']);
+    expect(union.map((a) => a.command)).toContain('cgremlin.stop');
+  });
+});

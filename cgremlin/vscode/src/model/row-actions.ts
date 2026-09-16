@@ -318,6 +318,14 @@ export function rowActions(facts: ActionFacts, list: WorkListKind): RowAction[] 
             : {}),
         };
 
+  // Phase 19 — a way forward while the agent works: beside the disabled Chat, `Stop` targets the
+  // very session that is running. Read off the same `chatAgent` Chat's own busy check already
+  // found, so the two verbs can never disagree about which session is live.
+  const stopAction =
+    chatAgent?.running === true
+      ? { command: 'cgremlin.stop', label: 'Stop', childId: agentChildId(chatAgent.sessionId) }
+      : null;
+
   // Phase 18 — the escape hatch, on every list. A run that died used to leave
   // the row with an error and no verb ("I can't do anything"); the engine now
   // heals the session, and this is the click that starts it over. Pushed
@@ -342,6 +350,7 @@ export function rowActions(facts: ActionFacts, list: WorkListKind): RowAction[] 
       push({ command: 'cgremlin.startReview', label: 'Start review' }, 'primary');
     }
     if (chatAction !== null) push(chatAction, 'inline');
+    if (stopAction !== null) push(stopAction, 'inline');
   } else if (list === 'waitingForReview') {
     // My PR, out with reviewers. The only verbs are "answer the review" and, once the respond
     // agent has something to say, "talk to it" (R50) — never a second respond run on top of one.
@@ -355,11 +364,13 @@ export function rowActions(facts: ActionFacts, list: WorkListKind): RowAction[] 
     if (respondable) {
       push({ command: 'cgremlin.addressReview', label: 'Address review comments' }, 'primary');
       if (chatAction !== null) push(chatAction, 'inline');
+      if (stopAction !== null) push(stopAction, 'inline');
     } else {
       pushQa(facts, list, push);
       // `push` downgrades a second `primary` to `inline` on its own, so this stays the row's one
       // click wherever the QA verbs did not take it.
       if (chatAction !== null) push(chatAction, 'primary');
+      if (stopAction !== null) push(stopAction, 'inline');
     }
   } else {
     // My own work (`myWork`, `investigations`): the forward-only ladder.
@@ -384,6 +395,7 @@ export function rowActions(facts: ActionFacts, list: WorkListKind): RowAction[] 
     }
     pushQa(facts, list, push);
     if (chatAction !== null) push(chatAction, 'inline');
+    if (stopAction !== null) push(stopAction, 'inline');
   }
 
   // The parts, always in the overflow: they are links, not decisions (R26).
