@@ -161,7 +161,7 @@ describe('PipelineService.prepareQaSession (R73)', () => {
 describe('E8 — the boot sweep', () => {
   it('moves a verifying session the engine died under to failed, which is runnable', async () => {
     const { h, session } = await seed({ stageStatus: 'verifying' });
-    const swept = await h.service.failStaleVerifications();
+    const swept = await h.service.failStaleRuns();
     expect(swept).toEqual({ count: 1, sessionIds: [session.id] });
     expect((await h.store.load(session.id)).stageStatus).toBe('failed');
     // and it can be started again straight away
@@ -174,7 +174,7 @@ describe('E8 — the boot sweep', () => {
     const { h, session } = await seed();
     const run = h.service.runVerify(session.id);
     await flush();
-    expect(await h.service.failStaleVerifications()).toEqual({ count: 0, sessionIds: [] });
+    expect(await h.service.failStaleRuns()).toEqual({ count: 0, sessionIds: [] });
     expect((await h.store.load(session.id)).stageStatus).toBe('verifying');
     await h.finishRun({ 'QA.md': qaMd('✅ Ready to deploy') }, CLEAN);
     await run;
@@ -182,6 +182,6 @@ describe('E8 — the boot sweep', () => {
 
   it('touches no other mode or phase', async () => {
     const { h } = await seed({ stageStatus: 'ready' });
-    expect(await h.service.failStaleVerifications()).toEqual({ count: 0, sessionIds: [] });
+    expect(await h.service.failStaleRuns()).toEqual({ count: 0, sessionIds: [] });
   });
 });
