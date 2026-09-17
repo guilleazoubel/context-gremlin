@@ -1,9 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { FakeAgentRunner } from '../support/fake-agent-runner';
 import { InMemoryFileSystem } from '../support/in-memory-file-system';
 import { SessionStore } from '../../src/engine/session-store';
 import { EngineEvents } from '../../src/engine/events';
 import { RunInProgressError, StageRunner, WorkspaceMissingError } from '../../src/pipeline/stage-runner';
+import { runLiveness } from '../../src/pipeline/run-liveness';
 import { KeyedLock } from '../../src/api/keyed-lock';
 import { migrateV1ToV2 } from '../../src/schema/session';
 
@@ -260,6 +261,105 @@ describe('StageRunner.run', () => {
     const persisted = await store.load('inv-1');
     expect(persisted.stageStatus).toBe('planning');
     expect(persisted.lastRun).toMatchObject({ outcome: 'succeeded' });
+  });
+});
+
+describe('Phase 19 — active self-corrects when a child dies without an exit event', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('an entry whose pid is gone: not reported live, dropped, and runLiveness answers crashed', async () => {
+    const { store, runner, sr } = await setup();
+    const p = sr.run({ sessionId: 'inv-1', stage: 'findings', brief: null, prompt: 'go' });
+    await flush();
+    const h = runner.lastHandle();
+    runner.setPid(h, 4242);
+    vi.spyOn(process, 'kill').mockImplementation(() => {
+      const err = new Error('ESRCH') as NodeJS.ErrnoException;
+      err.code = 'ESRCH';
+      throw err;
+    });
+
+    expect(sr.activeSessionIds()).toEqual([]);
+    // Dropped, not just hidden: a second call still reports nothing.
+    expect(sr.activeSessionIds()).toEqual([]);
+    expect(sr.isRunning('inv-1')).toBe(false);
+
+    const persisted = await store.load('inv-1');
+    expect(runLiveness(persisted.lastRun, false)).toBe('crashed');
+
+    // Clean up the still-pending run() promise without a real exit — the
+    // fake process is gone, so nothing will ever call onExit for real.
+    runner.emitExit(h, { code: null, signal: 'SIGKILL' });
+    await p;
+  });
+
+  it('an entry whose pid is alive is still reported live', async () => {
+    const { runner, sr } = await setup();
+    const p = sr.run({ sessionId: 'inv-1', stage: 'findings', brief: null, prompt: 'go' });
+    await flush();
+    const h = runner.lastHandle();
+    runner.setPid(h, 4242);
+    vi.spyOn(process, 'kill').mockImplementation(() => true);
+
+    expect(sr.activeSessionIds()).toEqual(['inv-1']);
+    runner.emitExit(h, { code: 0, signal: null });
+    await p;
+  });
+
+  it('a kill(pid,0) that throws EPERM: still reported live (pids get reused; EPERM proves someone holds it, not that it is dead)', async () => {
+    const { runner, sr } = await setup();
+    const p = sr.run({ sessionId: 'inv-1', stage: 'findings', brief: null, prompt: 'go' });
+    await flush();
+    const h = runner.lastHandle();
+    runner.setPid(h, 4242);
+    vi.spyOn(process, 'kill').mockImplementation(() => {
+      const err = new Error('EPERM') as NodeJS.ErrnoException;
+      err.code = 'EPERM';
+      throw err;
+    });
+
+    expect(sr.activeSessionIds()).toEqual(['inv-1']);
+    runner.emitExit(h, { code: 0, signal: null });
+    await p;
+  });
+
+  it('an entry with no pid yet (mid-spawn) is treated as live and never dropped', async () => {
+    const { runner, sr } = await setup();
+    const killSpy = vi.spyOn(process, 'kill');
+    const p = sr.run({ sessionId: 'inv-1', stage: 'findings', brief: null, prompt: 'go' });
+    await flush();
+    const h = runner.lastHandle();
+    // FakeAgentRunner.getPid returns undefined until setPid is called —
+    // exactly the real runners' "child hasn't spawned yet" state.
+
+    expect(sr.activeSessionIds()).toEqual(['inv-1']);
+    expect(killSpy).not.toHaveBeenCalled();
+    runner.emitExit(h, { code: 0, signal: null });
+    await p;
+  });
+
+  it('NEVER signals a real process — the only signal argument the probe ever passes is 0', async () => {
+    const { runner, sr } = await setup();
+    const p = sr.run({ sessionId: 'inv-1', stage: 'findings', brief: null, prompt: 'go' });
+    await flush();
+    const h = runner.lastHandle();
+    runner.setPid(h, 4242);
+    const signalsSeen: unknown[] = [];
+    vi.spyOn(process, 'kill').mockImplementation((_pid, signal) => {
+      signalsSeen.push(signal);
+      return true;
+    });
+
+    sr.activeSessionIds();
+    sr.isRunning('inv-1');
+
+    expect(signalsSeen.length).toBeGreaterThan(0);
+    expect(signalsSeen.every((s) => s === 0)).toBe(true);
+
+    runner.emitExit(h, { code: 0, signal: null });
+    await p;
   });
 });
 

@@ -114,6 +114,17 @@ export function describeAgentRunnerContract(name: string, fixture: ContractFixtu
       expect(exits).toEqual([{ code: 0, signal: null }]);
     });
 
+    it('getPid is undefined before the child spawns, and a real positive pid while it runs (Phase 19 liveness probe)', async () => {
+      const runner = fixture.makeRunner();
+      const handle = await runner.start({ sessionId: 'a', workingDirectory: process.cwd() });
+      expect(runner.getPid?.(handle)).toBeUndefined();
+      const pending = runner.sendPrompt(handle, fixture.hangPrompt);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(runner.getPid?.(handle)).toBeGreaterThan(0);
+      await runner.stop(handle);
+      await pending;
+    });
+
     it('an unknown handle throws an error whose name ends with UnknownAgentHandleError', async () => {
       const runner = fixture.makeRunner();
       const fake = { id: 'does-not-exist' };

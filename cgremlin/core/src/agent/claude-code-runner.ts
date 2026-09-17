@@ -182,6 +182,11 @@ export class ClaudeCodeRunner implements AgentRunner {
     return this.getClaudeSessionId(handle);
   }
 
+  /** `undefined` between `start()` and the child actually spawning, or once it has exited (currentProcess is cleared on 'close'/'error'). Never a claim that the handle is dead. */
+  getPid(handle: AgentHandle): number | undefined {
+    return this.requireState(handle).currentProcess?.pid;
+  }
+
   private requireState(handle: AgentHandle): ClaudeAgentState {
     const state = this.handles.get(handle.id);
     if (!state) {

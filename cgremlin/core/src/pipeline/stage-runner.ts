@@ -35,6 +35,36 @@ export interface StageRunResult { exit: AgentExitResult; outcome: 'succeeded' | 
 
 interface ActiveRun { handle: AgentHandle | null; stopRequested: boolean }
 
+type PidLiveness = 'alive' | 'gone' | 'foreign';
+
+/**
+ * W8/serve.ts's ESRCH/EPERM classification, reused a third time here: ESRCH
+ * means the pid is gone, EPERM means SOME process still holds that pid — not
+ * necessarily ours, since pids get reused (same reasoning `pidLiveness` in
+ * src/host/serve.ts applies to the engine lock). Anything else is a real
+ * fault and rethrows. This NEVER sends a real signal — signal 0 only checks
+ * existence, per Node's documented `process.kill` behavior.
+ *
+ * What this probe can prove: a specific pid no longer exists (ESRCH), which
+ * is enough to know OUR child is gone. What it can never prove: that a pid
+ * which IS alive (or foreign) is still our own child — a dead child's pid
+ * can be recycled by the OS to an unrelated process before we ever probe it.
+ * That is why `gone` is the only verdict this module treats as "dead"; both
+ * `alive` and `foreign` fall back to "still live" rather than risk dropping
+ * an entry that is only *reporting* under someone else's pid.
+ */
+function pidLiveness(pid: number): PidLiveness {
+  try {
+    process.kill(pid, 0);
+    return 'alive';
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ESRCH') return 'gone';
+    if (code === 'EPERM') return 'foreign';
+    throw err;
+  }
+}
+
 export class StageRunner {
   private readonly active = new Map<string, ActiveRun>();
   private readonly now: () => Date;
@@ -46,12 +76,53 @@ export class StageRunner {
   }
 
   isRunning(sessionId: string): boolean {
-    return this.active.has(sessionId);
+    return this.liveSessionIds().includes(sessionId);
   }
 
-  /** The ids of sessions with an in-flight run right now — the source of truth for "what to stop" on shutdown, not any on-disk field. */
+  /**
+   * The ids of sessions with an in-flight run right now — the source of
+   * truth for "what to stop" on shutdown, not any on-disk field.
+   *
+   * Self-correcting (the gap this closes): a child process can die without
+   * the runner ever seeing an exit event (killed out-of-band, OOM-killed,
+   * etc.), which would otherwise leave its entry in `active` forever —
+   * wedging the session as permanently "live" with no way to claim it, chat
+   * with it, or start a new run. Before reporting, each entry's pid (if any)
+   * is checked with a signal-0 probe; an entry whose pid is confirmed gone is
+   * dropped here so `runLiveness` sees it as `crashed` and the existing heal
+   * path (PipelineService.isStale) takes it from there.
+   */
   activeSessionIds(): string[] {
-    return [...this.active.keys()];
+    return this.liveSessionIds();
+  }
+
+  /** Shared by `activeSessionIds()` and `isRunning()` so both self-correct the same way. */
+  private liveSessionIds(): string[] {
+    const ids: string[] = [];
+    for (const [sessionId, run] of this.active) {
+      if (this.isEntryAlive(run)) {
+        ids.push(sessionId);
+      } else {
+        this.active.delete(sessionId);
+      }
+    }
+    return ids;
+  }
+
+  /**
+   * `false` only when we can PROVE the backing pid is gone. Every other case
+   * — no handle yet (mid-spawn, before `run()` even reaches `runner.start()`),
+   * no pid yet (between `start()` and the first `sendPrompt()`), or a pid
+   * that still answers to signal 0 (ours or, per `pidLiveness`, possibly
+   * someone else's after reuse) — is treated as alive. Absence of proof of
+   * death is not proof of life either, but the only alternative (assuming
+   * dead) is exactly the wedge this exists to prevent.
+   */
+  private isEntryAlive(run: ActiveRun): boolean {
+    if (run.handle === null) return true;
+    const pid = this.deps.runner.getPid?.(run.handle);
+    if (pid === undefined) return true;
+    return pidLiveness(pid) !== 'gone';
   }
 
   async stop(sessionId: string): Promise<boolean> {

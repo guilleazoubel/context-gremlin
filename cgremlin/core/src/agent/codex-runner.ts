@@ -231,6 +231,11 @@ export class CodexRunner implements AgentRunner {
     return this.getCodexThreadId(handle);
   }
 
+  /** `undefined` between `start()` and the child actually spawning, or once it has exited (currentProcess is cleared on 'close'/'error'). Never a claim that the handle is dead. */
+  getPid(handle: AgentHandle): number | undefined {
+    return this.requireState(handle).currentProcess?.pid;
+  }
+
   private requireState(handle: AgentHandle): CodexAgentState {
     const state = this.handles.get(handle.id);
     if (!state) {
