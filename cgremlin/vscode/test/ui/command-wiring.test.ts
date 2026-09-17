@@ -13,7 +13,7 @@ import path from 'node:path';
 import { CoreClient, EngineNotRunningError, type HttpResult } from '../../src/core-client';
 import type { EngineState, Trigger } from '../../src/engine/manager';
 import { createUi, type Ui } from '../../src/ui/wiring';
-import { validatePrUrl, validateTicket } from '../../src/ui/commands';
+import { STOP_RUN_CONFIRM_LABEL, validatePrUrl, validateTicket } from '../../src/ui/commands';
 import { heartbeatIntervalMs } from '../../src/ui/terminal';
 import { FakeHost, FakeWebviewView } from '../support/fake-host';
 import { FakeBridge, FakeEngineManager } from '../support/fake-engine-manager';
@@ -788,6 +788,8 @@ describe('the row commands', () => {
       ['cgremlin.retry', 'POST /sessions/inv-hb-627/retry'],
     ] as const) {
       const mark = h.mark();
+      // `cgremlin.stop` asks a modal first (Phase 19); the others act straight away.
+      if (command === 'cgremlin.stop') h.host.messageAnswers = [STOP_RUN_CONFIRM_LABEL];
       await h.host.invoke(command, HB_ITEM);
       expect(paths(h, mark)).toEqual([expected]);
     }
@@ -798,8 +800,36 @@ describe('the row commands', () => {
       handler: (req) =>
         req.method === 'POST' ? { status: 409, body: { error: 'nope, not now' } } : undefined,
     });
-    await h.host.invoke('cgremlin.stop', HB_ITEM);
+    await h.host.invoke('cgremlin.retry', HB_ITEM);
     expect(h.host.callsOf('showWarningMessage')[0].args[0]).toBe('nope, not now');
+  });
+
+  it('Stop’s modal names the exact consequence and only calls the engine on confirm', async () => {
+    const h = await connected({
+      handler: (req) =>
+        req.method === 'POST' ? { status: 409, body: { error: 'nope, not now' } } : undefined,
+    });
+    h.host.messageAnswers = [STOP_RUN_CONFIRM_LABEL];
+    const mark = h.mark();
+    await h.host.invoke('cgremlin.stop', HB_ITEM);
+    expect(h.host.callsOf('showWarningMessage')[0].args[0]).toBe(
+      "This ends the agent's current run. Work it already wrote to files is kept.",
+    );
+    expect(h.host.callsOf('showWarningMessage')[0].args[1]).toEqual({ modal: true });
+    // The confirmed call still went out, and its 409 is surfaced as its own, second, message.
+    expect(paths(h, mark)).toEqual(['POST /sessions/inv-hb-627/stop']);
+    expect(h.host.callsOf('showWarningMessage')[1]?.args[0]).toBe('nope, not now');
+  });
+
+  it('never reaches the engine when Stop’s modal is cancelled', async () => {
+    const h = await connected({
+      handler: (req) =>
+        req.method === 'POST' ? { status: 409, body: { error: 'nope, not now' } } : undefined,
+    });
+    h.host.messageAnswers = [undefined];
+    const mark = h.mark();
+    await h.host.invoke('cgremlin.stop', HB_ITEM);
+    expect(paths(h, mark)).toEqual([]);
   });
 
   it('R15 — a row with no PR asks which repo before starting a session', async () => {

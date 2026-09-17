@@ -13,6 +13,7 @@ interface FakeAgentState {
   prompts: string[];
   stopped: boolean;
   resumeId?: string;
+  pid?: number;
 }
 
 export class UnknownAgentHandleError extends Error {
@@ -94,6 +95,15 @@ export class FakeAgentRunner implements AgentRunner {
 
   setResumeId(handle: AgentHandle, id: string): void {
     this.requireState(handle).resumeId = id;
+  }
+
+  /** Undefined until set — mirrors the real runners' "no pid yet" state. */
+  getPid(handle: AgentHandle): number | undefined {
+    return this.requireState(handle).pid;
+  }
+
+  setPid(handle: AgentHandle, pid: number | undefined): void {
+    this.requireState(handle).pid = pid;
   }
 
   private requireState(handle: AgentHandle): FakeAgentState {

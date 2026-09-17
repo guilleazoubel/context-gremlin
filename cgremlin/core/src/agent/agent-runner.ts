@@ -29,4 +29,12 @@ export interface AgentRunner {
   stop(handle: AgentHandle): Promise<void>;
   /** The id a later `start({ resumeId })` should pass to continue this conversation, if the adapter has one. */
   getResumeId?(handle: AgentHandle): string | undefined;
+  /**
+   * The OS pid currently backing this handle, if any. `undefined` means
+   * either the adapter has no such concept, or — just as validly — the
+   * child process simply hasn't been spawned yet (between `start()` and the
+   * first `sendPrompt()`, or after it has already exited and been cleared).
+   * Callers MUST NOT read `undefined` as "dead": it proves nothing either way.
+   */
+  getPid?(handle: AgentHandle): number | undefined;
 }

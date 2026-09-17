@@ -157,6 +157,13 @@ export function qaVerbLabel(facts: ActionFacts): string {
   return facts.agents.some((agent) => agent.mode === 'qa') ? 'Verify in QA again' : 'Verify in QA';
 }
 
+/**
+ * Phase 19 — the sentence a live run leaves in Chat's place. Said once, here, so the button and
+ * whatever else renders a disabled reason (`aria-describedby`, `webview/panel/expanded.ts` and
+ * `webview/item-tab.ts` both wire it off `enabled === false` generically) cannot drift apart.
+ */
+export const CHAT_BUSY_REASON = 'The agent is working on this now — chat opens when it finishes.';
+
 /** Phase 18 — the four sentences, said in ONE place so a reason cannot drift from its cause. */
 export const QA_NOTHING_MERGED_REASON = 'Nothing is merged yet — QA verifies code that has landed.';
 export const QA_NO_PR_REASON = 'No pull request is linked to this ticket yet.';
@@ -293,10 +300,31 @@ export function rowActions(facts: ActionFacts, list: WorkListKind): RowAction[] 
 
   const pr = facts.prs[0];
   const chat = chatTargetOfAgents(facts.agents);
+  const chatAgent = chat === null ? undefined : facts.agents.find((a) => a.sessionId === chat);
   const chatAction =
     chat === null
       ? null
-      : { command: 'cgremlin.chat', label: 'Chat', childId: agentChildId(chat) };
+      : {
+          command: 'cgremlin.chat',
+          label: 'Chat',
+          childId: agentChildId(chat),
+          // Phase 19 — the escape hatch's opposite number. A run genuinely in flight used to
+          // leave Chat clickable, and the click answered with the raw engine sentence `session
+          // '…' already has a stage run in progress` ("I cant do anything"). The refusal was
+          // correct; the silence was the bug, so the button says so itself and the sentence
+          // never reaches the engine at all.
+          ...(chatAgent?.running === true
+            ? { enabled: false as const, reason: CHAT_BUSY_REASON }
+            : {}),
+        };
+
+  // Phase 19 — a way forward while the agent works: beside the disabled Chat, `Stop` targets the
+  // very session that is running. Read off the same `chatAgent` Chat's own busy check already
+  // found, so the two verbs can never disagree about which session is live.
+  const stopAction =
+    chatAgent?.running === true
+      ? { command: 'cgremlin.stop', label: 'Stop', childId: agentChildId(chatAgent.sessionId) }
+      : null;
 
   // Phase 18 — the escape hatch, on every list. A run that died used to leave
   // the row with an error and no verb ("I can't do anything"); the engine now
@@ -322,6 +350,7 @@ export function rowActions(facts: ActionFacts, list: WorkListKind): RowAction[] 
       push({ command: 'cgremlin.startReview', label: 'Start review' }, 'primary');
     }
     if (chatAction !== null) push(chatAction, 'inline');
+    if (stopAction !== null) push(stopAction, 'inline');
   } else if (list === 'waitingForReview') {
     // My PR, out with reviewers. The only verbs are "answer the review" and, once the respond
     // agent has something to say, "talk to it" (R50) — never a second respond run on top of one.
@@ -335,11 +364,13 @@ export function rowActions(facts: ActionFacts, list: WorkListKind): RowAction[] 
     if (respondable) {
       push({ command: 'cgremlin.addressReview', label: 'Address review comments' }, 'primary');
       if (chatAction !== null) push(chatAction, 'inline');
+      if (stopAction !== null) push(stopAction, 'inline');
     } else {
       pushQa(facts, list, push);
       // `push` downgrades a second `primary` to `inline` on its own, so this stays the row's one
       // click wherever the QA verbs did not take it.
       if (chatAction !== null) push(chatAction, 'primary');
+      if (stopAction !== null) push(stopAction, 'inline');
     }
   } else {
     // My own work (`myWork`, `investigations`): the forward-only ladder.
@@ -364,6 +395,7 @@ export function rowActions(facts: ActionFacts, list: WorkListKind): RowAction[] 
     }
     pushQa(facts, list, push);
     if (chatAction !== null) push(chatAction, 'inline');
+    if (stopAction !== null) push(stopAction, 'inline');
   }
 
   // The parts, always in the overflow: they are links, not decisions (R26).

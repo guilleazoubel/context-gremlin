@@ -62,6 +62,16 @@ export function validatePrUrl(value: string): string | null {
 const INTENTS = ['Investigate only', 'Development-bound'] as const;
 const DRIVE = ['Stop at the plan', 'Drive to completion'] as const;
 
+/**
+ * Phase 19 — `Stop`'s modal confirm. The row's rule table (`row-actions.ts`) offers the verb only
+ * beside a busy, disabled Chat, so by the time this asks the user has already been told an agent
+ * is on it; the modal names what the click actually does, in words a person weighing whether to
+ * interrupt a running agent can act on.
+ */
+export const STOP_RUN_CONFIRM_TEXT =
+  "This ends the agent's current run. Work it already wrote to files is kept.";
+export const STOP_RUN_CONFIRM_LABEL = 'Stop the run';
+
 export interface CommandDeps {
   host: Host;
   client: CoreClient;
@@ -454,7 +464,23 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
     host.registerCommand('cgremlin.approvePlan', (arg) =>
       onSession(arg, (id) => client.approvePlan(id)),
     ),
-    host.registerCommand('cgremlin.stop', (arg) => onSession(arg, (id) => client.stop(id))),
+    host.registerCommand('cgremlin.stop', async (arg, childArg) => {
+      const item = needsItem(arg);
+      if (item === null) return;
+      const named = agentOfChildId(idOf(childArg));
+      const id = named ?? sessionOf(item);
+      if (id === null) {
+        void host.showWarningMessage('That item has no session to act on.', undefined);
+        return;
+      }
+      const answer = await host.showWarningMessage(
+        STOP_RUN_CONFIRM_TEXT,
+        { modal: true },
+        STOP_RUN_CONFIRM_LABEL,
+      );
+      if (answer !== STOP_RUN_CONFIRM_LABEL) return;
+      if (surface(await send(() => client.stop(id)))) coordinator.schedule();
+    }),
     host.registerCommand('cgremlin.retry', (arg) => onSession(arg, (id) => client.retry(id))),
 
     // R31: one request. The core fans the ack out over every ref the item contributes.

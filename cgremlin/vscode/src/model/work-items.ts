@@ -121,6 +121,15 @@ export interface WorkItemAgent {
    */
   qaVerdict?: QaVerdict | null;
   /**
+   * Phase 19 — the session's own `lastRun.stage` and `lastRun.startedAt` (`items.ts`'s
+   * `LastRunView`), mirrored so a live run can say WHICH stage it is in and for how long, rather
+   * than the bare `running` that told the user nothing ("session already has a stage run in
+   * progress" — with no explanation and no next step — was the raw engine sentence this silence
+   * produced). **Optional**: an engine older than Phase 19 sends none, and the row falls back to
+   * the generic word it drew before, exactly as it did.
+   */
+  lastRun?: { stage: string; startedAt: string } | null;
+  /**
    * PANEL-LOCAL optimism, never on the wire: this window has just asked the
    * engine to start this stage and has not yet seen it in `/items`. It makes
    * the row say so at once — the defect it answers is a click on `Start
@@ -684,7 +693,7 @@ export function toRow(item: WorkItem, list: WorkListKind, now: number): WorkRow 
   const description = descriptionOf(item);
   const badges = item.agents.map(agentBadge);
   const chips = item.prs.map(prLabel);
-  const meta = rowMetaCells(item, list, { age, size, tier, activity, repo: repoTailOf(item) });
+  const meta = rowMetaCells(item, list, { age, size, tier, activity, repo: repoTailOf(item) }, now);
   return {
     id: item.id,
     list,
