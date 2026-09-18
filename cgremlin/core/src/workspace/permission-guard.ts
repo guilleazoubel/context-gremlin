@@ -44,6 +44,48 @@ const NEVER_LAND = [
 const GH_API_DENY = 'Bash(gh api:*)';
 
 /**
+ * `gh` is far more than `pr`, `issue` and `api`, and everything this table did
+ * not name ran unobstructed under `bypassPermissions`: `gh repo edit
+ * --visibility public`, `gh ruleset delete` (branch protection), `gh secret
+ * set`, `gh workflow run`, `gh release create`, `gh gist create`, `gh alias
+ * set`, `gh extension install`. None of it is any of these modes' job.
+ *
+ * Whole subcommands rather than verbs: the reads they also cover (`gh repo
+ * view`, `gh workflow list`) are ones an agent with the worktree checked out
+ * and `gh pr view` does not need, and a verb list is a list of holes.
+ * `gh auth` is the exception — `gh auth token` must stay reachable because
+ * both post helpers read the token with it (see ./post-helpers.ts), and there
+ * is NO negation in this language: an allow rule cannot carve an exception out
+ * of a deny. So `gh auth` is denied verb by verb, and `token` and `status`
+ * are simply not on the list.
+ *
+ * Deliberately still reachable, and named so nobody mistakes the omission for
+ * coverage: `gh run rerun|cancel` (CI reads are a normal part of reviewing),
+ * `gh project`, `gh config`, `gh search`, `gh browse`. See the header.
+ */
+const NEVER_ADMINISTER = [
+  'Bash(gh repo:*)',
+  'Bash(gh ruleset:*)',
+  'Bash(gh secret:*)',
+  'Bash(gh variable:*)',
+  'Bash(gh workflow:*)',
+  'Bash(gh release:*)',
+  'Bash(gh gist:*)',
+  'Bash(gh label:*)',
+  'Bash(gh cache:*)',
+  'Bash(gh alias:*)',
+  'Bash(gh extension:*)',
+  'Bash(gh codespace:*)',
+  'Bash(gh ssh-key:*)',
+  'Bash(gh gpg-key:*)',
+  'Bash(gh auth login:*)',
+  'Bash(gh auth logout:*)',
+  'Bash(gh auth refresh:*)',
+  'Bash(gh auth setup-git:*)',
+  'Bash(gh auth switch:*)',
+] as const;
+
+/**
  * A rule is matched against the WHOLE command text, `*` standing in for any
  * text; a trailing ` *` (which is all `:*` means) also matches the bare
  * command, but only when it is the rule's only wildcard. So
@@ -96,7 +138,13 @@ export const DEFAULT_PERMISSIONS: Record<SessionMode, PermissionConfig> = {
   // An investigation writes findings into its session directory. That is all
   // it does: it posts nothing and it lands nothing.
   investigation: {
-    deny: [...WRITES_NOTHING_OUTWARD, GH_API_DENY, 'Bash(git push:*)', 'Bash(git commit:*)'],
+    deny: [
+      ...WRITES_NOTHING_OUTWARD,
+      GH_API_DENY,
+      ...NEVER_ADMINISTER,
+      'Bash(git push:*)',
+      'Bash(git commit:*)',
+    ],
   },
   development: {
     deny: [
@@ -119,6 +167,7 @@ export const DEFAULT_PERMISSIONS: Record<SessionMode, PermissionConfig> = {
       ...NEVER_LAND,
       'Bash(gh pr create:*)',
       GH_API_DENY,
+      ...NEVER_ADMINISTER,
       ...NEVER_FORCE_PUSH,
     ],
   },
@@ -136,6 +185,7 @@ export const DEFAULT_PERMISSIONS: Record<SessionMode, PermissionConfig> = {
     deny: [
       ...WRITES_NOTHING_OUTWARD,
       GH_API_DENY,
+      ...NEVER_ADMINISTER,
       'Bash(git push:*)',
       'Bash(git commit:*)',
     ],
@@ -151,6 +201,7 @@ export const DEFAULT_PERMISSIONS: Record<SessionMode, PermissionConfig> = {
       ...NEVER_LAND,
       'Bash(gh pr create:*)',
       GH_API_DENY,
+      ...NEVER_ADMINISTER,
       'Bash(git push:*)',
       'Bash(git commit:*)',
     ],

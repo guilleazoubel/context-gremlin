@@ -107,6 +107,25 @@ describe('phase 20 — the per-mode deny table', () => {
           'Bash(gh pr ready:*)',
           'Bash(gh issue:*)',
           'Bash(gh api:*)',
+          'Bash(gh repo:*)',
+          'Bash(gh ruleset:*)',
+          'Bash(gh secret:*)',
+          'Bash(gh variable:*)',
+          'Bash(gh workflow:*)',
+          'Bash(gh release:*)',
+          'Bash(gh gist:*)',
+          'Bash(gh label:*)',
+          'Bash(gh cache:*)',
+          'Bash(gh alias:*)',
+          'Bash(gh extension:*)',
+          'Bash(gh codespace:*)',
+          'Bash(gh ssh-key:*)',
+          'Bash(gh gpg-key:*)',
+          'Bash(gh auth login:*)',
+          'Bash(gh auth logout:*)',
+          'Bash(gh auth refresh:*)',
+          'Bash(gh auth setup-git:*)',
+          'Bash(gh auth switch:*)',
           'Bash(git push:*)',
           'Bash(git commit:*)',
         ],
@@ -129,6 +148,25 @@ describe('phase 20 — the per-mode deny table', () => {
           'Bash(gh pr ready:*)',
           'Bash(gh pr create:*)',
           'Bash(gh api:*)',
+          'Bash(gh repo:*)',
+          'Bash(gh ruleset:*)',
+          'Bash(gh secret:*)',
+          'Bash(gh variable:*)',
+          'Bash(gh workflow:*)',
+          'Bash(gh release:*)',
+          'Bash(gh gist:*)',
+          'Bash(gh label:*)',
+          'Bash(gh cache:*)',
+          'Bash(gh alias:*)',
+          'Bash(gh extension:*)',
+          'Bash(gh codespace:*)',
+          'Bash(gh ssh-key:*)',
+          'Bash(gh gpg-key:*)',
+          'Bash(gh auth login:*)',
+          'Bash(gh auth logout:*)',
+          'Bash(gh auth refresh:*)',
+          'Bash(gh auth setup-git:*)',
+          'Bash(gh auth switch:*)',
           'Bash(git push --force:*)',
           'Bash(git push -f:*)',
           'Bash(git push --force-with-lease:*)',
@@ -154,6 +192,25 @@ describe('phase 20 — the per-mode deny table', () => {
           'Bash(gh pr ready:*)',
           'Bash(gh issue:*)',
           'Bash(gh api:*)',
+          'Bash(gh repo:*)',
+          'Bash(gh ruleset:*)',
+          'Bash(gh secret:*)',
+          'Bash(gh variable:*)',
+          'Bash(gh workflow:*)',
+          'Bash(gh release:*)',
+          'Bash(gh gist:*)',
+          'Bash(gh label:*)',
+          'Bash(gh cache:*)',
+          'Bash(gh alias:*)',
+          'Bash(gh extension:*)',
+          'Bash(gh codespace:*)',
+          'Bash(gh ssh-key:*)',
+          'Bash(gh gpg-key:*)',
+          'Bash(gh auth login:*)',
+          'Bash(gh auth logout:*)',
+          'Bash(gh auth refresh:*)',
+          'Bash(gh auth setup-git:*)',
+          'Bash(gh auth switch:*)',
           'Bash(git push:*)',
           'Bash(git commit:*)',
         ],
@@ -168,6 +225,25 @@ describe('phase 20 — the per-mode deny table', () => {
           'Bash(gh pr ready:*)',
           'Bash(gh pr create:*)',
           'Bash(gh api:*)',
+          'Bash(gh repo:*)',
+          'Bash(gh ruleset:*)',
+          'Bash(gh secret:*)',
+          'Bash(gh variable:*)',
+          'Bash(gh workflow:*)',
+          'Bash(gh release:*)',
+          'Bash(gh gist:*)',
+          'Bash(gh label:*)',
+          'Bash(gh cache:*)',
+          'Bash(gh alias:*)',
+          'Bash(gh extension:*)',
+          'Bash(gh codespace:*)',
+          'Bash(gh ssh-key:*)',
+          'Bash(gh gpg-key:*)',
+          'Bash(gh auth login:*)',
+          'Bash(gh auth logout:*)',
+          'Bash(gh auth refresh:*)',
+          'Bash(gh auth setup-git:*)',
+          'Bash(gh auth switch:*)',
           'Bash(git push:*)',
           'Bash(git commit:*)',
         ],
@@ -316,5 +392,54 @@ describe('respond opens no pull request of its own', () => {
 
   it('development still opens its own draft PR', () => {
     expect(isDenied('development', 'gh pr create --draft --title x')).toBe(false);
+  });
+});
+
+/**
+ * `gh` is far more than `pr`, `issue` and `api`. Under `bypassPermissions`
+ * everything not named here ran unobstructed, which meant a review agent —
+ * reading a diff written by someone else — could take the repository private,
+ * drop a branch-protection ruleset, write an Actions secret, dispatch a
+ * workflow, cut a release, or install an extension. None of that is anyone's
+ * job in any of these four modes.
+ */
+const ADMINISTRATIVE_GH = [
+  'gh repo edit --visibility public',
+  'gh ruleset delete 42',
+  'gh secret set NPM_TOKEN --body x',
+  'gh variable set FOO --body x',
+  'gh workflow run deploy.yml',
+  'gh release create v9.9.9',
+  'gh gist create secrets.txt',
+  'gh label delete bug',
+  'gh cache delete --all',
+  'gh alias set x "pr merge"',
+  'gh extension install owner/evil',
+  'gh codespace create -r owner/repo',
+  'gh ssh-key add ~/.ssh/id_ed25519.pub',
+  'gh gpg-key add key.asc',
+  'gh auth login --with-token',
+  'gh auth logout',
+  'gh auth refresh -s admin:org',
+  'gh auth setup-git',
+  'gh auth switch -u someone',
+] as const;
+const GUARDED_MODES = ['investigation', 'qa', 'review', 'respond'] as const;
+
+describe('the administrative `gh` surface outside pr/issue/api', () => {
+  it.each(GUARDED_MODES)('%s denies every one of them', (mode) => {
+    for (const command of ADMINISTRATIVE_GH) {
+      expect([command, isDenied(mode, command)]).toEqual([command, true]);
+    }
+  });
+
+  it.each(GUARDED_MODES)('%s keeps `gh auth token` reachable — both helpers need it', (mode) => {
+    expect(isDenied(mode, 'gh auth token')).toBe(false);
+  });
+
+  it('development is untouched by this phase and keeps the whole surface', () => {
+    for (const command of ADMINISTRATIVE_GH) {
+      expect([command, isDenied('development', command)]).toEqual([command, false]);
+    }
   });
 });
