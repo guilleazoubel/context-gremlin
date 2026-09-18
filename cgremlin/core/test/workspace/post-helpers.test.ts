@@ -4,35 +4,41 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  POST_COMMENT_HELPER_PATH,
   POST_REVIEW_HELPER_PATH,
-  postReviewHelperFiles,
-  writePostReviewHelper,
-} from '../../src/workspace/post-review-helper';
+  postHelperFiles,
+  writePostHelpers,
+} from '../../src/workspace/post-helpers';
 import { InMemoryFileSystem } from '../support/in-memory-file-system';
 
 /**
- * Phase 20 — the agent may not call `gh api`, so the ONE REST call a review
- * with inline comments needs is made by this helper, with the session's repo
- * and number baked in at write time. These tests run the SHIPPED script under
- * `node`, in dry-run, so what is asserted is the artifact itself and never a
- * re-implementation of it — and no request ever leaves the machine.
+ * Phase 20 — the agent may not type `gh pr review`, `gh pr comment` or
+ * `gh api`, so the two REST calls it legitimately makes are carried by these
+ * helpers, with the session's repo and number baked in at write time. These
+ * tests run the SHIPPED scripts under `node`, in dry-run, so what is asserted
+ * is the artifact itself and never a re-implementation of it — and no request
+ * ever leaves the machine.
  */
 const TARGET = { repoSlug: 'acme/app', prNumber: 42 };
 
-function installedHelper(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'post-review-'));
+function installedHelper(relativePath: string): string {
+  const dir = mkdtempSync(join(tmpdir(), 'post-helpers-'));
   mkdirSync(join(dir, '.cgremlin'), { recursive: true });
-  for (const file of postReviewHelperFiles(TARGET)) {
+  for (const file of postHelperFiles(TARGET)) {
     writeFileSync(join(dir, file.relativePath), file.content, { mode: file.mode ?? 0o644 });
   }
-  return join(dir, POST_REVIEW_HELPER_PATH);
+  return join(dir, relativePath);
 }
 
-function runHelper(args: string[]): { status: number; stdout: string; stderr: string } {
+function run(
+  relativePath: string,
+  dryRunEnv: string,
+  args: string[],
+): { status: number; stdout: string; stderr: string } {
   try {
-    const stdout = execFileSync(process.execPath, [installedHelper(), ...args], {
+    const stdout = execFileSync(process.execPath, [installedHelper(relativePath), ...args], {
       encoding: 'utf8',
-      env: { ...process.env, CGREMLIN_POST_REVIEW_DRY_RUN: '1' },
+      env: { ...process.env, [dryRunEnv]: '1' },
     });
     return { status: 0, stdout, stderr: '' };
   } catch (err) {
@@ -41,11 +47,17 @@ function runHelper(args: string[]): { status: number; stdout: string; stderr: st
   }
 }
 
-function findingsFile(payload: unknown): string {
-  const file = join(mkdtempSync(join(tmpdir(), 'findings-')), 'findings.json');
+const runHelper = (args: string[]) =>
+  run(POST_REVIEW_HELPER_PATH, 'CGREMLIN_POST_REVIEW_DRY_RUN', args);
+const runComment = (args: string[]) =>
+  run(POST_COMMENT_HELPER_PATH, 'CGREMLIN_POST_COMMENT_DRY_RUN', args);
+
+function jsonFile(payload: unknown): string {
+  const file = join(mkdtempSync(join(tmpdir(), 'payload-')), 'payload.json');
   writeFileSync(file, JSON.stringify(payload));
   return file;
 }
+const findingsFile = jsonFile;
 
 describe('the helper cannot be retargeted', () => {
   it.each([
@@ -131,13 +143,76 @@ describe('one inline comment per finding at its path:line', () => {
   });
 });
 
-describe('writePostReviewHelper', () => {
-  it('writes an executable helper at .cgremlin/post-review', async () => {
-    const fs = new InMemoryFileSystem();
-    await fs.mkdir('/work/pr-1', { recursive: true });
-    await writePostReviewHelper(fs, '/work/pr-1', TARGET);
+describe('writePostHelpers', () => {
+  it.each([POST_REVIEW_HELPER_PATH, POST_COMMENT_HELPER_PATH])(
+    'writes an executable helper at %s',
+    async (path) => {
+      const fs = new InMemoryFileSystem();
+      await fs.mkdir('/work/pr-1', { recursive: true });
+      await writePostHelpers(fs, '/work/pr-1', TARGET);
+      expect(await fs.statMode(`/work/pr-1/${path}`)).toBe(0o755);
+      expect(await fs.readFile(`/work/pr-1/${path}`)).toContain('acme/app');
+    },
+  );
+
+  it('writes both helpers at the paths the briefs name', () => {
     expect(POST_REVIEW_HELPER_PATH).toBe('.cgremlin/post-review');
-    expect(await fs.statMode(`/work/pr-1/${POST_REVIEW_HELPER_PATH}`)).toBe(0o755);
-    expect(await fs.readFile(`/work/pr-1/${POST_REVIEW_HELPER_PATH}`)).toContain('acme/app');
+    expect(POST_COMMENT_HELPER_PATH).toBe('.cgremlin/post-comment');
+  });
+});
+
+/**
+ * `.cgremlin/post-comment` is the conversation-comment sibling. `gh pr
+ * comment` is denied in every mode precisely because it takes `-R/--repo`, so
+ * this helper must offer no way whatsoever to name a target.
+ */
+describe('the comment helper cannot be retargeted', () => {
+  it.each([
+    ['--repo', 'acme/other'],
+    ['--body', 'hi'],
+  ])('refuses the extra argument %s %s — the target is baked in, not passed', (flag, value) => {
+    const result = runComment([jsonFile({ body: 'hello' }), flag, value]);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('acme/app#42');
+  });
+
+  it('refuses an option in place of the comment file', () => {
+    const result = runComment(['--repo=acme/other']);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('acme/app#42');
+  });
+
+  it('refuses a pull request URL as the comment file', () => {
+    const result = runComment(['https://github.com/acme/other/pull/99']);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('acme/app#42');
+  });
+
+  it('refuses a comment file whose own repo or number disagrees with the baked target', () => {
+    for (const payload of [
+      { body: 'hello', repo: 'acme/other' },
+      { body: 'hello', prNumber: 99 },
+    ]) {
+      const result = runComment([jsonFile(payload)]);
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain('acme/app#42');
+    }
+  });
+});
+
+describe('the comment helper posts one conversation comment', () => {
+  it('posts to the issues-comments endpoint of the baked PR, and to no other URL', () => {
+    const result = runComment([jsonFile({ body: 'looks good to me' })]);
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({
+      url: 'https://api.github.com/repos/acme/app/issues/42/comments',
+      body: { body: 'looks good to me' },
+    });
+  });
+
+  it('refuses a comment file with no body to post', () => {
+    const result = runComment([jsonFile({ body: '  ' })]);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/body/i);
   });
 });

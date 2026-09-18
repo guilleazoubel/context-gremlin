@@ -107,11 +107,13 @@ describe('WorkspaceManager', () => {
 });
 
 /**
- * Phase 20 — the posting modes may not call `gh api`, so the engine installs
- * the scoped `.cgremlin/post-review` helper for them. Every other mode posts
- * nothing and gets nothing.
+ * Phase 20 — the posting modes may not type a GitHub write verb at all, so the
+ * engine installs BOTH scoped helpers for them. Every other mode posts nothing
+ * and gets nothing.
  */
-describe('WorkspaceManager writes the scoped post-review helper', () => {
+const HELPERS = ['.cgremlin/post-review', '.cgremlin/post-comment'] as const;
+
+describe('WorkspaceManager writes the scoped posting helpers', () => {
   const pr = { repoSlug: 'acme/app', prNumber: 42 };
 
   async function create(mode: 'review' | 'respond' | 'qa' | 'development' | 'investigation') {
@@ -128,17 +130,19 @@ describe('WorkspaceManager writes the scoped post-review helper', () => {
     return fs;
   }
 
-  it.each(['review', 'respond'] as const)('%s gets an executable helper with its own PR baked in', async (mode) => {
+  it.each(['review', 'respond'] as const)('%s gets both executable helpers with its own PR baked in', async (mode) => {
     const fs = await create(mode);
-    const script = await fs.readFile(`/work/${mode}-1/.cgremlin/post-review`);
-    expect(script).toContain('"acme/app"');
-    expect(script).toContain('const PR = 42');
-    expect(await fs.statMode(`/work/${mode}-1/.cgremlin/post-review`)).toBe(0o755);
+    for (const helper of HELPERS) {
+      const script = await fs.readFile(`/work/${mode}-1/${helper}`);
+      expect(script).toContain('"acme/app"');
+      expect(script).toContain('const PR = 42');
+      expect(await fs.statMode(`/work/${mode}-1/${helper}`)).toBe(0o755);
+    }
   });
 
   it.each(['qa', 'development', 'investigation'] as const)('%s gets no helper at all', async (mode) => {
     const fs = await create(mode);
-    expect(await fs.exists(`/work/${mode}-1/.cgremlin/post-review`)).toBe(false);
+    for (const helper of HELPERS) expect(await fs.exists(`/work/${mode}-1/${helper}`)).toBe(false);
   });
 
   it('writes no helper for a posting mode with no PR to post to', async () => {
@@ -151,6 +155,6 @@ describe('WorkspaceManager writes the scoped post-review helper', () => {
       baseRef: 'origin/b',
       mode: 'review',
     });
-    expect(await fs.exists('/work/review-2/.cgremlin/post-review')).toBe(false);
+    for (const helper of HELPERS) expect(await fs.exists(`/work/review-2/${helper}`)).toBe(false);
   });
 });

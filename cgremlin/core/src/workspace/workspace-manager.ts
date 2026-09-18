@@ -5,10 +5,10 @@ import { ensureMirror, mirrorDirName } from './repo-mirror';
 import { createWorktree, removeWorktree } from './worktree';
 import { writePermissionSettings } from './permission-guard';
 import {
-  shouldWritePostReviewHelper,
-  writePostReviewHelper,
-  type PostReviewTarget,
-} from './post-review-helper';
+  shouldWritePostHelpers,
+  writePostHelpers,
+  type PostTarget,
+} from './post-helpers';
 
 export interface CreateWorkspaceParams {
   repoUrl: string;
@@ -20,12 +20,12 @@ export interface CreateWorkspaceParams {
   resetBranch?: boolean;
   /**
    * Phase 20 — the pull request this session is FOR. Its slug and number are
-   * baked into `.cgremlin/post-review` at write time, which is the whole of
-   * the scoping: the agent cannot pass a repo or a number (see
-   * ./post-review-helper.ts). Only `review` and `respond` get the helper;
-   * without a PR, nobody does.
+   * baked into `.cgremlin/post-review` and `.cgremlin/post-comment` at write
+   * time, which is the whole of the scoping: the agent cannot pass a repo or
+   * a number (see ./post-helpers.ts). Only `review` and `respond` get the
+   * helpers; without a PR, nobody does.
    */
-  pr?: PostReviewTarget;
+  pr?: PostTarget;
 }
 
 export class WorkspaceManager {
@@ -47,8 +47,8 @@ export class WorkspaceManager {
     );
     try {
       await writePermissionSettings(this.fs, params.worktreePath, params.mode);
-      if (params.pr !== undefined && shouldWritePostReviewHelper(params.mode)) {
-        await writePostReviewHelper(this.fs, params.worktreePath, params.pr);
+      if (params.pr !== undefined && shouldWritePostHelpers(params.mode)) {
+        await writePostHelpers(this.fs, params.worktreePath, params.pr);
       }
     } catch (err) {
       // Best-effort rollback so a retry with the same branchName doesn't
