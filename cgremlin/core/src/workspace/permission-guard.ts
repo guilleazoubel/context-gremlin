@@ -44,6 +44,39 @@ const NEVER_LAND = [
 const GH_API_DENY = 'Bash(gh api:*)';
 
 /**
+ * A rule is matched against the WHOLE command text, `*` standing in for any
+ * text; a trailing ` *` (which is all `:*` means) also matches the bare
+ * command, but only when it is the rule's only wildcard. So
+ * `Bash(git push --force:*)` catches `git push --force …` and nothing else:
+ * `git push origin my-branch --force` and the old-style forced refspec
+ * `git push origin +my-branch` both walked straight past it. Every spelling
+ * therefore needs its own rule — the flag next to `git push`, the flag later
+ * in the line with and without arguments after it, and the `+refspec`.
+ *
+ * STILL UNCOVERED, and not coverable by any rule shape here: a rule beginning
+ * `git push` never sees `git -c push.default=current push --force` or
+ * `git -C . push --force`, and quoting (`git 'push' --force`) defeats matching
+ * outright. See the header — this is a guardrail, not a boundary.
+ */
+const NEVER_FORCE_PUSH = [
+  // The flag immediately after `git push` (`:*` also matches the bare form).
+  'Bash(git push --force:*)',
+  'Bash(git push -f:*)',
+  'Bash(git push --force-with-lease:*)',
+  'Bash(git push --force-with-lease=*)',
+  // The flag later in the line, as the last token and as a not-last token.
+  'Bash(git push * --force)',
+  'Bash(git push * --force *)',
+  'Bash(git push * -f)',
+  'Bash(git push * -f *)',
+  'Bash(git push * --force-with-lease)',
+  'Bash(git push * --force-with-lease *)',
+  'Bash(git push * --force-with-lease=*)',
+  // `git push origin +my-branch` — a force push with no flag on it at all.
+  'Bash(git push * +*)',
+] as const;
+
+/**
  * An investigation, and QA, write nothing outward at all: no review, no
  * comment, no issue, no API call, nothing landed. Under `bypassPermissions`
  * an empty config denied NOTHING, so investigation used to have every one of
@@ -84,8 +117,7 @@ export const DEFAULT_PERMISSIONS: Record<SessionMode, PermissionConfig> = {
       ...NEVER_POST,
       ...NEVER_LAND,
       GH_API_DENY,
-      'Bash(git push --force:*)',
-      'Bash(git push -f:*)',
+      ...NEVER_FORCE_PUSH,
     ],
   },
   // R68/§9 — QA writes nothing outward: no PR, no issue, no API call at all.

@@ -130,6 +130,16 @@ describe('phase 20 — the per-mode deny table', () => {
           'Bash(gh api:*)',
           'Bash(git push --force:*)',
           'Bash(git push -f:*)',
+          'Bash(git push --force-with-lease:*)',
+          'Bash(git push --force-with-lease=*)',
+          'Bash(git push * --force)',
+          'Bash(git push * --force *)',
+          'Bash(git push * -f)',
+          'Bash(git push * -f *)',
+          'Bash(git push * --force-with-lease)',
+          'Bash(git push * --force-with-lease *)',
+          'Bash(git push * --force-with-lease=*)',
+          'Bash(git push * +*)',
         ],
       },
       qa: {
@@ -236,6 +246,54 @@ describe('phase 20 — qa denies `gh api` outright, short flag included', () => 
     '%s bans `gh api` with the one rule every other non-development mode uses',
     (mode) => {
       expect(DEFAULT_PERMISSIONS[mode].deny ?? []).toContain('Bash(gh api:*)');
+    },
+  );
+});
+
+/**
+ * The deny patterns are matched by Claude Code's documented Bash-rule matcher
+ * (code.claude.com/docs/en/permissions.md, "Wildcard patterns"): the rule is
+ * matched against the whole command text, `*` stands in for any text, a
+ * trailing ` *` ALSO matches the bare command but only when it is the rule's
+ * only wildcard, and `:*` is exactly that trailing ` *`. Reimplemented here so
+ * the table is proved against COMMANDS AS TYPED, not against its own strings —
+ * `Bash(git push --force:*)` looks like it bans force-pushing and does not.
+ */
+const matchesRule = (rule: string, command: string): boolean => {
+  const body = rule.replace(/^Bash\((.*)\)$/s, '$1');
+  const glob = body.endsWith(':*') ? `${body.slice(0, -2)} *` : body;
+  const escape = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  if (new RegExp(`^${glob.split('*').map(escape).join('.*')}$`).test(command)) return true;
+  const onlyWildcardIsTrailing = glob.endsWith(' *') && glob.indexOf('*') === glob.length - 1;
+  return onlyWildcardIsTrailing && command === glob.slice(0, -2);
+};
+
+const isDenied = (mode: (typeof ALL_MODES)[number], command: string): boolean =>
+  (DEFAULT_PERMISSIONS[mode].deny ?? []).some((rule) => matchesRule(rule, command));
+
+describe('the respond force-push ban covers the spellings people actually type', () => {
+  it.each([
+    'git push --force',
+    'git push -f',
+    'git push --force origin my-branch',
+    'git push -f origin my-branch',
+    'git push origin my-branch --force',
+    'git push origin my-branch -f',
+    'git push --force-with-lease',
+    'git push --force-with-lease origin my-branch',
+    'git push origin my-branch --force-with-lease',
+    'git push --force-with-lease=refs/heads/my-branch:0ff1ce origin my-branch',
+    'git push origin my-branch --force-with-lease=refs/heads/my-branch:0ff1ce',
+    'git push origin +my-branch',
+    'git push origin +HEAD:my-branch',
+  ])('denies `%s`', (command) => {
+    expect(isDenied('respond', command)).toBe(true);
+  });
+
+  it.each(['git push', 'git push -u origin HEAD', 'git push origin my-branch'])(
+    'still lets respond push its own branch: `%s`',
+    (command) => {
+      expect(isDenied('respond', command)).toBe(false);
     },
   );
 });
