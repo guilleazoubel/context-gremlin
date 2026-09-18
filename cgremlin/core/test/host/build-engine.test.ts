@@ -160,7 +160,8 @@ describe('buildEngine', () => {
       'new head sha on gh becomes reviewing after scheduler.runNow()',
     async () => {
       const gh = new FakeGhRunner();
-      const engine = buildEngine(testConfig(), testAdapters({ gh }));
+      const adapters = testAdapters({ gh });
+      const engine = buildEngine(testConfig(), adapters);
 
       const reviewId = 'pr-app-1-x';
       const oldSha = 'a'.repeat(40);
@@ -180,6 +181,9 @@ describe('buildEngine', () => {
         headSha: oldSha, reviewedSha: oldSha, title: 't', author: 'bob',
       };
       await engine.store.save(review);
+      // The worktree has to be on disk: a stage run refuses a session whose
+      // worktree is gone (WorktreeGoneError).
+      await adapters.fs.mkdir(`/worktrees/${reviewId}`, { recursive: true });
 
       // Consumed in order: the tick's own `gh pr view` (reconciler.reconcile()
       // runs before the inventory's `pr list` scan — see InventoryScanner.run()).

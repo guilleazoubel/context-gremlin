@@ -5,7 +5,7 @@ import { FakeAgentRunner } from '../support/fake-agent-runner';
 import { InMemoryFileSystem } from '../support/in-memory-file-system';
 import { SessionStore } from '../../src/engine/session-store';
 import { EngineEvents } from '../../src/engine/events';
-import { StageRunner } from '../../src/pipeline/stage-runner';
+import { StageRunner, WorkspaceMissingError, WorktreeGoneError } from '../../src/pipeline/stage-runner';
 import { KeyedLock } from '../../src/api/keyed-lock';
 import { SessionSchema, type Session, type SessionMode } from '../../src/schema/session';
 import type { StageName } from '../../src/schema/stage';
@@ -228,5 +228,60 @@ describe('the guardrail writers are reached from exactly two places', () => {
       'pipeline/stage-runner.ts',
       'workspace/workspace-manager.ts',
     ]);
+  });
+});
+
+/**
+ * The refresh's recursive `mkdir` would otherwise CONJURE a worktree that is
+ * no longer on disk (deleted by hand, `git worktree prune`, a wiped scratch
+ * disk): the directory comes back containing `.claude/` and nothing else, the
+ * agent spawns into it happily, and a review agent that can see no code still
+ * writes a confident report about nothing. A loud failure beats that.
+ */
+describe('a stage run refuses a worktree whose directory is gone', () => {
+  it('fails with WorktreeGoneError, creates nothing at the path, and spawns no agent', async () => {
+    const session = makeSession('review', 'rev-gone', { repo: 'acme/app', number: 5 });
+    const fs = new InMemoryFileSystem();
+    const store = new SessionStore(fs, SESSIONS_DIR);
+    await store.save(session);
+    // Deliberately NOT creating /w/rev-gone.
+    const runner = new FakeAgentRunner();
+    const events = new EngineEvents();
+    const finished: string[] = [];
+    events.on('run.finished', (e) => finished.push(e.outcome));
+    const sr = new StageRunner({
+      runner,
+      store,
+      fs,
+      events,
+      sessionsDir: SESSIONS_DIR,
+      runnerKind: 'claude-code',
+      lock: new KeyedLock(),
+    });
+    await expect(
+      sr.run({ sessionId: 'rev-gone', stage: 'review', brief: null, prompt: 'go' }),
+    ).rejects.toThrow(WorktreeGoneError);
+    expect(await fs.exists('/w/rev-gone')).toBe(false);
+    expect(await fs.exists('/w/rev-gone/.claude/settings.local.json')).toBe(false);
+    expect(await fs.exists('/w/rev-gone/.cgremlin/post-review')).toBe(false);
+    expect(() => runner.lastHandle()).toThrow('no handle has been started yet');
+    // Same shape as every other preparation failure on this path.
+    expect((await store.load('rev-gone')).lastRun).toMatchObject({ outcome: 'failed' });
+    expect(finished).toEqual(['failed']);
+  });
+
+  it('names the worktree path, and reads differently from an unset path', async () => {
+    expect(new WorktreeGoneError('rev-gone', '/w/rev-gone').message).toContain('/w/rev-gone');
+    expect(new WorktreeGoneError('rev-gone', '/w/rev-gone').message).not.toBe(
+      new WorkspaceMissingError('rev-gone').message,
+    );
+  });
+
+  it('still runs normally when the worktree directory IS there', async () => {
+    const fs = await runStage(makeSession('review', 'rev-ok', { repo: 'acme/app', number: 6 }));
+    expect(await fs.exists('/w/rev-ok/.cgremlin/post-review')).toBe(true);
+    expect(await fs.readFile('/w/rev-ok/.claude/settings.local.json')).toBe(
+      renderPermissionSettings(DEFAULT_PERMISSIONS.review),
+    );
   });
 });

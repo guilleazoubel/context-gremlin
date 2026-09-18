@@ -13,10 +13,33 @@ export class RunInProgressError extends Error {
     this.name = 'RunInProgressError';
   }
 }
+/** The session record names no worktree at all — it was never created. */
 export class WorkspaceMissingError extends Error {
   constructor(sessionId: string) {
-    super(`Session '${sessionId}' has no worktree; create its workspace before running a stage`);
+    super(
+      `Session '${sessionId}' has no worktree path recorded; create its workspace before running a stage`,
+    );
     this.name = 'WorkspaceMissingError';
+  }
+}
+/**
+ * The record names a worktree, but the directory is not on disk — deleted by
+ * hand, pruned, or on a wiped scratch disk. A DIFFERENT fault from the one
+ * above and it must read that way in the log, because the remedy differs:
+ * that one was never created, this one is gone.
+ *
+ * Checked explicitly (and not left to fail at spawn) because the guardrail
+ * refresh below mkdir's recursively: unchecked, it would recreate the path
+ * with `.claude/` and nothing else, the agent would spawn happily into an
+ * empty directory, and a review agent that can see no code at all would still
+ * write a confident report about nothing.
+ */
+export class WorktreeGoneError extends Error {
+  constructor(sessionId: string, worktreePath: string) {
+    super(
+      `Session '${sessionId}' has a worktree path that no longer exists on disk: ${worktreePath}; recreate its workspace before running a stage`,
+    );
+    this.name = 'WorktreeGoneError';
   }
 }
 
@@ -169,7 +192,12 @@ export class StageRunner {
         // Still inside the caller's lock (it releases at `run.started`,
         // below), and inside this try, so a failure to write them fails the
         // stage exactly as a failure to write BRIEF.md does — no try/catch of
-        // its own, on purpose.
+        // its own, on purpose. The existence check comes FIRST for the reason
+        // given on WorktreeGoneError: the refresh would otherwise conjure the
+        // directory back.
+        if (!(await this.deps.fs.exists(worktreePath))) {
+          throw new WorktreeGoneError(sessionId, worktreePath);
+        }
         await refreshWorkspaceGuardrails(
           this.deps.fs,
           worktreePath,

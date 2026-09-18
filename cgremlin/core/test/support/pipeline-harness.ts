@@ -2,6 +2,7 @@ import { InMemoryFileSystem } from './in-memory-file-system';
 import { FakeGitRunner } from './fake-git-runner';
 import { FakeAgentRunner } from './fake-agent-runner';
 import { SessionStore } from '../../src/engine/session-store';
+import { WorktreeSeedingSessionStore } from './worktree-seeding-store';
 import { WorkspaceManager } from '../../src/workspace/workspace-manager';
 import { EngineEvents } from '../../src/engine/events';
 import { StageRunner } from '../../src/pipeline/stage-runner';
@@ -64,8 +65,8 @@ export interface HarnessOptions {
 
 export function createHarness(options: HarnessOptions = {}): PipelineHarness {
   const fs = new InMemoryFileSystem();
-  const git = new FakeGitRunner();
-  const store = new SessionStore(fs, SESSIONS_DIR);
+  const git = new FakeGitRunner(fs);
+  const store = new WorktreeSeedingSessionStore(fs, SESSIONS_DIR);
   const workspace = new WorkspaceManager(git, fs, MIRRORS_DIR);
   const runner = new FakeAgentRunner();
   const events = new EngineEvents();
