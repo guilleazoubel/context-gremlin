@@ -70,77 +70,102 @@ describe('permission guards without dead cgremlin callbacks (phase 3a)', () => {
 });
 
 /**
- * Phase 20 — the user reversed the deferred-posting decision: the review and
- * respond agents now post to GitHub themselves. This table IS the policy, and
- * it is pinned here so the guard cannot drift without this file changing too.
- * Changing or LANDING the PR is still not posting: merge/close/edit/ready stay
- * denied everywhere, in every mode.
+ * Phase 20 — the review and respond agents post to GitHub themselves, but
+ * never through a bare `gh` write verb. `gh` honours `-R/--repo`, so an
+ * unscoped `gh pr comment` reaches EVERY pull request the token can see, and
+ * the material an agent is reading (a PR diff, a review thread) is written by
+ * whoever opened the PR. A prefix/glob deny cannot say "this one PR only", so
+ * the verbs are denied outright in every mode and the one legitimate write is
+ * carried by a helper with the repo and number compiled into it.
+ *
+ * Agents run under `--permission-mode bypassPermissions`, so `allow` entries
+ * are INERT and only `deny` bites. This table IS the policy; it is pinned by
+ * value so the guard cannot drift without this file changing too.
  */
-const POSTING_VERBS = ['Bash(gh pr review:*)', 'Bash(gh pr comment:*)'] as const;
-const NEVER_ALLOWED = [
+const NEVER_POST = ['Bash(gh pr review:*)', 'Bash(gh pr comment:*)'] as const;
+const NEVER_LAND = [
   'Bash(gh pr merge:*)',
   'Bash(gh pr close:*)',
   'Bash(gh pr edit:*)',
   'Bash(gh pr ready:*)',
 ] as const;
+const ALL_MODES = ['investigation', 'development', 'respond', 'qa', 'review'] as const;
 const POSTING_MODES = ['review', 'respond'] as const;
 
-describe('phase 20 — review and respond post to GitHub themselves', () => {
-  it.each(POSTING_MODES)('%s allows gh pr review and gh pr comment', (mode) => {
-    const cfg = DEFAULT_PERMISSIONS[mode];
-    for (const verb of POSTING_VERBS) {
-      expect(cfg.deny ?? []).not.toContain(verb);
-      expect(cfg.allow ?? []).toContain(verb);
-    }
+describe('phase 20 — the per-mode deny table', () => {
+  it('is exactly this, for all five modes, and nothing else', () => {
+    expect(DEFAULT_PERMISSIONS).toEqual({
+      investigation: {},
+      development: {
+        deny: [
+          'Bash(gh pr review:*)',
+          'Bash(gh pr comment:*)',
+          'Bash(gh pr merge:*)',
+          'Bash(gh pr close:*)',
+        ],
+      },
+      respond: {
+        deny: [
+          'Bash(gh pr review:*)',
+          'Bash(gh pr comment:*)',
+          'Bash(gh pr merge:*)',
+          'Bash(gh pr close:*)',
+          'Bash(gh pr edit:*)',
+          'Bash(gh pr ready:*)',
+          'Bash(gh api:*)',
+          'Bash(git push --force:*)',
+          'Bash(git push -f:*)',
+        ],
+      },
+      qa: {
+        deny: [
+          'Bash(gh pr review:*)',
+          'Bash(gh pr comment:*)',
+          'Bash(gh pr merge:*)',
+          'Bash(gh pr close:*)',
+          'Bash(gh pr edit:*)',
+          'Bash(gh pr create:*)',
+          'Bash(gh pr ready:*)',
+          'Bash(gh issue:*)',
+          'Bash(gh api:*--method*)',
+          'Bash(gh api:*graphql*)',
+          'Bash(git push:*)',
+          'Bash(git commit:*)',
+        ],
+      },
+      review: {
+        deny: [
+          'Bash(gh pr review:*)',
+          'Bash(gh pr comment:*)',
+          'Bash(gh pr merge:*)',
+          'Bash(gh pr close:*)',
+          'Bash(gh pr edit:*)',
+          'Bash(gh pr ready:*)',
+          'Bash(gh pr create:*)',
+          'Bash(gh api:*)',
+          'Bash(git push:*)',
+          'Bash(git commit:*)',
+        ],
+      },
+    });
+  });
+
+  it.each(ALL_MODES)('%s grants no allow entry — allow is inert under bypassPermissions', (mode) => {
+    expect(DEFAULT_PERMISSIONS[mode].allow).toBeUndefined();
+  });
+});
+
+describe('phase 20 — no mode may run an unscoped GitHub write verb', () => {
+  it.each(POSTING_MODES)('%s denies gh pr review and gh pr comment, scoping is the helper’s job', (mode) => {
+    expect(DEFAULT_PERMISSIONS[mode].deny ?? []).toEqual(expect.arrayContaining([...NEVER_POST]));
   });
 
   it.each(POSTING_MODES)('%s denies `gh api` outright — it is not a posting verb', (mode) => {
-    const cfg = DEFAULT_PERMISSIONS[mode];
-    expect(cfg.deny ?? []).toContain('Bash(gh api:*)');
-    for (const rule of cfg.allow ?? []) expect(rule).not.toContain('gh api');
+    expect(DEFAULT_PERMISSIONS[mode].deny ?? []).toContain('Bash(gh api:*)');
   });
-
-  it('the review deny table is exactly this, and nothing else', () => {
-    expect(DEFAULT_PERMISSIONS.review).toEqual({
-      allow: ['Bash(gh pr review:*)', 'Bash(gh pr comment:*)'],
-      deny: [
-        'Bash(gh pr merge:*)',
-        'Bash(gh pr close:*)',
-        'Bash(gh pr edit:*)',
-        'Bash(gh pr ready:*)',
-        'Bash(gh pr create:*)',
-        'Bash(gh api:*)',
-        'Bash(git push:*)',
-        'Bash(git commit:*)',
-      ],
-    });
-  });
-
-  it('the respond deny table is exactly this, and nothing else', () => {
-    expect(DEFAULT_PERMISSIONS.respond).toEqual({
-      allow: ['Bash(gh pr review:*)', 'Bash(gh pr comment:*)'],
-      deny: [
-        'Bash(gh pr merge:*)',
-        'Bash(gh pr close:*)',
-        'Bash(gh pr edit:*)',
-        'Bash(gh pr ready:*)',
-        'Bash(gh api:*)',
-        'Bash(git push --force:*)',
-        'Bash(git push -f:*)',
-      ],
-    });
-  });
-
-  it.each(['investigation', 'development', 'respond', 'qa', 'review'] as const)(
-    '%s never gets to land or rewrite a PR',
-    (mode) => {
-      const allow = DEFAULT_PERMISSIONS[mode].allow ?? [];
-      for (const rule of NEVER_ALLOWED) expect(allow).not.toContain(rule);
-    },
-  );
 
   it.each(POSTING_MODES)('%s denies merge, close, edit and ready outright', (mode) => {
-    expect(DEFAULT_PERMISSIONS[mode].deny ?? []).toEqual(expect.arrayContaining([...NEVER_ALLOWED]));
+    expect(DEFAULT_PERMISSIONS[mode].deny ?? []).toEqual(expect.arrayContaining([...NEVER_LAND]));
   });
 
   it('respond may push its own branch but never force-push it', () => {
@@ -154,33 +179,5 @@ describe('phase 20 — review and respond post to GitHub themselves', () => {
     const deny = DEFAULT_PERMISSIONS.review.deny ?? [];
     expect(deny).toContain('Bash(git push:*)');
     expect(deny).toContain('Bash(git commit:*)');
-  });
-
-  it('qa and development are untouched by phase 20 — neither posts', () => {
-    expect(DEFAULT_PERMISSIONS.development).toEqual({
-      deny: [
-        'Bash(gh pr review:*)',
-        'Bash(gh pr comment:*)',
-        'Bash(gh pr merge:*)',
-        'Bash(gh pr close:*)',
-      ],
-    });
-    expect(DEFAULT_PERMISSIONS.qa).toEqual({
-      deny: [
-        'Bash(gh pr review:*)',
-        'Bash(gh pr comment:*)',
-        'Bash(gh pr merge:*)',
-        'Bash(gh pr close:*)',
-        'Bash(gh pr edit:*)',
-        'Bash(gh pr create:*)',
-        'Bash(gh pr ready:*)',
-        'Bash(gh issue:*)',
-        'Bash(gh api:*--method*)',
-        'Bash(gh api:*graphql*)',
-        'Bash(git push:*)',
-        'Bash(git commit:*)',
-      ],
-    });
-    expect(DEFAULT_PERMISSIONS.investigation).toEqual({});
   });
 });
