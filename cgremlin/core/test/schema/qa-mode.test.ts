@@ -92,12 +92,29 @@ describe('the session variant', () => {
     expect(() => SessionV1Schema.parse({ ...QA_DOC, schemaVersion: 1 })).toThrow();
   });
 
-  it("the guard denies the review deny-list plus gh pr create / gh issue / gh api --method", () => {
+  // Phase 20: QA's policy is unchanged, but it can no longer be expressed as
+  // "review's deny list plus more" — review now deliberately PERMITS posting.
+  // QA's prohibitions are therefore asserted directly, and the point of the
+  // test is the same one it always made: QA writes nothing outward.
+  it('the guard denies every outward write — posting, landing, gh issue, any mutating gh api, push and commit', () => {
     const deny = DEFAULT_PERMISSIONS.qa.deny ?? [];
-    for (const rule of DEFAULT_PERMISSIONS.review.deny ?? []) expect(deny).toContain(rule);
-    expect(deny).toContain('Bash(gh pr create:*)');
-    expect(deny).toContain('Bash(gh issue:*)');
-    expect(deny).toContain('Bash(gh api:*--method*)');
+    for (const rule of [
+      'Bash(gh pr review:*)',
+      'Bash(gh pr comment:*)',
+      'Bash(gh pr merge:*)',
+      'Bash(gh pr close:*)',
+      'Bash(gh pr edit:*)',
+      'Bash(gh pr ready:*)',
+      'Bash(gh pr create:*)',
+      'Bash(gh issue:*)',
+      'Bash(gh api:*--method*)',
+      'Bash(gh api:*graphql*)',
+      'Bash(git push:*)',
+      'Bash(git commit:*)',
+    ]) {
+      expect(deny).toContain(rule);
+    }
+    expect(DEFAULT_PERMISSIONS.qa.allow ?? []).toEqual([]);
   });
 });
 
