@@ -1,11 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import {
+  EMPTY_QA_ENVIRONMENT,
   PLAN_REVIEW_STATUS_EXAMPLE,
   QA_CONTRACT_EXAMPLE,
   REVIEW_CONTRACT_EXAMPLE,
   qaOutputContract,
   renderPlanBrief,
   renderReviewBrief,
+  QA_CONDUCT_RULE,
+  renderQaBrief,
+  renderRereviewBrief,
+  renderRespondBrief,
   renderReviewContract,
   renderReviewPrompt,
 } from '../../src/pipeline/prompts';
@@ -119,5 +124,94 @@ describe('MG-17k — the external review skill does not get to pick the shape', 
     expect(prompt).toContain('/APFM:apfm-review');
     expect(prompt).toContain('/s/BRIEF.md');
     expect(prompt).toMatch(/whatever shape it proposes/i);
+  });
+});
+
+/**
+ * Phase 20 — the user reversed the deferred-posting decision. The permission
+ * guard cannot pin a repo and number (prefix/glob patterns, no negation), so
+ * "post to THIS pull request and no other" is enforced by the brief alone.
+ * These are the guards on that text.
+ */
+describe('phase 20 — posting is instructed, scoped, and still forbidden for QA', () => {
+  const review = renderReviewBrief({ sessionDir: '/s', prNumber: 7 });
+
+  it('the review brief tells the agent to post, to its own PR, and to no other', () => {
+    expect(review).toContain('## Posting');
+    expect(review).toContain('PR #7');
+    expect(review).toMatch(/any other pull request/i);
+    expect(review).toMatch(/exactly once per run/i);
+  });
+
+  it('the review brief posts findings inline at their Where, plus one summary carrying the verdict', () => {
+    expect(review).toMatch(/inline comment/i);
+    expect(review).toContain('/pulls/7/reviews');
+    expect(review).toMatch(/one summary comment/i);
+  });
+
+  it('the review brief maps every contract verdict to its GitHub event', () => {
+    expect(review).toContain('🔄 Request changes` → `REQUEST_CHANGES');
+    expect(review).toContain('✅ Approve` → `APPROVE');
+    expect(review).toContain('💬 Comment` → `COMMENT');
+  });
+
+  it('the review brief posts a NEW review on a re-review and says how to spot its own prior comments', () => {
+    expect(review).toMatch(/new review/i);
+    expect(review).toMatch(/anchor/i);
+  });
+
+  it('the review brief still forbids landing or rewriting the PR', () => {
+    expect(review).toMatch(/never merge/i);
+    expect(review).toMatch(/close/i);
+    expect(review).toMatch(/ready/i);
+  });
+
+  it('the re-review brief carries the same posting section', () => {
+    expect(renderRereviewBrief({ sessionDir: '/s', prNumber: 7, commitCount: 2 })).toContain('## Posting');
+  });
+
+  it('the review prompt no longer tells the agent to stay off GitHub', () => {
+    const prompt = renderReviewPrompt({ sessionDir: '/s' });
+    expect(prompt).not.toContain('Do NOT post to GitHub');
+    expect(prompt).toMatch(/## Posting/);
+  });
+
+  it('the respond brief replies in the threads it addressed, on its own PR only', () => {
+    const respond = renderRespondBrief({
+      sessionDir: '/s',
+      prRepo: 'acme/app',
+      prNumber: 42,
+      threads: [],
+      reviews: [{ author: 'bob', state: 'CHANGES_REQUESTED', body: 'nope', submittedAt: '2026-09-14T09:00:00.000Z' }],
+      reviewDecision: null,
+      failingChecks: [],
+      changedFiles: 1,
+      additions: 1,
+      deletions: 0,
+    });
+    expect(respond).toContain('## Posting');
+    expect(respond).toContain('acme/app#42');
+    expect(respond).toContain('/pulls/42/comments/');
+    expect(respond).toMatch(/any other pull request/i);
+    expect(respond).not.toContain('Nothing here posts to GitHub');
+    expect(respond).toMatch(/never merge/i);
+  });
+
+  it('QA is untouched: its brief still says it writes nothing to GitHub and never instructs posting', () => {
+    const qa = renderQaBrief({
+      sessionDir: '/s',
+      ticket: 'HB-1',
+      prRepo: 'acme/app',
+      prNumber: 42,
+      mergeSha: 'abc1234',
+      change: { title: 't', author: 'a', mergedAt: '2026-09-14T09:00:00.000Z', changedFiles: 1, additions: 1, deletions: 0, files: ['a.ts'] },
+      priorArtifacts: [],
+      ticketContext: null,
+      env: { ...EMPTY_QA_ENVIRONMENT, url: 'https://qa.example.com' },
+    });
+    expect(qa).toContain(QA_CONDUCT_RULE);
+    expect(QA_CONDUCT_RULE).toContain('write to Jira or GitHub');
+    expect(qa).not.toContain('## Posting');
+    expect(qa).not.toMatch(/gh pr (review|comment)/);
   });
 });

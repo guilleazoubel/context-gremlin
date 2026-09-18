@@ -70,7 +70,9 @@ describe('prompt templates', () => {
     // §4f — the external skill is not edited; the brief's contract wins.
     expect(t).toContain(`REVIEW.md must match the output contract in ${sessionDir}/BRIEF.md EXACTLY`);
     expect(t).toContain("run the '## LIVE UI CHECK' section");
-    expect(t).toContain('Do NOT post to GitHub');
+    // Phase 20: the prompt now hands posting authority to the brief's section.
+    expect(t).not.toContain('Do NOT post to GitHub');
+    expect(t).toContain("'## Posting' section");
     expect(t).toContain(`Write the output to ${sessionDir}/REVIEW.md`);
   });
 
@@ -643,14 +645,16 @@ describe('renderRespondBrief (R50)', () => {
     expect(text).toContain('COMMENTS.md');
   });
 
-  it('MG-14 / R55: no instruction to reply, resolve or push — and the out-of-scope line is IN the brief', () => {
+  // Phase 20 reversed R55: the respond agent now posts its replies itself.
+  // What it still may NOT do is resolve a thread or land the PR, and it never
+  // calls back into the engine's dead CLI.
+  it('MG-14: the brief instructs a threaded reply, and still forbids resolving or landing the PR', () => {
     const text = renderRespondBrief(ctx);
-    expect(text).toContain('Out of scope in v1');
-    expect(text).toContain('Do NOT reply to a comment');
-    expect(text).toContain('do NOT resolve a thread');
-    expect(text).toContain('do NOT push');
-    expect(text).not.toContain('gh pr comment');
-    expect(text).not.toContain('gh pr review');
+    expect(text).toContain('## Posting');
+    expect(text).toContain('Reply INSIDE the thread');
+    expect(text).toContain('Do NOT resolve threads');
+    expect(text).toContain('never force-push');
+    expect(text).toMatch(/never merge, close, edit, re-title or mark this pull request ready/i);
     expect(text).not.toContain('--reply-comment');
     expect(text).not.toContain('--resolve-comment');
     expect(text).not.toContain('--push-fix');

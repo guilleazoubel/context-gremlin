@@ -508,6 +508,30 @@ ${step5}${uiCheckBlock}
 `;
 }
 
+/**
+ * Phase 20 — the user reversed the deferred-posting decision: the review agent
+ * posts its own review. The permission guard cannot pin a repo and number (its
+ * patterns are prefix/glob, with no negation), so "this pull request and no
+ * other" is enforced HERE, in the brief, and nowhere else. Both the review and
+ * the re-review brief carry this one text.
+ */
+export function renderPostingProtocol(prNumber: number): string {
+  return `## Posting — you post this review to GitHub yourself
+
+**Where.** Exactly one pull request: **PR #${prNumber}**, in the repository this worktree is checked out on. Always pass the number explicitly (\`gh pr review ${prNumber} …\`) and never point \`--repo\` anywhere else. Never post to any other pull request, and never to an issue. If the checked-out branch is not the head of PR #${prNumber}, post nothing and say so in \`REVIEW.md\`.
+
+**When.** Exactly once per run, after \`REVIEW.md\` is written and final. \`REVIEW.md\` is the source and GitHub is the copy: post what the file says, not a fresh opinion.
+
+**What.**
+1. **Inline comments.** Every finding that carries a \`Where\` (\`path:line\`) is posted as an inline comment at that exact path and line. \`gh pr review\` cannot attach a comment at a file:line, so submit the whole review in ONE call to the REST reviews endpoint — \`gh api --method POST repos/{owner}/{repo}/pulls/${prNumber}/reviews --input <body.json>\` — with a body of the shape \`{"event": <event>, "body": <summary>, "comments": [{"path": "src/x.ts", "line": 88, "body": "f1 · 🔴 Critical — …"}]}\`. Begin every inline body with the finding's anchor id and severity, exactly as shown. A finding with no \`Where\` (📋 PM/AC, 🎨 Design) goes in the body, not inline.
+2. **One summary comment** — the review's \`body\`: line 2's verdict verbatim, line 3's scope, then the findings table. One per run; do not add a \`gh pr comment\` on top of it.
+3. **The verdict picks the event**, read from line 2 of \`REVIEW.md\` and nothing else: \`🔄 Request changes\` → \`REQUEST_CHANGES\`, \`✅ Approve\` → \`APPROVE\`, \`💬 Comment\` → \`COMMENT\`. If GitHub refuses \`APPROVE\` because the PR is your own, re-submit the same review as \`COMMENT\` and say why in the body.
+
+**On a re-review, post a NEW review — never repeat a comment you already posted.** Read what is there first: \`gh api repos/{owner}/{repo}/pulls/${prNumber}/comments --paginate\`. A finding is already posted when a comment authored by you begins with that finding's anchor id (\`f3 · …\`) — that prefix is how you tell, which is why an inline body is never written without it. Post inline comments only for anchors that are not up yet; the new review's body reports the status of the rest.
+
+Never merge, close, edit, re-title or mark this pull request ready, and never touch another one. The guard denies those commands — do not look for a way around them. Posting the review is the end of your authority.`;
+}
+
 export function renderReviewBrief(p: ReviewBriefParams): string {
   const env = p.env ?? EMPTY_ENVIRONMENT;
   const envSection = renderEnvironmentSection(env);
@@ -524,6 +548,7 @@ export function renderReviewBrief(p: ReviewBriefParams): string {
     envSection,
     uiCheck,
     renderReviewContract(),
+    renderPostingProtocol(p.prNumber),
   ].filter((part) => part !== '');
   return `${parts.join('\n\n')}\n`;
 }
@@ -540,6 +565,7 @@ export function renderRereviewBrief(p: RereviewBriefParams): string {
     envSection,
     uiCheck,
     renderReviewContract(),
+    renderPostingProtocol(p.prNumber),
   ].filter((part) => part !== '');
   return `${parts.join('\n\n')}\n`;
 }
@@ -551,7 +577,7 @@ export function renderReviewPrompt(p: ReviewPromptParams): string {
     (p.includeLiveUiCheck ?? true) && uiCheckRendered
       ? ` Then ALWAYS run the '## LIVE UI CHECK' section in ${p.sessionDir}/BRIEF.md (PM + Designer subagents) and merge its 📋/🎨 findings into REVIEW.md — this is required even when ${bareSkillName(skill)} handled the code review.`
       : '';
-  return `Run ${skill}. Whatever shape it proposes, REVIEW.md must match the output contract in ${p.sessionDir}/BRIEF.md EXACTLY — that contract is what the engine and the editor read, and it overrides the skill's own output format wherever the two differ.${ui} Proceed autonomously; do NOT ask for confirmation or a verdict. Read the PR with git (the branch is checked out) or gh pr view/diff as needed. If Jira/Atlassian MCP is unavailable, skip Jira context and proceed with the diff alone. Do NOT post to GitHub. Write the output to ${p.sessionDir}/REVIEW.md.`;
+  return `Run ${skill}. Whatever shape it proposes, REVIEW.md must match the output contract in ${p.sessionDir}/BRIEF.md EXACTLY — that contract is what the engine and the editor read, and it overrides the skill's own output format wherever the two differ.${ui} Proceed autonomously; do NOT ask for confirmation or a verdict. Read the PR with git (the branch is checked out) or gh pr view/diff as needed. If Jira/Atlassian MCP is unavailable, skip Jira context and proceed with the diff alone. Write the output to ${p.sessionDir}/REVIEW.md, then post it to the PR exactly as the '## Posting' section of ${p.sessionDir}/BRIEF.md says — that section is the whole of your posting authority.`;
 }
 
 export function renderRereviewPrompt(p: RereviewPromptParams): string {
@@ -707,8 +733,12 @@ ${COMMENTS_MD_SHAPE}
 
 When every thread has a verdict and the local fixes are committed, write \`${ctx.sessionDir}/AGENT_STATE\` = \`ready\` and \`${ctx.sessionDir}/AGENT_NOTE\` = "COMMENTS.md ready — replies drafted", and STOP.
 
-## Out of scope in v1 — do not do these
-Nothing here posts to GitHub. Do NOT reply to a comment, do NOT resolve a thread, do NOT push, and do NOT mark the PR ready. v1 ends at "the fix is committed locally"; the drafted replies live in \`${ctx.sessionDir}/COMMENTS.md\` for a human to paste.`);
+## Posting — you reply on GitHub yourself
+This is your own pull request: ${ctx.prRepo}#${ctx.prNumber}. Reply there and nowhere else — never pass a \`--repo\` or a number that is not ${ctx.prRepo}#${ctx.prNumber}, and never post to any other pull request.
+Reply once per run, after \`COMMENTS.md\` is complete and the local fixes are committed. \`COMMENTS.md\` is the source: post each thread's **Proposed reply** as it is written there.
+Reply INSIDE the thread, never as a new top-level comment: \`gh api --method POST repos/${ctx.prRepo}/pulls/${ctx.prNumber}/comments/<comment-id>/replies -f body=@<file>\`, where \`<comment-id>\` is the number at the end of that thread's FIRST comment URL (\`…#discussion_r<comment-id>\`). \`gh pr comment\` writes a top-level comment and is only for a single overall summary, if one is warranted.
+Reply once per thread. Re-read the live thread before posting: a thread whose entry already reads \`- **Status:** replied\` was answered on an earlier run — skip it unless the reviewer has added something new since. Set that Status to \`replied\` as soon as the reply is up.
+Do NOT resolve threads — the reviewer who opened one closes it. Never merge, close, edit, re-title or mark this pull request ready, and never force-push. The guard denies those commands.`);
 
   let text = sections.join('\n\n');
   const note = '\n\n_(truncated by the engine)_';
