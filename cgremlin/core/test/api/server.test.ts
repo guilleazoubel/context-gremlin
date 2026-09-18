@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createApiServer } from '../../src/api/server';
-import { SessionStore } from '../../src/engine/session-store';
+import { WorktreeSeedingSessionStore } from '../support/worktree-seeding-store';
 import { WorkspaceManager } from '../../src/workspace/workspace-manager';
 import { StageRunner } from '../../src/pipeline/stage-runner';
 import { PipelineService } from '../../src/pipeline/pipeline-service';
@@ -160,8 +160,8 @@ class DelayedFileSystem implements SessionFileSystem {
  */
 async function createDelayedServer(socketFileName: string, opts: { inventory?: boolean } = {}) {
   const delayedFs = new DelayedFileSystem(new InMemoryFileSystem());
-  const git = new FakeGitRunner();
-  const store = new SessionStore(delayedFs, '/sessions');
+  const git = new FakeGitRunner(delayedFs);
+  const store = new WorktreeSeedingSessionStore(delayedFs, '/sessions');
   const workspace = new WorkspaceManager(git, delayedFs, '/mirrors');
   const events = new EngineEvents();
   const runner = new FakeAgentRunner();
@@ -389,8 +389,8 @@ describe('API server', () => {
 
   it('concurrent transitions to the same target for the same session id are serialized: exactly one succeeds', async () => {
     const delayedFs = new DelayedFileSystem(new InMemoryFileSystem());
-    const git = new FakeGitRunner();
-    const delayedStore = new SessionStore(delayedFs, '/sessions');
+    const git = new FakeGitRunner(delayedFs);
+    const delayedStore = new WorktreeSeedingSessionStore(delayedFs, '/sessions');
     const delayedWorkspaceManager = new WorkspaceManager(git, delayedFs, '/mirrors');
     const delayedEvents = new EngineEvents();
     const delayedRunner = new FakeAgentRunner();

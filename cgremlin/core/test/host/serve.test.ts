@@ -834,6 +834,10 @@ describe('serve — human-turn claims are cleared at boot (R20)', () => {
     const store = new SessionStore(fs, '/sessions');
     await store.save(claimedDevSession('dev-claim-1'));
     await store.save(claimedDevSession('dev-claim-2'));
+    // The worktrees have to be on disk: a stage run refuses a session whose
+    // worktree is gone (WorktreeGoneError).
+    await fs.mkdir('/worktrees/dev-claim-1', { recursive: true });
+    await fs.mkdir('/worktrees/dev-claim-2', { recursive: true });
 
     let claimsAtListen: unknown;
     const handle = await serve(config, testAdapters({ fs, runner }), {

@@ -26,6 +26,7 @@ export function mapErrorToHttp(err: unknown): HttpError {
     case 'HumanTurnInProgressError':
     case 'UnsupportedStageError':
     case 'WorkspaceMissingError':
+    case 'WorktreeGoneError': // its sibling: the worktree is gone, not unset — both are fixed by recreating the workspace.
     case 'TickInProgressError':
       return { status: 409, body: { error: message } };
     case 'ArtifactNotFoundError':

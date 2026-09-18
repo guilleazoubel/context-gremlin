@@ -36,6 +36,9 @@ async function setup(session = inv(), opts: { runnerKind?: 'claude-code' | 'code
   const fs = new InMemoryFileSystem();
   const store = new SessionStore(fs, sessionsDir);
   await store.save(session);
+  // The worktree a session names has to actually exist: StageRunner refuses
+  // to run in one that is gone from disk (WorktreeGoneError).
+  if (session.workspace.worktreePath) await fs.mkdir(session.workspace.worktreePath, { recursive: true });
   const runner = new FakeAgentRunner();
   const events = new EngineEvents();
   const now = () => new Date('2026-09-04T12:00:00.000Z');
@@ -184,8 +187,9 @@ describe('StageRunner.run', () => {
   });
 
   it('rejects a second concurrent run for the same session and allows a different session', async () => {
-    const { store, runner, sr } = await setup();
+    const { fs, store, runner, sr } = await setup();
     await store.save({ ...inv(), id: 'inv-2', workspace: { repoUrl: 'u', worktreePath: '/w/inv-2' } });
+    await fs.mkdir('/w/inv-2', { recursive: true });
     const p = sr.run({ sessionId: 'inv-1', stage: 'findings', brief: null, prompt: 'go' });
     await flush();
     await expect(sr.run({ sessionId: 'inv-1', stage: 'plan', brief: null, prompt: 'x' })).rejects.toThrow(RunInProgressError);

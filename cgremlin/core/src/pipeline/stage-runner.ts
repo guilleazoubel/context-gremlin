@@ -5,6 +5,7 @@ import type { EngineEvents } from '../engine/events';
 import type { Session } from '../schema/session';
 import type { LastRun, StageName } from '../schema/stage';
 import { KeyedLock } from '../api/keyed-lock';
+import { refreshWorkspaceGuardrails } from '../workspace/workspace-manager';
 
 export class RunInProgressError extends Error {
   constructor(sessionId: string) {
@@ -12,10 +13,33 @@ export class RunInProgressError extends Error {
     this.name = 'RunInProgressError';
   }
 }
+/** The session record names no worktree at all — it was never created. */
 export class WorkspaceMissingError extends Error {
   constructor(sessionId: string) {
-    super(`Session '${sessionId}' has no worktree; create its workspace before running a stage`);
+    super(
+      `Session '${sessionId}' has no worktree path recorded; create its workspace before running a stage`,
+    );
     this.name = 'WorkspaceMissingError';
+  }
+}
+/**
+ * The record names a worktree, but the directory is not on disk — deleted by
+ * hand, pruned, or on a wiped scratch disk. A DIFFERENT fault from the one
+ * above and it must read that way in the log, because the remedy differs:
+ * that one was never created, this one is gone.
+ *
+ * Checked explicitly (and not left to fail at spawn) because the guardrail
+ * refresh below mkdir's recursively: unchecked, it would recreate the path
+ * with `.claude/` and nothing else, the agent would spawn happily into an
+ * empty directory, and a review agent that can see no code at all would still
+ * write a confident report about nothing.
+ */
+export class WorktreeGoneError extends Error {
+  constructor(sessionId: string, worktreePath: string) {
+    super(
+      `Session '${sessionId}' has a worktree path that no longer exists on disk: ${worktreePath}; recreate its workspace before running a stage`,
+    );
+    this.name = 'WorktreeGoneError';
   }
 }
 
@@ -157,6 +181,31 @@ export class StageRunner {
 
       const sessionDir = `${this.deps.sessionsDir}/${sessionId}`;
       try {
+        // Every stage run in the engine funnels through here — a first
+        // stage, a chained one, a re-run, a stage on a session resumed days
+        // later — and this is the last point before the agent is spawned at
+        // which the worktree path, the session's mode and its own PR are all
+        // known and unambiguous. So the guardrails are (re)written HERE, not
+        // only at worktree creation: a session created before a
+        // permission-table change used to keep the old table forever, and one
+        // created before the post helpers existed could never post at all.
+        // Still inside the caller's lock (it releases at `run.started`,
+        // below), and inside this try, so a failure to write them fails the
+        // stage exactly as a failure to write BRIEF.md does — no try/catch of
+        // its own, on purpose. The existence check comes FIRST for the reason
+        // given on WorktreeGoneError: the refresh would otherwise conjure the
+        // directory back.
+        if (!(await this.deps.fs.exists(worktreePath))) {
+          throw new WorktreeGoneError(sessionId, worktreePath);
+        }
+        await refreshWorkspaceGuardrails(
+          this.deps.fs,
+          worktreePath,
+          session.mode,
+          session.pr === null
+            ? undefined
+            : { repoSlug: session.pr.repo, prNumber: session.pr.number },
+        );
         await this.deps.fs.mkdir(sessionDir, { recursive: true });
         if (input.brief !== null) await this.deps.fs.writeFile(`${sessionDir}/BRIEF.md`, input.brief);
         await this.deps.fs.writeFile(`${sessionDir}/AGENT_STATE`, 'working');
