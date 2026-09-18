@@ -127,6 +127,7 @@ describe('phase 20 — the per-mode deny table', () => {
           'Bash(gh pr close:*)',
           'Bash(gh pr edit:*)',
           'Bash(gh pr ready:*)',
+          'Bash(gh pr create:*)',
           'Bash(gh api:*)',
           'Bash(git push --force:*)',
           'Bash(git push -f:*)',
@@ -296,4 +297,24 @@ describe('the respond force-push ban covers the spellings people actually type',
       expect(isDenied('respond', command)).toBe(false);
     },
   );
+});
+
+/**
+ * Every other non-development mode denies `gh pr create`. respond did not, so
+ * a respond agent — reading review threads written by other people — could
+ * open an unrelated pull request. It has nothing to open one for: the PR it
+ * answers on already exists.
+ */
+describe('respond opens no pull request of its own', () => {
+  it('denies `gh pr create`, like every other non-development mode', () => {
+    expect(DEFAULT_PERMISSIONS.respond.deny ?? []).toContain('Bash(gh pr create:*)');
+  });
+
+  it.each(['investigation', 'respond', 'qa', 'review'] as const)('%s denies it', (mode) => {
+    expect(isDenied(mode, 'gh pr create --draft --title x')).toBe(true);
+  });
+
+  it('development still opens its own draft PR', () => {
+    expect(isDenied('development', 'gh pr create --draft --title x')).toBe(false);
+  });
 });

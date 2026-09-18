@@ -110,12 +110,14 @@ export const DEFAULT_PERMISSIONS: Record<SessionMode, PermissionConfig> = {
   // `.cgremlin/post-review` and `.cgremlin/post-comment`, which have this
   // session's repo and number baked in (see the header comment for why that
   // scoping cannot be expressed as a pattern); it may never type a `gh` write
-  // verb itself, never LAND or rewrite the PR, never call `gh api`, and never
-  // force-push the branch it is allowed to push.
+  // verb itself, never LAND or rewrite the PR, never call `gh api`, never
+  // open a pull request of its own (the one it answers on already exists),
+  // and never force-push the branch it is allowed to push.
   respond: {
     deny: [
       ...NEVER_POST,
       ...NEVER_LAND,
+      'Bash(gh pr create:*)',
       GH_API_DENY,
       ...NEVER_FORCE_PUSH,
     ],
