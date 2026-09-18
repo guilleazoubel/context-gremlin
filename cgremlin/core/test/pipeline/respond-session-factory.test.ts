@@ -84,6 +84,15 @@ describe('RespondSessionFactory (R51)', () => {
     expect(session.pr?.number).toBe(12);
   });
 
+  // Phase 20 — the scoping of "post to this PR and no other" is the repo slug
+  // and number baked into the helper, so the factory must hand them over.
+  it('passes its own PR to createWorkspace, so the post-review helper is baked for it', async () => {
+    const { gh, factory, createCalls } = makeFactory();
+    gh.queueResponse({ stdout: prViewJson('me-user') });
+    await factory.createFromPr(REPO, 12);
+    expect(createCalls[0]).toMatchObject({ pr: { repoSlug: REPO, prNumber: 12 } });
+  });
+
   it('the author match is case-insensitive', async () => {
     const { gh, factory } = makeFactory('ME-USER');
     gh.queueResponse({ stdout: prViewJson('me-user') });

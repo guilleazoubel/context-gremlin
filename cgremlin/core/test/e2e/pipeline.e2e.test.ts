@@ -80,8 +80,15 @@ describe.skipIf(!hasGit())('Phase 3 engine end-to-end: investigation -> developm
       expect(savedSession.schemaVersion).toBe(2);
       expect(savedSession.stageStatus).toBe('findings');
 
+      // The investigation guard: it reads and writes findings, and posts nothing.
       const settingsPath = path.join(worktreePath, '.claude', 'settings.local.json');
-      expect(JSON.parse(await readFile(settingsPath, 'utf8'))).toEqual({ permissions: {} });
+      const invSettings = JSON.parse(await readFile(settingsPath, 'utf8')) as {
+        permissions: { allow?: string[]; deny?: string[] };
+      };
+      expect(invSettings.permissions.allow).toBeUndefined();
+      expect(invSettings.permissions.deny).toEqual(
+        expect.arrayContaining(['Bash(gh pr comment:*)', 'Bash(gh api:*)', 'Bash(git push:*)']),
+      );
 
       // --- Step 2: start the findings run ---
       const runRes = await engine.request('POST', `/sessions/${invId}/run`, { stage: 'findings' });

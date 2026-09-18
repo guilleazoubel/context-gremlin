@@ -40,6 +40,22 @@ function isMissingConfigKeyError(err: unknown): boolean {
   );
 }
 
+// Phase 20 — the engine writes `.cgremlin/post-review` INTO the worktree, so
+// the repository being reviewed must never be able to commit it. A worktree
+// shares its common dir's `info/exclude` with the bare mirror, so excluding it
+// here covers every worktree cut from this mirror, without touching a tracked
+// file (`.gitignore`) in the user's repository.
+const ENGINE_EXCLUDE_LINE = '.cgremlin/';
+
+async function excludeEngineDir(fs: SessionFileSystem, mirrorPath: string): Promise<void> {
+  const excludePath = `${mirrorPath}/info/exclude`;
+  const existing = (await fs.exists(excludePath)) ? await fs.readFile(excludePath) : '';
+  if (existing.split('\n').includes(ENGINE_EXCLUDE_LINE)) return;
+  await fs.mkdir(`${mirrorPath}/info`, { recursive: true });
+  const prefix = existing === '' || existing.endsWith('\n') ? existing : `${existing}\n`;
+  await fs.writeFile(excludePath, `${prefix}${ENGINE_EXCLUDE_LINE}\n`);
+}
+
 export async function ensureMirror(
   git: GitRunner,
   fs: SessionFileSystem,
@@ -81,6 +97,7 @@ export async function ensureMirror(
       await git.run(['config', '--add', 'remote.origin.fetch', ORIGIN_FETCH_PULLS_REFSPEC], { cwd: mirrorPath });
     }
   }
+  await excludeEngineDir(fs, mirrorPath);
   await git.run(['fetch', '--prune', 'origin'], { cwd: mirrorPath });
   return mirrorPath;
 }

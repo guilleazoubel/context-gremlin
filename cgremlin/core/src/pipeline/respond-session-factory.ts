@@ -92,6 +92,9 @@ export class RespondSessionFactory {
       baseRef,
       mode: 'respond',
       resetBranch: true,
+      // Bakes this repo and number into `.cgremlin/post-review`; see
+      // review-session-factory.ts for why the scoping lives there.
+      pr: { repoSlug: slug, prNumber: number },
     });
 
     const session: RespondSession = {

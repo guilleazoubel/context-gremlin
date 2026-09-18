@@ -83,7 +83,17 @@ export class ReviewSessionFactory {
     const branchName = `pr-${number}`;
     const baseRef = `origin/pr/${number}`;
 
-    await workspace.createWorkspace({ repoUrl, worktreePath, branchName, baseRef, mode: 'review' });
+    // `pr` bakes this repo and number into `.cgremlin/post-review` — the only
+    // place "post to THIS pull request and no other" can be expressed, since
+    // the permission guard's patterns cannot say it (see permission-guard.ts).
+    await workspace.createWorkspace({
+      repoUrl,
+      worktreePath,
+      branchName,
+      baseRef,
+      mode: 'review',
+      pr: { repoSlug: slug, prNumber: number },
+    });
 
     const session: ReviewSession = {
       schemaVersion: 2,

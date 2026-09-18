@@ -4,6 +4,11 @@ import type { SessionMode } from '../schema/session-mode';
 import { ensureMirror, mirrorDirName } from './repo-mirror';
 import { createWorktree, removeWorktree } from './worktree';
 import { writePermissionSettings } from './permission-guard';
+import {
+  shouldWritePostHelpers,
+  writePostHelpers,
+  type PostTarget,
+} from './post-helpers';
 
 export interface CreateWorkspaceParams {
   repoUrl: string;
@@ -13,6 +18,14 @@ export interface CreateWorkspaceParams {
   mode: SessionMode;
   /** R51: reset an EXISTING branch (the PR's own head) instead of inventing one — see worktree.ts. */
   resetBranch?: boolean;
+  /**
+   * Phase 20 — the pull request this session is FOR. Its slug and number are
+   * baked into `.cgremlin/post-review` and `.cgremlin/post-comment` at write
+   * time, which is the whole of the scoping: the agent cannot pass a repo or
+   * a number (see ./post-helpers.ts). Only `review` and `respond` get the
+   * helpers; without a PR, nobody does.
+   */
+  pr?: PostTarget;
 }
 
 export class WorkspaceManager {
@@ -34,6 +47,9 @@ export class WorkspaceManager {
     );
     try {
       await writePermissionSettings(this.fs, params.worktreePath, params.mode);
+      if (params.pr !== undefined && shouldWritePostHelpers(params.mode)) {
+        await writePostHelpers(this.fs, params.worktreePath, params.pr);
+      }
     } catch (err) {
       // Best-effort rollback so a retry with the same branchName doesn't
       // fail with "a branch already exists" — surface the original error
