@@ -151,6 +151,17 @@ describe('ReviewSessionFactory.createFromPrUrl', () => {
     expect(session.lineage.ticket).toBe('APP-1');
   });
 
+  // Phase 20 — the review agent cannot call `gh api`; it runs the helper the
+  // engine installs, which only works if the factory names the PR it is for.
+  it('installs the post-review helper in the worktree with THIS PR baked in', async () => {
+    const { gh, fs, factory } = harness();
+    gh.queueResponse({ stdout: fixture('pr-view-open-approved.json') });
+    const session = await factory.createFromPrUrl(PR_URL);
+    const script = await fs.readFile(`${session.workspace.worktreePath}/.cgremlin/post-review`);
+    expect(script).toContain('"aplaceformom/grace-frontend"');
+    expect(script).toContain('const PR = 1614');
+  });
+
   it('saves nothing and transitions nothing when createWorkspace fails', async () => {
     const { gh, git, store, factory } = harness();
     const source = developmentSession('dev-1', 'aplaceformom/grace-frontend', 1614);

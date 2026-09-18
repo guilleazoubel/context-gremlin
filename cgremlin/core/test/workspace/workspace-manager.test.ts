@@ -74,8 +74,12 @@ describe('WorkspaceManager', () => {
     const fs = new InMemoryFileSystem();
     const failingFs: SessionFileSystem = {
       readFile: (p) => fs.readFile(p),
-      writeFile: async () => {
-        throw new Error('disk full');
+      // Only the permission-settings write fails: the mirror's own
+      // `info/exclude` write (phase 20) happens BEFORE the worktree exists,
+      // and a failure there is not what this rollback is about.
+      writeFile: async (path, content, options) => {
+        if (path.includes('/.claude/')) throw new Error('disk full');
+        return fs.writeFile(path, content, options);
       },
       statMode: (p) => fs.statMode(p),
       statMtimeMs: (p) => fs.statMtimeMs(p),
@@ -99,5 +103,54 @@ describe('WorkspaceManager', () => {
     const branchDeleteCall = git.calls.find((c) => c.args[0] === 'branch' && c.args[1] === '-D');
     expect(removeCall).toBeDefined();
     expect(branchDeleteCall).toBeDefined();
+  });
+});
+
+/**
+ * Phase 20 — the posting modes may not call `gh api`, so the engine installs
+ * the scoped `.cgremlin/post-review` helper for them. Every other mode posts
+ * nothing and gets nothing.
+ */
+describe('WorkspaceManager writes the scoped post-review helper', () => {
+  const pr = { repoSlug: 'acme/app', prNumber: 42 };
+
+  async function create(mode: 'review' | 'respond' | 'qa' | 'development' | 'investigation') {
+    const fs = new InMemoryFileSystem();
+    const manager = new WorkspaceManager(new FakeGitRunner(), fs, '/mirrors');
+    await manager.createWorkspace({
+      repoUrl: 'git@github.com:acme/app.git',
+      worktreePath: `/work/${mode}-1`,
+      branchName: 'b',
+      baseRef: 'origin/b',
+      mode,
+      pr,
+    });
+    return fs;
+  }
+
+  it.each(['review', 'respond'] as const)('%s gets an executable helper with its own PR baked in', async (mode) => {
+    const fs = await create(mode);
+    const script = await fs.readFile(`/work/${mode}-1/.cgremlin/post-review`);
+    expect(script).toContain('"acme/app"');
+    expect(script).toContain('const PR = 42');
+    expect(await fs.statMode(`/work/${mode}-1/.cgremlin/post-review`)).toBe(0o755);
+  });
+
+  it.each(['qa', 'development', 'investigation'] as const)('%s gets no helper at all', async (mode) => {
+    const fs = await create(mode);
+    expect(await fs.exists(`/work/${mode}-1/.cgremlin/post-review`)).toBe(false);
+  });
+
+  it('writes no helper for a posting mode with no PR to post to', async () => {
+    const fs = new InMemoryFileSystem();
+    const manager = new WorkspaceManager(new FakeGitRunner(), fs, '/mirrors');
+    await manager.createWorkspace({
+      repoUrl: 'git@github.com:acme/app.git',
+      worktreePath: '/work/review-2',
+      branchName: 'b',
+      baseRef: 'origin/b',
+      mode: 'review',
+    });
+    expect(await fs.exists('/work/review-2/.cgremlin/post-review')).toBe(false);
   });
 });

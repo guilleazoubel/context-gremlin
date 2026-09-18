@@ -157,3 +157,22 @@ describe('ensureMirror', () => {
     );
   });
 });
+
+describe('ensureMirror excludes the engine’s own directory', () => {
+  it('writes .cgremlin/ into the bare mirror’s info/exclude, so no worktree can commit it', async () => {
+    const fs = new InMemoryFileSystem();
+    await ensureMirror(new FakeGitRunner(), fs, '/mirrors', 'git@github.com:org/repo.git');
+    expect(await fs.readFile('/mirrors/github.com-org-repo.git/info/exclude')).toContain('.cgremlin/');
+  });
+
+  it('keeps whatever info/exclude already said, and does not repeat itself', async () => {
+    const fs = new InMemoryFileSystem();
+    await fs.mkdir('/mirrors/github.com-org-repo.git/info', { recursive: true });
+    await fs.writeFile('/mirrors/github.com-org-repo.git/info/exclude', '# git ls-files --others\n*.log\n');
+    await ensureMirror(new FakeGitRunner(), fs, '/mirrors', 'git@github.com:org/repo.git');
+    await ensureMirror(new FakeGitRunner(), fs, '/mirrors', 'git@github.com:org/repo.git');
+    const exclude = await fs.readFile('/mirrors/github.com-org-repo.git/info/exclude');
+    expect(exclude).toContain('*.log');
+    expect(exclude.match(/^\.cgremlin\/$/gm)).toHaveLength(1);
+  });
+});
