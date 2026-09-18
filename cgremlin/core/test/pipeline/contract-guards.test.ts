@@ -1,3 +1,5 @@
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   EMPTY_QA_ENVIRONMENT,
@@ -160,9 +162,27 @@ describe('phase 20 — posting goes through the scoped helper, and nowhere else'
   );
 
   it.each([['review', () => review], ['respond', () => respond]] as const)(
-    'the %s brief names gh pr comment as the way to leave a plain conversation comment',
+    'the %s brief names .cgremlin/post-comment as the way to leave a plain conversation comment',
     (_mode, brief) => {
-      expect(brief()).toMatch(/gh pr comment[\s\S]{0,200}conversation comment|conversation comment[\s\S]{0,200}gh pr comment/);
+      expect(brief()).toMatch(
+        /\.cgremlin\/post-comment[\s\S]{0,200}conversation comment|conversation comment[\s\S]{0,200}\.cgremlin\/post-comment/,
+      );
+    },
+  );
+
+  it.each([['review', () => review], ['respond', () => respond]] as const)(
+    'the %s brief says gh pr review and gh pr comment are unavailable, so no turn is spent discovering it',
+    (_mode, brief) => {
+      const text = brief();
+      expect(text).toMatch(/UNAVAILABLE[\s\S]{0,300}`gh pr review`/);
+      expect(text).toMatch(/UNAVAILABLE[\s\S]{0,300}`gh pr comment`/);
+    },
+  );
+
+  it.each([['review', () => review], ['respond', () => respond]] as const)(
+    'the %s brief says a non-zero helper exit means the post did NOT happen, and must be reported as such',
+    (_mode, brief) => {
+      expect(brief()).toMatch(/exits non-zero[\s\S]{0,200}nothing was posted/i);
     },
   );
 
@@ -227,5 +247,49 @@ describe('phase 20 — posting goes through the scoped helper, and nowhere else'
     expect(QA_CONDUCT_RULE).toContain('write to Jira or GitHub');
     expect(qa).not.toContain('## Posting');
     expect(qa).not.toMatch(/gh pr (review|comment)/);
+  });
+});
+
+/**
+ * The scoping this whole feature exists to provide is that an agent never
+ * names a target. `gh pr review` and `gh pr comment` both take `-R/--repo`,
+ * are denied in every mode, and must therefore never appear in a brief as
+ * something to RUN — only as something that is unavailable. A brief that
+ * still says "run `gh pr comment`" costs a turn and teaches the wrong habit.
+ */
+describe('phase 20 — no brief tells an agent to run a bare GitHub write verb', () => {
+  const mentions = (text: string): string[] =>
+    text
+      .split('\n')
+      .filter((line) => /gh pr (review|comment)\b/.test(line))
+      .filter((line) => !/unavailable|denied|never|not available|no mode/i.test(line));
+
+  it.each([
+    ['review', () => renderReviewBrief({ sessionDir: '/s', prNumber: 7 })],
+    ['re-review', () => renderRereviewBrief({ sessionDir: '/s', prNumber: 7, commitCount: 2 })],
+    [
+      'respond',
+      () =>
+        renderRespondBrief({
+          sessionDir: '/s',
+          prRepo: 'acme/app',
+          prNumber: 42,
+          threads: [],
+          reviews: [],
+          reviewDecision: null,
+          failingChecks: [],
+          changedFiles: 1,
+          additions: 1,
+          deletions: 0,
+        }),
+    ],
+    ['plan', () => renderPlanBrief({ sessionDir: '/s', ticket: 'HB-1', driveToCompletion: false })],
+  ] as const)('the %s brief never instructs a bare gh pr review or gh pr comment', (_mode, brief) => {
+    expect(mentions(brief())).toEqual([]);
+  });
+
+  it('nothing in prompts.ts instructs a bare gh pr review or gh pr comment', async () => {
+    const source = await readFile(path.resolve(__dirname, '../../src/pipeline/prompts.ts'), 'utf8');
+    expect(mentions(source)).toEqual([]);
   });
 });

@@ -509,20 +509,24 @@ ${step5}${uiCheckBlock}
 }
 
 /**
- * Phase 20 — the review agent posts its own review, through the scoped
- * `.cgremlin/post-review` helper the engine writes into the worktree with
- * this session's repo and number baked in. `gh api` is denied outright, so
- * this section must never name a REST endpoint: an instruction to call one
- * would fail closed. Both the review and the re-review brief carry this text.
+ * Phase 20 — the review agent posts its own review, through the two scoped
+ * helpers the engine writes into the worktree with this session's repo and
+ * number baked in. `gh api` and the bare `gh pr` write verbs are all denied
+ * outright (they take a repository and a number, so none of them is scoped),
+ * so this section must never name a REST endpoint or a `gh` write command:
+ * an instruction to run one would fail closed and cost a turn. Both the
+ * review and the re-review brief carry this text.
  */
 export function renderPostingProtocol(prNumber: number): string {
   return `## Posting — you post this review to GitHub yourself
 
-**Where.** Exactly one pull request: **PR #${prNumber}**, the one this worktree is checked out on. You do not choose it and you cannot change it — the helper below has this repository and this number compiled into it, and takes no repo, number or URL. Never post to any other pull request, and never to an issue.
+**Where.** Exactly one pull request: **PR #${prNumber}**, the one this worktree is checked out on. You do not choose it and you cannot change it — the helpers below have this repository and this number compiled into them, and take no repo, number or URL. Never post to any other pull request, and never to an issue.
 
-**What you have.** \`gh api\` is UNAVAILABLE in this session — every endpoint, every verb — and so are \`gh pr merge|close|edit|ready\`, \`git push\` and \`git commit\`. Two commands write to GitHub, and they are the whole of your authority:
+**What you have.** Every \`gh\` command that writes to GitHub is UNAVAILABLE in this session: \`gh api\` (every endpoint, every verb), \`gh pr review\`, \`gh pr comment\`, \`gh pr merge|close|edit|ready\`, and so are \`git push\` and \`git commit\`. Each of those takes a repository and a number, which is exactly why none of them is yours to run. Two commands write to GitHub, and they are the whole of your authority:
 - \`.cgremlin/post-review <findings.json>\` — submits the review itself, inline comments included.
-- \`gh pr comment\` — a plain conversation comment on this same PR, for a note that is not a review.
+- \`.cgremlin/post-comment <comment.json>\` — one plain conversation comment on this same PR, for a note that is not a review. The file is \`{ "body": "<markdown>" }\`.
+
+**If a helper exits non-zero, nothing was posted.** Read what it printed, fix the file and run it once more. If it still fails, report the review as NOT delivered — say plainly that \`REVIEW.md\` is written but GitHub has nothing on it, and quote the error. Never call a review posted on the strength of having run the command.
 
 **When.** Exactly once per run, after \`REVIEW.md\` is written and final. \`REVIEW.md\` is the source and GitHub is the copy: post what the file says, not a fresh opinion.
 
@@ -540,11 +544,11 @@ export function renderPostingProtocol(prNumber: number): string {
 
 1. **\`verdict\`** is line 2 of \`REVIEW.md\` and nothing else. **The verdict picks the event**: \`🔄 Request changes\` → \`REQUEST_CHANGES\`, \`✅ Approve\` → \`APPROVE\`, \`💬 Comment\` → \`COMMENT\`. If GitHub refuses \`APPROVE\` because the PR is your own, re-run with \`💬 Comment\` and say why in \`body\`.
 2. **One \`findings\` entry per finding that carries a \`Where\` (\`path:line\`)** — each becomes an inline comment at exactly that path and line. Begin every inline \`body\` with the finding's anchor id and severity, exactly as shown. A finding with no \`path:line\` (📋 PM/AC, 🎨 Design) belongs in \`body\`, not in \`findings\`.
-3. **\`body\` is the one summary comment.** Do not add a \`gh pr comment\` on top of it.
+3. **\`body\` is the one summary comment.** Do not add a \`.cgremlin/post-comment\` on top of it.
 
 **On a re-review, post a NEW review — never repeat a comment you already posted.** Read what is on the PR first (\`gh pr view ${prNumber} --comments\`). A finding is already posted when a comment authored by you begins with that finding's anchor id (\`f3 · …\`) — that prefix is how you tell, which is why an inline body is never written without it. Put only the not-yet-posted anchors in \`findings\`; \`body\` reports the status of the rest.
 
-Do NOT edit \`.cgremlin/post-review\` and do NOT commit \`.cgremlin/\`. Never merge, close, edit, re-title or mark this pull request ready, and never touch another one. Posting the review is the end of your authority.`;
+Do NOT edit the helpers in \`.cgremlin/\` and do NOT commit \`.cgremlin/\`. Never merge, close, edit, re-title or mark this pull request ready, and never touch another one. Posting the review is the end of your authority.`;
 }
 
 export function renderReviewBrief(p: ReviewBriefParams): string {
@@ -749,11 +753,13 @@ ${COMMENTS_MD_SHAPE}
 When every thread has a verdict and the local fixes are committed, write \`${ctx.sessionDir}/AGENT_STATE\` = \`ready\` and \`${ctx.sessionDir}/AGENT_NOTE\` = "COMMENTS.md ready — replies drafted", and STOP.
 
 ## Posting — you answer on GitHub yourself
-**Where.** Your own pull request, ${ctx.prRepo}#${ctx.prNumber}, and no other. You do not choose it and you cannot change it — the helper below has this repository and this number compiled into it, and takes no repo, number or URL. Never post to any other pull request.
+**Where.** Your own pull request, ${ctx.prRepo}#${ctx.prNumber}, and no other. You do not choose it and you cannot change it — the helpers below have this repository and this number compiled into them, and take no repo, number or URL. Never post to any other pull request.
 
-**What you have.** \`gh api\` is UNAVAILABLE in this session — every endpoint, every verb — so there is no way to reply INSIDE a review thread; do not look for one. Two commands write to GitHub:
+**What you have.** Every \`gh\` command that writes to GitHub is UNAVAILABLE in this session: \`gh api\` (every endpoint, every verb), \`gh pr review\`, \`gh pr comment\`, \`gh pr merge|close|edit|ready\`. So there is no way to reply INSIDE a review thread; do not look for one. Two commands write to GitHub:
 - \`.cgremlin/post-review <replies.json>\` — ONE review carrying your answers, each one inline at the file and line of the thread it answers. That is where a reply goes.
-- \`gh pr comment\` — a plain conversation comment on this same PR, for one overall note if one is warranted.
+- \`.cgremlin/post-comment <comment.json>\` — one plain conversation comment on this same PR, for one overall note if one is warranted. The file is \`{ "body": "<markdown>" }\`.
+
+**If a helper exits non-zero, nothing was posted.** Read what it printed, fix the file and run it once more. If it still fails, report the replies as NOT delivered — say plainly that \`COMMENTS.md\` is written but your reviewers have seen nothing, and quote the error. Never call a reply posted on the strength of having run the command.
 
 **When.** Once per run, after \`${ctx.sessionDir}/COMMENTS.md\` is complete and the local fixes are committed. \`COMMENTS.md\` is the source: post each thread's **Proposed reply** exactly as it is written there.
 
@@ -773,7 +779,7 @@ The \`verdict\` is always \`💬 Comment\`: you are answering your reviewers, no
 
 **Once per thread.** Skip any thread whose \`COMMENTS.md\` entry already reads \`- **Status:** replied\` — it was answered on an earlier run — unless the reviewer has added something new since. Set that Status to \`replied\` as soon as the reply is up.
 
-Do NOT resolve threads — the reviewer who opened one closes it. Do NOT edit \`.cgremlin/post-review\` and do NOT commit \`.cgremlin/\`. Never merge, close, edit, re-title or mark this pull request ready, and never force-push.`);
+Do NOT resolve threads — the reviewer who opened one closes it. Do NOT edit the helpers in \`.cgremlin/\` and do NOT commit \`.cgremlin/\`. Never merge, close, edit, re-title or mark this pull request ready, and never force-push.`);
 
   let text = sections.join('\n\n');
   const note = '\n\n_(truncated by the engine)_';
