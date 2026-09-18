@@ -509,27 +509,42 @@ ${step5}${uiCheckBlock}
 }
 
 /**
- * Phase 20 — the user reversed the deferred-posting decision: the review agent
- * posts its own review. The permission guard cannot pin a repo and number (its
- * patterns are prefix/glob, with no negation), so "this pull request and no
- * other" is enforced HERE, in the brief, and nowhere else. Both the review and
- * the re-review brief carry this one text.
+ * Phase 20 — the review agent posts its own review, through the scoped
+ * `.cgremlin/post-review` helper the engine writes into the worktree with
+ * this session's repo and number baked in. `gh api` is denied outright, so
+ * this section must never name a REST endpoint: an instruction to call one
+ * would fail closed. Both the review and the re-review brief carry this text.
  */
 export function renderPostingProtocol(prNumber: number): string {
   return `## Posting — you post this review to GitHub yourself
 
-**Where.** Exactly one pull request: **PR #${prNumber}**, in the repository this worktree is checked out on. Always pass the number explicitly (\`gh pr review ${prNumber} …\`) and never point \`--repo\` anywhere else. Never post to any other pull request, and never to an issue. If the checked-out branch is not the head of PR #${prNumber}, post nothing and say so in \`REVIEW.md\`.
+**Where.** Exactly one pull request: **PR #${prNumber}**, the one this worktree is checked out on. You do not choose it and you cannot change it — the helper below has this repository and this number compiled into it, and takes no repo, number or URL. Never post to any other pull request, and never to an issue.
+
+**What you have.** \`gh api\` is UNAVAILABLE in this session — every endpoint, every verb — and so are \`gh pr merge|close|edit|ready\`, \`git push\` and \`git commit\`. Two commands write to GitHub, and they are the whole of your authority:
+- \`.cgremlin/post-review <findings.json>\` — submits the review itself, inline comments included.
+- \`gh pr comment\` — a plain conversation comment on this same PR, for a note that is not a review.
 
 **When.** Exactly once per run, after \`REVIEW.md\` is written and final. \`REVIEW.md\` is the source and GitHub is the copy: post what the file says, not a fresh opinion.
 
-**What.**
-1. **Inline comments.** Every finding that carries a \`Where\` (\`path:line\`) is posted as an inline comment at that exact path and line. \`gh pr review\` cannot attach a comment at a file:line, so submit the whole review in ONE call to the REST reviews endpoint — \`gh api --method POST repos/{owner}/{repo}/pulls/${prNumber}/reviews --input <body.json>\` — with a body of the shape \`{"event": <event>, "body": <summary>, "comments": [{"path": "src/x.ts", "line": 88, "body": "f1 · 🔴 Critical — …"}]}\`. Begin every inline body with the finding's anchor id and severity, exactly as shown. A finding with no \`Where\` (📋 PM/AC, 🎨 Design) goes in the body, not inline.
-2. **One summary comment** — the review's \`body\`: line 2's verdict verbatim, line 3's scope, then the findings table. One per run; do not add a \`gh pr comment\` on top of it.
-3. **The verdict picks the event**, read from line 2 of \`REVIEW.md\` and nothing else: \`🔄 Request changes\` → \`REQUEST_CHANGES\`, \`✅ Approve\` → \`APPROVE\`, \`💬 Comment\` → \`COMMENT\`. If GitHub refuses \`APPROVE\` because the PR is your own, re-submit the same review as \`COMMENT\` and say why in the body.
+**How.** Write a findings file (JSON, in this session directory), then run \`.cgremlin/post-review <that file>\`:
 
-**On a re-review, post a NEW review — never repeat a comment you already posted.** Read what is there first: \`gh api repos/{owner}/{repo}/pulls/${prNumber}/comments --paginate\`. A finding is already posted when a comment authored by you begins with that finding's anchor id (\`f3 · …\`) — that prefix is how you tell, which is why an inline body is never written without it. Post inline comments only for anchors that are not up yet; the new review's body reports the status of the rest.
+\`\`\`json
+{
+  "verdict": "🔄 Request changes",
+  "body": "<line 2's verdict verbatim, then line 3's scope, then the findings table>",
+  "findings": [
+    { "where": "src/api/web-content.ts:88", "body": "f1 · 🔴 Critical — <the finding, in plain English>" }
+  ]
+}
+\`\`\`
 
-Never merge, close, edit, re-title or mark this pull request ready, and never touch another one. The guard denies those commands — do not look for a way around them. Posting the review is the end of your authority.`;
+1. **\`verdict\`** is line 2 of \`REVIEW.md\` and nothing else. **The verdict picks the event**: \`🔄 Request changes\` → \`REQUEST_CHANGES\`, \`✅ Approve\` → \`APPROVE\`, \`💬 Comment\` → \`COMMENT\`. If GitHub refuses \`APPROVE\` because the PR is your own, re-run with \`💬 Comment\` and say why in \`body\`.
+2. **One \`findings\` entry per finding that carries a \`Where\` (\`path:line\`)** — each becomes an inline comment at exactly that path and line. Begin every inline \`body\` with the finding's anchor id and severity, exactly as shown. A finding with no \`path:line\` (📋 PM/AC, 🎨 Design) belongs in \`body\`, not in \`findings\`.
+3. **\`body\` is the one summary comment.** Do not add a \`gh pr comment\` on top of it.
+
+**On a re-review, post a NEW review — never repeat a comment you already posted.** Read what is on the PR first (\`gh pr view ${prNumber} --comments\`). A finding is already posted when a comment authored by you begins with that finding's anchor id (\`f3 · …\`) — that prefix is how you tell, which is why an inline body is never written without it. Put only the not-yet-posted anchors in \`findings\`; \`body\` reports the status of the rest.
+
+Do NOT edit \`.cgremlin/post-review\` and do NOT commit \`.cgremlin/\`. Never merge, close, edit, re-title or mark this pull request ready, and never touch another one. Posting the review is the end of your authority.`;
 }
 
 export function renderReviewBrief(p: ReviewBriefParams): string {
@@ -733,12 +748,32 @@ ${COMMENTS_MD_SHAPE}
 
 When every thread has a verdict and the local fixes are committed, write \`${ctx.sessionDir}/AGENT_STATE\` = \`ready\` and \`${ctx.sessionDir}/AGENT_NOTE\` = "COMMENTS.md ready — replies drafted", and STOP.
 
-## Posting — you reply on GitHub yourself
-This is your own pull request: ${ctx.prRepo}#${ctx.prNumber}. Reply there and nowhere else — never pass a \`--repo\` or a number that is not ${ctx.prRepo}#${ctx.prNumber}, and never post to any other pull request.
-Reply once per run, after \`COMMENTS.md\` is complete and the local fixes are committed. \`COMMENTS.md\` is the source: post each thread's **Proposed reply** as it is written there.
-Reply INSIDE the thread, never as a new top-level comment: \`gh api --method POST repos/${ctx.prRepo}/pulls/${ctx.prNumber}/comments/<comment-id>/replies -f body=@<file>\`, where \`<comment-id>\` is the number at the end of that thread's FIRST comment URL (\`…#discussion_r<comment-id>\`). \`gh pr comment\` writes a top-level comment and is only for a single overall summary, if one is warranted.
-Reply once per thread. Re-read the live thread before posting: a thread whose entry already reads \`- **Status:** replied\` was answered on an earlier run — skip it unless the reviewer has added something new since. Set that Status to \`replied\` as soon as the reply is up.
-Do NOT resolve threads — the reviewer who opened one closes it. Never merge, close, edit, re-title or mark this pull request ready, and never force-push. The guard denies those commands.`);
+## Posting — you answer on GitHub yourself
+**Where.** Your own pull request, ${ctx.prRepo}#${ctx.prNumber}, and no other. You do not choose it and you cannot change it — the helper below has this repository and this number compiled into it, and takes no repo, number or URL. Never post to any other pull request.
+
+**What you have.** \`gh api\` is UNAVAILABLE in this session — every endpoint, every verb — so there is no way to reply INSIDE a review thread; do not look for one. Two commands write to GitHub:
+- \`.cgremlin/post-review <replies.json>\` — ONE review carrying your answers, each one inline at the file and line of the thread it answers. That is where a reply goes.
+- \`gh pr comment\` — a plain conversation comment on this same PR, for one overall note if one is warranted.
+
+**When.** Once per run, after \`${ctx.sessionDir}/COMMENTS.md\` is complete and the local fixes are committed. \`COMMENTS.md\` is the source: post each thread's **Proposed reply** exactly as it is written there.
+
+**How.** Write a replies file (JSON, in this session directory), then run \`.cgremlin/post-review <that file>\`:
+
+\`\`\`json
+{
+  "verdict": "💬 Comment",
+  "body": "<one short paragraph: what you changed, and which threads you answered>",
+  "findings": [
+    { "where": "src/api/web-content.ts:88", "body": "@reviewer — <the Proposed reply for this thread, verbatim>" }
+  ]
+}
+\`\`\`
+
+The \`verdict\` is always \`💬 Comment\`: you are answering your reviewers, not reviewing them. One \`findings\` entry per thread you addressed, at that thread's own \`path:line\`; a thread with no file and line is answered in \`body\`.
+
+**Once per thread.** Skip any thread whose \`COMMENTS.md\` entry already reads \`- **Status:** replied\` — it was answered on an earlier run — unless the reviewer has added something new since. Set that Status to \`replied\` as soon as the reply is up.
+
+Do NOT resolve threads — the reviewer who opened one closes it. Do NOT edit \`.cgremlin/post-review\` and do NOT commit \`.cgremlin/\`. Never merge, close, edit, re-title or mark this pull request ready, and never force-push.`);
 
   let text = sections.join('\n\n');
   const note = '\n\n_(truncated by the engine)_';

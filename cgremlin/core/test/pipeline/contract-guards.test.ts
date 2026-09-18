@@ -133,20 +133,48 @@ describe('MG-17k — the external review skill does not get to pick the shape', 
  * "post to THIS pull request and no other" is enforced by the brief alone.
  * These are the guards on that text.
  */
-describe('phase 20 — posting is instructed, scoped, and still forbidden for QA', () => {
+describe('phase 20 — posting goes through the scoped helper, and nowhere else', () => {
   const review = renderReviewBrief({ sessionDir: '/s', prNumber: 7 });
+  const respond = renderRespondBrief({
+    sessionDir: '/s',
+    prRepo: 'acme/app',
+    prNumber: 42,
+    threads: [],
+    reviews: [{ author: 'bob', state: 'CHANGES_REQUESTED', body: 'nope', submittedAt: '2026-09-14T09:00:00.000Z' }],
+    reviewDecision: null,
+    failingChecks: [],
+    changedFiles: 1,
+    additions: 1,
+    deletions: 0,
+  });
 
-  it('the review brief tells the agent to post, to its own PR, and to no other', () => {
-    expect(review).toContain('## Posting');
+  it.each([['review', () => review], ['respond', () => respond]] as const)(
+    'the %s brief posts the review with the scoped helper and never names a REST endpoint',
+    (_mode, brief) => {
+      const text = brief();
+      expect(text).toContain('## Posting');
+      expect(text).toContain('.cgremlin/post-review');
+      expect(text).not.toContain('/pulls/');
+      expect(text).toMatch(/gh api[^\n]*(unavailable|denied)|(unavailable|denied)[^\n]*gh api/i);
+    },
+  );
+
+  it.each([['review', () => review], ['respond', () => respond]] as const)(
+    'the %s brief names gh pr comment as the way to leave a plain conversation comment',
+    (_mode, brief) => {
+      expect(brief()).toMatch(/gh pr comment[\s\S]{0,200}conversation comment|conversation comment[\s\S]{0,200}gh pr comment/);
+    },
+  );
+
+  it('the review brief posts to its own PR, once, and to no other', () => {
     expect(review).toContain('PR #7');
     expect(review).toMatch(/any other pull request/i);
     expect(review).toMatch(/exactly once per run/i);
   });
 
-  it('the review brief posts findings inline at their Where, plus one summary carrying the verdict', () => {
+  it('the review brief puts every finding with a Where at its path:line', () => {
     expect(review).toMatch(/inline comment/i);
-    expect(review).toContain('/pulls/7/reviews');
-    expect(review).toMatch(/one summary comment/i);
+    expect(review).toContain('"where"');
   });
 
   it('the review brief maps every contract verdict to its GitHub event', () => {
@@ -176,22 +204,8 @@ describe('phase 20 — posting is instructed, scoped, and still forbidden for QA
     expect(prompt).toMatch(/## Posting/);
   });
 
-  it('the respond brief replies in the threads it addressed, on its own PR only', () => {
-    const respond = renderRespondBrief({
-      sessionDir: '/s',
-      prRepo: 'acme/app',
-      prNumber: 42,
-      threads: [],
-      reviews: [{ author: 'bob', state: 'CHANGES_REQUESTED', body: 'nope', submittedAt: '2026-09-14T09:00:00.000Z' }],
-      reviewDecision: null,
-      failingChecks: [],
-      changedFiles: 1,
-      additions: 1,
-      deletions: 0,
-    });
-    expect(respond).toContain('## Posting');
+  it('the respond brief answers on its own PR only, and never force-pushes or lands it', () => {
     expect(respond).toContain('acme/app#42');
-    expect(respond).toContain('/pulls/42/comments/');
     expect(respond).toMatch(/any other pull request/i);
     expect(respond).not.toContain('Nothing here posts to GitHub');
     expect(respond).toMatch(/never merge/i);
