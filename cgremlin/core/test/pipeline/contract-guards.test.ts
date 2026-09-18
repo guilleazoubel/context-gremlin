@@ -171,11 +171,11 @@ describe('phase 20 — posting goes through the scoped helper, and nowhere else'
   );
 
   it.each([['review', () => review], ['respond', () => respond]] as const)(
-    'the %s brief says gh pr review and gh pr comment are unavailable, so no turn is spent discovering it',
+    'the %s brief names gh pr review and gh pr comment as denied, so no turn is spent discovering it',
     (_mode, brief) => {
       const text = brief();
-      expect(text).toMatch(/UNAVAILABLE[\s\S]{0,300}`gh pr review`/);
-      expect(text).toMatch(/UNAVAILABLE[\s\S]{0,300}`gh pr comment`/);
+      expect(text).toMatch(/denies[\s\S]{0,300}`gh pr review`/);
+      expect(text).toMatch(/denies[\s\S]{0,300}`gh pr comment`/);
     },
   );
 

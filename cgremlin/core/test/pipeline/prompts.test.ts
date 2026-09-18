@@ -653,7 +653,7 @@ describe('renderRespondBrief (R50)', () => {
     const text = renderRespondBrief(ctx);
     expect(text).toContain('## Posting');
     expect(text).toContain('.cgremlin/post-review');
-    expect(text).toMatch(/no way to reply INSIDE a review thread/);
+    expect(text).toMatch(/Neither posts INSIDE a review thread/);
     expect(text).toContain('Do NOT resolve threads');
     expect(text).toContain('never force-push');
     expect(text).toMatch(/never merge, close, edit, re-title or mark this pull request ready/i);

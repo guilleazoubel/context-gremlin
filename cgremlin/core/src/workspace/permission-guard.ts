@@ -1,6 +1,29 @@
 import type { SessionFileSystem } from '../fs/session-file-system';
 import type { SessionMode } from '../schema/session-mode';
 
+/**
+ * THIS TABLE IS A GUARDRAIL, NOT A SECURITY BOUNDARY. It binds a COOPERATIVE
+ * agent and nothing else.
+ *
+ * A deny rule matches Bash command text. It does not wall off the network.
+ * Nothing here denies `curl`, `wget`, `node -e` or `python3 -c`, and
+ * `gh auth token` stays readable because the post helpers need it — so any
+ * agent that wants to can read that token and POST to api.github.com against
+ * every repository the token can reach. That is not a hole to be patched: it
+ * is how the sanctioned helpers themselves post (./post-helpers.ts), and no
+ * pattern in this language can close it. Quoting (`git 'push' --force`) and a
+ * wrapper (`git -c … push`) defeat matching on their own, MCP tools are not
+ * covered at all, and the runner launches with `--permission-mode
+ * bypassPermissions` (../agent/claude-code-runner.ts), so only `deny` bites.
+ *
+ * What this table buys is that an agent does not stumble into a destructive
+ * command, and that an INJECTED instruction ("run `gh pr comment -R other/repo
+ * …`") fails closed instead of succeeding quietly. What actually holds the
+ * line is the brief telling the agent, plainly, that posting anywhere but its
+ * own pull request is out of bounds even where nothing stops it — and the
+ * permissions of the token itself. Do not add a rule here and call a class of
+ * behaviour prevented; say in the brief what the rule does and does not do.
+ */
 export interface PermissionConfig {
   allow?: string[];
   deny?: string[];
