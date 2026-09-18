@@ -28,6 +28,36 @@ export interface CreateWorkspaceParams {
   pr?: PostTarget;
 }
 
+/**
+ * The whole of what the engine installs INTO a worktree for the agent that
+ * will run there: the permission guard, and — for the two posting modes, when
+ * the session has a pull request — the scoped helpers with that PR baked in.
+ *
+ * Idempotent, and deliberately overwriting rather than skip-if-present: both
+ * writes replace whatever is on disk, and `fs.writeFile` chmods, so a helper
+ * the agent edited or stripped +x from comes back byte-for-byte at 0o755.
+ * That matters because this runs TWICE — once at worktree creation below,
+ * and again immediately before EVERY stage run (src/pipeline/stage-runner.ts).
+ * Written once, at creation only, a session kept whatever permission table it
+ * was born with forever, and a session older than the helpers could never
+ * post at all no matter what shipped afterwards.
+ *
+ * Keep this the ONLY caller of `writePermissionSettings`/`writePostHelpers`:
+ * a scattered third call site is how the two drift apart again, and
+ * test/pipeline/stage-runner.workspace-refresh.test.ts fails if one appears.
+ */
+export async function refreshWorkspaceGuardrails(
+  fs: SessionFileSystem,
+  worktreePath: string,
+  mode: SessionMode,
+  pr?: PostTarget,
+): Promise<void> {
+  await writePermissionSettings(fs, worktreePath, mode);
+  if (pr !== undefined && shouldWritePostHelpers(mode)) {
+    await writePostHelpers(fs, worktreePath, pr);
+  }
+}
+
 export class WorkspaceManager {
   constructor(
     private readonly git: GitRunner,
@@ -46,10 +76,7 @@ export class WorkspaceManager {
       { resetBranch: params.resetBranch === true },
     );
     try {
-      await writePermissionSettings(this.fs, params.worktreePath, params.mode);
-      if (params.pr !== undefined && shouldWritePostHelpers(params.mode)) {
-        await writePostHelpers(this.fs, params.worktreePath, params.pr);
-      }
+      await refreshWorkspaceGuardrails(this.fs, params.worktreePath, params.mode, params.pr);
     } catch (err) {
       // Best-effort rollback so a retry with the same branchName doesn't
       // fail with "a branch already exists" — surface the original error

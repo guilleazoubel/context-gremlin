@@ -5,6 +5,7 @@ import type { EngineEvents } from '../engine/events';
 import type { Session } from '../schema/session';
 import type { LastRun, StageName } from '../schema/stage';
 import { KeyedLock } from '../api/keyed-lock';
+import { refreshWorkspaceGuardrails } from '../workspace/workspace-manager';
 
 export class RunInProgressError extends Error {
   constructor(sessionId: string) {
@@ -157,6 +158,26 @@ export class StageRunner {
 
       const sessionDir = `${this.deps.sessionsDir}/${sessionId}`;
       try {
+        // Every stage run in the engine funnels through here — a first
+        // stage, a chained one, a re-run, a stage on a session resumed days
+        // later — and this is the last point before the agent is spawned at
+        // which the worktree path, the session's mode and its own PR are all
+        // known and unambiguous. So the guardrails are (re)written HERE, not
+        // only at worktree creation: a session created before a
+        // permission-table change used to keep the old table forever, and one
+        // created before the post helpers existed could never post at all.
+        // Still inside the caller's lock (it releases at `run.started`,
+        // below), and inside this try, so a failure to write them fails the
+        // stage exactly as a failure to write BRIEF.md does — no try/catch of
+        // its own, on purpose.
+        await refreshWorkspaceGuardrails(
+          this.deps.fs,
+          worktreePath,
+          session.mode,
+          session.pr === null
+            ? undefined
+            : { repoSlug: session.pr.repo, prNumber: session.pr.number },
+        );
         await this.deps.fs.mkdir(sessionDir, { recursive: true });
         if (input.brief !== null) await this.deps.fs.writeFile(`${sessionDir}/BRIEF.md`, input.brief);
         await this.deps.fs.writeFile(`${sessionDir}/AGENT_STATE`, 'working');
