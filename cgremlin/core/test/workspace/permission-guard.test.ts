@@ -94,21 +94,41 @@ describe('phase 20 — review and respond post to GitHub themselves', () => {
     }
   });
 
-  it.each(POSTING_MODES)('%s allows the REST POST that carries inline comments, but no mutating verb beyond it', (mode) => {
+  it.each(POSTING_MODES)('%s denies `gh api` outright — it is not a posting verb', (mode) => {
     const cfg = DEFAULT_PERMISSIONS[mode];
-    expect(cfg.allow ?? []).toContain('Bash(gh api:*/pulls/*/reviews*)');
-    expect(cfg.allow ?? []).toContain('Bash(gh api:*/pulls/*/comments*)');
-    for (const rule of [
-      'Bash(gh api:*--method PUT*)',
-      'Bash(gh api:*--method PATCH*)',
-      'Bash(gh api:*--method DELETE*)',
-      'Bash(gh api:*-X PUT*)',
-      'Bash(gh api:*-X PATCH*)',
-      'Bash(gh api:*-X DELETE*)',
-      'Bash(gh api:*graphql*)',
-    ]) {
-      expect(cfg.deny ?? []).toContain(rule);
-    }
+    expect(cfg.deny ?? []).toContain('Bash(gh api:*)');
+    for (const rule of cfg.allow ?? []) expect(rule).not.toContain('gh api');
+  });
+
+  it('the review deny table is exactly this, and nothing else', () => {
+    expect(DEFAULT_PERMISSIONS.review).toEqual({
+      allow: ['Bash(gh pr review:*)', 'Bash(gh pr comment:*)'],
+      deny: [
+        'Bash(gh pr merge:*)',
+        'Bash(gh pr close:*)',
+        'Bash(gh pr edit:*)',
+        'Bash(gh pr ready:*)',
+        'Bash(gh pr create:*)',
+        'Bash(gh api:*)',
+        'Bash(git push:*)',
+        'Bash(git commit:*)',
+      ],
+    });
+  });
+
+  it('the respond deny table is exactly this, and nothing else', () => {
+    expect(DEFAULT_PERMISSIONS.respond).toEqual({
+      allow: ['Bash(gh pr review:*)', 'Bash(gh pr comment:*)'],
+      deny: [
+        'Bash(gh pr merge:*)',
+        'Bash(gh pr close:*)',
+        'Bash(gh pr edit:*)',
+        'Bash(gh pr ready:*)',
+        'Bash(gh api:*)',
+        'Bash(git push --force:*)',
+        'Bash(git push -f:*)',
+      ],
+    });
   });
 
   it.each(['investigation', 'development', 'respond', 'qa', 'review'] as const)(

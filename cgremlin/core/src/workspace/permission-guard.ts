@@ -7,18 +7,21 @@ export interface PermissionConfig {
 }
 
 /**
- * Phase 20 — posting is allowed for `review` and `respond`, and nothing more.
- * `gh pr review` cannot attach a comment at a file:line, so the review itself
- * is submitted through the REST reviews endpoint, which carries the inline
- * `comments` array; the pulls comments endpoint is what an agent reads to see
- * what it already posted (and, for respond, where a threaded reply goes).
+ * Phase 20 — `gh pr review` and `gh pr comment` are the ONLY GitHub write
+ * verbs an agent runs itself. A review with inline comments needs the REST
+ * reviews endpoint, which `gh pr review` cannot reach; that call is made by
+ * the scoped `.cgremlin/post-review` helper the engine writes into the
+ * worktree (see ./post-review-helper.ts), NOT by the agent typing `gh api`.
+ *
+ * WHY THE SCOPING CANNOT LIVE HERE: the engine runs agents with
+ * `--permission-mode bypassPermissions` (src/agent/claude-code-runner.ts:40),
+ * so every `allow` entry below is INERT — only `deny` bites. And the pattern
+ * language is a prefix/glob match with no negation, so a deny can never say
+ * "every repo and number except this one". A rule scoped to one PR is
+ * therefore unexpressible here; it is expressed by baking the repo slug and
+ * the PR number into the helper at write time.
  */
-const POSTING_ALLOW = [
-  'Bash(gh pr review:*)',
-  'Bash(gh pr comment:*)',
-  'Bash(gh api:*/pulls/*/reviews*)',
-  'Bash(gh api:*/pulls/*/comments*)',
-] as const;
+const POSTING_ALLOW = ['Bash(gh pr review:*)', 'Bash(gh pr comment:*)'] as const;
 
 /** Changing or landing the PR is not posting — denied in every mode. */
 const NEVER_LAND = [
@@ -29,20 +32,13 @@ const NEVER_LAND = [
 ] as const;
 
 /**
- * The blanket `gh api --method` deny cannot stay where POST must get through,
- * so the verbs that MUTATE an existing PR (merge is PUT, close/edit are PATCH)
- * are denied by name instead, in both spellings `gh api` accepts. GraphQL stays
- * denied outright: it is a second door to the same mutations.
+ * `gh api` is denied OUTRIGHT for the posting modes. Splitting it by verb
+ * (deny PUT/PATCH/DELETE, let POST through) left every POST endpoint open —
+ * create an issue, cut a release, dispatch a workflow, POST /merges, write a
+ * git ref — none of which is "review this PR". One rule, no exceptions; the
+ * helper carries the one POST an agent legitimately needs.
  */
-const API_WRITE_DENY = [
-  'Bash(gh api:*--method PUT*)',
-  'Bash(gh api:*--method PATCH*)',
-  'Bash(gh api:*--method DELETE*)',
-  'Bash(gh api:*-X PUT*)',
-  'Bash(gh api:*-X PATCH*)',
-  'Bash(gh api:*-X DELETE*)',
-  'Bash(gh api:*graphql*)',
-] as const;
+const GH_API_DENY = 'Bash(gh api:*)';
 
 export const DEFAULT_PERMISSIONS: Record<SessionMode, PermissionConfig> = {
   investigation: {},
@@ -56,19 +52,14 @@ export const DEFAULT_PERMISSIONS: Record<SessionMode, PermissionConfig> = {
   },
   // Phase 20 — the deferred-posting decision was reversed by the user: the
   // respond agent replies on its OWN pull request itself. It may reply and
-  // comment; it may never LAND or rewrite the PR, and it may never force-push
-  // the branch it is allowed to push.
-  //
-  // SCOPE, stated plainly: this pattern language is a prefix/glob match with
-  // no negation, so it CANNOT express "only PR #N of repo X". Under
-  // `--permission-mode bypassPermissions` (how the engine runs agents) an
-  // allow entry is inert anyway — only `deny` bites. The allow list below is
-  // therefore a statement of intent, and the "post to this PR and no other"
-  // rule is carried by the brief, which is the only place that knows the
-  // session's repo and number.
+  // comment; it may never LAND or rewrite the PR, may never call `gh api`,
+  // and may never force-push the branch it is allowed to push. The one REST
+  // call it needs is made for it by `.cgremlin/post-review`, which has this
+  // session's repo and number baked in (see the header comment for why that
+  // scoping cannot be expressed as a pattern).
   respond: {
     allow: [...POSTING_ALLOW],
-    deny: [...NEVER_LAND, ...API_WRITE_DENY, 'Bash(git push --force:*)', 'Bash(git push -f:*)'],
+    deny: [...NEVER_LAND, GH_API_DENY, 'Bash(git push --force:*)', 'Bash(git push -f:*)'],
   },
   // R68/§9 — QA writes nothing outward: no PR, no issue, no mutating API
   // call. Phase 20 did NOT touch it (nor development, nor investigation). It
@@ -94,15 +85,16 @@ export const DEFAULT_PERMISSIONS: Record<SessionMode, PermissionConfig> = {
       'Bash(git commit:*)',
     ],
   },
-  // Phase 20 — the review agent posts its own review (see `respond` above for
-  // why the scoping lives in the brief). It still writes no code: no commit,
-  // no push, and no `gh pr create`.
+  // Phase 20 — the review agent posts its own review, through
+  // `.cgremlin/post-review` for the review itself and `gh pr comment` for a
+  // plain conversation comment. It still writes no code: no commit, no push,
+  // no `gh pr create` — and no `gh api`.
   review: {
     allow: [...POSTING_ALLOW],
     deny: [
       ...NEVER_LAND,
       'Bash(gh pr create:*)',
-      ...API_WRITE_DENY,
+      GH_API_DENY,
       'Bash(git push:*)',
       'Bash(git commit:*)',
     ],
