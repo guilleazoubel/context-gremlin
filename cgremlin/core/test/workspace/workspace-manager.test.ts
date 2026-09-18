@@ -37,7 +37,7 @@ describe('WorkspaceManager', () => {
       },
     ]);
     const settings = await fs.readFile('/work/inv-1/.claude/settings.local.json');
-    expect(JSON.parse(settings)).toEqual({ permissions: {} });
+    expect(JSON.parse(settings).permissions.deny).toContain('Bash(gh pr comment:*)');
   });
 
   it('createWorkspace passes resetBranch through as -B (R51, the respond mode)', async () => {

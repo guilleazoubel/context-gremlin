@@ -24,13 +24,14 @@ describe('renderPermissionSettings', () => {
 });
 
 describe('writePermissionSettings', () => {
-  it('writes empty permissions for investigation mode (no allow-list needed) to .claude/settings.local.json', async () => {
+  it('writes the investigation deny-list to .claude/settings.local.json — an investigation posts nothing', async () => {
     const fs = new InMemoryFileSystem();
     await fs.mkdir('/work/inv-1', { recursive: true });
     await writePermissionSettings(fs, '/work/inv-1', 'investigation');
     const content = await fs.readFile('/work/inv-1/.claude/settings.local.json');
     const parsed = JSON.parse(content);
-    expect(parsed).toEqual({ permissions: {} });
+    expect(parsed.permissions.deny).toContain('Bash(gh pr comment:*)');
+    expect(parsed.permissions.allow).toBeUndefined();
   });
 
   it('writes the review mode deny-list to .claude/settings.local.json', async () => {
@@ -95,7 +96,21 @@ const POSTING_MODES = ['review', 'respond'] as const;
 describe('phase 20 — the per-mode deny table', () => {
   it('is exactly this, for all five modes, and nothing else', () => {
     expect(DEFAULT_PERMISSIONS).toEqual({
-      investigation: {},
+      investigation: {
+        deny: [
+          'Bash(gh pr review:*)',
+          'Bash(gh pr comment:*)',
+          'Bash(gh pr merge:*)',
+          'Bash(gh pr close:*)',
+          'Bash(gh pr edit:*)',
+          'Bash(gh pr create:*)',
+          'Bash(gh pr ready:*)',
+          'Bash(gh issue:*)',
+          'Bash(gh api:*)',
+          'Bash(git push:*)',
+          'Bash(git commit:*)',
+        ],
+      },
       development: {
         deny: [
           'Bash(gh pr review:*)',
@@ -179,5 +194,28 @@ describe('phase 20 — no mode may run an unscoped GitHub write verb', () => {
     const deny = DEFAULT_PERMISSIONS.review.deny ?? [];
     expect(deny).toContain('Bash(git push:*)');
     expect(deny).toContain('Bash(git commit:*)');
+  });
+});
+
+/**
+ * An investigation writes findings into its session directory. It posts
+ * nothing and it lands nothing — and under `bypassPermissions` an empty
+ * config denied nothing, so every one of those had been available.
+ */
+describe('phase 20 — investigation writes findings and nothing else', () => {
+  it.each([
+    'Bash(gh pr review:*)',
+    'Bash(gh pr comment:*)',
+    'Bash(gh pr merge:*)',
+    'Bash(gh pr close:*)',
+    'Bash(gh pr edit:*)',
+    'Bash(gh pr create:*)',
+    'Bash(gh pr ready:*)',
+    'Bash(gh issue:*)',
+    'Bash(gh api:*)',
+    'Bash(git push:*)',
+    'Bash(git commit:*)',
+  ])('denies %s', (rule) => {
+    expect(DEFAULT_PERMISSIONS.investigation.deny ?? []).toContain(rule);
   });
 });

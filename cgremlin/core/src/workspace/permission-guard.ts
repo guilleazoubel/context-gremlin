@@ -43,8 +43,28 @@ const NEVER_LAND = [
  */
 const GH_API_DENY = 'Bash(gh api:*)';
 
+/**
+ * An investigation, and QA, write nothing outward at all: no review, no
+ * comment, no issue, no API call, nothing landed. Under `bypassPermissions`
+ * an empty config denied NOTHING, so investigation used to have every one of
+ * these available to it; the list is shared so the two cannot drift.
+ */
+const WRITES_NOTHING_OUTWARD = [
+  ...NEVER_POST,
+  'Bash(gh pr merge:*)',
+  'Bash(gh pr close:*)',
+  'Bash(gh pr edit:*)',
+  'Bash(gh pr create:*)',
+  'Bash(gh pr ready:*)',
+  'Bash(gh issue:*)',
+] as const;
+
 export const DEFAULT_PERMISSIONS: Record<SessionMode, PermissionConfig> = {
-  investigation: {},
+  // An investigation writes findings into its session directory. That is all
+  // it does: it posts nothing and it lands nothing.
+  investigation: {
+    deny: [...WRITES_NOTHING_OUTWARD, GH_API_DENY, 'Bash(git push:*)', 'Bash(git commit:*)'],
+  },
   development: {
     deny: [
       ...NEVER_POST,
@@ -70,20 +90,14 @@ export const DEFAULT_PERMISSIONS: Record<SessionMode, PermissionConfig> = {
   },
   // R68/§9 — QA writes nothing outward: no PR, no issue, no mutating API
   // call. It used to be defined as "review's deny list plus more"; the lists
-  // have since diverged, so QA's is spelled out in full here.
+  // have since diverged, so QA shares investigation's list instead.
   // NOTE (stated plainly, per §9): this guard covers `Bash(...)` only — an MCP
   // server exposing a write tool is NOT blocked by settings.local.json. The
   // brief and the skill carry the prohibition for everything the guard cannot
   // reach.
   qa: {
     deny: [
-      ...NEVER_POST,
-      'Bash(gh pr merge:*)',
-      'Bash(gh pr close:*)',
-      'Bash(gh pr edit:*)',
-      'Bash(gh pr create:*)',
-      'Bash(gh pr ready:*)',
-      'Bash(gh issue:*)',
+      ...WRITES_NOTHING_OUTWARD,
       'Bash(gh api:*--method*)',
       'Bash(gh api:*graphql*)',
       'Bash(git push:*)',
