@@ -142,8 +142,7 @@ describe('phase 20 — the per-mode deny table', () => {
           'Bash(gh pr create:*)',
           'Bash(gh pr ready:*)',
           'Bash(gh issue:*)',
-          'Bash(gh api:*--method*)',
-          'Bash(gh api:*graphql*)',
+          'Bash(gh api:*)',
           'Bash(git push:*)',
           'Bash(git commit:*)',
         ],
@@ -218,4 +217,25 @@ describe('phase 20 — investigation writes findings and nothing else', () => {
   ])('denies %s', (rule) => {
     expect(DEFAULT_PERMISSIONS.investigation.deny ?? []).toContain(rule);
   });
+});
+
+/**
+ * `Bash(gh api:*--method*)` and `Bash(gh api:*graphql*)` never covered
+ * `gh api -X POST /repos/...` — the short form of `--method` — so QA's API
+ * ban had a hole the posting modes did not. QA uses the same outright deny.
+ */
+describe('phase 20 — qa denies `gh api` outright, short flag included', () => {
+  it('denies every `gh api` invocation, not just the two spellings it used to name', () => {
+    const deny = DEFAULT_PERMISSIONS.qa.deny ?? [];
+    expect(deny).toContain('Bash(gh api:*)');
+    expect(deny).not.toContain('Bash(gh api:*--method*)');
+    expect(deny).not.toContain('Bash(gh api:*graphql*)');
+  });
+
+  it.each(['investigation', 'respond', 'qa', 'review'] as const)(
+    '%s bans `gh api` with the one rule every other non-development mode uses',
+    (mode) => {
+      expect(DEFAULT_PERMISSIONS[mode].deny ?? []).toContain('Bash(gh api:*)');
+    },
+  );
 });

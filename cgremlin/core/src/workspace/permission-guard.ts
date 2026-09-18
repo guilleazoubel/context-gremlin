@@ -88,9 +88,12 @@ export const DEFAULT_PERMISSIONS: Record<SessionMode, PermissionConfig> = {
       'Bash(git push -f:*)',
     ],
   },
-  // R68/§9 — QA writes nothing outward: no PR, no issue, no mutating API
-  // call. It used to be defined as "review's deny list plus more"; the lists
-  // have since diverged, so QA shares investigation's list instead.
+  // R68/§9 — QA writes nothing outward: no PR, no issue, no API call at all.
+  // It used to name `gh api:*--method*` and `gh api:*graphql*`, which left
+  // `gh api -X POST /repos/...` — the short form — wide open; it uses the
+  // outright ban now, like every other non-development mode. It used to be
+  // defined as "review's deny list plus more"; the lists have since diverged,
+  // so QA shares investigation's list instead.
   // NOTE (stated plainly, per §9): this guard covers `Bash(...)` only — an MCP
   // server exposing a write tool is NOT blocked by settings.local.json. The
   // brief and the skill carry the prohibition for everything the guard cannot
@@ -98,8 +101,7 @@ export const DEFAULT_PERMISSIONS: Record<SessionMode, PermissionConfig> = {
   qa: {
     deny: [
       ...WRITES_NOTHING_OUTWARD,
-      'Bash(gh api:*--method*)',
-      'Bash(gh api:*graphql*)',
+      GH_API_DENY,
       'Bash(git push:*)',
       'Bash(git commit:*)',
     ],

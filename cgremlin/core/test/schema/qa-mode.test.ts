@@ -96,7 +96,7 @@ describe('the session variant', () => {
   // "review's deny list plus more" — review now deliberately PERMITS posting.
   // QA's prohibitions are therefore asserted directly, and the point of the
   // test is the same one it always made: QA writes nothing outward.
-  it('the guard denies every outward write — posting, landing, gh issue, any mutating gh api, push and commit', () => {
+  it('the guard denies every outward write — posting, landing, gh issue, gh api outright, push and commit', () => {
     const deny = DEFAULT_PERMISSIONS.qa.deny ?? [];
     for (const rule of [
       'Bash(gh pr review:*)',
@@ -107,8 +107,7 @@ describe('the session variant', () => {
       'Bash(gh pr ready:*)',
       'Bash(gh pr create:*)',
       'Bash(gh issue:*)',
-      'Bash(gh api:*--method*)',
-      'Bash(gh api:*graphql*)',
+      'Bash(gh api:*)',
       'Bash(git push:*)',
       'Bash(git commit:*)',
     ]) {
