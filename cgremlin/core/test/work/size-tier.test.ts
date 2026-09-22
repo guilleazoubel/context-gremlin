@@ -33,6 +33,7 @@ function pr(changedFiles: number | null, additions: number | null, deletions: nu
     labels: null,
     sizeTier: null,
     state: null,
+    newCommits: null,
   };
 }
 

@@ -47,7 +47,7 @@
       ],
       "demoted": true,
       "parkingLotGroup": "someoneOnIt",
-      "title": "acme/api#55 \u2014 Split the scheduler",
+      "title": "acme/api#55 — Split the scheduler",
       "prs": [
         {
           "repo": "acme/api",
@@ -107,7 +107,7 @@
       ],
       "demoted": false,
       "parkingLotGroup": "untouched",
-      "title": "acme/api#56 \u2014 Retire the v1 endpoint",
+      "title": "acme/api#56 — Retire the v1 endpoint",
       "prs": [
         {
           "repo": "acme/api",
@@ -164,7 +164,7 @@
       ],
       "demoted": false,
       "parkingLotGroup": null,
-      "title": "acme/api#77 \u2014 Split the ingest worker",
+      "title": "acme/api#77 — Split the ingest worker",
       "prs": [
         {
           "repo": "acme/api",
@@ -249,7 +249,7 @@
       ],
       "demoted": false,
       "parkingLotGroup": "untouched",
-      "title": "acme/legacy#9 \u2014 Bump the toolchain",
+      "title": "acme/legacy#9 — Bump the toolchain",
       "prs": [
         {
           "repo": "acme/legacy",
@@ -299,7 +299,7 @@
       ],
       "demoted": false,
       "parkingLotGroup": "untouched",
-      "title": "acme/web#101 \u2014 Add the retry budget",
+      "title": "acme/web#101 — Add the retry budget",
       "prs": [
         {
           "repo": "acme/web",
@@ -355,7 +355,7 @@
       ],
       "demoted": false,
       "parkingLotGroup": "reviewing",
-      "title": "acme/web#102 \u2014 Drop the legacy shim",
+      "title": "acme/web#102 — Drop the legacy shim",
       "prs": [
         {
           "repo": "acme/web",
@@ -382,7 +382,8 @@
           "ci": "failure",
           "labels": [],
           "sizeTier": "L",
-          "state": "open"
+          "state": "open",
+          "newCommits": true
         }
       ],
       "ticket": null,
@@ -428,7 +429,7 @@
       ],
       "demoted": false,
       "parkingLotGroup": null,
-      "title": "acme/web#200 \u2014 Tighten the socket timeout",
+      "title": "acme/web#200 — Tighten the socket timeout",
       "prs": [
         {
           "repo": "acme/web",
@@ -545,7 +546,7 @@
       ],
       "demoted": false,
       "parkingLotGroup": null,
-      "title": "HB-627 \u2014 Caregiver inbox reshuffle",
+      "title": "HB-627 — Caregiver inbox reshuffle",
       "prs": [
         {
           "repo": "acme/web",

@@ -76,6 +76,16 @@ export interface WorkItemPr {
    * draft/reviewDecision wording).
    */
   state?: PrState | null;
+  /**
+   * Round 3 — the PR has moved since the review of ours that is on it looked at it: the
+   * engine's own `ours.newCommits`, carried on the item rather than re-derived here. A verdict
+   * about code that has since changed is the one gap that makes the user act WRONGLY rather
+   * than late, so the expanded block says it beside the verdict.
+   *
+   * **Optional**: an engine older than this contract sends none, and `null` (no review of ours,
+   * or a PR the open-PR inventory no longer has) is "no claim" rather than "fresh".
+   */
+  newCommits?: boolean | null;
 }
 
 export type PrState = 'open' | 'draft' | 'merged' | 'closed';

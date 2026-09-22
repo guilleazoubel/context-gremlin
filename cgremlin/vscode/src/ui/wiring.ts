@@ -118,10 +118,11 @@ export function createUi(options: UiOptions): Ui {
       // Round 3 §e.1 — the ANSWER, for the ONE row the user just clicked. `primaryArtifact` and
       // `CoreClient.artifactText` are both already there; what was missing was anyone asking.
       const artifact = await artifactOf(client, item, note);
-      // Ruling 3 — and whether that answer still applies. The engine already computes it
-      // (`InventoryEntry.ours.newCommits`); the panel's `/items` wire simply does not carry it,
-      // so the one row that is open asks `/prs` for its own PR's entry.
-      const newCommits = await newCommitsOf(client, item, note);
+      // Ruling 3 — and whether that answer still applies. The engine computes it once, in the
+      // inventory, and now carries it on the item's own PR: nothing here re-derives a freshness
+      // bit, so the panel and the CLI cannot come to disagree about whether a verdict stands.
+      // An engine older than that contract sends nothing, which reads as "no claim" (MG-12).
+      const newCommits = item.prs[0]?.newCommits === true;
       return { artifactAt, changes, offline, artifact, newCommits };
     },
   });
@@ -310,26 +311,4 @@ async function artifactOf(
   if (agent === null || agent.primaryArtifact === null) return null;
   const text = await client.artifactText(agent.sessionId, agent.primaryArtifact).catch(note);
   return { mode: agent.mode, text, unreadable: text === null };
-}
-
-/**
- * Ruling 3 — the engine's own "the PR moved after we reviewed it", for this item's first PR.
- *
- * `inventory.ts:153` computes `reviewedSha !== headSha` and ships it on `ours.newCommits`; the
- * CLI is the only thing that has ever read it. It is NOT re-derived here — a second derivation
- * of a freshness bit is how two surfaces come to disagree about whether a verdict still stands.
- */
-async function newCommitsOf(
-  client: CoreClient,
-  item: WorkItem,
-  note: (err: unknown) => null,
-): Promise<boolean> {
-  const pr = item.prs[0];
-  if (pr === undefined) return false;
-  const answer = await client.prs().catch(note);
-  const entry = answer?.inventory.entries.find(
-    (candidate) => candidate.repo === pr.repo && candidate.number === pr.number,
-  );
-  const ours = entry?.ours;
-  return ours !== undefined && ours.status !== 'none' && ours.newCommits;
 }

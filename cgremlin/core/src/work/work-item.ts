@@ -72,6 +72,19 @@ export interface WorkItemPr {
    * not read it.
    */
   state: PrState | null;
+  /**
+   * Round 3 — the PR has moved since the review of ours that is on it looked
+   * at it. This is the inventory's OWN answer (`ours.newCommits`, which it
+   * computes from the two shas), carried through rather than computed again:
+   * a freshness bit derived twice is how two surfaces come to disagree about
+   * whether a verdict still stands, and the panel must never say "approved"
+   * about code that is no longer there.
+   *
+   * `null` means there is nothing to be stale about — no review of ours, or
+   * a PR the open-PR inventory no longer has. Additive on the wire; a client
+   * older than this contract simply does not read it.
+   */
+  newCommits: boolean | null;
 }
 
 export interface WorkItemTicket {
@@ -230,6 +243,8 @@ function prFromEntry(e: InventoryEntry): WorkItemPr {
     // The inventory lists `--state open` only, so every row in it is open;
     // draftness is the one distinction it carries.
     state: e.isDraft ? 'draft' : 'open',
+    // Carried, never re-derived (see the field's own note).
+    newCommits: e.ours.status === 'none' ? null : e.ours.newCommits,
   };
 }
 
@@ -269,6 +284,9 @@ function prFromAgentLinks(
       deletions: cached?.deletions ?? null,
     }),
     state: cached?.state ?? null,
+    // The pr-state cache knows nothing about what our review looked at, and a
+    // PR that left the open-PR inventory has no live head to compare with.
+    newCommits: null,
   };
 }
 

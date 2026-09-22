@@ -23,16 +23,34 @@ const REVIEW = [
   '- **Severity:** 🔴 Critical',
 ].join('\n');
 
-function handler(over: { artifact?: () => { status: number; text?: string } } = {}): StubHandler {
+interface Over {
+  artifact?: () => { status: number; text?: string };
+  /** A `/items` body of our own, for the cases that turn the staleness bit off. */
+  items?: unknown;
+}
+
+function handler(over: Over = {}): StubHandler {
   return (req: StubRequest) => {
     if (req.method === 'GET' && /^\/sessions\/[^/]+\/artifacts\/[^/]+$/.test(req.path)) {
       return over.artifact?.() ?? { status: 200, text: REVIEW };
+    }
+    if (over.items !== undefined && req.method === 'GET' && req.path === '/items') {
+      return { status: 200, body: over.items };
     }
     return undefined;
   };
 }
 
-async function expand(over: Parameters<typeof handler>[0] = {}) {
+/** The same items, with every PR saying the review still describes what is on GitHub. */
+function settled(): unknown {
+  const body = JSON.parse(JSON.stringify(fixtures.items)) as {
+    items: { prs: { newCommits?: boolean | null }[] }[];
+  };
+  for (const item of body.items) for (const pr of item.prs) pr.newCommits = false;
+  return body;
+}
+
+async function expand(over: Over = {}) {
   const h = await panelHarness({ handler: handler(over) });
   h.toPanel({ type: 'toggleRow', id: 'pr:acme/web#102', expanded: true });
   await h.settle();
@@ -73,41 +91,21 @@ describe('the expanded row carries the answer', () => {
     );
   });
 
-  it('says nothing of the kind where the inventory reports no new commits', async () => {
-    const quiet = JSON.parse(JSON.stringify(fixtures.prs)) as {
-      inventory: { entries: { ours: { newCommits?: boolean } }[] };
-    };
-    for (const entry of quiet.inventory.entries) {
-      if (entry.ours.newCommits !== undefined) entry.ours.newCommits = false;
-    }
-    const h = await panelHarness({
-      handler: (req) => {
-        if (req.method === 'GET' && req.path === '/prs') return { status: 200, body: quiet };
-        return handler()(req);
-      },
-    });
-    h.toPanel({ type: 'toggleRow', id: 'pr:acme/web#102', expanded: true });
-    await h.settle();
+  it('says nothing of the kind where the engine reports no new commits', async () => {
+    const h = await expand({ items: settled() });
     expect(h.rowOf('pr:acme/web#102')?.verdict?.stale).toBeNull();
   });
 
+  it('asks the inventory route for nothing at all — the bit rides on the item', async () => {
+    const h = await expand();
+    expect(h.server.requests.map((req) => req.path)).not.toContain('/prs');
+  });
+
   it('draws no block at all on a row whose agent wrote no parseable verdict', async () => {
-    const h = await panelHarness({
-      handler: (req) => {
-        if (req.method === 'GET' && req.path === '/prs') {
-          const quiet = JSON.parse(JSON.stringify(fixtures.prs)) as {
-            inventory: { entries: { ours: { newCommits?: boolean } }[] };
-          };
-          for (const entry of quiet.inventory.entries) {
-            if (entry.ours.newCommits !== undefined) entry.ours.newCommits = false;
-          }
-          return { status: 200, body: quiet };
-        }
-        return handler({ artifact: () => ({ status: 200, text: 'just prose' }) })(req);
-      },
+    const h = await expand({
+      items: settled(),
+      artifact: () => ({ status: 200, text: 'just prose' }),
     });
-    h.toPanel({ type: 'toggleRow', id: 'pr:acme/web#102', expanded: true });
-    await h.settle();
     const row = h.rowOf('pr:acme/web#102');
     expect(row?.verdict).toBeNull();
     expect(JSON.stringify(row)).not.toContain('0 findings');
