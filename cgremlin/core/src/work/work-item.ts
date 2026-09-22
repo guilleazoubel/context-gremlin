@@ -6,6 +6,7 @@ import { isLandedState, prStateKey, type PrState, type PrStateCache, type PrStat
 import type { Inventory, InventoryEntry, TeamActivity } from '../inventory/inventory';
 import type { JiraScanReport } from '../jira/jira-store';
 import type { QaVerdict, SessionMode } from '../schema/session';
+import type { RunOutcome } from '../schema/stage';
 import { sizeTierOf, type SizeTier } from './size-tier';
 import { workItemIdOf, type WorkItemId } from './work-item-id';
 
@@ -142,6 +143,15 @@ export interface WorkItemAgent {
    * pure, per this module's own doc comment).
    */
   qaVerdict: QaVerdict | null;
+  /**
+   * Defect 1 — HOW this session's last run ENDED, straight off the attention
+   * item's own `runOutcome` (itself `session.lastRun.outcome`). `running:
+   * false` covers a run that finished, one that failed and one that was
+   * KILLED; with only `runFailed` beside it, a killed run was indistinguish-
+   * able from a finished one and the panel called it done. `null` for a
+   * session that has never run. Additive on the wire.
+   */
+  runOutcome: RunOutcome | null;
 }
 
 export interface WorkItem {
@@ -495,6 +505,7 @@ export function groupWorkItems(input: GroupWorkItemsInput): WorkItem[] {
           : { repo: item.links.prRepo, number: item.links.prNumber },
       ref: item.ref,
       qaVerdict: item.qaVerdict ?? null,
+      runOutcome: item.runOutcome ?? null,
     });
     cand.contributors.push(item);
     cand.sessionTitle ??= item.title;

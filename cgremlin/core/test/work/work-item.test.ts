@@ -80,6 +80,7 @@ interface AgentOpts {
   title?: string;
   acked?: boolean;
   qaVerdict?: 'ready' | 'not_ready' | 'blocked' | null;
+  runOutcome?: 'running' | 'succeeded' | 'failed' | 'stopped' | null;
 }
 
 function agentAttention(o: AgentOpts): AttentionItem {
@@ -113,6 +114,7 @@ function agentAttention(o: AgentOpts): AttentionItem {
     running: false,
     claimed: false,
     qaVerdict: o.qaVerdict ?? null,
+    runOutcome: o.runOutcome ?? null,
   };
 }
 
@@ -179,6 +181,27 @@ describe('groupWorkItems: qaVerdict passthrough (Gap 1)', () => {
   it('defaults to null when the attention item carries none', () => {
     const items = group({ items: [agentAttention({ id: 'qa-2', mode: 'qa', ticket: 'HB-627' })], jira: jiraReport([{ key: 'HB-627' }]) });
     expect(items[0].agents[0].qaVerdict).toBeNull();
+  });
+});
+
+// Defect 1 — HOW the run ended is a straight passthrough too. A killed run
+// and a finished one are both `running: false`; without this the panel cannot
+// tell them apart and calls both of them done.
+describe('groupWorkItems: runOutcome passthrough', () => {
+  it("carries the agent's runOutcome onto the wire WorkItemAgent", () => {
+    const items = group({
+      items: [agentAttention({ id: 'inv-1', mode: 'investigation', ticket: 'HB-627', runOutcome: 'stopped' })],
+      jira: jiraReport([{ key: 'HB-627' }]),
+    });
+    expect(items[0].agents[0].runOutcome).toBe('stopped');
+  });
+
+  it('defaults to null when the attention item carries none', () => {
+    const items = group({
+      items: [agentAttention({ id: 'inv-2', mode: 'investigation', ticket: 'HB-627' })],
+      jira: jiraReport([{ key: 'HB-627' }]),
+    });
+    expect(items[0].agents[0].runOutcome).toBeNull();
   });
 });
 

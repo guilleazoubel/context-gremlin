@@ -70,8 +70,10 @@ describe('the lifecycle slots', () => {
     expect(built[0].stateText).toBe('needs you');
   });
 
+  // Defect 1: `done` is a claim about a session that PRODUCED something, so the agent that earns
+  // it names a real artifact — one that is not the brief it was handed.
   it('dates a finished slot by the artifact, and says plain "done" when it has no date', () => {
-    const agents = [agent({ mode: 'investigation', phase: 'ready' })];
+    const agents = [agent({ mode: 'investigation', phase: 'ready', primaryArtifact: 'FINDINGS.md' })];
     const withDate = slots({
       agents,
       facts: facts({ agents: asActionAgents(agents) }),
