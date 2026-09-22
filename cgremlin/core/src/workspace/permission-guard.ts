@@ -47,7 +47,16 @@ export interface PermissionConfig {
  * expressed by baking the repo slug and the PR number into the helpers at
  * write time. Nothing below grants anything — this table only takes away.
  */
-const NEVER_POST = ['Bash(gh pr review:*)', 'Bash(gh pr comment:*)'] as const;
+const NEVER_POST = [
+  'Bash(gh pr review:*)',
+  'Bash(gh pr comment:*)',
+  // Round 3 — a pull request IS an issue to the issue-comment endpoint, so
+  // `gh issue comment <pr number> -b …` posts to the PR. It honours `-R` too.
+  // Naming only the two `gh pr` verbs left the property with an unlisted
+  // bypass in exactly the modes that talk to GitHub; it is shared now, so no
+  // mode can be added without it.
+  'Bash(gh issue:*)',
+] as const;
 
 /** Changing or landing the PR is not posting — denied in every mode. */
 const NEVER_LAND = [
@@ -154,7 +163,6 @@ const WRITES_NOTHING_OUTWARD = [
   'Bash(gh pr edit:*)',
   'Bash(gh pr create:*)',
   'Bash(gh pr ready:*)',
-  'Bash(gh issue:*)',
 ] as const;
 
 export const DEFAULT_PERMISSIONS: Record<SessionMode, PermissionConfig> = {

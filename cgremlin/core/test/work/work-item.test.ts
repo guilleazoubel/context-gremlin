@@ -1087,3 +1087,32 @@ describe('a PR says whether it moved after our review looked at it', () => {
     expect(source).toContain('e.ours.newCommits');
   });
 });
+
+/**
+ * Round 3 pre-merge — a session says WHICH pull request it is about.
+ *
+ * The panel's expanded block makes three selections that must be one: whose verdict it quotes,
+ * whose freshness bit it shows, and whose facts it lists. It could not tie them, because an
+ * agent named no PR: a ticket with two pull requests (mine, and a teammate's I am reviewing)
+ * would show the review's verdict over the OTHER pull request's size, CI and staleness — a
+ * genuinely stale approval rendering as fresh. The link is already on the attention item; it
+ * just never crossed.
+ */
+describe('an agent names the pull request it is about', () => {
+  it('carries the session`s own PR, straight off the attention item`s links', () => {
+    const e = entry({ number: 7 });
+    const items = group({
+      items: [prAttention(e), agentAttention({ id: 's-rev', mode: 'review', prRepo: REPO, prNumber: 7 })],
+      inventory: inv([e]),
+    });
+    const agent = items[0]?.agents[0];
+    expect(agent?.pr).toEqual({ repo: REPO, number: 7 });
+  });
+
+  it('says null for a session with no pull request behind it at all', () => {
+    const items = group({
+      items: [agentAttention({ id: 's-inv', mode: 'investigation', ticket: 'HB-1' })],
+    });
+    expect(items[0]?.agents[0]?.pr).toBeNull();
+  });
+});

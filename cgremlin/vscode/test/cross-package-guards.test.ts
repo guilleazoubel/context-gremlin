@@ -160,7 +160,7 @@ describe('MG-14: the ENGINE writes to GitHub nowhere, and the agent only through
   it('the permission guard really denies them rather than merely mentioning them', () => {
     const guard = CORE.find((file) => file.label.endsWith('workspace/permission-guard.ts'));
     expect(guard).toBeDefined();
-    for (const verb of ['gh pr review', 'gh pr comment', 'gh pr merge', 'gh pr close']) {
+    for (const verb of ['gh pr review', 'gh pr comment', 'gh pr merge', 'gh pr close', 'gh issue']) {
       expect(guard?.text).toContain(`Bash(${verb}:*)`);
     }
     expect(guard?.text).toMatch(/deny/i);
@@ -195,7 +195,9 @@ describe('MG-14: the ENGINE writes to GitHub nowhere, and the agent only through
     const to = brief.indexOf('**If a helper exits non-zero');
     expect(from).toBeGreaterThan(0);
     expect(to).toBeGreaterThan(from);
-    const GH_WRITE = /gh (pr (review|comment|create|merge|close|edit|ready)|api)\b/g;
+    // `gh issue comment <n>` posts to a PULL REQUEST — they share the issue-comment endpoint —
+    // so it is a write verb like the rest and has to be located like the rest.
+    const GH_WRITE = /gh (pr (review|comment|create|merge|close|edit|ready)|issue|api)\b/g;
     const stray: string[] = [];
     for (let m = GH_WRITE.exec(brief); m !== null; m = GH_WRITE.exec(brief)) {
       if (m.index < from || m.index > to) stray.push(m[0]);
@@ -204,12 +206,32 @@ describe('MG-14: the ENGINE writes to GitHub nowhere, and the agent only through
 
     // 3. …and the refusal really does name them, so silence cannot pass for safety.
     const denial = brief.slice(from, to);
-    for (const verb of ['gh api', 'gh pr review', 'gh pr comment', 'gh pr merge']) {
+    for (const verb of ['gh api', 'gh pr review', 'gh pr comment', 'gh pr merge', 'gh issue']) {
       expect(denial, verb).toContain(verb);
     }
 
     // 4. A failed post is reported as NOT delivered rather than assumed (prompts.ts's own rule).
     expect(brief).toMatch(/NOT delivered/);
+  });
+
+  /**
+   * Round 3 pre-merge — the same property, for the brief the REVIEW agent reads. Both briefs
+   * tell the agent what the guard refuses, and a refusal list that goes out of date is worse
+   * than none: it teaches the agent that a verb is available when the guard denies it.
+   */
+  it('the posting protocol`s refusal names every verb the guard denies, `gh issue` included', () => {
+    const prompts = CORE.find((file) => file.label.endsWith('pipeline/prompts.ts'));
+    // The review and re-review briefs share ONE posting protocol; this is it.
+    const brief =
+      /export function renderPostingProtocol[\s\S]*?\n}/.exec(prompts?.text ?? '')?.[0] ?? '';
+    expect(brief).not.toBe('');
+    const from = brief.indexOf('**What is denied.**');
+    const to = brief.indexOf('**What is NOT denied');
+    expect(from).toBeGreaterThan(0);
+    const denial = brief.slice(from, to);
+    for (const verb of ['gh api', 'gh pr review', 'gh pr comment', 'gh issue']) {
+      expect(denial, verb).toContain(verb);
+    }
   });
 
   it('the helpers the brief sends the agent to are really written by the core', () => {

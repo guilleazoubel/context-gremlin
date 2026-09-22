@@ -121,6 +121,18 @@ export interface WorkItemAgent {
   claimed: boolean;
   primaryArtifact: string | null;
   worktreePath: string | null;
+  /**
+   * Round 3 — WHICH pull request this session is about, from the attention
+   * item's own `links.prRepo`/`prNumber`. `null` for a session with no PR
+   * behind it (an investigation, a ticket-led development before its PR).
+   *
+   * The panel's expanded block quotes one agent's verdict and must show that
+   * agent's pull request beside it — its freshness, its size, its CI. With
+   * no link it fell back to `prs[0]`, which on a ticket carrying two pull
+   * requests is the most recently updated one, not the reviewed one, so a
+   * stale approval could render as fresh. Additive on the wire.
+   */
+  pr: { repo: string; number: number } | null;
   /** The AttentionItem it came from — the ack key stays the ref (R3). */
   ref: ItemRef;
   /**
@@ -477,6 +489,10 @@ export function groupWorkItems(input: GroupWorkItemsInput): WorkItem[] {
       claimed: item.claimed,
       primaryArtifact: item.links.primaryArtifact,
       worktreePath: item.links.worktreePath,
+      pr:
+        item.links.prRepo === null || item.links.prNumber === null
+          ? null
+          : { repo: item.links.prRepo, number: item.links.prNumber },
       ref: item.ref,
       qaVerdict: item.qaVerdict ?? null,
     });
