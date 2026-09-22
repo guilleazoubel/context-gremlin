@@ -8,7 +8,7 @@
 import { itemActionFacts, rowActions } from '../../src/model/row-actions';
 // The panel's own action layer, so the fixture cannot drift from what the host actually posts.
 import { actionsFor } from '../../src/ui/panel-view';
-import { itemParts } from '../../src/model/item-parts';
+import { hoistVerbs, itemParts } from '../../src/model/item-parts';
 import { lifecycleSlots } from '../../src/model/lifecycle';
 import {
   buildWorkLists,
@@ -32,11 +32,13 @@ export interface StateOptions {
   expanded?: string;
   selected?: string;
   response?: ItemsResponse;
-  changes?: { committed: string; workingTree: string };
+  changes?: { worktree: string; uncommitted: string | null };
   /** Which sections the user has closed, by section key. */
   collapsed?: Record<string, boolean>;
   /** §6: `all`, or the one section key the panel is narrowed to. */
   focus?: string;
+  /** §e.7 — whether the open row's disclosure is showing the parts and the housekeeping. */
+  detailsOpen?: boolean;
   /** Item 2: the ids the user has put aside, and whether the bin is open. */
   dismissed?: string[];
   showDismissed?: boolean;
@@ -98,6 +100,8 @@ function rowViewOf(row: WorkRow, over: StateOptions) {
   const expanded = over.expanded === row.id;
   const dismissed = (over.dismissed ?? []).includes(row.id);
   const actions = actionsFor(row.item, row.list, dismissed);
+  const built = expanded ? partsOf(row.item, row.list, actions) : [];
+  const hoisted = hoistVerbs(built, actions);
   return {
     id: row.id,
     list: row.list,
@@ -119,11 +123,17 @@ function rowViewOf(row: WorkRow, over: StateOptions) {
     hasChildren: true,
     expanded,
     selected: over.selected === row.id,
-    parts: expanded ? partsOf(row.item, row.list, actions) : [],
-    changes: expanded ? (over.changes ?? { committed: '—', workingTree: '—' }) : null,
+    parts: expanded ? hoisted.parts : [],
+    verbs: expanded ? hoisted.verbs : [],
+    detailsOpen: expanded && (over.detailsOpen ?? false),
+    changes: expanded
+      ? (over.changes ?? { worktree: 'Agent worktree: —', uncommitted: null })
+      : null,
     actions,
-    hint: null,
     detailNotice: null,
+    verdict: null,
+    facts: [],
+    ticketLine: '',
   };
 }
 

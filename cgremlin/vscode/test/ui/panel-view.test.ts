@@ -35,7 +35,7 @@ interface Built {
   ready(): void;
 }
 
-function build(over: { response?: ItemsResponse | null } = {}): Built {
+function build(over: { response?: ItemsResponse | null; me?: string } = {}): Built {
   const host = new FakeHost();
   const opened: string[] = [];
   const children: [string, string][] = [];
@@ -55,6 +55,7 @@ function build(over: { response?: ItemsResponse | null } = {}): Built {
     },
     now: () => Date.parse('2026-09-10T12:00:00.000Z'),
     nonce: () => 'test-nonce',
+    me: () => over.me ?? '',
   });
   const view = new FakeWebviewView();
   panel.resolveWebviewView(view);
@@ -110,6 +111,21 @@ describe('MG-B8 four lists and no tree', () => {
     expect(hits(/cgremlin\.refreshPreview/)).toEqual([]);
     expect(hits(/TreeDataProvider|createTreeView/)).toEqual([]);
     expect(fs.existsSync(path.join(root, 'src/ui/tree.ts'))).toBe(false);
+  });
+
+  /**
+   * Round 3, ruling 3 — the staleness bit rides on the ITEM, and the panel copies it. A second
+   * derivation of "has the PR moved since we reviewed it" is how two surfaces come to disagree
+   * about whether a verdict still stands, so the extension compares no shas of its own.
+   */
+  it('re-derives the staleness bit nowhere — it reads the one the engine sent', () => {
+    // The two shas are DECLARED in `model/items.ts`, which mirrors the engine's own types; what
+    // no module may do is compare them, which is the derivation the engine already owns.
+    expect(hits(/reviewedSha\s*[!=]==|[!=]==\s*[\w.?]*headSha/)).toEqual([]);
+    // …and it reads it off the pull request the VERDICT is about, never off `prs[0]`.
+    const wiring = fs.readFileSync(path.join(root, 'src/ui/wiring.ts'), 'utf8');
+    expect(wiring).toContain('focus.pr?.newCommits === true');
+    expect(wiring).not.toContain('prs[0]');
   });
 
   it('contributes the view as a webview and no longer contributes refreshPreview', () => {
@@ -408,11 +424,26 @@ describe('R42/R51/P0-2 the row actions are a rule about the LIST', () => {
     expect(actionsOf(h, 'waitingForReview', 'pr:acme/web#200')).not.toContain('cgremlin.chat');
   });
 
-  it('P0-2 — Ack only where the item needs you, never unconditionally', () => {
+  /**
+   * P0-2, and round 3's amendment: the acknowledgement is offered only where something needs
+   * you, and it is HOUSEKEEPING — it belongs in the open block's disclosure rather than beside
+   * the verb that does the work. It stays on the row because clearing the needs-you count is
+   * the one thing reading the artifact does not do.
+   */
+  it('offers the acknowledgement only where the item needs you, and only in the disclosure', () => {
     const h = build();
     h.ready();
     expect(actionsOf(h, 'parkingLot', 'pr:acme/api#55')).not.toContain('cgremlin.ack');
     expect(actionsOf(h, 'parkingLot', 'pr:acme/web#102')).toContain('cgremlin.ack');
+    h.view.webview.emit({ type: 'toggleRow', id: 'pr:acme/web#102', expanded: true });
+    const row = h
+      .state()
+      .sections.flatMap((section) => section.rows)
+      .find((candidate) => candidate.id === 'pr:acme/web#102');
+    expect(row?.verbs.find((verb) => verb.command === 'cgremlin.ack')).toMatchObject({
+      label: 'Mark as seen',
+      placement: 'overflow',
+    });
   });
 
   it('P1-5 — every row flags exactly one primary action', () => {
@@ -477,6 +508,10 @@ describe('R66/R54 the panel is an accessible tree, and the keys are the tree mod
     const h = build();
     h.ready();
     h.view.webview.emit({ type: 'toggleRow', id: 'ticket:HB-627', expanded: true });
+    // Round 3 §e.7: the parts live inside a disclosure, and §6's rule holds one level down — a
+    // part the user cannot see is a part the keyboard cannot reach.
+    expect(nodes(h).filter((n) => n.kind === 'child')).toEqual([]);
+    h.view.webview.emit({ type: 'toggleDetails', open: true });
     const seen = nodes(h);
     // §5: a section header is a disclosure BUTTON, not a tree item, so the tree is rows and
     // parts and nothing else — the browser owns the header's own Enter and Space.
@@ -536,6 +571,7 @@ describe('R66/R54 the panel is an accessible tree, and the keys are the tree mod
     });
 
     h.view.webview.emit({ type: 'toggleRow', id: 'ticket:HB-627', expanded: true });
+    h.view.webview.emit({ type: 'toggleDetails', open: true });
     const opened = nodes(h);
     const openedRow = opened.find((n) => n.id === 'ticket:HB-627');
     if (openedRow === undefined) throw new Error('no row');
@@ -666,8 +702,8 @@ describe('MG-12 the panel half — defaults render as unknown', () => {
   });
 });
 
-describe('R48 the parts are clickable, with two actions', () => {
-  it('gives each part its Open and its browser action', () => {
+describe('R48 the parts are clickable, and a link part carries its one destination', () => {
+  it('gives a ticket and a PR the browser verb alone (round 3 §e.4)', () => {
     const h = build();
     h.ready();
     h.view.webview.emit({ type: 'toggleRow', id: 'ticket:HB-627', expanded: true });
@@ -679,7 +715,7 @@ describe('R48 the parts are clickable, with two actions', () => {
       row?.parts
         .filter((part) => part.kind === 'ticket' || part.kind === 'pr')
         .map((part) => part.actions.map((action) => action.label).join('/')),
-    ).toEqual(['Open/Open in Jira', 'Open/Open on GitHub', 'Open/Open on GitHub']);
+    ).toEqual(['Open in Jira', 'Open on GitHub', 'Open on GitHub']);
     h.view.webview.emit({ type: 'openChild', id: 'ticket:HB-627', childId: 'pr:acme/web#310' });
     expect(h.children).toEqual([['ticket:HB-627', 'pr:acme/web#310']]);
   });
@@ -740,5 +776,29 @@ describe('the per-section accents', () => {
     expect(css).toMatch(/\.row-id\s*\{[^}]*font-weight:\s*700/);
     expect(css).toMatch(/\.row-desc\s*\{[^}]*font-size:\s*12px/);
     expect(css).toMatch(/\.row-signals\s*\{[^}]*font-size:\s*11px/);
+  });
+});
+
+/**
+ * Round 3 §e.9 — phase 11 §8(a) ("the panel never learns `me`") is retired. `CoreConfigView.me`
+ * arrives on `GET /config` and reaches the composer by the same thunk `qaRepos` uses, so the PR
+ * part stops reporting the user to himself.
+ */
+describe('the panel knows who the user is', () => {
+  function detailOf(me: string): string {
+    const h = build({ me });
+    h.ready();
+    h.view.webview.emit({ type: 'toggleRow', id: 'pr:acme/api#55', expanded: true });
+    const row = h
+      .state()
+      .sections.flatMap((section) => section.rows)
+      .find((r) => r.id === 'pr:acme/api#55');
+    return row?.parts.find((part) => part.kind === 'pr')?.detail ?? '';
+  }
+
+  it('drops the user from the PR part he is looking at', () => {
+    expect(detailOf('')).toBe('@dana reviewed, @kim commented');
+    expect(detailOf('dana')).toBe('@kim commented');
+    expect(detailOf('kim')).toBe('@dana reviewed');
   });
 });

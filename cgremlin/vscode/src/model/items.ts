@@ -251,6 +251,16 @@ export interface CoreConfigView {
 }
 
 /**
+ * Round 3 §e.9 — who the user is, read as defensively as every other config field. An engine
+ * that sent no `me` (or sent a non-string) reads as "the panel has not learned it", and the
+ * people line then keeps every login rather than guessing which one is his.
+ */
+export function meOf(config: CoreConfigView | null | undefined): string {
+  const me = config?.me;
+  return typeof me === 'string' ? me : '';
+}
+
+/**
  * The repos that have a QA environment configured, as §8's gate wants them. A malformed or
  * absent block is "no QA here" rather than an error: the panel degrades to offering no verb.
  */

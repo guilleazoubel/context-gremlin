@@ -88,3 +88,30 @@ export function changeSummary(set: ChangeSet | null | undefined): string {
   if (set.additions === null && set.deletions === null) return files;
   return `${files} +${set.additions ?? 0}/−${set.deletions ?? 0}`;
 }
+
+/**
+ * Round 3 §e.3 — the agent's worktree diff, as ONE line that names what it is measured against.
+ *
+ * Three numbers used to sit on the open row with three different BASES and nothing on screen
+ * saying so: the PR's own size (against its base branch), and these two (against this session's
+ * `base`, in its own worktree). The PR's size is the one a human asks for and it stays above the
+ * fold; this pair moves into the disclosure, where naming the ref costs nothing.
+ */
+export function worktreeLine(changes: SessionChanges | null | undefined): string {
+  const summary = changeSummary(changes?.committed);
+  const base = changes?.base ?? null;
+  return base === null
+    ? `Agent worktree: ${summary}`
+    : `Agent worktree since ${base}: ${summary}`;
+}
+
+/**
+ * Product §3.14 — zero is the normal case, and a whole line saying nothing happened is what the
+ * user was reading. The line earns its place in exactly one case, where it is an action prompt
+ * rather than a statistic. `null` (the engine never answered) is not zero and says nothing.
+ */
+export function uncommittedLine(changes: SessionChanges | null | undefined): string | null {
+  const files = changes?.workingTree.files ?? null;
+  if (files === null || files === 0) return null;
+  return `The agent left ${files} uncommitted ${files === 1 ? 'file' : 'files'} in your worktree`;
+}

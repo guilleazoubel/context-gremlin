@@ -21,6 +21,12 @@ export type SlotState = 'notStarted' | 'running' | 'needsYou' | 'done';
 
 export interface LifecycleAgent {
   sessionId: string;
+  /**
+   * Round 3 — WHICH pull request this session is about (`WorkItemAgent.pr`). **Optional**: an
+   * engine older than that contract sends none, and the focus then falls back only where
+   * nothing is ambiguous (see {@link verdictFocusOf}).
+   */
+  pr?: { repo: string; number: number } | null;
   mode: string;
   phase: string;
   running: boolean;
@@ -112,6 +118,12 @@ function stateOf(agent: LifecycleAgent | undefined): SlotState {
  * `done` carries the artifact's age when the engine told us one — "done" with no date is the
  * state the user said tells him nothing. No mtime is `done` alone, never a fabricated one
  * (MG-12), and a `running` slot says which phase rather than a date it does not have yet.
+ *
+ * Round 3 §e.2: the phase word is spent on `running` and NOWHERE else. The gate followed by a
+ * middle dot and the raw pipeline phase read as an answer and never was one — a gate (`needs
+ * you`) and a phase (`ready`) are two different axes, and the separator claimed they were the
+ * same kind of thing. What the user wanted out of `ready` is the verdict, which the expanded
+ * block now states in its own words.
  */
 function stateTextOf(
   state: SlotState,
@@ -121,7 +133,7 @@ function stateTextOf(
 ): string {
   if (state === 'notStarted' || agent === undefined) return 'not started';
   if (state === 'running') return `running · ${agent.phase}`;
-  if (state === 'needsYou') return `needs you · ${agent.phase}`;
+  if (state === 'needsYou') return 'needs you';
   const age = artifactAt === null ? '—' : compactAge(artifactAt, now);
   return age === '—' ? 'done' : `done · ${age}`;
 }
@@ -150,6 +162,68 @@ export function currentAgentOf<T extends LifecycleAgent>(agents: readonly T[]): 
 /** `respond` ranks after `review`: it is what happens once a review has already landed. */
 function rankOf(mode: string): number {
   return mode === 'respond' ? STAGE_ORDER.length : STAGE_ORDER.indexOf(mode as StageKind);
+}
+
+/**
+ * Round 3 §e.1 — whose artifact the expanded row reads for its verdict.
+ *
+ * The LAST thing to have concluded, which is the claim the user is being asked to adjudicate: a
+ * verification outranks a reply, a reply outranks the review it answers, and both outrank the
+ * development notes under them. A pending agent (this window's optimism) and an agent that named
+ * no artifact are not candidates at all — there is nothing to read behind either.
+ */
+const VERDICT_RANK: Record<string, number> = {
+  qa: 5,
+  respond: 4,
+  review: 3,
+  development: 2,
+  investigation: 1,
+};
+
+export function verdictAgentOf<T extends LifecycleAgent>(agents: readonly T[]): T | null {
+  let best: T | null = null;
+  for (const agent of agents) {
+    if (agent.pending === true) continue;
+    if (agent.primaryArtifact === null || agent.primaryArtifact === '') continue;
+    const rank = VERDICT_RANK[agent.mode] ?? 0;
+    if (best === null || rank >= (VERDICT_RANK[best.mode] ?? 0)) best = agent;
+  }
+  return best;
+}
+
+/**
+ * Round 3 — THE selection the whole expanded block follows.
+ *
+ * The block used to make three independent choices: the verdict by stage rank, the freshness
+ * bit and the PR facts by `prs[0]` (the core's `updatedAt` order), and the one full-width button
+ * by part order. On a ticket carrying two pull requests — mine, and a teammate's I am reviewing
+ * — those three disagree, and the block then states one pull request's verdict over another
+ * one's size, CI and freshness. A genuinely stale approval renders as fresh.
+ *
+ * So there is ONE choice: the agent whose conclusion is being quoted, and the pull request that
+ * agent is about. Where the agent names a pull request the item does not carry, the answer is
+ * `null` and the block says nothing about a pull request at all — never `prs[0]`, because a
+ * wrong claim is worse than a missing one (MG-12). Where NOTHING names one, the single pull
+ * request is taken (there is nothing to be ambiguous between) and two or more are refused.
+ */
+export interface VerdictFocus<A, P> {
+  /** Whose artifact the verdict block quotes, or `null` when no agent wrote one. */
+  agent: A | null;
+  /** The pull request that agent is about, or `null` when it cannot be identified. */
+  pr: P | null;
+}
+
+export function verdictFocusOf<
+  A extends LifecycleAgent,
+  P extends { repo: string; number: number },
+>(agents: readonly A[], prs: readonly P[]): VerdictFocus<A, P> {
+  const agent = verdictAgentOf(agents);
+  const named = agent?.pr ?? null;
+  if (named === null) {
+    return { agent, pr: prs.length === 1 ? prs[0] : null };
+  }
+  const found = prs.find((pr) => pr.repo === named.repo && pr.number === named.number);
+  return { agent, pr: found ?? null };
 }
 
 /**

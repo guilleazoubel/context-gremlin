@@ -141,7 +141,10 @@ describe('what an expanded row asks the engine for', () => {
   it('paints `—` until the engine has answered, and never a fabricated zero', () => {
     const h = build({ detail: null });
     click(h, 'ticket:HB-627');
-    expect(h.row('ticket:HB-627')?.changes).toEqual({ committed: '—', workingTree: '—' });
+    expect(h.row('ticket:HB-627')?.changes).toEqual({
+      worktree: 'Agent worktree: —',
+      uncommitted: null,
+    });
   });
 
   it('reads the change counts and the artifact times once they arrive', async () => {
@@ -160,9 +163,11 @@ describe('what an expanded row asks the engine for', () => {
     click(h, 'ticket:HB-627');
     await Promise.resolve();
     await Promise.resolve();
+    // §e.3 — ONE line, naming the ref it is measured against, and the working tree only where
+    // it is news rather than a statistic.
     expect(h.row('ticket:HB-627')?.changes).toEqual({
-      committed: '8 files +240/−31',
-      workingTree: '2 files +12/−0',
+      worktree: 'Agent worktree since main: 8 files +240/−31',
+      uncommitted: 'The agent left 2 uncommitted files in your worktree',
     });
     expect(h.loaded).toEqual(['ticket:HB-627']);
   });

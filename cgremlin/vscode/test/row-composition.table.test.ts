@@ -123,25 +123,33 @@ const CASES: Case[] = [
   {
     name: 'PR live (open), nobody on it',
     item: item(),
-    identity: ['#2061'], description: 'feat(HB-6210): the landed change',
+    // Round 3 §e.8: the ticket key is lifted out of the conventional-commit prefix onto L1, and
+    // the prefix itself comes off L2 — it is chrome twice over.
+    identity: ['HB-6210', '#2061'], description: 'the landed change',
     repo: 'grace-frontend', age: '6d', author: '@gennaro',
   },
   {
     name: 'PR draft',
     item: item({ prs: [pr({ state: 'draft', isDraft: true })] }),
-    identity: ['#2061'], description: 'feat(HB-6210): the landed change',
+    // Round 3 §e.8: the ticket key is lifted out of the conventional-commit prefix onto L1, and
+    // the prefix itself comes off L2 — it is chrome twice over.
+    identity: ['HB-6210', '#2061'], description: 'the landed change',
     repo: 'grace-frontend', age: '6d', author: '@gennaro',
   },
   {
     name: 'PR merged — decorated from the pr-state cache',
     item: item({ prs: [pr({ state: 'merged' })] }),
-    identity: ['#2061'], description: 'feat(HB-6210): the landed change',
+    // Round 3 §e.8: the ticket key is lifted out of the conventional-commit prefix onto L1, and
+    // the prefix itself comes off L2 — it is chrome twice over.
+    identity: ['HB-6210', '#2061'], description: 'the landed change',
     repo: 'grace-frontend', age: '6d', author: '@gennaro', prState: 'merged',
   },
   {
     name: 'PR closed without merging',
     item: item({ prs: [pr({ state: 'closed' })] }),
-    identity: ['#2061'], description: 'feat(HB-6210): the landed change',
+    // Round 3 §e.8: the ticket key is lifted out of the conventional-commit prefix onto L1, and
+    // the prefix itself comes off L2 — it is chrome twice over.
+    identity: ['HB-6210', '#2061'], description: 'the landed change',
     repo: 'grace-frontend', age: '6d', author: '@gennaro', prState: 'closed',
   },
   {
@@ -174,7 +182,9 @@ const CASES: Case[] = [
   {
     name: 'PR + agent — the agent outranks the author',
     item: item({ agents: [agent()] }),
-    identity: ['#2061'], description: 'feat(HB-6210): the landed change',
+    // Round 3 §e.8: the ticket key is lifted out of the conventional-commit prefix onto L1, and
+    // the prefix itself comes off L2 — it is chrome twice over.
+    identity: ['HB-6210', '#2061'], description: 'the landed change',
     repo: 'grace-frontend', age: '6d', agentPhase: '◈ dismissed',
   },
   {

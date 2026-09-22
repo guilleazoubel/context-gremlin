@@ -76,6 +76,16 @@ export interface WorkItemPr {
    * draft/reviewDecision wording).
    */
   state?: PrState | null;
+  /**
+   * Round 3 — the PR has moved since the review of ours that is on it looked at it: the
+   * engine's own `ours.newCommits`, carried on the item rather than re-derived here. A verdict
+   * about code that has since changed is the one gap that makes the user act WRONGLY rather
+   * than late, so the expanded block says it beside the verdict.
+   *
+   * **Optional**: an engine older than this contract sends none, and `null` (no review of ours,
+   * or a PR the open-PR inventory no longer has) is "no claim" rather than "fresh".
+   */
+  newCommits?: boolean | null;
 }
 
 export type PrState = 'open' | 'draft' | 'merged' | 'closed';
@@ -112,6 +122,16 @@ export interface WorkItemAgent {
   claimed: boolean;
   primaryArtifact: string | null;
   worktreePath: string | null;
+  /**
+   * Round 3 — WHICH pull request this session is about, from the engine's own
+   * `links.prRepo`/`prNumber`. The expanded block quotes one agent's verdict and has to show
+   * THAT agent's pull request beside it; `prs[0]` is the most recently updated one, which on a
+   * ticket carrying two pull requests is routinely a different one.
+   *
+   * **Optional**: an engine older than this contract sends none, and the block then falls back
+   * only where nothing is ambiguous (`verdictFocusOf`).
+   */
+  pr?: { repo: string; number: number } | null;
   ref: string;
   /**
    * Gap 1 — the same parse `evaluateQa` ran, straight off the wire.
@@ -743,6 +763,7 @@ export {
   landedOf,
   prLabel,
   prRefOf,
+  prState,
   qaStateText,
   repoTailOf,
   rowMetaCells,
@@ -762,6 +783,7 @@ import {
   isLandedItem,
   prLabel,
   prRefOf,
+  prState,
   repoTailOf,
   rowMetaCells,
   sizeOf,
@@ -971,17 +993,6 @@ export function buildItemChildren(item: WorkItem): WorkChild[] {
     });
   }
   return children;
-}
-
-export function prState(pr: WorkItemPr): string {
-  // The terminal states outrank everything: a merged PR that was approved is
-  // merged, and saying `approved` there is what kept offering a review of it.
-  if (pr.state === 'merged') return 'merged';
-  if (pr.state === 'closed') return 'closed';
-  if (pr.isDraft === true) return 'draft';
-  if (pr.reviewDecision === 'APPROVED') return 'approved';
-  if (pr.reviewDecision === 'CHANGES_REQUESTED') return 'changes_requested';
-  return 'open';
 }
 
 // ---------------------------------------------------------------------------

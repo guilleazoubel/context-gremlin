@@ -15,6 +15,8 @@
  *
  * Pure: no editor API, no DOM, no clock of its own (a `now` is always an argument).
  */
+import { severityCountsOf, verdictOf, type VerdictTone } from './artifact-outline';
+import { reasonText } from './needs-you';
 import type {
   CiStatus,
   QaVerdict,
@@ -80,13 +82,39 @@ export function identityOf(item: WorkItem): string {
 
 export function identityKeysOf(item: WorkItem): string[] {
   const keys: string[] = [];
-  if (item.ticket !== null) keys.push(item.ticket.key);
+  // §e.8 — a key the panel has a FIELD for should not have to survive inside 14 characters of
+  // conventional-commit prefix. Where the core linked no ticket, the key is lifted out of the
+  // title's prefix or the branch; both are shapes the convention actually produces, and a row
+  // with neither gets nothing rather than a guess (MG-12).
+  const key = item.ticket?.key ?? ticketKeyIn(item);
+  if (key !== null) keys.push(key);
   // The FIRST PR only: a second `#88` on the same line is the other PR's number, which reads as
   // part of the first one. Every PR is named in the block the row opens into (§4).
   const primary = item.prs[0];
   if (primary !== undefined) keys.push(`#${primary.number}`);
   return keys.length === 0 ? [item.title] : keys;
 }
+
+/** `PROJ-123`, read off the title's prefix or the branch. Nothing else is looked at. */
+const TICKET_SHAPE = /\b([A-Z][A-Z0-9]+-\d+)\b/;
+
+function ticketKeyIn(item: WorkItem): string | null {
+  const title = item.prs[0]?.title ?? item.title;
+  const prefix = CONVENTIONAL_PREFIX.exec(title)?.[0] ?? '';
+  const sources = [prefix, item.prs[0]?.branch ?? ''];
+  for (const source of sources) {
+    const found = TICKET_SHAPE.exec(source);
+    if (found !== null) return found[1];
+  }
+  return null;
+}
+
+/**
+ * `feat(HB-1555): `, `fix: ` — the conventional-commit head, and only where it IS one. The
+ * type is a short lowercase word from a closed-ish set and the scope carries no spaces, so
+ * `Offer list: the second page is off by one` is prose and stays whole.
+ */
+const CONVENTIONAL_PREFIX = /^[a-z][a-z0-9]{1,9}(?:\([^()\s]{1,40}\))?!?:\s+/;
 
 /**
  * §2 L2 — the prose, once. Empty means the line is not rendered, not that it is blank.
@@ -112,7 +140,9 @@ export function descriptionOf(item: WorkItem): string {
     item.prs[0]?.branch ?? '',
   ];
   for (const rung of rungs) {
-    const text = rung.trim();
+    // §e.8 — `feat(HB-1555): ` is chrome twice over: the type says nothing a human is deciding
+    // on, and the scope is a key L1 now carries. What is left is the half he reads.
+    const text = rung.trim().replace(CONVENTIONAL_PREFIX, '');
     if (text !== '' && text !== identity) return text;
   }
   return '';
@@ -228,6 +258,165 @@ export function agentBadge(agent: WorkItemAgent): string {
   return `${MODE_LETTER[agent.mode] ?? '?'}${agentGlyph(agent)}`;
 }
 
+/**
+ * Round 3 §e.1 — the ANSWER, composed once, out of the artifact the agent actually wrote.
+ *
+ * Two rules are absolute. **Never fabricate** (MG-12, MG-17j): nothing parsed means no block,
+ * and never `0 findings` — a zero would tell the user the change is clean, which is a claim
+ * this module has no evidence for. And **staleness travels with the verdict**: a conclusion
+ * about code that has since changed is the one gap that makes a user act WRONGLY rather than
+ * late, so it is said beside the claim and never below the fold. It is therefore also the one
+ * thing that can draw the block on its own.
+ */
+export interface RowVerdict {
+  /** The artifact's own tone, or `null` when there is no verdict to tone. */
+  tone: VerdictTone | null;
+  /** The label AS WRITTEN — a novel one prints as itself rather than as nothing. */
+  label: string;
+  sentence: string;
+  /** `1 critical · 1 high` — empty where no finding carried a severity. Never a zero. */
+  counts: string;
+  /** Round 3, ruling 3: the pull request moved after the agent looked at it. */
+  stale: string | null;
+  /** The report exists and could not be read — which is not the same as a crash. */
+  notice: string | null;
+}
+
+export const STALE_SENTENCE = 'The pull request changed after the agent looked at it';
+
+/** The noun each mode's primary artifact is, so a failure names what it could not read. */
+const REPORT_NOUN: Record<string, string> = {
+  review: 'review',
+  rereview: 'review',
+  respond: 'replies',
+  investigation: 'findings',
+  development: 'plan',
+  qa: 'QA result',
+};
+
+export function verdictView(input: {
+  /** The primary artifact's text, or `null` when there was none to fetch or it did not arrive. */
+  text: string | null;
+  /** The fetch itself failed. Distinct from "there is nothing to fetch", which says nothing. */
+  unreadable: boolean;
+  /** `InventoryEntry.ours.newCommits` — the engine's own answer, not a second derivation. */
+  newCommits: boolean;
+  mode: string | null;
+}): RowVerdict | null {
+  const stale = input.newCommits ? STALE_SENTENCE : null;
+  if (input.unreadable) {
+    const noun = REPORT_NOUN[input.mode ?? ''] ?? 'report';
+    return { tone: null, label: '', sentence: '', counts: '', stale, notice: `The ${noun} could not be read` };
+  }
+  const verdict = input.text === null || input.text === '' ? null : verdictOf(input.text);
+  if (verdict === null) {
+    return stale === null
+      ? null
+      : { tone: null, label: '', sentence: '', counts: '', stale, notice: null };
+  }
+  return {
+    tone: verdict.tone,
+    label: verdict.label,
+    sentence: verdict.sentence,
+    counts: severityText(input.text ?? ''),
+    stale,
+    notice: null,
+  };
+}
+
+/**
+ * `1 critical · 1 high · 1 design`, in the artifact's own severity order, and EMPTY where no
+ * finding carried one. The words, never the emoji (phase 11 §2).
+ */
+function severityText(text: string): string {
+  return severityCountsOf(text)
+    .map((entry) => `${entry.count} ${entry.word.toLowerCase()}`)
+    .join(' · ');
+}
+
+/**
+ * What the PR IS, as one word. The terminal states outrank everything: a merged PR that was
+ * approved is merged, and saying `approved` there is what kept offering a review of it.
+ *
+ * Round 3 moved it into the composer with the rest of the row's words — it had to, since the
+ * facts block below reads it and the composer may not import a value out of `work-items`.
+ */
+export function prState(pr: WorkItemPr): string {
+  if (pr.state === 'merged') return 'merged';
+  if (pr.state === 'closed') return 'closed';
+  if (pr.isDraft === true) return 'draft';
+  if (pr.reviewDecision === 'APPROVED') return 'approved';
+  if (pr.reviewDecision === 'CHANGES_REQUESTED') return 'changes_requested';
+  return 'open';
+}
+
+/** The tier letter, spelled out — the expanded block is where `L` and `●` become words. */
+const TIER_WORD: Record<string, string> = {
+  S: 'Small',
+  M: 'Medium',
+  L: 'Large',
+  XL: 'Very large',
+};
+
+const CI_WORD: Record<string, string> = {
+  success: 'CI passing',
+  pending: 'CI pending',
+  failure: 'CI failing',
+};
+
+/**
+ * Round 3 §(d) — the PR's facts, in words, as the two or three lines that sit above the
+ * disclosure.
+ *
+ * This is the ONE size measurement the open block shows (defect 3): the PR's own, because that
+ * is the change under judgement. The worktree pair moves into the disclosure, where it can name
+ * the ref it is measured against. Defect 10's answer is here too — the collapsed row's `L` and
+ * its bare dot are cheap and honest at 300px, and this is where they are said out loud.
+ *
+ * Every token is dropped where the engine sent nothing (MG-12): no `0 files`, no `—`, no guess.
+ */
+export function prFactLines(pr: WorkItemPr | undefined, me: string): string[] {
+  if (pr === undefined) return [];
+  const size = sizeOf(pr);
+  const first = [
+    `${ownerWord(pr, me)}, ${prState(pr).replace(/_/g, ' ')}`,
+    size === '—' ? '' : size,
+  ].filter((part) => part !== '');
+  const tier = tierOf(pr);
+  const second = [
+    TIER_WORD[tier] ?? '',
+    CI_WORD[pr.ci ?? ''] ?? '',
+    openedOn(pr.createdAt),
+  ].filter((part) => part !== '');
+  return [first.join(' · '), second.join(' · '), peopleLine(pr, me)].filter((line) => line !== '');
+}
+
+/** `Your PR`, `@dtorres's PR`, or just `This PR` where the engine named no author. */
+function ownerWord(pr: WorkItemPr, me: string): string {
+  if (pr.isMine === true) return 'Your PR';
+  if (pr.author !== null && pr.author !== undefined && pr.author !== '') {
+    return me !== '' && pr.author === me ? 'Your PR' : `@${pr.author}'s PR`;
+  }
+  return 'This PR';
+}
+
+/** `opened 21 Sep`, or nothing at all where the engine sent no date (MG-12). */
+function openedOn(createdAt: string | null): string {
+  if (createdAt === null) return '';
+  const at = Date.parse(createdAt);
+  if (Number.isNaN(at)) return '';
+  return `opened ${new Date(at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`;
+}
+
+/**
+ * `HB-1555 · In Review`. Product §6.4: the Jira status is the single best predictor of what the
+ * user should do next, and it rendered as undifferentiated grey text under two agent parts.
+ */
+export function ticketLineOf(ticket: { key: string; status: string } | null): string {
+  if (ticket === null) return '';
+  return [ticket.key, ticket.status].filter((part) => part !== '').join(' · ');
+}
+
 const CI_DOTS: Record<CiStatus, string> = {
   success: '●',
   pending: '◐',
@@ -301,6 +490,24 @@ export function humanInteractions(pr: WorkItemPr | undefined, now: number): Huma
   ];
 }
 
+/**
+ * Round 3 §e.9 — who has been on the PR, EXCEPT me.
+ *
+ * `@guilleazoubel reviewed` on the user's own screen is a line telling him he did the thing he
+ * did; the question the row answers is whether anyone ELSE has looked. When the remainder is
+ * empty the line says so out loud — "nobody else has" is a decision input, and a blank line is
+ * not. `me` empty (an engine that sent no `me`) keeps every login rather than guessing.
+ */
+export function peopleLine(pr: WorkItemPr | undefined, me: string): string {
+  if (pr === undefined) return '';
+  const others = (logins: readonly string[] | null | undefined): string[] =>
+    [...(logins ?? [])].filter((login) => me === '' || login !== me);
+  const reviewed = others(pr.humanActivity?.reviewedBy).map((login) => `@${login} reviewed`);
+  const commented = others(pr.humanActivity?.commentedBy).map((login) => `@${login} commented`);
+  const line = [...reviewed, ...commented].join(', ');
+  return line === '' ? 'Nobody else has reviewed it yet' : line;
+}
+
 /** The one line the collapsed row shows: the stronger kind, every handle in it, and the age. */
 export function humanActivitySummary(pr: WorkItemPr | undefined, now: number): string {
   if (pr === undefined) return '';
@@ -341,8 +548,13 @@ export function rowMetaCells(
   const primary = item.prs[0];
   const cells: RowMetaCell[] = [];
 
+  // The reason describes the ITEM, so it is said once — on the furthest agent that has finished,
+  // which is the one whose state the row is actually reporting. An earlier stage keeps its own
+  // phase rather than echoing a reason that is not about it.
+  const reason = item.attention.reasons[0] ?? null;
+  const reasonAgent = lastFinishedAgent(item.agents);
   const pushAgent = (agent: WorkItemAgent): void => {
-    cells.push(phaseCell(agent));
+    cells.push(phaseCell(agent, agent === reasonAgent ? reason : null));
     if (agent.running) cells.push(runningCell(agent, now));
   };
 
@@ -430,9 +642,29 @@ function qaDeployCell(deploy: { state: 'awaiting' | 'verified'; sha: string }): 
   };
 }
 
-function phaseCell(agent: WorkItemAgent): RowMetaCell {
+/** The last agent that is neither running nor QA — whose phase the reason speaks for. */
+function lastFinishedAgent(agents: readonly WorkItemAgent[]): WorkItemAgent | null {
+  let found: WorkItemAgent | null = null;
+  for (const agent of agents) if (!agent.running && agent.mode !== 'qa') found = agent;
+  return found;
+}
+
+/**
+ * Round 3 — the row's state token is the REASON the item wants the user, not the phase the
+ * pipeline is in. `◆ ready` said which mode and which phase and neither was an outcome; the
+ * core's own `attention.reasons` already says WHY, and `reasonText` already words it (it was
+ * spent on the needs-you strip alone). No new field, no new vocabulary.
+ *
+ * Two agents keep their phase. A RUNNING one, because there the phase is genuine progress and
+ * the reason is about the answer that does not exist yet. And QA, whose token is already an
+ * outcome (`qaStateText`) rather than a phase — swapping it for a reason would LOSE information.
+ */
+function phaseCell(agent: WorkItemAgent, reason: string | null): RowMetaCell {
   const glyph = MODE_GLYPH[agent.mode] ?? '•';
-  if (agent.mode !== 'qa') return { kind: 'agentPhase', text: `${glyph} ${agent.phase}` };
+  if (agent.mode !== 'qa') {
+    const word = !agent.running && reason !== null && reason !== '' ? reasonText(reason) : agent.phase;
+    return { kind: 'agentPhase', text: `${glyph} ${word}` };
+  }
   // §8's one toned cell: a verification that came back short of ready is the top of my work,
   // and the row has to say so without a second composition site (R72 does the ordering).
   const bad = agent.phase === 'not_ready' || agent.phase === 'failed';

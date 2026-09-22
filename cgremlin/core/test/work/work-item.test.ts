@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   groupWorkItems,
@@ -317,6 +319,9 @@ describe('groupWorkItems: list membership (R47–R50, MG-2)', () => {
       sizeTier: null,
       // Unknown, NOT open: the pr-state leg has not resolved this one.
       state: null,
+      // Nothing to be stale about: the PR left the open-PR inventory, so there is no live head
+      // to compare our review against (round 3).
+      newCommits: null,
     });
   });
 
@@ -1035,5 +1040,79 @@ describe('MG-17: the four lists are total and disjoint where they must be', () =
     for (const id of reviewing) expect(items.find((i) => i.id === id)!.parkingLotGroup).toBe('reviewing');
     for (const id of untouched) expect(items.find((i) => i.id === id)!.parkingLotGroup).toBe('untouched');
     for (const id of someoneOnIt) expect(items.find((i) => i.id === id)!.parkingLotGroup).toBe('someoneOnIt');
+  });
+});
+
+/**
+ * Round 3, ruling 3 — "the PR changed after the agent looked at it", on the `/items` wire.
+ *
+ * The engine has computed this since the inventory did: `ours.newCommits` is
+ * `reviewedSha !== headSha` (`inventory/inventory.ts:153`), and exactly one thing has ever read
+ * it — the CLI. A verdict without a freshness bit invites the user to act on a conclusion about
+ * code that no longer exists, which is the one gap that makes him act WRONGLY rather than late.
+ *
+ * It is CARRIED, never re-derived: `groupWorkItems` does not compare shas of its own, so the
+ * panel, the CLI and the engine cannot come to disagree about whether a verdict still stands.
+ */
+describe('a PR says whether it moved after our review looked at it', () => {
+  const reviewed = (newCommits = false): InventoryEntry['ours'] => ({
+    status: 'reviewed',
+    sessionId: 's-1',
+    reviewedSha: 'aaa',
+    newCommits,
+    phase: 'ready',
+  });
+
+  function prOf(ours: InventoryEntry['ours']): WorkItem['prs'][number] {
+    const e = entry({ number: 1, ours });
+    const items = group({ items: [prAttention(e)], inventory: inv([e]) });
+    const pr = items[0]?.prs[0];
+    if (pr === undefined) throw new Error('no pr');
+    return pr;
+  }
+
+  it('carries the inventory`s own answer when a review of ours has looked at it', () => {
+    expect(prOf(reviewed(true)).newCommits).toBe(true);
+    expect(prOf(reviewed(false)).newCommits).toBe(false);
+  });
+
+  it('says nothing at all where no review of ours exists — there is nothing to be stale about', () => {
+    expect(prOf({ status: 'none' }).newCommits).toBeNull();
+  });
+
+  it('re-derives nothing: no sha comparison of its own lives in the grouper', () => {
+    const source = readFileSync(path.resolve(__dirname, '../../src/work/work-item.ts'), 'utf8');
+    expect(source).not.toContain('headSha');
+    expect(source).not.toContain('reviewedSha');
+    expect(source).toContain('e.ours.newCommits');
+  });
+});
+
+/**
+ * Round 3 pre-merge — a session says WHICH pull request it is about.
+ *
+ * The panel's expanded block makes three selections that must be one: whose verdict it quotes,
+ * whose freshness bit it shows, and whose facts it lists. It could not tie them, because an
+ * agent named no PR: a ticket with two pull requests (mine, and a teammate's I am reviewing)
+ * would show the review's verdict over the OTHER pull request's size, CI and staleness — a
+ * genuinely stale approval rendering as fresh. The link is already on the attention item; it
+ * just never crossed.
+ */
+describe('an agent names the pull request it is about', () => {
+  it('carries the session`s own PR, straight off the attention item`s links', () => {
+    const e = entry({ number: 7 });
+    const items = group({
+      items: [prAttention(e), agentAttention({ id: 's-rev', mode: 'review', prRepo: REPO, prNumber: 7 })],
+      inventory: inv([e]),
+    });
+    const agent = items[0]?.agents[0];
+    expect(agent?.pr).toEqual({ repo: REPO, number: 7 });
+  });
+
+  it('says null for a session with no pull request behind it at all', () => {
+    const items = group({
+      items: [agentAttention({ id: 's-inv', mode: 'investigation', ticket: 'HB-1' })],
+    });
+    expect(items[0]?.agents[0]?.pr).toBeNull();
   });
 });

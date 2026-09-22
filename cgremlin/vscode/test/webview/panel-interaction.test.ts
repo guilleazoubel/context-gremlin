@@ -90,8 +90,9 @@ describe('§4 — one click is one message', () => {
   it('posts the verb alone when the click was on a button in the open block', () => {
     panel.render(stateOf({ expanded: 'pr:acme/web#101' }));
     dom.posted.length = 0;
-    const pr = dom.root.byClass('part').find((node) => (node.dataset.key ?? '').endsWith('#101'));
-    pr?.byClass('part-action')[1].emit('click');
+    const open = dom.root.byClass('expanded').at(-1);
+    const github = open?.byClass('row-verb').find((node) => node.textContent === 'Open on GitHub');
+    github?.emit('click');
     expect(dom.posted).toEqual([
       {
         type: 'command',
@@ -157,8 +158,8 @@ describe('R66 — the keys do what the mouse does', () => {
     ]);
   });
 
-  it('opens a part from the keyboard once its row is open', () => {
-    panel.render(stateOf({ expanded: 'ticket:HB-627' }));
+  it('opens a part from the keyboard once its row and its disclosure are open', () => {
+    panel.render(stateOf({ expanded: 'ticket:HB-627', detailsOpen: true }));
     dom.document.emit('keydown', { key: 'Home' });
     // Down to the first part that has something to open. A stage that never ran has no session
     // behind it, so the arrows still land on it and <kbd>Enter</kbd> deliberately does nothing.

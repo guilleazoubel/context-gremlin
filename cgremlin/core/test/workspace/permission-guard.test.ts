@@ -83,7 +83,12 @@ describe('permission guards without dead cgremlin callbacks (phase 3a)', () => {
  * are INERT and only `deny` bites. This table IS the policy; it is pinned by
  * value so the guard cannot drift without this file changing too.
  */
-const NEVER_POST = ['Bash(gh pr review:*)', 'Bash(gh pr comment:*)'] as const;
+const NEVER_POST = [
+  'Bash(gh pr review:*)',
+  'Bash(gh pr comment:*)',
+  // Round 3 — a PR shares the issue-comment endpoint, so this posts to one too.
+  'Bash(gh issue:*)',
+] as const;
 const NEVER_LAND = [
   'Bash(gh pr merge:*)',
   'Bash(gh pr close:*)',
@@ -100,12 +105,12 @@ describe('phase 20 — the per-mode deny table', () => {
         deny: [
           'Bash(gh pr review:*)',
           'Bash(gh pr comment:*)',
+          'Bash(gh issue:*)',
           'Bash(gh pr merge:*)',
           'Bash(gh pr close:*)',
           'Bash(gh pr edit:*)',
           'Bash(gh pr create:*)',
           'Bash(gh pr ready:*)',
-          'Bash(gh issue:*)',
           'Bash(gh api:*)',
           'Bash(gh repo:*)',
           'Bash(gh ruleset:*)',
@@ -134,6 +139,7 @@ describe('phase 20 — the per-mode deny table', () => {
         deny: [
           'Bash(gh pr review:*)',
           'Bash(gh pr comment:*)',
+          'Bash(gh issue:*)',
           'Bash(gh pr merge:*)',
           'Bash(gh pr close:*)',
         ],
@@ -142,6 +148,7 @@ describe('phase 20 — the per-mode deny table', () => {
         deny: [
           'Bash(gh pr review:*)',
           'Bash(gh pr comment:*)',
+          'Bash(gh issue:*)',
           'Bash(gh pr merge:*)',
           'Bash(gh pr close:*)',
           'Bash(gh pr edit:*)',
@@ -185,12 +192,12 @@ describe('phase 20 — the per-mode deny table', () => {
         deny: [
           'Bash(gh pr review:*)',
           'Bash(gh pr comment:*)',
+          'Bash(gh issue:*)',
           'Bash(gh pr merge:*)',
           'Bash(gh pr close:*)',
           'Bash(gh pr edit:*)',
           'Bash(gh pr create:*)',
           'Bash(gh pr ready:*)',
-          'Bash(gh issue:*)',
           'Bash(gh api:*)',
           'Bash(gh repo:*)',
           'Bash(gh ruleset:*)',
@@ -219,6 +226,7 @@ describe('phase 20 — the per-mode deny table', () => {
         deny: [
           'Bash(gh pr review:*)',
           'Bash(gh pr comment:*)',
+          'Bash(gh issue:*)',
           'Bash(gh pr merge:*)',
           'Bash(gh pr close:*)',
           'Bash(gh pr edit:*)',
@@ -440,6 +448,28 @@ describe('the administrative `gh` surface outside pr/issue/api', () => {
   it('development is untouched by this phase and keeps the whole surface', () => {
     for (const command of ADMINISTRATIVE_GH) {
       expect([command, isDenied('development', command)]).toEqual([command, false]);
+    }
+  });
+});
+
+/**
+ * Round 3 pre-merge — `gh issue comment <number>` posts to a PULL REQUEST.
+ *
+ * Pull requests and issues share the issue-comment endpoint, so `gh issue comment 2140 -b …`
+ * lands a comment on PR 2140. `NEVER_POST` named `gh pr review` and `gh pr comment` and stopped
+ * there, which left the "no mode may type a bare GitHub write verb" property with an unlisted
+ * bypass in the two modes that actually talk to GitHub. Investigation and QA already denied it
+ * through `WRITES_NOTHING_OUTWARD`; it belongs in the shared list, where no mode can miss it.
+ */
+describe('round 3 — no mode may reach a pull request through `gh issue`', () => {
+  it.each(ALL_MODES)('denies `gh issue` in %s', (mode) => {
+    expect(DEFAULT_PERMISSIONS[mode].deny ?? []).toContain('Bash(gh issue:*)');
+  });
+
+  it('names it once per mode, not twice — the shared list is the only source', () => {
+    for (const mode of ALL_MODES) {
+      const deny = DEFAULT_PERMISSIONS[mode].deny ?? [];
+      expect(deny.filter((rule) => rule === 'Bash(gh issue:*)'), mode).toHaveLength(1);
     }
   });
 });

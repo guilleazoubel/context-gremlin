@@ -419,7 +419,9 @@ export function rowActions(facts: ActionFacts, list: WorkListKind): RowAction[] 
       'overflow',
     );
   }
-  if (facts.needsYou) push({ command: 'cgremlin.ack', label: 'Ack' }, 'overflow');
+  // Round 3 — the verb names its EFFECT rather than the jargon. It clears the item from the
+  // needs-you count, which is the one thing reading it does not do, so it stays reachable.
+  if (facts.needsYou) push({ command: 'cgremlin.ack', label: 'Mark as seen' }, 'overflow');
 
   if (!primaryTaken) promote(out);
   return out;

@@ -72,6 +72,19 @@ export interface WorkItemPr {
    * not read it.
    */
   state: PrState | null;
+  /**
+   * Round 3 — the PR has moved since the review of ours that is on it looked
+   * at it. This is the inventory's OWN answer (`ours.newCommits`, which it
+   * computes from the two shas), carried through rather than computed again:
+   * a freshness bit derived twice is how two surfaces come to disagree about
+   * whether a verdict still stands, and the panel must never say "approved"
+   * about code that is no longer there.
+   *
+   * `null` means there is nothing to be stale about — no review of ours, or
+   * a PR the open-PR inventory no longer has. Additive on the wire; a client
+   * older than this contract simply does not read it.
+   */
+  newCommits: boolean | null;
 }
 
 export interface WorkItemTicket {
@@ -108,6 +121,18 @@ export interface WorkItemAgent {
   claimed: boolean;
   primaryArtifact: string | null;
   worktreePath: string | null;
+  /**
+   * Round 3 — WHICH pull request this session is about, from the attention
+   * item's own `links.prRepo`/`prNumber`. `null` for a session with no PR
+   * behind it (an investigation, a ticket-led development before its PR).
+   *
+   * The panel's expanded block quotes one agent's verdict and must show that
+   * agent's pull request beside it — its freshness, its size, its CI. With
+   * no link it fell back to `prs[0]`, which on a ticket carrying two pull
+   * requests is the most recently updated one, not the reviewed one, so a
+   * stale approval could render as fresh. Additive on the wire.
+   */
+  pr: { repo: string; number: number } | null;
   /** The AttentionItem it came from — the ack key stays the ref (R3). */
   ref: ItemRef;
   /**
@@ -230,6 +255,8 @@ function prFromEntry(e: InventoryEntry): WorkItemPr {
     // The inventory lists `--state open` only, so every row in it is open;
     // draftness is the one distinction it carries.
     state: e.isDraft ? 'draft' : 'open',
+    // Carried, never re-derived (see the field's own note).
+    newCommits: e.ours.status === 'none' ? null : e.ours.newCommits,
   };
 }
 
@@ -269,6 +296,9 @@ function prFromAgentLinks(
       deletions: cached?.deletions ?? null,
     }),
     state: cached?.state ?? null,
+    // The pr-state cache knows nothing about what our review looked at, and a
+    // PR that left the open-PR inventory has no live head to compare with.
+    newCommits: null,
   };
 }
 
@@ -459,6 +489,10 @@ export function groupWorkItems(input: GroupWorkItemsInput): WorkItem[] {
       claimed: item.claimed,
       primaryArtifact: item.links.primaryArtifact,
       worktreePath: item.links.worktreePath,
+      pr:
+        item.links.prRepo === null || item.links.prNumber === null
+          ? null
+          : { repo: item.links.prRepo, number: item.links.prNumber },
       ref: item.ref,
       qaVerdict: item.qaVerdict ?? null,
     });

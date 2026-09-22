@@ -14,7 +14,9 @@
  *
  * Pure module — no editor API (MG-B1).
  */
-import { MODE_GLYPH, MODE_NAME, prLabel, prRefOf, qaDeployText, qaStateText } from './row-composition';
+import {
+  MODE_GLYPH, MODE_NAME, peopleLine, prLabel, prRefOf, qaDeployText, qaStateText,
+} from './row-composition';
 import type { LifecycleSlot } from './lifecycle';
 import { chatTargetOfAgents, isLandedPr, prState, sizeOf, type WorkItem, type WorkListKind } from './work-items';
 import {
@@ -70,6 +72,8 @@ export interface ItemPartsInput {
   qaRepos?: readonly string[];
   /** Phase 18 — `jira.qaStatuses`, so a blocked QA part knows the item wants QA at all. */
   qaStatuses?: readonly string[];
+  /** Round 3 §e.9 — the user's own login (`CoreConfigView.me`), so a line can leave him out. */
+  me?: string;
   /** Already built by `lifecycleSlots`, so the state wording is said in exactly one place. */
   slots: readonly LifecycleSlot[];
   /** The list's own rule table — the only source of a verb (P0-2). */
@@ -112,7 +116,7 @@ export function itemParts(input: ItemPartsInput): ItemPart[] {
       stateText: item.ticket.status,
       detail: '',
       childId: `ticket:${item.ticket.key}`,
-      actions: openAction(`ticket:${item.ticket.key}`).concat(
+      actions: openAction(`ticket:${item.ticket.key}`, 'ticket').concat(
         find(input.actions, 'cgremlin.openTicket', `ticket:${item.ticket.key}`, 'Open in Jira'),
       ),
     });
@@ -129,9 +133,9 @@ export function itemParts(input: ItemPartsInput): ItemPart[] {
       // because the row is still here for its ticket, not for the change.
       state: isLandedPr(pr) ? prState(pr) : '',
       stateText: prStateText(pr, input.now),
-      detail: peopleLine(pr),
+      detail: peopleLine(pr, input.me ?? ''),
       childId,
-      actions: openAction(childId).concat(
+      actions: openAction(childId, 'pr').concat(
         find(input.actions, 'cgremlin.openPr', childId, 'Open on GitHub'),
       ),
     });
@@ -163,7 +167,7 @@ function qaPart(facts: ActionFacts, input: ItemPartsInput): ItemPart | null {
   const childId = agent === undefined || agent.pending === true ? null : `agent:${agent.sessionId}`;
   const actions: RowAction[] = [];
   if (childId !== null) {
-    actions.push(...openAction(childId));
+    actions.push(...openAction(childId, 'qa'));
     actions.push({ command: 'cgremlin.chat', label: 'Chat', childId, placement: 'inline' });
   }
   // Phase 16 — and the re-verification, wherever the row's own rule table
@@ -245,7 +249,7 @@ function stagePart(slot: LifecycleSlot, input: ItemPartsInput): ItemPart {
   const childId = slot.sessionId === null ? null : `agent:${slot.sessionId}`;
   const actions: RowAction[] = [];
   if (childId !== null) {
-    actions.push(...openAction(childId));
+    actions.push(...openAction(childId, slot.stage));
     // R50's gate, asked of the one function every surface asks: a respond agent still writing its
     // brief has nothing to say yet, so it offers no Chat.
     if (agent !== undefined && chatTargetOfAgents([agent]) !== null) {
@@ -274,8 +278,25 @@ function stagePart(slot: LifecycleSlot, input: ItemPartsInput): ItemPart {
   };
 }
 
-function openAction(childId: string): RowAction[] {
-  return [{ command: 'cgremlin.openChild', label: 'Open', childId, placement: 'inline' }];
+/**
+ * Round 3 §e.4 — the verb names the DOCUMENT, per the part's kind.
+ *
+ * Two buttons on one open row both read `Open`: the review's and the PR's. The word was
+ * hardcoded here for every kind, so the row could not say which of them read what. A stage part
+ * opens the artifact that stage wrote; a PR and a ticket have exactly one destination each and it
+ * is GitHub or Jira, so neither keeps a local Open at all.
+ */
+const READ_LABEL: Partial<Record<PartKind, string>> = {
+  investigation: 'Read the findings',
+  development: 'Read the plan',
+  review: 'Read the review',
+  qa: 'Read the QA result',
+};
+
+function openAction(childId: string, kind: PartKind): RowAction[] {
+  const label = READ_LABEL[kind];
+  if (label === undefined) return [];
+  return [{ command: 'cgremlin.openChild', label, childId, placement: 'primary' }];
 }
 
 /**
@@ -314,9 +335,88 @@ function openedOn(createdAt: string | null): string {
   return `Opened ${new Date(at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`;
 }
 
-/** Who has already been on the PR — the evidence `people` used to carry on its own block. */
-function peopleLine(pr: WorkItem['prs'][number]): string {
-  const reviewed = (pr.humanActivity?.reviewedBy ?? []).map((login) => `@${login} reviewed`);
-  const commented = (pr.humanActivity?.commentedBy ?? []).map((login) => `@${login} commented`);
-  return [...reviewed, ...commented].join(', ');
+
+/**
+ * Round 3 §e.7 — the open block's verbs, with `ActionPlacement` finally READ.
+ *
+ * The field is computed through three modules (`rowActions` decides it, `rowActionsForLists`
+ * merges it, `item-tab.ts` honours it) and the panel threw it away: every leftover action drew an
+ * identical button, which is why `Ack`, `Rename` and `Dismiss` sat at the same weight as the verb
+ * that does the work, and why two buttons could both read `Open`.
+ *
+ * The rule, once, here:
+ *   - ONE primary — the recommended next action, full width. A failed run's `Retry` takes it over
+ *     anything else, for the same reason `rowActions` pushes it first: it is the most urgent
+ *     thing the row has to say.
+ *   - At most TWO supporting verbs beside it. A third would be a button row again.
+ *   - Everything else that is not a part's own verb goes to the disclosure as housekeeping.
+ *
+ * A verb that is hoisted LEAVES the part it came from, so nothing is said twice; a part's
+ * remaining verbs stay under it, where a second `Chat` is unambiguous about which agent it means.
+ * No verb is invented (P0-2): every one of these came out of `rowActions`.
+ */
+const SUPPORTING_LIMIT = 2;
+
+/**
+ * Generic over the part shape, so the host may hand it either an `ItemPart` or its view.
+ *
+ * `focusChildId` is the session whose artifact the verdict block is quoting (`verdictFocusOf`).
+ * Without it the primary was "whichever part emitted one first", in part order — so an item that
+ * investigated and was then reviewed hoisted `Read the findings` while the verdict above it was
+ * the review's, and `Read the review` stayed inside a disclosure that is CLOSED by default. The
+ * one prominent button now opens the document the block quotes, and the focus part's other
+ * verbs (its Chat, the disagreement channel) lead the supporting pair for the same reason.
+ */
+export function hoistVerbs<P extends { actions: RowAction[]; childId?: string | null }>(
+  parts: readonly P[],
+  actions: readonly RowAction[],
+  focusChildId: string | null = null,
+): { verbs: RowAction[]; parts: P[] } {
+  const key = (action: RowAction): string => `${action.command}:${action.childId ?? ''}`;
+  const ordered =
+    focusChildId === null
+      ? [...parts]
+      : [
+          ...parts.filter((part) => part.childId === focusChildId),
+          ...parts.filter((part) => part.childId !== focusChildId),
+        ];
+  const pool: RowAction[] = [];
+  const seen = new Set<string>();
+  for (const action of [...ordered.flatMap((part) => part.actions), ...actions]) {
+    if (seen.has(key(action))) continue;
+    seen.add(key(action));
+    pool.push(action);
+  }
+
+  const retry = pool.find((action) => action.command === 'cgremlin.retry');
+  const quoted =
+    focusChildId === null
+      ? undefined
+      : pool.find(
+          (action) => action.command === 'cgremlin.openChild' && action.childId === focusChildId,
+        );
+  const primary = retry ?? quoted ?? pool.find((action) => action.placement === 'primary') ?? null;
+  const supporting = pool
+    .filter((action) => action !== primary && action.placement !== 'overflow')
+    .slice(0, SUPPORTING_LIMIT);
+  const hoistedKeys = new Set([...(primary === null ? [] : [primary]), ...supporting].map(key));
+
+  // The disclosure's own verbs: the row-level ones no part offers and nothing hoisted — which in
+  // practice is the housekeeping, which is exactly where it belongs.
+  const onParts = new Set(parts.flatMap((part) => part.actions.map(key)));
+  const housekeeping = actions.filter(
+    (action) => !hoistedKeys.has(key(action)) && !onParts.has(key(action)),
+  );
+
+  return {
+    verbs: [
+      ...(primary === null ? [] : [{ ...primary, placement: 'primary' as const }]),
+      ...supporting.map((action) => ({ ...action, placement: 'inline' as const })),
+      ...housekeeping.map((action) => ({ ...action, placement: 'overflow' as const })),
+    ],
+    parts: parts.map((part) => ({
+      ...part,
+      actions: part.actions.filter((action) => !hoistedKeys.has(key(action))),
+    })),
+  };
 }

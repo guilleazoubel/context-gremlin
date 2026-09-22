@@ -137,7 +137,7 @@ describe('MG-10: no HTML crosses the port, the API or postMessage', () => {
  *  - the `gh pr comment|review|merge|…` grep legitimately hits `permission-guard.ts`, whose whole
  *    job is to DENY those verbs to the agent, plus the comment that points at it.
  */
-describe('MG-14: nothing in Phase 9 writes to GitHub', () => {
+describe('MG-14: the ENGINE writes to GitHub nowhere, and the agent only through the helpers', () => {
   it('no GraphQL document in the core contains a mutation operation', () => {
     // The operation kind, not the English word: `mutation Name(`, `mutation {`, `mutation(`.
     expect(hits(CORE, /\bmutation\s*[({A-Z]/)).toEqual([]);
@@ -160,18 +160,87 @@ describe('MG-14: nothing in Phase 9 writes to GitHub', () => {
   it('the permission guard really denies them rather than merely mentioning them', () => {
     const guard = CORE.find((file) => file.label.endsWith('workspace/permission-guard.ts'));
     expect(guard).toBeDefined();
-    for (const verb of ['gh pr review', 'gh pr comment', 'gh pr merge', 'gh pr close']) {
+    for (const verb of ['gh pr review', 'gh pr comment', 'gh pr merge', 'gh pr close', 'gh issue']) {
       expect(guard?.text).toContain(`Bash(${verb}:*)`);
     }
     expect(guard?.text).toMatch(/deny/i);
   });
 
-  it('the respond brief instructs no reply, no resolve, no push (R55)', () => {
+  /**
+   * Phase 20 REVERSED R55's "never answer": the respond agent now does reply, through two
+   * scoped helpers (`.cgremlin/post-review`, `.cgremlin/post-comment`) that have this one repo
+   * and this one PR number compiled into them, with every `gh` write verb denied outright.
+   *
+   * So the guard pins the CURRENT policy rather than the old one. The brief's posting
+   * INSTRUCTIONS must reach for no `gh` write of any kind and must route the replies through
+   * the helper; the denial section that follows still has to enumerate the verbs, so the brief
+   * cannot pass by going silent about them, and the helpers have to exist in the core that
+   * writes them into the worktree.
+   */
+  it('the respond brief routes every reply through the scoped helper, and instructs no `gh` write', () => {
     const prompts = CORE.find((file) => file.label.endsWith('pipeline/prompts.ts'));
     const brief = /export function renderRespondBrief[\s\S]*?\n}/.exec(prompts?.text ?? '')?.[0] ?? '';
     expect(brief).not.toBe('');
-    expect(brief).toContain('Do NOT reply to a comment');
-    expect(brief).toContain('do NOT push');
+
+    // 1. The route, named, and named as the whole of the agent's authority to write.
+    expect(brief).toContain('.cgremlin/post-review');
+    expect(brief).toContain('.cgremlin/post-comment');
+    expect(brief).toMatch(/whole of your authority to write to GitHub/);
+    expect(brief).toMatch(/post-review[^\n]*ONE review/);
+
+    // 2. A `gh` write verb may appear in EXACTLY one place in the brief: the paragraphs that
+    //    refuse it. The posting steps ("When", "How") sit BELOW those, so a slice is not enough
+    //    — every occurrence is located and has to fall inside the refusal.
+    const from = brief.indexOf('**What is denied.**');
+    const to = brief.indexOf('**If a helper exits non-zero');
+    expect(from).toBeGreaterThan(0);
+    expect(to).toBeGreaterThan(from);
+    // `gh issue comment <n>` posts to a PULL REQUEST — they share the issue-comment endpoint —
+    // so it is a write verb like the rest and has to be located like the rest.
+    const GH_WRITE = /gh (pr (review|comment|create|merge|close|edit|ready)|issue|api)\b/g;
+    const stray: string[] = [];
+    for (let m = GH_WRITE.exec(brief); m !== null; m = GH_WRITE.exec(brief)) {
+      if (m.index < from || m.index > to) stray.push(m[0]);
+    }
+    expect(stray).toEqual([]);
+
+    // 3. …and the refusal really does name them, so silence cannot pass for safety.
+    const denial = brief.slice(from, to);
+    for (const verb of ['gh api', 'gh pr review', 'gh pr comment', 'gh pr merge', 'gh issue']) {
+      expect(denial, verb).toContain(verb);
+    }
+
+    // 4. A failed post is reported as NOT delivered rather than assumed (prompts.ts's own rule).
+    expect(brief).toMatch(/NOT delivered/);
+  });
+
+  /**
+   * Round 3 pre-merge — the same property, for the brief the REVIEW agent reads. Both briefs
+   * tell the agent what the guard refuses, and a refusal list that goes out of date is worse
+   * than none: it teaches the agent that a verb is available when the guard denies it.
+   */
+  it('the posting protocol`s refusal names every verb the guard denies, `gh issue` included', () => {
+    const prompts = CORE.find((file) => file.label.endsWith('pipeline/prompts.ts'));
+    // The review and re-review briefs share ONE posting protocol; this is it.
+    const brief =
+      /export function renderPostingProtocol[\s\S]*?\n}/.exec(prompts?.text ?? '')?.[0] ?? '';
+    expect(brief).not.toBe('');
+    const from = brief.indexOf('**What is denied.**');
+    const to = brief.indexOf('**What is NOT denied');
+    expect(from).toBeGreaterThan(0);
+    const denial = brief.slice(from, to);
+    for (const verb of ['gh api', 'gh pr review', 'gh pr comment', 'gh issue']) {
+      expect(denial, verb).toContain(verb);
+    }
+  });
+
+  it('the helpers the brief sends the agent to are really written by the core', () => {
+    const helpers = CORE.find((file) => file.label.endsWith('workspace/post-helpers.ts'));
+    expect(helpers?.text ?? '').toContain('post-review');
+    expect(helpers?.text ?? '').toContain('post-comment');
+    // And the guard still allows exactly those two while denying the raw verbs (asserted above).
+    const guard = CORE.find((file) => file.label.endsWith('workspace/permission-guard.ts'));
+    expect(guard?.text ?? '').toContain('.cgremlin/post-review');
   });
 });
 

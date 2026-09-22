@@ -2,6 +2,8 @@
  * The expanded row's three slots — always three, and never one that offers a Start the row's own
  * button would refuse.
  */
+import fs from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   currentAgentOf,
@@ -55,11 +57,17 @@ describe('the lifecycle slots', () => {
     expect(built[1].sessionId).toBe('s-development');
   });
 
-  it('reads the gate as "needs you" rather than as done', () => {
+  /**
+   * Round 3 §e.2 — a gate and a pipeline phase are two different axes, and joining them with a
+   * `·` said they were one kind of thing. `needs you · ready` is what the user read as an answer
+   * and it never was one; the answer is the verdict, which now has a block of its own. The phase
+   * word survives only on `running`, where it is genuine progress.
+   */
+  it('reads the gate as "needs you", with no pipeline phase glued to it', () => {
     const agents = [agent({ mode: 'investigation', phase: 'plan_ready', needsYou: true })];
     const built = slots({ agents, facts: facts({ agents: asActionAgents(agents) }) });
     expect(built[0].state).toBe('needsYou');
-    expect(built[0].stateText).toBe('needs you · plan_ready');
+    expect(built[0].stateText).toBe('needs you');
   });
 
   it('dates a finished slot by the artifact, and says plain "done" when it has no date', () => {
@@ -190,5 +198,28 @@ describe('what an open row’s detail depends on', () => {
     expect(detailSignatureOf({ ...item(), needsYou: true } as never)).toBe(
       detailSignatureOf(item()),
     );
+  });
+});
+
+/**
+ * Round 3 AC 2 — "No string of the form `needs you · <phase>` appears anywhere". The unit test
+ * above pins the one producer; this reads the sources, so a second producer cannot appear.
+ */
+describe('AC 2 — no module glues a gate to a pipeline phase', () => {
+  const SRC = path.resolve(__dirname, '../../src');
+
+  function sources(dir: string): string[] {
+    return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) return sources(full);
+      return entry.name.endsWith('.ts') ? [full] : [];
+    });
+  }
+
+  it('has no `needs you · ` anywhere under src', () => {
+    const offenders = sources(SRC).filter((file) =>
+      fs.readFileSync(file, 'utf8').includes('needs you · '),
+    );
+    expect(offenders.map((file) => path.relative(SRC, file))).toEqual([]);
   });
 });

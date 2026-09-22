@@ -7,9 +7,9 @@
  */
 import { CoreHttpError, EngineNotRunningError, type CoreClient } from '../core-client';
 import { troubleOf } from '../model/engine-trouble';
-import { qaReposOf, qaStatusesOf } from '../model/items';
-import { currentAgentOf } from '../model/lifecycle';
-import { itemPathOf, type ItemArtifactListing } from '../model/work-items';
+import { meOf, qaReposOf, qaStatusesOf } from '../model/items';
+import { currentAgentOf, verdictFocusOf } from '../model/lifecycle';
+import { itemPathOf, type ItemArtifactListing, type WorkItem } from '../model/work-items';
 import type { NotificationLevel } from '../model/notify-policy';
 import { PanelView, PANEL_VIEW_ID } from './panel-view';
 import { NotificationSurface } from './notifications';
@@ -89,6 +89,8 @@ export function createUi(options: UiOptions): Ui {
     qaRepos: () => qaReposOf(coordinator.config()),
     /** Phase 18 — and which statuses mean "in QA", so a blocked row knows it wants one. */
     qaStatuses: () => qaStatusesOf(coordinator.config()),
+    /** Round 3 §e.9 — who the user is, so a line never reports him to himself. */
+    me: () => meOf(coordinator.config()),
     onSelect: async (id) => {
       const agent = currentAgentOf(coordinator.itemOf(id)?.agents ?? []);
       if (agent?.worktreePath == null) return;
@@ -113,7 +115,20 @@ export function createUi(options: UiOptions): Ui {
       }
       const agent = currentAgentOf(item.agents);
       const changes = agent === null ? null : await client.changes(agent.sessionId).catch(note);
-      return { artifactAt, changes, offline };
+      // Round 3 §e.1 — the ANSWER, for the ONE row the user just clicked. `primaryArtifact` and
+      // `CoreClient.artifactText` are both already there; what was missing was anyone asking.
+      //
+      // ONE selection decides both halves (`verdictFocusOf`): whose artifact is read, and which
+      // pull request the freshness bit is about. Reading the bit off the first PR instead meant a
+      // review of one pull request could be declared fresh on the strength of another one.
+      const focus = verdictFocusOf(item.agents, item.prs);
+      const artifact = await artifactOf(client, focus.agent, note);
+      // Ruling 3 — the engine computes it once, in the inventory, and carries it on the PR:
+      // nothing here re-derives a freshness bit, so the panel and the CLI cannot come to
+      // disagree about whether a verdict stands. An engine older than that contract sends
+      // nothing, and an unidentifiable pull request makes no claim at all (MG-12).
+      const newCommits = focus.pr?.newCommits === true;
+      return { artifactAt, changes, offline, artifact, newCommits };
     },
   });
   const coordinator = new RefreshCoordinator({
@@ -282,4 +297,22 @@ function latestArtifactAt(listing: readonly ItemArtifactListing[]): string | nul
     if (latest === null || artifact.mtime > latest) latest = artifact.mtime;
   }
   return latest;
+}
+
+
+/**
+ * Round 3 §e.1 — the primary artifact of the agent whose conclusion the row reports, as text.
+ *
+ * Nothing is parsed here: the host fetches, the model reads (`verdictView`). A failure is
+ * reported as `unreadable` rather than swallowed — "the review finished but its report could not
+ * be read" is a different thing from "there is no review", and only one of them is silence.
+ */
+async function artifactOf(
+  client: CoreClient,
+  agent: WorkItem['agents'][number] | null,
+  note: (err: unknown) => null,
+): Promise<{ mode: string; text: string | null; unreadable: boolean } | null> {
+  if (agent === null || agent.primaryArtifact === null) return null;
+  const text = await client.artifactText(agent.sessionId, agent.primaryArtifact).catch(note);
+  return { mode: agent.mode, text, unreadable: text === null };
 }

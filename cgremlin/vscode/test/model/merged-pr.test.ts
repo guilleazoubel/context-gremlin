@@ -132,7 +132,10 @@ describe('the merged marker', () => {
     const part = parts.find((p) => p.kind === 'pr')!;
     expect(part.state).toBe('merged');
     expect(part.stateText.startsWith('merged')).toBe(true);
-    expect(part.actions.map((a) => a.command)).toContain('cgremlin.openChild');
+    // Round 3 §e.4: a PR's one destination is GitHub, so it carries no local Open at all — the
+    // part itself is still the click that opens its pane.
+    expect(part.actions.map((a) => a.command)).toEqual(['cgremlin.openPr']);
+    expect(part.childId).toBe('pr:aplaceformom/grace#2180');
   });
 });
 
