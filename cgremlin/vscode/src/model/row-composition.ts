@@ -15,6 +15,7 @@
  *
  * Pure: no editor API, no DOM, no clock of its own (a `now` is always an argument).
  */
+import { severityCountsOf, verdictOf, type VerdictTone } from './artifact-outline';
 import { reasonText } from './needs-you';
 import type {
   CiStatus,
@@ -227,6 +228,165 @@ export function agentGlyph(agent: WorkItemAgent): string {
 /** The one-or-two character badge a row draws per agent. */
 export function agentBadge(agent: WorkItemAgent): string {
   return `${MODE_LETTER[agent.mode] ?? '?'}${agentGlyph(agent)}`;
+}
+
+/**
+ * Round 3 §e.1 — the ANSWER, composed once, out of the artifact the agent actually wrote.
+ *
+ * Two rules are absolute. **Never fabricate** (MG-12, MG-17j): nothing parsed means no block,
+ * and never `0 findings` — a zero would tell the user the change is clean, which is a claim
+ * this module has no evidence for. And **staleness travels with the verdict**: a conclusion
+ * about code that has since changed is the one gap that makes a user act WRONGLY rather than
+ * late, so it is said beside the claim and never below the fold. It is therefore also the one
+ * thing that can draw the block on its own.
+ */
+export interface RowVerdict {
+  /** The artifact's own tone, or `null` when there is no verdict to tone. */
+  tone: VerdictTone | null;
+  /** The label AS WRITTEN — a novel one prints as itself rather than as nothing. */
+  label: string;
+  sentence: string;
+  /** `1 critical · 1 high` — empty where no finding carried a severity. Never a zero. */
+  counts: string;
+  /** Round 3, ruling 3: the pull request moved after the agent looked at it. */
+  stale: string | null;
+  /** The report exists and could not be read — which is not the same as a crash. */
+  notice: string | null;
+}
+
+export const STALE_SENTENCE = 'The pull request changed after the agent looked at it';
+
+/** The noun each mode's primary artifact is, so a failure names what it could not read. */
+const REPORT_NOUN: Record<string, string> = {
+  review: 'review',
+  rereview: 'review',
+  respond: 'replies',
+  investigation: 'findings',
+  development: 'plan',
+  qa: 'QA result',
+};
+
+export function verdictView(input: {
+  /** The primary artifact's text, or `null` when there was none to fetch or it did not arrive. */
+  text: string | null;
+  /** The fetch itself failed. Distinct from "there is nothing to fetch", which says nothing. */
+  unreadable: boolean;
+  /** `InventoryEntry.ours.newCommits` — the engine's own answer, not a second derivation. */
+  newCommits: boolean;
+  mode: string | null;
+}): RowVerdict | null {
+  const stale = input.newCommits ? STALE_SENTENCE : null;
+  if (input.unreadable) {
+    const noun = REPORT_NOUN[input.mode ?? ''] ?? 'report';
+    return { tone: null, label: '', sentence: '', counts: '', stale, notice: `The ${noun} could not be read` };
+  }
+  const verdict = input.text === null || input.text === '' ? null : verdictOf(input.text);
+  if (verdict === null) {
+    return stale === null
+      ? null
+      : { tone: null, label: '', sentence: '', counts: '', stale, notice: null };
+  }
+  return {
+    tone: verdict.tone,
+    label: verdict.label,
+    sentence: verdict.sentence,
+    counts: severityText(input.text ?? ''),
+    stale,
+    notice: null,
+  };
+}
+
+/**
+ * `1 critical · 1 high · 1 design`, in the artifact's own severity order, and EMPTY where no
+ * finding carried one. The words, never the emoji (phase 11 §2).
+ */
+function severityText(text: string): string {
+  return severityCountsOf(text)
+    .map((entry) => `${entry.count} ${entry.word.toLowerCase()}`)
+    .join(' · ');
+}
+
+/**
+ * What the PR IS, as one word. The terminal states outrank everything: a merged PR that was
+ * approved is merged, and saying `approved` there is what kept offering a review of it.
+ *
+ * Round 3 moved it into the composer with the rest of the row's words — it had to, since the
+ * facts block below reads it and the composer may not import a value out of `work-items`.
+ */
+export function prState(pr: WorkItemPr): string {
+  if (pr.state === 'merged') return 'merged';
+  if (pr.state === 'closed') return 'closed';
+  if (pr.isDraft === true) return 'draft';
+  if (pr.reviewDecision === 'APPROVED') return 'approved';
+  if (pr.reviewDecision === 'CHANGES_REQUESTED') return 'changes_requested';
+  return 'open';
+}
+
+/** The tier letter, spelled out — the expanded block is where `L` and `●` become words. */
+const TIER_WORD: Record<string, string> = {
+  S: 'Small',
+  M: 'Medium',
+  L: 'Large',
+  XL: 'Very large',
+};
+
+const CI_WORD: Record<string, string> = {
+  success: 'CI passing',
+  pending: 'CI pending',
+  failure: 'CI failing',
+};
+
+/**
+ * Round 3 §(d) — the PR's facts, in words, as the two or three lines that sit above the
+ * disclosure.
+ *
+ * This is the ONE size measurement the open block shows (defect 3): the PR's own, because that
+ * is the change under judgement. The worktree pair moves into the disclosure, where it can name
+ * the ref it is measured against. Defect 10's answer is here too — the collapsed row's `L` and
+ * its bare dot are cheap and honest at 300px, and this is where they are said out loud.
+ *
+ * Every token is dropped where the engine sent nothing (MG-12): no `0 files`, no `—`, no guess.
+ */
+export function prFactLines(pr: WorkItemPr | undefined, me: string): string[] {
+  if (pr === undefined) return [];
+  const size = sizeOf(pr);
+  const first = [
+    `${ownerWord(pr, me)}, ${prState(pr).replace(/_/g, ' ')}`,
+    size === '—' ? '' : size,
+  ].filter((part) => part !== '');
+  const tier = tierOf(pr);
+  const second = [
+    TIER_WORD[tier] ?? '',
+    CI_WORD[pr.ci ?? ''] ?? '',
+    openedOn(pr.createdAt),
+  ].filter((part) => part !== '');
+  return [first.join(' · '), second.join(' · '), peopleLine(pr, me)].filter((line) => line !== '');
+}
+
+/** `Your PR`, `@dtorres's PR`, or just `This PR` where the engine named no author. */
+function ownerWord(pr: WorkItemPr, me: string): string {
+  if (pr.isMine === true) return 'Your PR';
+  if (pr.author !== null && pr.author !== undefined && pr.author !== '') {
+    return me !== '' && pr.author === me ? 'Your PR' : `@${pr.author}'s PR`;
+  }
+  return 'This PR';
+}
+
+/** `opened 21 Sep`, or nothing at all where the engine sent no date (MG-12). */
+function openedOn(createdAt: string | null): string {
+  if (createdAt === null) return '';
+  const at = Date.parse(createdAt);
+  if (Number.isNaN(at)) return '';
+  return `opened ${new Date(at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`;
+}
+
+/**
+ * `HB-1555 · In Review`. Product §6.4: the Jira status is the single best predictor of what the
+ * user should do next, and it rendered as undifferentiated grey text under two agent parts.
+ */
+export function ticketLineOf(ticket: { key: string; status: string } | null): string {
+  if (ticket === null) return '';
+  return [ticket.key, ticket.status].filter((part) => part !== '').join(' · ');
 }
 
 const CI_DOTS: Record<CiStatus, string> = {

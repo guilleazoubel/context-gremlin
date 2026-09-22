@@ -105,12 +105,27 @@ describe('MG-B8 four lists and no tree', () => {
   }
 
   it('has no repo-wide PR list, no markdown preview and no tree left under src', () => {
-    expect(hits(/client\.prs\(/)).toEqual([]);
+    // Round 3, ruling 3 — the ONE exception, and it is not a list. `ours.newCommits` (the
+    // engine's own `reviewedSha !== headSha`, `core/src/inventory/inventory.ts:153`) crosses no
+    // other route: `/items` carries neither sha, and re-deriving a freshness bit in the panel is
+    // how two surfaces come to disagree about whether a verdict still stands. So the composition
+    // root reads ONE entry out of `/prs`, for the ONE row the user expanded, and nothing renders
+    // the inventory itself. MG-B8 is about a repo-wide PR SURFACE; this is a boolean.
+    expect(hits(/client\.prs\(/)).toEqual(['src/ui/wiring.ts']);
     expect(hits(/markdown\.showPreview/)).toEqual([]);
     expect(hits(/markdown\.preview\.refresh/)).toEqual([]);
     expect(hits(/cgremlin\.refreshPreview/)).toEqual([]);
     expect(hits(/TreeDataProvider|createTreeView/)).toEqual([]);
     expect(fs.existsSync(path.join(root, 'src/ui/tree.ts'))).toBe(false);
+  });
+
+  it('reads the inventory for one boolean and never for a row, a list or a section', () => {
+    const wiring = fs.readFileSync(path.join(root, 'src/ui/wiring.ts'), 'utf8');
+    const call = /client\.prs\(\)[\s\S]{0,400}/.exec(wiring)?.[0] ?? '';
+    expect(call).toContain('newCommits');
+    // Nothing downstream of the call may reach for a title, an author or a body — the moment it
+    // does, the panel is rendering the repo-wide list MG-B8 removed.
+    expect(call).not.toMatch(/\.title|\.author|entries\.map|entries\.filter/);
   });
 
   it('contributes the view as a webview and no longer contributes refreshPreview', () => {

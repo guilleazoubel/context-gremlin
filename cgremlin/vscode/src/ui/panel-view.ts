@@ -17,6 +17,7 @@ import crypto from 'node:crypto';
 import { changeSummary, type SessionChanges } from '../model/changes';
 import { detailSignatureOf, lifecycleSlots } from '../model/lifecycle';
 import { itemParts } from '../model/item-parts';
+import { prFactLines, ticketLineOf, verdictView, type RowVerdict } from '../model/row-composition';
 import { readTitle } from '../model/item-title';
 import { itemActionFacts, rowActions } from '../model/row-actions';
 import {
@@ -125,6 +126,19 @@ export interface ExpandedDetail {
   /** The latest artifact time per session id, for a slot's `done · 2h`. */
   artifactAt: Record<string, string | null>;
   changes: SessionChanges | null;
+  /**
+   * Round 3 §e.1 — the primary artifact of the agent whose conclusion the row is reporting, as
+   * TEXT. The parse is the model's (`verdictView`); the host only fetches. Absent means there was
+   * nothing to fetch, which says nothing at all — `unreadable` is the different case where the
+   * report exists and did not arrive.
+   */
+  artifact?: { mode: string; text: string | null; unreadable: boolean } | null;
+  /**
+   * Ruling 3 — the engine's OWN answer to "has the PR moved since the agent looked"
+   * (`InventoryEntry.ours.newCommits`, `core/src/inventory/inventory.ts:153`). Never re-derived
+   * here: a second derivation of a freshness bit is how two surfaces come to disagree.
+   */
+  newCommits?: boolean;
   /**
    * P11: the read found no engine on the socket. The row still opens — everything it shows comes
    * out of the snapshot — and the block carries one line saying the detail is the last one that
@@ -610,6 +624,10 @@ export class PanelView implements WebviewViewProviderLike {
       selected: this.selectedId === row.id,
       // §4: the item's OWN parts, each already carrying only the buttons the list allows.
       parts: expanded ? this.partsOf(row, actions) : [],
+      // Round 3 — the ANSWER, above every button, and only on the row that is open.
+      verdict: expanded ? this.verdictOf(row) : null,
+      facts: expanded ? prFactLines(row.item.prs[0], this.deps.me?.() ?? '') : [],
+      ticketLine: expanded ? ticketLineOf(row.item.ticket) : '',
       changes: expanded ? this.changesView(row.id) : null,
       actions,
       // The notice again, where the user is actually looking — the open row, and only it.
@@ -643,6 +661,24 @@ export class PanelView implements WebviewViewProviderLike {
       }),
       actions,
       now: this.deps.now?.(),
+    });
+  }
+
+  /**
+   * Round 3 §e.1 — the verdict block, or `null` for no block at all.
+   *
+   * Nothing is composed here: the fetched text and the engine's freshness bit go to the ONE
+   * composer, which is also the only module allowed to decide that there is nothing to say.
+   */
+  private verdictOf(row: WorkRow): RowVerdict | null {
+    const detail = this.detailOf(row.id);
+    if (detail === null) return null;
+    const artifact = detail.artifact ?? null;
+    return verdictView({
+      text: artifact?.text ?? null,
+      unreadable: artifact?.unreadable === true,
+      newCommits: detail.newCommits === true,
+      mode: artifact?.mode ?? null,
     });
   }
 

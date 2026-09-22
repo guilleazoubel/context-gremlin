@@ -743,6 +743,7 @@ export {
   landedOf,
   prLabel,
   prRefOf,
+  prState,
   qaStateText,
   repoTailOf,
   rowMetaCells,
@@ -762,6 +763,7 @@ import {
   isLandedItem,
   prLabel,
   prRefOf,
+  prState,
   repoTailOf,
   rowMetaCells,
   sizeOf,
@@ -971,17 +973,6 @@ export function buildItemChildren(item: WorkItem): WorkChild[] {
     });
   }
   return children;
-}
-
-export function prState(pr: WorkItemPr): string {
-  // The terminal states outrank everything: a merged PR that was approved is
-  // merged, and saying `approved` there is what kept offering a review of it.
-  if (pr.state === 'merged') return 'merged';
-  if (pr.state === 'closed') return 'closed';
-  if (pr.isDraft === true) return 'draft';
-  if (pr.reviewDecision === 'APPROVED') return 'approved';
-  if (pr.reviewDecision === 'CHANGES_REQUESTED') return 'changes_requested';
-  return 'open';
 }
 
 // ---------------------------------------------------------------------------

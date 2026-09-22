@@ -124,6 +124,9 @@ function rowViewOf(row: WorkRow, over: StateOptions) {
     actions,
     hint: null,
     detailNotice: null,
+    verdict: null,
+    facts: [],
+    ticketLine: '',
   };
 }
 

@@ -8,6 +8,7 @@
  * Pure module — no editor API (MG-B1).
  */
 import type { NeedsYouEntry } from './needs-you';
+import type { RowVerdict } from './row-composition';
 import type { ActionPlacement } from './row-actions';
 import {
   DISMISSED_SECTION_KEY,
@@ -23,6 +24,7 @@ import {
 
 export type { RowMetaCell } from './work-items';
 export type { NeedsYouEntry } from './needs-you';
+export type { RowVerdict } from './row-composition';
 
 export interface PanelRowView {
   id: string;
@@ -68,6 +70,16 @@ export interface PanelRowView {
    * Empty unless the row is expanded. What replaced "three lifecycle slots + parts + people".
    */
   parts: PanelPartView[];
+  /**
+   * Round 3 §e.1 — the ANSWER the open block leads with: the agent's own verdict, its severity
+   * counts and, WITH it, whether the pull request has moved since. `null` means there is nothing
+   * to say and NO block is drawn — never a fabricated `0 findings` (MG-17j).
+   */
+  verdict: RowVerdict | null;
+  /** §(d) — the PR's facts in words: state, one size, tier, CI, date, who else has looked. */
+  facts: string[];
+  /** `HB-1555 · In Review`, or empty where the item has no ticket. */
+  ticketLine: string;
   /** "Changes so far", or `null` until the engine has answered — the row then paints `—`. */
   changes: PanelChangesView | null;
   /** The row's own actions, already decided by the host (which ones apply is not the view's job). */

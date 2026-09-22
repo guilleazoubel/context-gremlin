@@ -159,6 +159,33 @@ function rankOf(mode: string): number {
 }
 
 /**
+ * Round 3 §e.1 — whose artifact the expanded row reads for its verdict.
+ *
+ * The LAST thing to have concluded, which is the claim the user is being asked to adjudicate: a
+ * verification outranks a reply, a reply outranks the review it answers, and both outrank the
+ * development notes under them. A pending agent (this window's optimism) and an agent that named
+ * no artifact are not candidates at all — there is nothing to read behind either.
+ */
+const VERDICT_RANK: Record<string, number> = {
+  qa: 5,
+  respond: 4,
+  review: 3,
+  development: 2,
+  investigation: 1,
+};
+
+export function verdictAgentOf<T extends LifecycleAgent>(agents: readonly T[]): T | null {
+  let best: T | null = null;
+  for (const agent of agents) {
+    if (agent.pending === true) continue;
+    if (agent.primaryArtifact === null || agent.primaryArtifact === '') continue;
+    const rank = VERDICT_RANK[agent.mode] ?? 0;
+    if (best === null || rank >= (VERDICT_RANK[best.mode] ?? 0)) best = agent;
+  }
+  return best;
+}
+
+/**
  * Everything an open row's detail actually depends on, as one comparable string.
  *
  * The panel re-reads the open row's artifacts and its change counts on a refresh, and every SSE

@@ -30,6 +30,9 @@ function rowView(over: Partial<PanelRowView> = {}): PanelRowView {
   return {
     hint: null,
     detailNotice: null,
+    verdict: null,
+    facts: [],
+    ticketLine: '',
     id: 'pr:acme/web#101',
     list: 'parkingLot',
     label: '#101 — Fix hydration on /communities',

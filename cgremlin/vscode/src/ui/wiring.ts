@@ -8,8 +8,8 @@
 import { CoreHttpError, EngineNotRunningError, type CoreClient } from '../core-client';
 import { troubleOf } from '../model/engine-trouble';
 import { meOf, qaReposOf, qaStatusesOf } from '../model/items';
-import { currentAgentOf } from '../model/lifecycle';
-import { itemPathOf, type ItemArtifactListing } from '../model/work-items';
+import { currentAgentOf, verdictAgentOf } from '../model/lifecycle';
+import { itemPathOf, type ItemArtifactListing, type WorkItem } from '../model/work-items';
 import type { NotificationLevel } from '../model/notify-policy';
 import { PanelView, PANEL_VIEW_ID } from './panel-view';
 import { NotificationSurface } from './notifications';
@@ -115,7 +115,14 @@ export function createUi(options: UiOptions): Ui {
       }
       const agent = currentAgentOf(item.agents);
       const changes = agent === null ? null : await client.changes(agent.sessionId).catch(note);
-      return { artifactAt, changes, offline };
+      // Round 3 §e.1 — the ANSWER, for the ONE row the user just clicked. `primaryArtifact` and
+      // `CoreClient.artifactText` are both already there; what was missing was anyone asking.
+      const artifact = await artifactOf(client, item, note);
+      // Ruling 3 — and whether that answer still applies. The engine already computes it
+      // (`InventoryEntry.ours.newCommits`); the panel's `/items` wire simply does not carry it,
+      // so the one row that is open asks `/prs` for its own PR's entry.
+      const newCommits = await newCommitsOf(client, item, note);
+      return { artifactAt, changes, offline, artifact, newCommits };
     },
   });
   const coordinator = new RefreshCoordinator({
@@ -284,4 +291,45 @@ function latestArtifactAt(listing: readonly ItemArtifactListing[]): string | nul
     if (latest === null || artifact.mtime > latest) latest = artifact.mtime;
   }
   return latest;
+}
+
+
+/**
+ * Round 3 §e.1 — the primary artifact of the agent whose conclusion the row reports, as text.
+ *
+ * Nothing is parsed here: the host fetches, the model reads (`verdictView`). A failure is
+ * reported as `unreadable` rather than swallowed — "the review finished but its report could not
+ * be read" is a different thing from "there is no review", and only one of them is silence.
+ */
+async function artifactOf(
+  client: CoreClient,
+  item: WorkItem,
+  note: (err: unknown) => null,
+): Promise<{ mode: string; text: string | null; unreadable: boolean } | null> {
+  const agent = verdictAgentOf(item.agents);
+  if (agent === null || agent.primaryArtifact === null) return null;
+  const text = await client.artifactText(agent.sessionId, agent.primaryArtifact).catch(note);
+  return { mode: agent.mode, text, unreadable: text === null };
+}
+
+/**
+ * Ruling 3 — the engine's own "the PR moved after we reviewed it", for this item's first PR.
+ *
+ * `inventory.ts:153` computes `reviewedSha !== headSha` and ships it on `ours.newCommits`; the
+ * CLI is the only thing that has ever read it. It is NOT re-derived here — a second derivation
+ * of a freshness bit is how two surfaces come to disagree about whether a verdict still stands.
+ */
+async function newCommitsOf(
+  client: CoreClient,
+  item: WorkItem,
+  note: (err: unknown) => null,
+): Promise<boolean> {
+  const pr = item.prs[0];
+  if (pr === undefined) return false;
+  const answer = await client.prs().catch(note);
+  const entry = answer?.inventory.entries.find(
+    (candidate) => candidate.repo === pr.repo && candidate.number === pr.number,
+  );
+  const ours = entry?.ours;
+  return ours !== undefined && ours.status !== 'none' && ours.newCommits;
 }
