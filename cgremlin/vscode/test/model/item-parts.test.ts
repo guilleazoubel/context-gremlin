@@ -127,3 +127,48 @@ describe('§4 — every button a part renders is one the list already allows', (
     }
   });
 });
+
+/**
+ * Round 3 §e.4 — no button is labelled `Open`.
+ *
+ * Two buttons on one open row both read `Open` and meant different things: one opened the review
+ * in the Item tab, the other opened the PR's own pane. `openAction()` hardcoded the word for
+ * every part kind. A verb names the document it opens, or it is not there at all — a PR and a
+ * ticket have exactly one destination each, and it is not local.
+ */
+describe('AC 4 — a verb names what it opens', () => {
+  const labelsOf = (id: string, list: WorkListKind): string[] =>
+    partsOf(id, list).flatMap((part) => part.actions.map((action) => action.label));
+
+  it('names the document on a stage part, per its kind', () => {
+    const parts = partsOf('ticket:HB-627', 'myWork');
+    const byKind = new Map(parts.map((part) => [part.kind, part.actions.map((a) => a.label)]));
+    expect(byKind.get('investigation')).toContain('Read the findings');
+    expect(byKind.get('development')).toContain('Read the plan');
+  });
+
+  it('names the review on a review part that actually ran', () => {
+    const parts = partsOf('pr:acme/web#102', 'parkingLot');
+    const review = parts.find((part) => part.kind === 'review');
+    expect(review?.actions.map((a) => a.label) ?? []).toContain('Read the review');
+  });
+
+  it('leaves a PR and a ticket with only their one true destination', () => {
+    const parts = partsOf('ticket:HB-627', 'myWork');
+    const ticket = parts.find((part) => part.kind === 'ticket');
+    const pr = parts.find((part) => part.kind === 'pr');
+    expect(ticket?.actions.map((a) => a.label)).toEqual(['Open in Jira']);
+    expect(pr?.actions.map((a) => a.label)).toEqual(['Open on GitHub']);
+  });
+
+  it('labels nothing, on any row of any list, exactly `Open`', () => {
+    const rows: [string, WorkListKind][] = [
+      ['pr:acme/web#101', 'parkingLot'],
+      ['ticket:HB-627', 'myWork'],
+      ['pr:acme/web#200', 'waitingForReview'],
+      ['pr:acme/web#102', 'parkingLot'],
+      ['session:inv-stacktrace-1', 'investigations'],
+    ];
+    for (const [id, list] of rows) expect(labelsOf(id, list)).not.toContain('Open');
+  });
+});

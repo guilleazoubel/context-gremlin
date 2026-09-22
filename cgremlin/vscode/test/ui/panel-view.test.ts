@@ -666,8 +666,8 @@ describe('MG-12 the panel half — defaults render as unknown', () => {
   });
 });
 
-describe('R48 the parts are clickable, with two actions', () => {
-  it('gives each part its Open and its browser action', () => {
+describe('R48 the parts are clickable, and a link part carries its one destination', () => {
+  it('gives a ticket and a PR the browser verb alone (round 3 §e.4)', () => {
     const h = build();
     h.ready();
     h.view.webview.emit({ type: 'toggleRow', id: 'ticket:HB-627', expanded: true });
@@ -679,7 +679,7 @@ describe('R48 the parts are clickable, with two actions', () => {
       row?.parts
         .filter((part) => part.kind === 'ticket' || part.kind === 'pr')
         .map((part) => part.actions.map((action) => action.label).join('/')),
-    ).toEqual(['Open/Open in Jira', 'Open/Open on GitHub', 'Open/Open on GitHub']);
+    ).toEqual(['Open in Jira', 'Open on GitHub', 'Open on GitHub']);
     h.view.webview.emit({ type: 'openChild', id: 'ticket:HB-627', childId: 'pr:acme/web#310' });
     expect(h.children).toEqual([['ticket:HB-627', 'pr:acme/web#310']]);
   });

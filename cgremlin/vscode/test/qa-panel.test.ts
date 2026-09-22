@@ -224,7 +224,7 @@ describe('§8 — the QA part of the expanded row', () => {
       key: 'qa', name: 'QA verification', glyph: '⛋', state: 'running', stateText: 'verifying',
       childId: 'agent:qa-grace-frontend-HB-6210-20260915',
     });
-    expect(qa?.actions.map((a) => a.label)).toEqual(['Open', 'Chat']);
+    expect(qa?.actions.map((a) => a.label)).toEqual(['Read the QA result', 'Chat']);
   });
 
   it('says the verdict once it has one', () => {
@@ -323,7 +323,9 @@ describe('Phase 16 §4 — Verify in QA again', () => {
       actions: rowActions(f, 'myWork'), now: NOW, qaRepos: QA_REPOS,
     });
     const qa = parts.find((p) => p.kind === 'qa');
-    expect(qa?.actions.map((a) => a.label)).toEqual(['Open', 'Chat', 'Verify in QA again', 'Ask about QA']);
+    expect(qa?.actions.map((a) => a.label)).toEqual([
+      'Read the QA result', 'Chat', 'Verify in QA again', 'Ask about QA',
+    ]);
   });
 });
 

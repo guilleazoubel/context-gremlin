@@ -91,7 +91,7 @@ describe('§4 — one click is one message', () => {
     panel.render(stateOf({ expanded: 'pr:acme/web#101' }));
     dom.posted.length = 0;
     const pr = dom.root.byClass('part').find((node) => (node.dataset.key ?? '').endsWith('#101'));
-    pr?.byClass('part-action')[1].emit('click');
+    pr?.byClass('part-action')[0].emit('click');
     expect(dom.posted).toEqual([
       {
         type: 'command',
