@@ -17,6 +17,7 @@
 import {
   MODE_GLYPH, MODE_NAME, peopleLine, prLabel, prRefOf, qaDeployText, qaStateText,
 } from './row-composition';
+import { readArtifactVerb } from './artifact-labels';
 import type { LifecycleSlot } from './lifecycle';
 import { chatTargetOfAgents, isLandedPr, prState, sizeOf, type WorkItem, type WorkListKind } from './work-items';
 import {
@@ -121,8 +122,12 @@ export function itemParts(input: ItemPartsInput): ItemPart[] {
       stateText: item.ticket.status,
       detail: '',
       childId: `ticket:${item.ticket.key}`,
-      actions: openAction(`ticket:${item.ticket.key}`, 'ticket').concat(
-        find(input.actions, 'cgremlin.openTicket', `ticket:${item.ticket.key}`, 'Open in Jira'),
+      // No local Open: a ticket's one destination is Jira (§e.4).
+      actions: find(
+        input.actions,
+        'cgremlin.openTicket',
+        `ticket:${item.ticket.key}`,
+        'Open in Jira',
       ),
     });
   }
@@ -140,9 +145,8 @@ export function itemParts(input: ItemPartsInput): ItemPart[] {
       stateText: prStateText(pr, input.now),
       detail: peopleLine(pr, input.me ?? ''),
       childId,
-      actions: openAction(childId, 'pr').concat(
-        find(input.actions, 'cgremlin.openPr', childId, 'Open on GitHub'),
-      ),
+      // No local Open either: a pull request's one destination is GitHub (§e.4).
+      actions: find(input.actions, 'cgremlin.openPr', childId, 'Open on GitHub'),
     });
   }
   return parts;
@@ -172,7 +176,7 @@ function qaPart(facts: ActionFacts, input: ItemPartsInput): ItemPart | null {
   const childId = agent === undefined || agent.pending === true ? null : `agent:${agent.sessionId}`;
   const actions: RowAction[] = [];
   if (childId !== null) {
-    actions.push(...openAction(childId, 'qa'));
+    actions.push(...openAction(childId, agent?.primaryArtifact ?? null));
     actions.push({ command: 'cgremlin.chat', label: 'Chat', childId, placement: 'inline' });
   }
   // Phase 16 — and the re-verification, wherever the row's own rule table
@@ -254,7 +258,7 @@ function stagePart(slot: LifecycleSlot, input: ItemPartsInput): ItemPart {
   const childId = slot.sessionId === null ? null : `agent:${slot.sessionId}`;
   const actions: RowAction[] = [];
   if (childId !== null) {
-    actions.push(...openAction(childId, slot.stage));
+    actions.push(...openAction(childId, agent?.primaryArtifact ?? null));
     // R50's gate, asked of the one function every surface asks: a respond agent still writing its
     // brief has nothing to say yet, so it offers no Chat.
     if (agent !== undefined && chatTargetOfAgents([agent]) !== null) {
@@ -286,24 +290,26 @@ function stagePart(slot: LifecycleSlot, input: ItemPartsInput): ItemPart {
 }
 
 /**
- * Round 3 §e.4 — the verb names the DOCUMENT, per the part's kind.
+ * Round 3 §e.4 — the verb names the DOCUMENT it will open.
  *
  * Two buttons on one open row both read `Open`: the review's and the PR's. The word was
- * hardcoded here for every kind, so the row could not say which of them read what. A stage part
- * opens the artifact that stage wrote; a PR and a ticket have exactly one destination each and it
- * is GitHub or Jira, so neither keeps a local Open at all.
+ * hardcoded per KIND, so the row could not say which of them read what — and then, worse, could
+ * not say which FILE it read: a killed investigation whose only artifact is the brief it was
+ * handed still read `Read the findings`, and opened the agent's own orders under that promise.
+ *
+ * So the label comes from the artifact the core actually picked, through the one rule that owns
+ * artifact naming (`artifact-labels.readArtifactVerb`). A PR and a ticket have exactly one
+ * destination each and it is GitHub or Jira, so neither keeps a local Open at all.
  */
-const READ_LABEL: Partial<Record<PartKind, string>> = {
-  investigation: 'Read the findings',
-  development: 'Read the plan',
-  review: 'Read the review',
-  qa: 'Read the QA result',
-};
-
-function openAction(childId: string, kind: PartKind): RowAction[] {
-  const label = READ_LABEL[kind];
-  if (label === undefined) return [];
-  return [{ command: 'cgremlin.openChild', label, childId, placement: 'primary' }];
+function openAction(childId: string, primaryArtifact: string | null): RowAction[] {
+  return [
+    {
+      command: 'cgremlin.openChild',
+      label: readArtifactVerb(primaryArtifact),
+      childId,
+      placement: 'primary',
+    },
+  ];
 }
 
 /**

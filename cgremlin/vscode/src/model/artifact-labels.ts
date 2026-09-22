@@ -11,6 +11,7 @@
  * all it has is the brief. Pure and DOM-free: the host composes the labels, the webview draws
  * them, and neither invents a second naming rule.
  */
+import { reportNoun } from './row-composition';
 export type ArtifactRole =
   | 'qa'
   | 'review'
@@ -112,9 +113,50 @@ export function orderArtifactTabs(names: readonly string[]): string[] {
   return [...names].sort((a, b) => rank(a) - rank(b) || (a < b ? -1 : a > b ? 1 : 0));
 }
 
-/** One sentence, no emoji (the tab's CSP sets `font-src 'none'`, so glyphs degrade to boxes). */
-export const BRIEF_ONLY_NOTICE =
-  'This agent has not written a review yet. What follows is the brief it was given, not its findings.';
+/**
+ * Defect 1 — the verb a surface puts on the button that OPENS this artifact.
+ *
+ * It is keyed on the artifact the core actually picked (`WorkItemAgent.primaryArtifact`), never
+ * on the session's mode: a killed investigation's only file is the brief it was HANDED, and a
+ * mode-keyed label called that file `the findings`. A button now names what it opens or it names
+ * the session — there is no third case, and `null` is not a reason to say nothing.
+ */
+const READ_VERBS: Record<Exclude<ArtifactRole, 'other'>, string> = {
+  brief: 'Read the brief it was given',
+  qa: 'Read the QA result',
+  review: 'Read the review',
+  findings: 'Read the findings',
+  plan: 'Read the plan',
+  development: 'Read the development notes',
+  comments: 'Read the replies',
+};
+
+/** The session's own tab, for an agent the engine named no artifact for at all. */
+export const OPEN_SESSION_VERB = 'Open the session';
+
+export function readArtifactVerb(name: string | null): string {
+  if (name === null || name === '') return OPEN_SESSION_VERB;
+  const role = artifactRole(name);
+  return role === 'other' ? `Read ${name}` : READ_VERBS[role];
+}
+
+/**
+ * One sentence, no emoji (the tab's CSP sets `font-src 'none'`, so glyphs degrade to boxes).
+ *
+ * Defect 1 — it named a REVIEW, because that is the session the phase-14 case was about. On
+ * `inv-aplaceformom-grace-frontend-no-ticket-20260916-211103` the tab therefore told an
+ * investigation it had not written a review, which is a document nobody ever asked it for. The
+ * noun comes from the one composer that already owns it (`reportNoun`).
+ */
+export function briefOnlyNotice(mode: string | null): string {
+  return (
+    `This agent has not written its ${reportNoun(mode)} yet. ` +
+    'What follows is the brief it was given.'
+  );
+}
+
+/** The review wording, kept as the constant the phase-14 surfaces already import. */
+export const BRIEF_ONLY_NOTICE = briefOnlyNotice('review');
 
 /** True when the only thing this agent has produced is its own instructions. */
 export function briefOnly(names: readonly string[]): boolean {

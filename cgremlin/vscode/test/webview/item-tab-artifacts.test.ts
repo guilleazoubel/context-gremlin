@@ -170,3 +170,20 @@ describe('a wide table scrolls itself rather than the document', () => {
     expect(body.byClass('table-scroll')).toHaveLength(1);
   });
 });
+
+/**
+ * Defect 1, second surface — the user did not read the label, he read the TAB: he clicked `Read
+ * the findings` on `inv-aplaceformom-grace-frontend-no-ticket-20260916-211103` and the pane put
+ * the agent's briefing on screen. The notice above it was worded for a review session, so on an
+ * investigation it named a document this agent was never asked to write.
+ */
+describe('the brief-only notice names the document this agent owed', () => {
+  it('tells an investigation it has no FINDINGS, not that it has no review', () => {
+    const one = agent(['BRIEF.md'], { 'BRIEF.md': BRIEF });
+    webview.render(state({ ...one, mode: 'investigation' }));
+    const notice = dom.document.body.byClass('artifact-notice')[0];
+    expect(notice.hidden).toBe(false);
+    expect(notice.textContent).toContain('findings');
+    expect(notice.textContent).not.toMatch(/review/i);
+  });
+});

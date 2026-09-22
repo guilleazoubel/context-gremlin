@@ -140,11 +140,17 @@ describe('AC 4 — a verb names what it opens', () => {
   const labelsOf = (id: string, list: WorkListKind): string[] =>
     partsOf(id, list).flatMap((part) => part.actions.map((action) => action.label));
 
-  it('names the document on a stage part, per its kind', () => {
+  /**
+   * Defect 1 — per the ARTIFACT, not per the kind. `inv-hb-627` reached `plan_ready` and its
+   * primary artifact is `PLAN.md`, so its button opens the plan and says so; the development
+   * agent's is `NOTES.md`, a file the naming rule does not recognise and therefore does not
+   * rename.
+   */
+  it('names the document on a stage part, per the artifact it will open', () => {
     const parts = partsOf('ticket:HB-627', 'myWork');
     const byKind = new Map(parts.map((part) => [part.kind, part.actions.map((a) => a.label)]));
-    expect(byKind.get('investigation')).toContain('Read the findings');
-    expect(byKind.get('development')).toContain('Read the plan');
+    expect(byKind.get('investigation')).toContain('Read the plan');
+    expect(byKind.get('development')).toContain('Read NOTES.md');
   });
 
   it('names the review on a review part that actually ran', () => {

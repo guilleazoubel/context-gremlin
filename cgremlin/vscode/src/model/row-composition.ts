@@ -294,6 +294,17 @@ const REPORT_NOUN: Record<string, string> = {
   qa: 'QA result',
 };
 
+/**
+ * The document a session of this mode OWES — the one noun every surface uses for it.
+ *
+ * It was private to `verdictView`'s "could not be read" sentence; Defect 1 needs the same word in
+ * the tab's brief-only notice, and a second copy of this map is exactly how the row and the tab
+ * come to call one file two things. An unknown mode is `report`, never a guess (MG-12).
+ */
+export function reportNoun(mode: string | null): string {
+  return REPORT_NOUN[mode ?? ''] ?? 'report';
+}
+
 export function verdictView(input: {
   /** The primary artifact's text, or `null` when there was none to fetch or it did not arrive. */
   text: string | null;
@@ -305,7 +316,7 @@ export function verdictView(input: {
 }): RowVerdict | null {
   const stale = input.newCommits ? STALE_SENTENCE : null;
   if (input.unreadable) {
-    const noun = REPORT_NOUN[input.mode ?? ''] ?? 'report';
+    const noun = reportNoun(input.mode);
     return { tone: null, label: '', sentence: '', counts: '', stale, notice: `The ${noun} could not be read` };
   }
   const verdict = input.text === null || input.text === '' ? null : verdictOf(input.text);
