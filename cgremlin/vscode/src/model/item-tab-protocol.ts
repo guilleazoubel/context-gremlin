@@ -9,12 +9,18 @@
  */
 
 import type { TabPart } from './item-tab-parts';
+import type { RunOutputView } from './run-output';
 import type { WorkListKind } from './work-items';
 
 export type ItemFocusMessage =
   | { kind: 'agent'; sessionId: string }
   /** Phase 17 §2 — ONE artifact of one agent, which is what a part switcher addresses. */
   | { kind: 'artifact'; sessionId: string; name: string }
+  /**
+   * Defect 4 — a live run's output, read-only. The one part whose content is not a re-read: see
+   * the R41 exception in `ui/wiring.ts`.
+   */
+  | { kind: 'runOutput'; sessionId: string }
   | { kind: 'ticket' }
   | { kind: 'pr'; repo: string; number: number };
 
@@ -39,6 +45,12 @@ export interface TabAgent {
   glyph: string;
   primaryArtifact: string | null;
   artifacts: TabArtifact[];
+  /**
+   * Defect 4 — what the host's `RunOutputStore` is holding for this session, or `null` when
+   * nothing has opened a buffer for it. Absent means no Output part at all: the pane exists only
+   * where somebody asked to watch.
+   */
+  runOutput?: RunOutputView | null;
 }
 
 export interface TabPr {
@@ -155,6 +167,10 @@ function parseFocus(value: unknown): ItemFocusMessage | null {
   if (focus.kind === 'agent') {
     const sessionId = text(focus.sessionId);
     return sessionId === null ? null : { kind: 'agent', sessionId };
+  }
+  if (focus.kind === 'runOutput') {
+    const sessionId = text(focus.sessionId);
+    return sessionId === null ? null : { kind: 'runOutput', sessionId };
   }
   if (focus.kind === 'artifact') {
     const sessionId = text(focus.sessionId);

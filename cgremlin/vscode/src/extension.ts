@@ -48,7 +48,13 @@ export function activate(context: vscode.ExtensionContext): void {
   // without rebuilding the UI and releasing every chat claim (R7).
   const socketPath = (): string => engineSurface?.paths()?.socketPath ?? '';
   const client = new CoreClient(socketPath);
-  const sse = new SseClient({ socketPath });
+  // Defect 4 — the `run.output` include is negotiated, not standing: it is on only while an
+  // Output pane is open, because EventRing holds 256 entries of every type mixed and a chatty run
+  // subscribed to permanently would evict `item.changed` frames from the reconnect replay window.
+  const sse = new SseClient({
+    socketPath,
+    includeRunOutput: () => ui?.itemTab.watching() === true,
+  });
   stream = sse;
 
   let created: Ui | null = null;
@@ -118,6 +124,7 @@ export function activate(context: vscode.ExtensionContext): void {
     // Read live, so changing the level takes effect without a reload.
     notificationLevel: () => readSettings((line) => output.appendLine(line)).notificationLevel,
     engine: surface,
+    onWatchChanged: () => sse.renegotiate(),
   });
   ui = created;
 

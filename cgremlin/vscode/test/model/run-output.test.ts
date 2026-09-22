@@ -64,6 +64,22 @@ describe('the buffer holds only what it saw', () => {
     expect(store.watching()).toBe(false);
   });
 
+  it('stops asking for frames once the run it was watching has ended', () => {
+    const store = opened(false);
+    expect(store.watching()).toBe(true);
+    store.finish(SESSION, { outcome: 'succeeded' });
+    // The pane stays readable — that is why it freezes rather than clearing — but nothing more
+    // can arrive in it, so the high-volume include comes back off.
+    expect(store.viewOf(SESSION)).not.toBeNull();
+    expect(store.watching()).toBe(false);
+  });
+
+  it('never asks for frames on behalf of a pane opened on an idle session', () => {
+    const store = new RunOutputStore();
+    store.open(SESSION, { alreadyRunning: false, stage: null, live: false });
+    expect(store.watching()).toBe(false);
+  });
+
   it('ignores a chunk for a session nobody is watching', () => {
     const store = new RunOutputStore();
     store.append('somebody-else', 'noise');

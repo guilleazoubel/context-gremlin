@@ -129,9 +129,19 @@ export class RunOutputStore {
     this.buffers.clear();
   }
 
-  /** Whether the SSE client should be asking the engine for `run.output` frames at all. */
+  /**
+   * Whether the SSE client should be asking the engine for `run.output` frames at all.
+   *
+   * A FROZEN buffer does not count. The pane stays readable after its run ends — that is the
+   * point of freezing rather than clearing it — but nothing more will ever arrive in it, and
+   * keeping the high-volume include on for a pane that cannot change is the exact global cost
+   * this negotiation exists to avoid.
+   */
   watching(): boolean {
-    return this.buffers.size > 0;
+    for (const buffer of this.buffers.values()) {
+      if (buffer.ending === null && buffer.live) return true;
+    }
+    return false;
   }
 
   viewOf(sessionId: string): RunOutputView | null {

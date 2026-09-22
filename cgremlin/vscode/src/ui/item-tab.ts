@@ -31,6 +31,7 @@ import { rowActionsForLists, type ActionFacts } from '../model/row-actions';
 import { qaReposOf, qaStatusesOf } from '../model/items';
 import { partsOf } from '../model/item-tab-parts';
 import { primaryArtifactName } from '../model/artifact-labels';
+import { RunOutputStore, type RunOutputView } from '../model/run-output';
 import type { CoreConfigView } from '../model/items';
 import { withEngineRetry, type EngineRevival } from './engine-retry';
 import type { WorktreeSwapper } from './preview';
@@ -62,6 +63,12 @@ export interface ItemTabDeps {
   swapper: WorktreeSwapper;
   /** Tells the status bar which agent the window is on (R43). */
   onOpened: (sessionId: string | null, worktreePath: string | null) => void;
+  /**
+   * Defect 4 — the set of watched sessions changed, so the SSE client must re-ask the engine for
+   * (or stop asking it for) `run.output`. Optional: a host that does not stream simply never
+   * renegotiates, and the pane then shows only what the frames it already gets carry.
+   */
+  onWatchChanged?: () => void;
   nonce?: () => string;
 }
 
@@ -75,6 +82,8 @@ export class ItemTab {
   private selected: string | null = null;
   /** Artifact bodies already fetched, keyed `<sessionId>/<name>` — never refetched on a redraw. */
   private readonly bodies = new Map<string, string>();
+  /** Defect 4 — the live-output buffers. Empty is the normal state; see `model/run-output`. */
+  private readonly runOutput = new RunOutputStore();
   private pending: Promise<unknown>[] = [];
 
   constructor(private readonly deps: ItemTabDeps) {}
@@ -97,6 +106,8 @@ export class ItemTab {
       void this.deps.host.showWarningMessage(messageOf(err), undefined);
       return;
     }
+    // A different item is a different run: the buffers belong to the pane that showed them.
+    if (this.detail !== null && this.detail.item.id !== detail.item.id) this.stopWatching();
     this.path = path;
     this.detail = detail;
     this.focus = resolveFocus(detail.item, artifactNamesOf(detail), focus);
@@ -171,6 +182,66 @@ export class ItemTab {
     this.subscription = null;
     this.panel?.dispose();
     this.panel = null;
+    this.stopWatching();
+  }
+
+  // --- Defect 4: watching a live run ---------------------------------------
+
+  /** Whether any pane is watching, which is exactly when the SSE include belongs on. */
+  watching(): boolean {
+    return this.runOutput.watching();
+  }
+
+  /** What the pane for `sessionId` is holding, or `null` when nothing is watching it. */
+  runOutputOf(sessionId: string): RunOutputView | null {
+    return this.runOutput.viewOf(sessionId);
+  }
+
+  /**
+   * Open the Output pane on a session and start listening.
+   *
+   * `alreadyRunning` is read from the agent the engine last reported: a run in flight when the
+   * buffer opens has a beginning this window can never recover, and the pane says so rather than
+   * showing a partial stream as though it were the whole one.
+   */
+  async watchRun(sessionId: string): Promise<void> {
+    const agent = this.detail?.item.agents.find((one) => one.sessionId === sessionId);
+    const live = agent?.running === true;
+    this.runOutput.open(sessionId, {
+      alreadyRunning: live,
+      stage: agent?.lastRun?.stage ?? null,
+      live,
+    });
+    this.selected = sessionId;
+    this.focus = { kind: 'runOutput', sessionId };
+    this.show();
+    this.render();
+    this.deps.onWatchChanged?.();
+    await Promise.resolve();
+  }
+
+  /** One `run.output` chunk — the ONE frame payload read as content (the R41 exception). */
+  noteRunOutput(sessionId: string, data: string): void {
+    if (this.runOutput.viewOf(sessionId) === null) return;
+    this.runOutput.append(sessionId, data);
+    this.render();
+  }
+
+  /** The run stopped underneath a watcher: the pane freezes and the include comes back off. */
+  noteRunFinished(sessionId: string, outcome: string | null): void {
+    if (this.runOutput.viewOf(sessionId) === null) return;
+    this.runOutput.finish(sessionId, { outcome });
+    this.render();
+    this.deps.onWatchChanged?.();
+  }
+
+  private stopWatching(): void {
+    // A FROZEN buffer is not "watching" (the include is already off for it) but it is still a
+    // buffer, and it goes with the pane that showed it. The renegotiation is only owed where the
+    // include was actually on.
+    const wasWatching = this.runOutput.watching();
+    this.runOutput.closeAll();
+    if (wasWatching) this.deps.onWatchChanged?.();
   }
 
   // --- internals -----------------------------------------------------------
@@ -354,6 +425,8 @@ export class ItemTab {
       runFailed: agent?.runFailed ?? false,
       needsYou: agent?.needsYou ?? false,
       claimed: agent?.claimed ?? false,
+      // Defect 4 — `null` unless a pane is watching, which is what keeps the Output part absent.
+      runOutput: this.runOutput.viewOf(sessionId),
       glyph: agent === undefined ? '' : glyphOf(agent),
       primaryArtifact: agent?.primaryArtifact ?? null,
       artifacts: listings.map((listing) => ({

@@ -33,6 +33,7 @@ import { createSwitcher, tabIdOf, type Switcher } from './item/tablist';
 import { createArtifactPane, patchArtifactPane } from './item/artifact-pane';
 import { createTicketPane, patchTicketPane } from './item/ticket-pane';
 import { createPrPane, patchPrPane } from './item/pr-pane';
+import { createRunOutputPane, patchRunOutputPane } from './item/run-output-pane';
 
 let state: ItemTabState | null = null;
 /** The part the pane is currently showing, so the caret moves only when it actually changes. */
@@ -223,6 +224,7 @@ function patchPane(current: ItemTabState, f: Frame): void {
 function createPane(part: TabPart): HTMLElement {
   if (part.focus.kind === 'ticket') return createTicketPane();
   if (part.focus.kind === 'pr') return createPrPane();
+  if (part.focus.kind === 'runOutput') return createRunOutputPane();
   return createArtifactPane();
 }
 
@@ -235,6 +237,11 @@ function patchPaneOf(pane: HTMLElement, part: TabPart, current: ItemTabState): v
   if (focus.kind === 'pr') {
     const pr = current.prs.find((one) => one.repo === focus.repo && one.number === focus.number);
     if (pr !== undefined) patchPrPane(pane, pr);
+    return;
+  }
+  if (focus.kind === 'runOutput') {
+    const watched = current.agents.find((one) => one.sessionId === focus.sessionId);
+    if (watched?.runOutput != null) patchRunOutputPane(pane, watched.runOutput);
     return;
   }
   if (focus.kind !== 'artifact') return;
