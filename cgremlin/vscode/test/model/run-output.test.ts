@@ -12,8 +12,13 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  JOINED_MID_RUN_NOTICE,
   MAX_RUN_OUTPUT_LINES,
+  NOT_STARTED_NOTICE,
   RunOutputStore,
+  WAITING_NOTICE,
+  droppedNotice,
+  endedNotice,
   type RunOutputView,
 } from '../../src/model/run-output';
 
@@ -88,11 +93,11 @@ describe('the buffer holds only what it saw', () => {
 });
 
 describe('the five things the pane can be looking at', () => {
-  it('a live run that has printed nothing yet SAYS so — an empty box reads as a broken one', () => {
+  it('a live run that has done nothing yet SAYS so — an empty box reads as a broken one', () => {
     const shown = view(opened(false));
     expect(shown.state).toBe('waiting');
     expect(shown.lines).toEqual([]);
-    expect(shown.notice).toContain('has not printed anything yet');
+    expect(shown.notice).toContain('has not done anything yet');
   });
 
   it('a live run with output shows it, with no notice in the way', () => {
@@ -110,7 +115,7 @@ describe('the five things the pane can be looking at', () => {
     const shown = view(store);
     expect(shown.joinedMidRun).toBe(true);
     expect(shown.notice).toContain('joined this run in progress');
-    expect(shown.notice).toContain('not kept');
+    expect(shown.notice).toContain('is not kept');
     expect(shown.lines).toEqual(['a later line']);
   });
 
@@ -143,5 +148,49 @@ describe('the five things the pane can be looking at', () => {
     store.finish(SESSION, { outcome: 'stopped' });
     store.append(SESSION, 'a straggler');
     expect(view(store).lines).toEqual([]);
+  });
+});
+
+/**
+ * Defect 5 — the pane's content changed underneath its sentences. It used to carry the agent's
+ * occasional prose and now carries a work log (the reads, the edits, the commands, their capped
+ * answers), so every state has to be re-read: "printed nothing" was the wrong question to ask
+ * about an agent that is working hard and saying nothing.
+ */
+describe('the five states read as a work log, not as a print stream', () => {
+  const ALL = [
+    WAITING_NOTICE,
+    JOINED_MID_RUN_NOTICE,
+    NOT_STARTED_NOTICE,
+    droppedNotice(12),
+    endedNotice('succeeded'),
+  ];
+
+  it('waiting names the WORK that will appear, not the printing that may never happen', () => {
+    expect(WAITING_NOTICE).toMatch(/has not done anything yet/);
+    expect(WAITING_NOTICE).toMatch(/reads|edits|runs/);
+  });
+
+  it('a mid-run join claims only what it has, and only since the pane opened', () => {
+    expect(JOINED_MID_RUN_NOTICE).toMatch(/since the pane opened/);
+    expect(JOINED_MID_RUN_NOTICE).toMatch(/is not kept/);
+  });
+
+  it('an idle session says where the work would go', () => {
+    expect(NOT_STARTED_NOTICE).toMatch(/Nothing is running/);
+    expect(NOT_STARTED_NOTICE).toMatch(/while a stage is running/);
+  });
+
+  it('the ending says it is a summary of the work seen, and points at the record', () => {
+    expect(endedNotice('succeeded')).toMatch(/summarised|summary/);
+    expect(endedNotice('succeeded')).toMatch(/while the pane was open/);
+    expect(endedNotice('succeeded')).toMatch(/artifact/);
+  });
+
+  it('no state describes the pane as the agent printing, or as a complete record', () => {
+    for (const sentence of ALL) {
+      expect(sentence).not.toMatch(/print/i);
+      expect(sentence).not.toMatch(/\btranscript\b|\bcomplete\b|\bfull record\b/i);
+    }
   });
 });

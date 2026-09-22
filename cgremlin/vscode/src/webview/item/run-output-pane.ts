@@ -5,8 +5,12 @@
  * the record of the run and must never read as one — the artifact the run wrote is the record,
  * and `run-output.ts` explains why nothing else is possible. So the sentences above and below the
  * lines are as load-bearing as the lines themselves, and the empty case is the most important of
- * them: a live run with nothing printed yet SAYS so, because an empty box and a wedged agent look
+ * them: a live run that has done nothing yet SAYS so, because an empty box and a wedged agent look
  * identical and the user spent an afternoon unable to tell them apart.
+ *
+ * Defect 5 — the lines are a WORK LOG (each file read or edited, each command run, each capped
+ * answer), not the agent's prose and not its conversation. Every sentence around them is worded
+ * for that.
  *
  * Lines are keyed by their ABSOLUTE line number (`dropped + index`), so appending writes only the
  * new nodes and the cap scrolling the front off writes none of the survivors.

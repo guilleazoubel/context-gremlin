@@ -20,12 +20,18 @@ export const MAX_RUN_OUTPUT_LINES = 500;
 
 export type RunOutputState = 'notStarted' | 'waiting' | 'streaming' | 'ended';
 
+/**
+ * Defect 5 — these five sentences were written for a stream of the agent's prose, and the pane
+ * now carries a work log: each file read or edited, each command run, each capped answer. So each
+ * one says WORK rather than printing — "has printed nothing yet" was the wrong question to ask
+ * about an agent that is working hard and saying nothing.
+ */
 export const WAITING_NOTICE =
-  'The run is live and has not printed anything yet. Output appears here as the agent writes it.';
+  'The run is live and has not done anything yet. Each file it reads or edits, and each command it runs, appears here as it happens.';
 export const JOINED_MID_RUN_NOTICE =
-  'You joined this run in progress. Earlier output was not kept — this is everything since the pane opened.';
+  'You joined this run in progress. What it did before is not kept — this is only what it has done since the pane opened.';
 export const NOT_STARTED_NOTICE =
-  'Nothing is running for this session right now. Output appears here while a stage runs.';
+  'Nothing is running for this session right now. What a run does appears here while a stage is running.';
 
 /** `dropped > 0`: the cap bit, and the pane must not imply it is showing the whole run. */
 export function droppedNotice(dropped: number): string {
@@ -34,7 +40,7 @@ export function droppedNotice(dropped: number): string {
 
 export function endedNotice(outcome: string | null): string {
   const how = outcome === null || outcome === '' ? 'The run ended' : `The run ended (${outcome})`;
-  return `${how}. This is only what it printed while the pane was open; the artifact it wrote is the record.`;
+  return `${how}. This is only the work it did while the pane was open, summarised; the artifact it wrote is the record.`;
 }
 
 export interface RunOutputView {

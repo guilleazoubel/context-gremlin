@@ -88,7 +88,7 @@ describe('what the pane shows', () => {
   it('a live run with nothing yet says so, rather than sitting empty', () => {
     render(opened(false));
     expect(lines()).toEqual([]);
-    expect(byClass('run-output-notice').textContent).toContain('has not printed anything yet');
+    expect(byClass('run-output-notice').textContent).toContain('has not done anything yet');
     expect(byClass('run-output-notice').hidden).toBe(false);
   });
 
