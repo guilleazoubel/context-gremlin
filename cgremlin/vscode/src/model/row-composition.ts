@@ -95,6 +95,18 @@ export function identityKeysOf(item: WorkItem): string[] {
   return keys.length === 0 ? [item.title] : keys;
 }
 
+/**
+ * §2 — the item's ONE headline: its keys, then its prose, in the row's own order.
+ *
+ * The Item tab used to be named by the engine's raw `WorkItem.title` (`HB-1490 — <ticket
+ * summary>`), which carries no pull request number and never could, while the row beside it read
+ * `HB-1490 #2037`. Two names for one piece of work is the defect ("it doesnt show the pr on the
+ * title either, just the jira number"), so both surfaces read this.
+ */
+export function headlineOf(item: WorkItem): string {
+  return [identityOf(item), descriptionOf(item)].filter((part) => part !== '').join(' — ');
+}
+
 /** `PROJ-123`, read off the title's prefix or the branch. Nothing else is looked at. */
 const TICKET_SHAPE = /\b([A-Z][A-Z0-9]+-\d+)\b/;
 

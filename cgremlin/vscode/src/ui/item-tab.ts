@@ -16,7 +16,7 @@ import crypto from 'node:crypto';
 import nodePath from 'node:path';
 import { CoreHttpError, engineErrorText, type CoreClient } from '../core-client';
 import { ciDot, itemPathOf, type WorkItem, type WorkItemPr, prState } from '../model/work-items';
-import { prLabel } from '../model/row-composition';
+import { headlineOf, prLabel } from '../model/row-composition';
 import {
   parseWebviewMessage,
   type HostToWebview,
@@ -179,15 +179,20 @@ export class ItemTab {
     this.pending.push(work);
   }
 
+  /** The tab's name: the row's own headline, so one piece of work has one name (Task 1). */
+  private titleText(): string {
+    return this.detail === null ? 'cgremlin' : headlineOf(this.detail.item);
+  }
+
   private show(): void {
     if (this.panel !== null) {
-      this.panel.title = this.detail?.item.title ?? 'cgremlin';
+      this.panel.title = this.titleText();
       this.panel.reveal(true);
       return;
     }
     const panel = this.deps.host.createWebviewPanel({
       viewType: ITEM_TAB_VIEW_TYPE,
-      title: this.detail?.item.title ?? 'cgremlin',
+      title: this.titleText(),
       enableScripts: true,
       // R39: the tab keeps its artifacts and its scroll position across a tab switch.
       retainContextWhenHidden: true,
@@ -304,7 +309,9 @@ export class ItemTab {
     const item = detail.item;
     const state: ItemTabState = {
       itemId: item.id,
-      title: item.title,
+      // Task 1 — the SAME headline the row draws (`headlineOf`), never the engine's raw title:
+      // that one is `HB-1490 — <ticket summary>` and carries no pull request number.
+      title: headlineOf(item),
       needsYou: item.needsYou,
       chips: [
         ...(item.ticket === null ? [] : [{ label: item.ticket.key, url: item.ticket.url }]),
