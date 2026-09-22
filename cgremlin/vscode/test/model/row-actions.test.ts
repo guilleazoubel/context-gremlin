@@ -268,8 +268,11 @@ describe('P0-2 — Chat while a run is live on the target session', () => {
     });
     const chat = rowActions(running, 'parkingLot').find((a) => a.command === 'cgremlin.chat');
     expect(chat?.enabled).toBe(false);
+    // Defect 4 — the sentence now ends with the way through it can offer, because reading a run
+    // is not interrupting it. The refusal itself is unchanged: Chat is still disabled.
     expect(chat?.reason).toBe(
-      'The agent is working on this now — chat opens when it finishes.',
+      'The agent is working on this now — chat opens when it finishes. ' +
+        'You can watch its output meanwhile.',
     );
     expect(chat?.reason).toBe(CHAT_BUSY_REASON);
   });

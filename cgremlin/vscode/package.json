@@ -121,6 +121,11 @@
         "category": "cgremlin"
       },
       {
+        "command": "cgremlin.watchRun",
+        "title": "Watch this run's output",
+        "category": "cgremlin"
+      },
+      {
         "command": "cgremlin.renameItem",
         "title": "Rename item...",
         "category": "cgremlin"
@@ -288,6 +293,10 @@
         },
         {
           "command": "cgremlin.releaseConversation",
+          "when": "false"
+        },
+        {
+          "command": "cgremlin.watchRun",
           "when": "false"
         },
         {

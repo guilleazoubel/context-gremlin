@@ -553,6 +553,25 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
       if (answer !== STOP_RUN_CONFIRM_LABEL) return;
       if (surface(await send(() => client.stop(id)))) coordinator.schedule();
     }),
+    /**
+     * Defect 4 — the read-only half of a refusal that used to be a dead end. Chat stays refused
+     * while a run is live (two writers on one transcript is unrecoverable corruption); this opens
+     * the Item tab on that session's Output pane instead, which is safe and is what the user was
+     * actually asking for. No claim, no POST — it only starts listening.
+     */
+    host.registerCommand('cgremlin.watchRun', async (arg, childArg) => {
+      const item = needsItem(arg);
+      if (item === null) return;
+      const id = agentOfChildId(idOf(childArg)) ?? sessionOf(item);
+      if (id === null) {
+        void host.showWarningMessage('That item has no run to watch.', undefined);
+        return;
+      }
+      const path = itemPathOf(item.id);
+      if (path === null) return;
+      await openTab(deps, path);
+      await deps.itemTab.watchRun(id);
+    }),
     host.registerCommand('cgremlin.retry', (arg) => onSession(arg, (id) => client.retry(id))),
     /**
      * Defect 3 — the inverse of the claim `ChatSessions.open` takes, and the first button in the

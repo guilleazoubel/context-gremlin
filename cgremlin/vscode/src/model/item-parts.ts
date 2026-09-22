@@ -273,8 +273,10 @@ function stagePart(slot: LifecycleSlot, input: ItemPartsInput): ItemPart {
     }
   }
   // Defect 3 — and the undo for the claim this stage is holding, beside the work it is blocking.
+  // Defect 4 — and the read-only look at a run this stage will not let anyone interrupt.
   if (childId !== null) {
     actions.push(...find(input.actions, 'cgremlin.releaseConversation', childId, null));
+    actions.push(...find(input.actions, 'cgremlin.watchRun', childId, null));
   }
   // The one verb that is not a Start and not a Chat: answering a review that has landed (§4).
   if (slot.stage === 'review' && input.list === 'waitingForReview') {
