@@ -480,3 +480,44 @@ body {
 .error {
   color: var(--vscode-errorForeground);
 }
+
+/*
+ * Defect 4 — the live-output pane.
+ *
+ * Monospace and unwrapped-per-line, because this is a terminal's output and re-flowing it loses
+ * the alignment the agent printed. The notice and the ending line are NOT monospace: they are the
+ * pane speaking about itself, and they must not read as part of the stream.
+ */
+.run-output-meta {
+  margin: 0 0 8px;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.run-output-notice,
+.run-output-ending {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border-left: 2px solid var(--vscode-panel-border);
+  color: var(--vscode-descriptionForeground);
+}
+
+.run-output-ending {
+  margin: 12px 0 0;
+}
+
+.run-output-lines {
+  font-family: var(--vscode-editor-font-family);
+  font-size: var(--vscode-editor-font-size);
+  color: var(--vscode-foreground);
+  background: var(--vscode-textCodeBlock-background);
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 3px;
+  padding: 8px 10px;
+  /* One scroll container of its own: a long agent line must never take the document sideways. */
+  overflow-x: auto;
+}
+
+.run-output-line {
+  white-space: pre;
+}

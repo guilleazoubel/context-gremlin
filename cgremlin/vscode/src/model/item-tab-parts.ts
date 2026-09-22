@@ -13,6 +13,12 @@ import { artifactTabLabel, orderArtifactTabs } from './artifact-labels';
 import { prRefOf } from './row-composition';
 import type { ItemFocusMessage, ItemTabState } from './item-tab-protocol';
 
+/**
+ * One word, and the same word whether the run is live or over (§1's fixed order applies to the
+ * LABEL as well as the position). Which of those it is, the pane itself says.
+ */
+export const RUN_OUTPUT_LABEL = 'Output';
+
 export interface TabPart {
   /** Stable across renders, so the tablist reconciles by identity rather than by position. */
   key: string;
@@ -48,6 +54,16 @@ export function partsOf(state: ItemTabState): TabPart[] {
         key: `artifact:${agent.sessionId}/${name}`,
         label: artifactTabLabel(name),
         focus: { kind: 'artifact', sessionId: agent.sessionId, name },
+      });
+    }
+    // Defect 4 — after the documents and before the ticket, in a FIXED position like every other
+    // part (§1): a tab that moves as a run starts and stops is unlearnable. It exists only where
+    // a buffer does, which is only where somebody asked to watch.
+    if (agent.runOutput != null) {
+      parts.push({
+        key: `runOutput:${agent.sessionId}`,
+        label: RUN_OUTPUT_LABEL,
+        focus: { kind: 'runOutput', sessionId: agent.sessionId },
       });
     }
   }

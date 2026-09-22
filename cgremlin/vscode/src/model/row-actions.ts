@@ -256,7 +256,17 @@ export function qaVerbLabel(facts: ActionFacts): string {
  * whatever else renders a disabled reason (`aria-describedby`, `webview/panel/expanded.ts` and
  * `webview/item-tab.ts` both wire it off `enabled === false` generically) cannot drift apart.
  */
-export const CHAT_BUSY_REASON = 'The agent is working on this now — chat opens when it finishes.';
+export const CHAT_BUSY_REASON =
+  'The agent is working on this now — chat opens when it finishes. You can watch its output meanwhile.';
+
+/**
+ * Defect 4 — the verb the busy Chat can offer instead of nothing.
+ *
+ * "you may not INTERRUPT this" and "you may not SEE this" are different rules, and one check was
+ * answering both: the user asked to look at a plan stage eight minutes in and got the write
+ * refusal. Watching is read-only and safe, so the refusal names it and this is the button.
+ */
+export const WATCH_RUN_LABEL = 'Watch the run';
 
 /** Phase 18 — the four sentences, said in ONE place so a reason cannot drift from its cause. */
 export const QA_NOTHING_MERGED_REASON = 'Nothing is merged yet — QA verifies code that has landed.';
@@ -434,6 +444,14 @@ export function rowActions(facts: ActionFacts, list: WorkListKind): RowAction[] 
       ? { command: 'cgremlin.stop', label: 'Stop', childId: agentChildId(chatAgent.sessionId) }
       : null;
 
+  // Defect 4 — read-only, beside the two verbs a live run already had (a disabled Chat and a
+  // Stop). Read off the same `chatAgent`, so all three can never disagree about which session is
+  // the one running.
+  const watchAction =
+    chatAgent?.running === true
+      ? { command: 'cgremlin.watchRun', label: WATCH_RUN_LABEL, childId: agentChildId(chatAgent.sessionId) }
+      : null;
+
   // Phase 18 — the escape hatch, on every list. A run that died used to leave
   // the row with an error and no verb ("I can't do anything"); the engine now
   // heals the session, and this is the click that starts it over. Pushed
@@ -472,6 +490,7 @@ export function rowActions(facts: ActionFacts, list: WorkListKind): RowAction[] 
       push({ command: 'cgremlin.startReview', label: 'Start review' }, 'primary');
     }
     if (chatAction !== null) push(chatAction, 'inline');
+    if (watchAction !== null) push(watchAction, 'inline');
     if (stopAction !== null) push(stopAction, 'inline');
   } else if (list === 'waitingForReview') {
     // My PR, out with reviewers. The only verbs are "answer the review" and, once the respond
@@ -486,12 +505,14 @@ export function rowActions(facts: ActionFacts, list: WorkListKind): RowAction[] 
     if (respondable) {
       push({ command: 'cgremlin.addressReview', label: 'Address review comments' }, 'primary');
       if (chatAction !== null) push(chatAction, 'inline');
+      if (watchAction !== null) push(watchAction, 'inline');
       if (stopAction !== null) push(stopAction, 'inline');
     } else {
       pushQa(facts, list, push);
       // `push` downgrades a second `primary` to `inline` on its own, so this stays the row's one
       // click wherever the QA verbs did not take it.
       if (chatAction !== null) push(chatAction, 'primary');
+      if (watchAction !== null) push(watchAction, 'inline');
       if (stopAction !== null) push(stopAction, 'inline');
     }
   } else {
@@ -556,6 +577,7 @@ export function rowActions(facts: ActionFacts, list: WorkListKind): RowAction[] 
     }
     pushQa(facts, list, push);
     if (chatAction !== null) push(chatAction, 'inline');
+    if (watchAction !== null) push(watchAction, 'inline');
     if (stopAction !== null) push(stopAction, 'inline');
   }
 

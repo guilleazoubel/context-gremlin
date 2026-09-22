@@ -30,6 +30,12 @@ export interface UiOptions {
   client: CoreClient;
   notificationLevel: () => NotificationLevel;
   /**
+   * Defect 4 — the set of sessions being watched changed. The SSE include is negotiated per
+   * connection, so applying it means reconnecting; `extension.ts` wires this to
+   * `SseClient.renegotiate`. Absent in a test that does not care.
+   */
+  onWatchChanged?: () => void;
+  /**
    * The engine's own surface: its four commands and the status bar's engine half. Optional only
    * so a test can compose the rest of the UI without one.
    */
@@ -55,6 +61,28 @@ export interface Ui {
    * One `/events` frame. R41: its payload is read as an **address** and never as content — the
    * open Item tab refetches only when the id is its own, and everything else coalesces into one
    * `/items` refresh.
+   *
+   * ### The R41 exception: `run.output`, and only `run.output`
+   *
+   * R41 holds because everything a frame announces can be read back authoritatively: an
+   * `item.changed` is answered by `GET /items`, an `artifact.changed` by re-reading the file. The
+   * payload is therefore never needed, and refusing it is what stops two engines' answers
+   * disagreeing.
+   *
+   * `run.output` has no such read, BY CONSTRUCTION. The agent's output exists only as it streams;
+   * nothing persists it, and the design is that nothing should — a transcript written as a side
+   * effect of somebody happening to watch would be a second, partial record competing with the
+   * artifact. So for this ONE event the payload is the whole of the information, and it is read
+   * as content.
+   *
+   * Two consequences follow, and they are the price of the exception:
+   *  - the Output pane can never be the source of truth for what a run did. It shows what this
+   *    window saw while it was looking, says what it missed, and freezes when the run ends. The
+   *    ARTIFACT the run wrote on disk remains the record, and `model/run-output` words every
+   *    sentence in the pane around that;
+   *  - it is not a precedent. Anyone adding a second content-bearing frame has to argue against
+   *    this paragraph first, and the argument they must win is that their event, too, can never
+   *    be re-read — not merely that re-reading it would be convenient to skip.
    */
   handleFrame(frame: unknown): void;
   /** The SSE consumer lost its connection (or never had one). */
@@ -160,6 +188,9 @@ export function createUi(options: UiOptions): Ui {
     mediaPath: options.assets?.mediaPath ?? '',
     swapper,
     onOpened: (sessionId, worktreePath) => coordinator.setCurrentSession(sessionId, worktreePath),
+    // Defect 4 — a pane opened or closed, so the stream must re-ask the engine for (or stop
+    // asking it for) `run.output`. `extension.ts` hands this to `SseClient.renegotiate`.
+    onWatchChanged: options.onWatchChanged,
   });
   const disposables: DisposableLike[] = [
     host.registerWebviewViewProvider(VIEW_ID, panel, {
@@ -238,6 +269,16 @@ export function createUi(options: UiOptions): Ui {
         panel.noteFrame(id, null);
         if (id === itemTab.itemId()) void itemTab.itemChanged(id);
       }
+      // The R41 exception, applied: this frame's payload IS the information (see `handleFrame`).
+      if (event === 'run.output') {
+        const { sessionId, data } = runOutputOf(frame);
+        if (sessionId !== null && data !== null) itemTab.noteRunOutput(sessionId, data);
+        return;
+      }
+      if (event === 'run.finished') {
+        const { sessionId, outcome } = runFinishedOf(frame);
+        if (sessionId !== null) itemTab.noteRunFinished(sessionId, outcome);
+      }
       if (event === 'artifact.changed') {
         const { sessionId, name } = artifactAddressOf(frame);
         if (sessionId !== null) panel.noteFrame(null, sessionId);
@@ -273,6 +314,36 @@ function addressOf(frame: unknown): { event: string | null; id: string | null } 
   return {
     event: typeof event === 'string' ? event : null,
     id: typeof id === 'string' ? id : null,
+  };
+}
+
+/**
+ * The R41 exception's one reader: `{ sessionId, stage, chunk: { stream, data } }`, already
+ * redacted engine-side (`api/event-stream.redactRunOutput`, the same `redactSecrets` pass
+ * `serve()` runs). Anything that is not a string is dropped rather than coerced.
+ */
+function runOutputOf(frame: unknown): { sessionId: string | null; data: string | null } {
+  const data = (frame as { data?: unknown } | null)?.data;
+  if (typeof data !== 'object' || data === null) return { sessionId: null, data: null };
+  const sessionId = (data as { sessionId?: unknown }).sessionId;
+  const chunk = (data as { chunk?: unknown }).chunk;
+  const text = typeof chunk === 'object' && chunk !== null ? (chunk as { data?: unknown }).data : undefined;
+  return {
+    sessionId: typeof sessionId === 'string' ? sessionId : null,
+    data: typeof text === 'string' ? text : null,
+  };
+}
+
+/** `run.finished` — read as an ADDRESS plus its outcome word, which the pane freezes on. */
+function runFinishedOf(frame: unknown): { sessionId: string | null; outcome: string | null } {
+  const data = (frame as { data?: unknown } | null)?.data;
+  if (typeof data !== 'object' || data === null) return { sessionId: null, outcome: null };
+  const session = (data as { session?: unknown }).session;
+  const id = typeof session === 'object' && session !== null ? (session as { id?: unknown }).id : undefined;
+  const outcome = (data as { outcome?: unknown }).outcome;
+  return {
+    sessionId: typeof id === 'string' ? id : null,
+    outcome: typeof outcome === 'string' ? outcome : null,
   };
 }
 
