@@ -719,6 +719,20 @@ body {
   color: var(--cg-accent);
 }
 
+/*
+ * Defect 1 — a run that BROKE is not the same news as an agent asking a question, and it is not
+ * news the eye may skip: the user read a failed findings run as "needs you" and a killed one as
+ * "done". The error colour says which of the two this is; a stopped run stays in the quiet ink,
+ * because nothing went wrong — somebody ended it.
+ */
+.part[data-state='failed'] .part-state {
+  color: var(--vscode-errorForeground);
+}
+
+.part[data-state='stopped'] .part-state {
+  font-style: italic;
+}
+
 /* A PR that merged or closed: still listed, still openable, but visibly done. */
 .part[data-state='merged'],
 .part[data-state='closed'] {

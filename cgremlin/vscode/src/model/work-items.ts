@@ -101,6 +101,9 @@ export interface WorkItemTicket {
   updatedAt: string;
 }
 
+/** The engine's `lastRun.outcome` (`src/schema/stage.ts`), straight off the wire. */
+export type RunOutcome = 'running' | 'succeeded' | 'failed' | 'stopped';
+
 export interface WorkItemAgent {
   sessionId: string;
   /**
@@ -140,6 +143,18 @@ export interface WorkItemAgent {
    * (the ONE composer this module never spells the words of itself).
    */
   qaVerdict?: QaVerdict | null;
+  /**
+   * Defect 1 — HOW this session's last run ENDED, the engine's own
+   * `lastRun.outcome`. `running: false` is equally true of a run that
+   * finished, one that failed and one that was KILLED; the panel read all
+   * three as `done`, and a killed session that wrote nothing at all showed
+   * the user its own brief as though it were an answer.
+   *
+   * **Optional**: an engine older than this contract sends none, and a slot
+   * then reads exactly as it did before — a failure still by `runFailed`, and
+   * a stopped run indistinguishable from a finished one, as today.
+   */
+  runOutcome?: RunOutcome | null;
   /**
    * Phase 19 — the session's own `lastRun.stage` and `lastRun.startedAt` (`items.ts`'s
    * `LastRunView`), mirrored so a live run can say WHICH stage it is in and for how long, rather

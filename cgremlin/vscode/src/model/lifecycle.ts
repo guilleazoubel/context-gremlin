@@ -15,9 +15,28 @@
  */
 import { prLabel } from './row-composition';
 import { nextStages, STAGE_ORDER, type ActionFacts, type StageKind } from './row-actions';
-import { compactAge } from './work-items';
+import { compactAge, type RunOutcome } from './work-items';
 
-export type SlotState = 'notStarted' | 'running' | 'needsYou' | 'done';
+/**
+ * Defect 1 — `done` used to be the FALLTHROUGH of three booleans, so a run that was KILLED and
+ * wrote nothing read exactly like one that finished with an answer. `stopped` and `failed` are
+ * the two endings that were being swallowed; `done` is now a claim, made only about a session
+ * that ended well AND produced something of its own.
+ */
+export type SlotState = 'notStarted' | 'running' | 'needsYou' | 'stopped' | 'failed' | 'done';
+
+/**
+ * The one file a session never wrote: the brief it was HANDED. `pickPrimaryArtifact` falls back
+ * to it (core `WORK_FALLBACK`), so a session that produced nothing still names an artifact — the
+ * agent's own input, offered in the slot where its output belongs. "Has this produced anything?"
+ * is asked here, once, rather than by comparing this string at each call site.
+ */
+const BRIEF = 'BRIEF.md';
+
+export function hasRealOutput(agent: Pick<LifecycleAgent, 'primaryArtifact'>): boolean {
+  const name = agent.primaryArtifact;
+  return name !== null && name !== '' && name !== BRIEF;
+}
 
 export interface LifecycleAgent {
   sessionId: string;
@@ -32,6 +51,13 @@ export interface LifecycleAgent {
   running: boolean;
   needsYou: boolean;
   primaryArtifact: string | null;
+  /**
+   * The engine's own `lastRun.outcome`. **Optional**: an engine older than this contract sends
+   * none, and the slot then degrades to what it said before — never a guess, and never a crash.
+   */
+  runOutcome?: RunOutcome | null;
+  /** Phase 18's `run_failed` reason. Optional for the same reason. */
+  runFailed?: boolean;
   worktreePath?: string | null;
   /** Panel-local: a start this window has asked for and not yet seen in `/items`. */
   pending?: boolean;
@@ -107,10 +133,23 @@ function agentFor(
   return found;
 }
 
+/**
+ * WHAT the session produced and HOW its run ended — in that order, and never a fallthrough.
+ *
+ * `stopped` comes from the engine's own outcome and is never re-derived here. `failed` is asked
+ * BEFORE `needsYou`, because a failed run raises `needsYou` too and "needs you" is the same
+ * sentence an agent uses when it is politely asking a question: the user could not tell a broken
+ * run from a waiting one. Last, a session that ended with nothing but the brief it was handed has
+ * produced NOTHING, whatever its exit code said, and `ended` is all that can honestly be claimed
+ * of it — an engine that sends no outcome leaves no room for a stronger word.
+ */
 function stateOf(agent: LifecycleAgent | undefined): SlotState {
   if (agent === undefined) return 'notStarted';
   if (agent.running) return 'running';
+  if (agent.runOutcome === 'stopped') return 'stopped';
+  if (agent.runOutcome === 'failed' || agent.runFailed === true) return 'failed';
   if (agent.needsYou) return 'needsYou';
+  if (!hasRealOutput(agent)) return 'stopped';
   return 'done';
 }
 
@@ -134,6 +173,13 @@ function stateTextOf(
   if (state === 'notStarted' || agent === undefined) return 'not started';
   if (state === 'running') return `running · ${agent.phase}`;
   if (state === 'needsYou') return 'needs you';
+  if (state === 'stopped' || state === 'failed') {
+    // The second half is the part the user acts on: whether anything survives to be read. A
+    // stopped run that the engine never named is `ended` — it stopped somehow, and claiming more
+    // than that would be inventing the reason (MG-12).
+    const how = state === 'failed' ? 'failed' : agent.runOutcome === 'stopped' ? 'stopped' : 'ended';
+    return `${how} · ${hasRealOutput(agent) ? 'output written' : 'no output'}`;
+  }
   const age = artifactAt === null ? '—' : compactAge(artifactAt, now);
   return age === '—' ? 'done' : `done · ${age}`;
 }
@@ -244,7 +290,10 @@ export function detailSignatureOf(item: {
   ticket: { status: string; updatedAt: string } | null;
 }): string {
   const agents = item.agents
-    .map((a) => `${a.sessionId}|${a.mode}|${a.phase}|${a.running}|${a.needsYou}|${a.worktreePath ?? ''}`)
+    .map(
+      (a) =>
+        `${a.sessionId}|${a.mode}|${a.phase}|${a.running}|${a.needsYou}|${a.runOutcome ?? ''}|${a.primaryArtifact ?? ''}|${a.worktreePath ?? ''}`,
+    )
     .join(';');
   const prs = item.prs
     .map((p) => `${prLabel(p)}|${p.updatedAt ?? ''}|${p.reviewDecision ?? ''}|${p.isDraft ?? ''}`)

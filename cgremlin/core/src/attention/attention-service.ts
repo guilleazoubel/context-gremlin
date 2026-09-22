@@ -5,6 +5,7 @@ import type { Inventory } from '../inventory/inventory';
 import type { LocalAppStatus } from '../env/environment-service';
 import type { SessionWatchEvent, SessionWatcher } from '../fs/session-watcher';
 import type { QaVerdict, Session, SessionMode } from '../schema/session';
+import type { RunOutcome } from '../schema/stage';
 import { repoSlugFromUrl } from '../gh/repo-slug';
 import { isClaimed } from '../pipeline/pipeline-service';
 import { pickPrimaryArtifact } from '../api/artifacts';
@@ -81,6 +82,14 @@ export interface AttentionItem extends Item {
    * source or a test fixture that predates Gap 1 need not supply it.
    */
   qaVerdict?: QaVerdict | null;
+  /**
+   * Defect 1 — HOW the session's last run ENDED (`session.lastRun.outcome`),
+   * carried, never re-derived. `running: false` is true of a run that
+   * finished, a run that failed and a run that was KILLED, and without this
+   * no client can tell the three apart: the panel called all of them done.
+   * Optional so a source or a fixture that predates this need not supply it.
+   */
+  runOutcome?: RunOutcome | null;
 }
 
 /** What an adapter collects: everything but the evaluated attention state. */
@@ -98,6 +107,8 @@ export interface CollectedItem {
   links: ItemLinks;
   /** See `AttentionItem.qaVerdict` — carried straight through by `evaluate()`. */
   qaVerdict?: QaVerdict | null;
+  /** See `AttentionItem.runOutcome` — carried straight through by `evaluate()`. */
+  runOutcome?: RunOutcome | null;
 }
 
 /** One per ItemSource. Adding Jira/Slack = adding an adapter to the array. */
@@ -228,6 +239,8 @@ export class SessionSourceAdapter implements SourceAdapter {
       // Gap 1: `session.qa` only exists on the qa-mode branch of the
       // discriminated union — every other mode reads null.
       qaVerdict: session.mode === 'qa' ? session.qa.verdict : null,
+      // Defect 1: the engine's OWN word for how the last run ended.
+      runOutcome: session.lastRun?.outcome ?? null,
       links: {
         ...emptyLinks(),
         sessionId: session.id,
@@ -646,6 +659,7 @@ export class AttentionService {
       running: collected.running,
       claimed: collected.claimed,
       qaVerdict: collected.qaVerdict ?? null,
+      runOutcome: collected.runOutcome ?? null,
     };
   }
 }

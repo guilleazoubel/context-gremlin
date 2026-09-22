@@ -189,7 +189,7 @@ describe('AttentionService.list', () => {
     expect(all.items.map((i) => i.ref).sort()).toEqual(['pr:acme/app#7', 'session:loud', 'session:quiet']);
     const item = all.items.find((i) => i.ref === 'session:loud')!;
     expect(Object.keys(item).sort()).toEqual(
-      ['attention', 'claimed', 'id', 'links', 'mode', 'qaVerdict', 'ref', 'repoOrContext', 'running', 'source', 'stageStatus', 'title'].sort(),
+      ['attention', 'claimed', 'id', 'links', 'mode', 'qaVerdict', 'ref', 'repoOrContext', 'running', 'runOutcome', 'source', 'stageStatus', 'title'].sort(),
     );
     expect(item.source).toBe('session');
     expect(item.mode).toBe('investigation');
@@ -265,6 +265,29 @@ describe('AttentionService.list', () => {
     const all = await fx.service.list({ all: true });
     expect(all.items.find((i) => i.ref === 'session:qa-blocked')!.qaVerdict).toBe('blocked');
     expect(all.items.find((i) => i.ref === 'session:non-qa')!.qaVerdict).toBeNull();
+  });
+
+  // Defect 1 — HOW the run ended, straight off `session.lastRun.outcome`.
+  // A killed run and a finished one are both `running: false`, and without
+  // this field no client can tell them apart at all.
+  it('carries the session’s own lastRun.outcome, and null when it never ran', async () => {
+    await fx.h.store.save(
+      investigation('killed', {
+        lastRun: {
+          stage: 'findings',
+          startedAt: '2026-09-01T00:00:00.000Z',
+          finishedAt: '2026-09-01T00:00:03.000Z',
+          exitCode: null,
+          signal: 'SIGTERM',
+          outcome: 'stopped',
+          error: 'stopped by user',
+        },
+      } as Partial<Session>),
+    );
+    await fx.h.store.save(investigation('never-ran'));
+    const all = await fx.service.list({ all: true });
+    expect(all.items.find((i) => i.ref === 'session:killed')!.runOutcome).toBe('stopped');
+    expect(all.items.find((i) => i.ref === 'session:never-ran')!.runOutcome).toBeNull();
   });
 
   it('reports claimed: true for a session whose human-turn claim is still live', async () => {
