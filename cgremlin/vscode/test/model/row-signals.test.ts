@@ -185,6 +185,9 @@ describe('P0-3 investigations', () => {
   it('reads phase then age, and takes its age from the work when there is no PR', () => {
     const row = rowOf(lists(), 'investigations', 'session:inv-stacktrace-1');
     expect(kinds(row.meta)).toEqual(['agentPhase', 'age']);
-    expect(texts(row.meta)).toEqual(['∴ investigating', '7h']);
+    // Defect 3 — this fixture session is `claimed: true`, and until now the row said nothing
+    // about it: the user took the claim by opening Chat and then read the stage refusal as the
+    // panel breaking. A conversation somebody is holding outranks the phase it is parked in.
+    expect(texts(row.meta)).toEqual(['∴ conversation held', '7h']);
   });
 });

@@ -11,7 +11,7 @@
  *
  * Runs in a browser context (R40).
  */
-import { artifactLabel, BRIEF_ONLY_NOTICE, briefOnly } from '../../model/artifact-labels';
+import { artifactLabel, briefOnly, briefOnlyNotice } from '../../model/artifact-labels';
 import { compactAge } from '../../model/row-composition';
 import { stripLeadingH1 } from '../../model/artifact-outline';
 import type { TabAgent, TabArtifact } from '../../model/item-tab-protocol';
@@ -79,7 +79,8 @@ export function createArtifactPane(): HTMLElement {
     // written five minutes ago or last month, which is the first thing a reader needs to know.
     meta: el('p', 'artifact-meta'),
     strip: createVerdictStrip(),
-    notice: el('p', 'artifact-notice', BRIEF_ONLY_NOTICE),
+    // Text is set on every patch: WHICH document this agent owed depends on its mode.
+    notice: el('p', 'artifact-notice'),
     body: el('div', 'artifact-body'),
     rendered: null,
   };
@@ -105,6 +106,7 @@ export function patchArtifactPane(pane: HTMLElement, data: ArtifactPaneData): vo
   // user starts reading an agent's ORDERS as its verdict.
   const names = data.agent.artifacts.map((artifact) => artifact.name);
   setText(parts.meta, metaOf(data.artifact));
+  setText(parts.notice, briefOnlyNotice(data.agent.mode));
   setHidden(parts.notice, !briefOnly(names));
   const text = data.artifact.text;
   if (text === null) {

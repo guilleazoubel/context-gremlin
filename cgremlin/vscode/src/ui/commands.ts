@@ -13,6 +13,7 @@
 import { prLabel, prRefOf } from '../model/row-composition';
 import { engineErrorText, type CoreClient, type HttpResult } from '../core-client';
 import { refreshBlockedMessage } from '../model/engine-trouble';
+import { RELEASE_CONVERSATION_LABEL } from '../model/row-actions';
 import { readTitle, writeTitle } from '../model/item-title';
 import { withEngineRetry, type EngineRevival } from './engine-retry';
 import {
@@ -68,6 +69,17 @@ const DRIVE = ['Stop at the plan', 'Drive to completion'] as const;
  * is on it; the modal names what the click actually does, in words a person weighing whether to
  * interrupt a running agent can act on.
  */
+/**
+ * Defect 3 — the two halves of a refusal that used to be a dead end.
+ *
+ * `HumanTurnInProgressError` (core `pipeline-service.ts`) is the ONE refusal whose remedy the
+ * user cannot reach from anywhere: releasing the claim is a route, not a button, and the sentence
+ * named it without offering it. Matched on the engine's own wording rather than on a status code,
+ * because 409 is also a live run, a plan gate and an own-PR review — none of which a release would
+ * help. The refusal itself is untouched: a claim somebody is holding still refuses.
+ */
+const CLAIM_REFUSAL = /holds the (?:agent )?conversation/i;
+
 export const STOP_RUN_CONFIRM_TEXT =
   "This ends the agent's current run. Work it already wrote to files is kept.";
 export const STOP_RUN_CONFIRM_LABEL = 'Stop the run';
@@ -147,6 +159,31 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
     return false;
   };
 
+  /**
+   * `surface`, for a call addressed at ONE session — the only calls a held claim can refuse.
+   *
+   * A refusal the user cannot act on is half a fix (the Phase 18 rule, applied to the one refusal
+   * that had no remedy at all). So the engine's sentence arrives with the button that clears it,
+   * and taking the offer re-sends the very verb that was refused: the user asked once.
+   */
+  const surfaceSession = async (
+    result: HttpResult | null,
+    id: string,
+    call: (id: string) => Promise<HttpResult>,
+  ): Promise<boolean> => {
+    if (result === null) return false;
+    if (result.status >= 200 && result.status < 300) return true;
+    const text = engineErrorText(result.body);
+    if (!CLAIM_REFUSAL.test(text)) {
+      void host.showWarningMessage(text, undefined);
+      return false;
+    }
+    const answer = await host.showWarningMessage(text, undefined, RELEASE_CONVERSATION_LABEL);
+    if (answer !== RELEASE_CONVERSATION_LABEL) return false;
+    if (!surface(await send(() => client.releaseConversation(id)))) return false;
+    return surface(await send(() => call(id)));
+  };
+
   /** The session a per-session command acts on: the selected agent, else the item's first. */
   const sessionOf = (item: WorkItem): string | null => {
     const current = coordinator.currentSession();
@@ -165,7 +202,7 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
       void host.showWarningMessage('That item has no session to act on.', undefined);
       return;
     }
-    if (surface(await send(() => call(id)))) coordinator.schedule();
+    if (await surfaceSession(await send(() => call(id)), id, call)) coordinator.schedule();
   };
 
   /**
@@ -185,7 +222,7 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
       void host.showWarningMessage('That item has no session to act on.', undefined);
       return;
     }
-    if (surface(await send(() => call(id)))) coordinator.schedule();
+    if (await surfaceSession(await send(() => call(id)), id, call)) coordinator.schedule();
   };
 
   /**
@@ -517,6 +554,14 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
       if (surface(await send(() => client.stop(id)))) coordinator.schedule();
     }),
     host.registerCommand('cgremlin.retry', (arg) => onSession(arg, (id) => client.retry(id))),
+    /**
+     * Defect 3 — the inverse of the claim `ChatSessions.open` takes, and the first button in the
+     * extension ever to call `POST /sessions/:id/conversation/release`. `CoreClient.release`
+     * answers 200 on a session nobody holds, so a stale row costs the user nothing.
+     */
+    host.registerCommand('cgremlin.releaseConversation', (arg, childArg) =>
+      onNamedSession(arg, childArg, (id) => client.releaseConversation(id)),
+    ),
     /**
      * Phase 21 — Retry's opposite number for a session whose failed run already produced its
      * artifact. `retry` re-runs `lastRun.stage`; this runs the stage that never got to run, which

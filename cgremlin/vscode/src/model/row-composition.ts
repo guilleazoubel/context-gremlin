@@ -245,6 +245,15 @@ export function qaDeployText(deploy: { state: 'awaiting' | 'verified'; sha: stri
   return deploy.state === 'awaiting' ? QA_AWAITING_DEPLOY : `build ${deploy.sha.slice(0, 7)}`;
 }
 
+/**
+ * Defect 3 — the words for a conversation a human is holding, said HERE and nowhere else.
+ *
+ * Deliberately not `you hold this`: the wire carries `claimed: boolean` and nothing about WHO,
+ * and a row that named the wrong person would be worse than one that named none (MG-12). The
+ * engine's own refusal sentence is what tells the user it is them.
+ */
+export const CLAIM_HELD_TEXT = 'conversation held';
+
 /** Claim, then a live run, then the gate — the precedence the tree used before the panel (R18). */
 export function agentGlyph(agent: WorkItemAgent): string {
   if (agent.claimed) return '◉';
@@ -294,6 +303,17 @@ const REPORT_NOUN: Record<string, string> = {
   qa: 'QA result',
 };
 
+/**
+ * The document a session of this mode OWES — the one noun every surface uses for it.
+ *
+ * It was private to `verdictView`'s "could not be read" sentence; Defect 1 needs the same word in
+ * the tab's brief-only notice, and a second copy of this map is exactly how the row and the tab
+ * come to call one file two things. An unknown mode is `report`, never a guess (MG-12).
+ */
+export function reportNoun(mode: string | null): string {
+  return REPORT_NOUN[mode ?? ''] ?? 'report';
+}
+
 export function verdictView(input: {
   /** The primary artifact's text, or `null` when there was none to fetch or it did not arrive. */
   text: string | null;
@@ -305,7 +325,7 @@ export function verdictView(input: {
 }): RowVerdict | null {
   const stale = input.newCommits ? STALE_SENTENCE : null;
   if (input.unreadable) {
-    const noun = REPORT_NOUN[input.mode ?? ''] ?? 'report';
+    const noun = reportNoun(input.mode);
     return { tone: null, label: '', sentence: '', counts: '', stale, notice: `The ${noun} could not be read` };
   }
   const verdict = input.text === null || input.text === '' ? null : verdictOf(input.text);
@@ -662,8 +682,7 @@ function lastFinishedAgent(agents: readonly WorkItemAgent[]): WorkItemAgent | nu
 function phaseCell(agent: WorkItemAgent, reason: string | null): RowMetaCell {
   const glyph = MODE_GLYPH[agent.mode] ?? '•';
   if (agent.mode !== 'qa') {
-    const word = !agent.running && reason !== null && reason !== '' ? reasonText(reason) : agent.phase;
-    return { kind: 'agentPhase', text: `${glyph} ${word}` };
+    return { kind: 'agentPhase', text: `${glyph} ${stateWordOf(agent, reason)}` };
   }
   // §8's one toned cell: a verification that came back short of ready is the top of my work,
   // and the row has to say so without a second composition site (R72 does the ordering).
@@ -671,6 +690,32 @@ function phaseCell(agent: WorkItemAgent, reason: string | null): RowMetaCell {
   const text = qaStateText(agent.phase, agent.qaVerdict ?? null);
   const cell: RowMetaCell = { kind: 'agentPhase', text: `${glyph} ${text}` };
   return bad ? { ...cell, tone: 'bad' } : cell;
+}
+
+/**
+ * Defect 2 — the one word a finished agent's cell shows, in the order the user needs it.
+ *
+ * `runOutcome` reached `WorkItemAgent` a round ago and only `lifecycleSlots` (the EXPANDED row)
+ * ever asked for it, so the collapsed row kept reporting the STAGE a killed run died in as
+ * though it were a state: `∴ findings · 5d` on a session that was killed on day one and wrote
+ * nothing. The phase is what an agent was DOING; it is not how the run ENDED.
+ *
+ * The order is deliberate and nothing is displaced. A running agent keeps its phase, because
+ * there the phase is genuine progress. An attention reason still outranks the outcome: the
+ * reason is what the item wants FROM THE USER, which is a stronger thing to say than how the
+ * last run finished. Only where the cell would otherwise have fallen back to the raw phase does
+ * the outcome speak — and an engine that sends none leaves the phase exactly where it was.
+ */
+function stateWordOf(agent: WorkItemAgent, reason: string | null): string {
+  // Defect 3 — first, because it is the fact that will REFUSE whatever the user tries next. A
+  // human holding the agent conversation used to be a glyph (`agentGlyph`'s `◉`) and nothing
+  // else, so the user took the claim by opening Chat, saw a phase, and read the stage refusal
+  // forty-three seconds later as the panel breaking.
+  if (agent.claimed) return CLAIM_HELD_TEXT;
+  if (agent.running) return agent.phase;
+  if (reason !== null && reason !== '') return reasonText(reason);
+  if (agent.runOutcome === 'stopped' || agent.runOutcome === 'failed') return agent.runOutcome;
+  return agent.phase;
 }
 
 /**

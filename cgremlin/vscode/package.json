@@ -116,6 +116,11 @@
         "category": "cgremlin"
       },
       {
+        "command": "cgremlin.releaseConversation",
+        "title": "Release the agent conversation",
+        "category": "cgremlin"
+      },
+      {
         "command": "cgremlin.renameItem",
         "title": "Rename item...",
         "category": "cgremlin"
@@ -279,6 +284,10 @@
         },
         {
           "command": "cgremlin.promoteToDevelopment",
+          "when": "false"
+        },
+        {
+          "command": "cgremlin.releaseConversation",
           "when": "false"
         },
         {
