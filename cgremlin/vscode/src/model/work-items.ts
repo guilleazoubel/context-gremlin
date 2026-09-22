@@ -122,6 +122,16 @@ export interface WorkItemAgent {
   claimed: boolean;
   primaryArtifact: string | null;
   worktreePath: string | null;
+  /**
+   * Round 3 — WHICH pull request this session is about, from the engine's own
+   * `links.prRepo`/`prNumber`. The expanded block quotes one agent's verdict and has to show
+   * THAT agent's pull request beside it; `prs[0]` is the most recently updated one, which on a
+   * ticket carrying two pull requests is routinely a different one.
+   *
+   * **Optional**: an engine older than this contract sends none, and the block then falls back
+   * only where nothing is ambiguous (`verdictFocusOf`).
+   */
+  pr?: { repo: string; number: number } | null;
   ref: string;
   /**
    * Gap 1 — the same parse `evaluateQa` ran, straight off the wire.

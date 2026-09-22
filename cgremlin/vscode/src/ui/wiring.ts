@@ -8,7 +8,7 @@
 import { CoreHttpError, EngineNotRunningError, type CoreClient } from '../core-client';
 import { troubleOf } from '../model/engine-trouble';
 import { meOf, qaReposOf, qaStatusesOf } from '../model/items';
-import { currentAgentOf, verdictAgentOf } from '../model/lifecycle';
+import { currentAgentOf, verdictFocusOf } from '../model/lifecycle';
 import { itemPathOf, type ItemArtifactListing, type WorkItem } from '../model/work-items';
 import type { NotificationLevel } from '../model/notify-policy';
 import { PanelView, PANEL_VIEW_ID } from './panel-view';
@@ -117,12 +117,17 @@ export function createUi(options: UiOptions): Ui {
       const changes = agent === null ? null : await client.changes(agent.sessionId).catch(note);
       // Round 3 §e.1 — the ANSWER, for the ONE row the user just clicked. `primaryArtifact` and
       // `CoreClient.artifactText` are both already there; what was missing was anyone asking.
-      const artifact = await artifactOf(client, item, note);
-      // Ruling 3 — and whether that answer still applies. The engine computes it once, in the
-      // inventory, and now carries it on the item's own PR: nothing here re-derives a freshness
-      // bit, so the panel and the CLI cannot come to disagree about whether a verdict stands.
-      // An engine older than that contract sends nothing, which reads as "no claim" (MG-12).
-      const newCommits = item.prs[0]?.newCommits === true;
+      //
+      // ONE selection decides both halves (`verdictFocusOf`): whose artifact is read, and which
+      // pull request the freshness bit is about. Reading the bit off the first PR instead meant a
+      // review of one pull request could be declared fresh on the strength of another one.
+      const focus = verdictFocusOf(item.agents, item.prs);
+      const artifact = await artifactOf(client, focus.agent, note);
+      // Ruling 3 — the engine computes it once, in the inventory, and carries it on the PR:
+      // nothing here re-derives a freshness bit, so the panel and the CLI cannot come to
+      // disagree about whether a verdict stands. An engine older than that contract sends
+      // nothing, and an unidentifiable pull request makes no claim at all (MG-12).
+      const newCommits = focus.pr?.newCommits === true;
       return { artifactAt, changes, offline, artifact, newCommits };
     },
   });
@@ -304,10 +309,9 @@ function latestArtifactAt(listing: readonly ItemArtifactListing[]): string | nul
  */
 async function artifactOf(
   client: CoreClient,
-  item: WorkItem,
+  agent: WorkItem['agents'][number] | null,
   note: (err: unknown) => null,
 ): Promise<{ mode: string; text: string | null; unreadable: boolean } | null> {
-  const agent = verdictAgentOf(item.agents);
   if (agent === null || agent.primaryArtifact === null) return null;
   const text = await client.artifactText(agent.sessionId, agent.primaryArtifact).catch(note);
   return { mode: agent.mode, text, unreadable: text === null };

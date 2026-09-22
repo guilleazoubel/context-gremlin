@@ -357,22 +357,45 @@ function openedOn(createdAt: string | null): string {
  */
 const SUPPORTING_LIMIT = 2;
 
-/** Generic over the part shape, so the host may hand it either an `ItemPart` or its view. */
-export function hoistVerbs<P extends { actions: RowAction[] }>(
+/**
+ * Generic over the part shape, so the host may hand it either an `ItemPart` or its view.
+ *
+ * `focusChildId` is the session whose artifact the verdict block is quoting (`verdictFocusOf`).
+ * Without it the primary was "whichever part emitted one first", in part order — so an item that
+ * investigated and was then reviewed hoisted `Read the findings` while the verdict above it was
+ * the review's, and `Read the review` stayed inside a disclosure that is CLOSED by default. The
+ * one prominent button now opens the document the block quotes, and the focus part's other
+ * verbs (its Chat, the disagreement channel) lead the supporting pair for the same reason.
+ */
+export function hoistVerbs<P extends { actions: RowAction[]; childId?: string | null }>(
   parts: readonly P[],
   actions: readonly RowAction[],
+  focusChildId: string | null = null,
 ): { verbs: RowAction[]; parts: P[] } {
   const key = (action: RowAction): string => `${action.command}:${action.childId ?? ''}`;
+  const ordered =
+    focusChildId === null
+      ? [...parts]
+      : [
+          ...parts.filter((part) => part.childId === focusChildId),
+          ...parts.filter((part) => part.childId !== focusChildId),
+        ];
   const pool: RowAction[] = [];
   const seen = new Set<string>();
-  for (const action of [...parts.flatMap((part) => part.actions), ...actions]) {
+  for (const action of [...ordered.flatMap((part) => part.actions), ...actions]) {
     if (seen.has(key(action))) continue;
     seen.add(key(action));
     pool.push(action);
   }
 
   const retry = pool.find((action) => action.command === 'cgremlin.retry');
-  const primary = retry ?? pool.find((action) => action.placement === 'primary') ?? null;
+  const quoted =
+    focusChildId === null
+      ? undefined
+      : pool.find(
+          (action) => action.command === 'cgremlin.openChild' && action.childId === focusChildId,
+        );
+  const primary = retry ?? quoted ?? pool.find((action) => action.placement === 'primary') ?? null;
   const supporting = pool
     .filter((action) => action !== primary && action.placement !== 'overflow')
     .slice(0, SUPPORTING_LIMIT);

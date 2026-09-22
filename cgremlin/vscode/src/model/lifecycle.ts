@@ -21,6 +21,12 @@ export type SlotState = 'notStarted' | 'running' | 'needsYou' | 'done';
 
 export interface LifecycleAgent {
   sessionId: string;
+  /**
+   * Round 3 — WHICH pull request this session is about (`WorkItemAgent.pr`). **Optional**: an
+   * engine older than that contract sends none, and the focus then falls back only where
+   * nothing is ambiguous (see {@link verdictFocusOf}).
+   */
+  pr?: { repo: string; number: number } | null;
   mode: string;
   phase: string;
   running: boolean;
@@ -183,6 +189,41 @@ export function verdictAgentOf<T extends LifecycleAgent>(agents: readonly T[]): 
     if (best === null || rank >= (VERDICT_RANK[best.mode] ?? 0)) best = agent;
   }
   return best;
+}
+
+/**
+ * Round 3 — THE selection the whole expanded block follows.
+ *
+ * The block used to make three independent choices: the verdict by stage rank, the freshness
+ * bit and the PR facts by `prs[0]` (the core's `updatedAt` order), and the one full-width button
+ * by part order. On a ticket carrying two pull requests — mine, and a teammate's I am reviewing
+ * — those three disagree, and the block then states one pull request's verdict over another
+ * one's size, CI and freshness. A genuinely stale approval renders as fresh.
+ *
+ * So there is ONE choice: the agent whose conclusion is being quoted, and the pull request that
+ * agent is about. Where the agent names a pull request the item does not carry, the answer is
+ * `null` and the block says nothing about a pull request at all — never `prs[0]`, because a
+ * wrong claim is worse than a missing one (MG-12). Where NOTHING names one, the single pull
+ * request is taken (there is nothing to be ambiguous between) and two or more are refused.
+ */
+export interface VerdictFocus<A, P> {
+  /** Whose artifact the verdict block quotes, or `null` when no agent wrote one. */
+  agent: A | null;
+  /** The pull request that agent is about, or `null` when it cannot be identified. */
+  pr: P | null;
+}
+
+export function verdictFocusOf<
+  A extends LifecycleAgent,
+  P extends { repo: string; number: number },
+>(agents: readonly A[], prs: readonly P[]): VerdictFocus<A, P> {
+  const agent = verdictAgentOf(agents);
+  const named = agent?.pr ?? null;
+  if (named === null) {
+    return { agent, pr: prs.length === 1 ? prs[0] : null };
+  }
+  const found = prs.find((pr) => pr.repo === named.repo && pr.number === named.number);
+  return { agent, pr: found ?? null };
 }
 
 /**

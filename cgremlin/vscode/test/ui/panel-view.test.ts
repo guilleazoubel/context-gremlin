@@ -122,8 +122,10 @@ describe('MG-B8 four lists and no tree', () => {
     // The two shas are DECLARED in `model/items.ts`, which mirrors the engine's own types; what
     // no module may do is compare them, which is the derivation the engine already owns.
     expect(hits(/reviewedSha\s*[!=]==|[!=]==\s*[\w.?]*headSha/)).toEqual([]);
+    // …and it reads it off the pull request the VERDICT is about, never off `prs[0]`.
     const wiring = fs.readFileSync(path.join(root, 'src/ui/wiring.ts'), 'utf8');
-    expect(wiring).toContain('item.prs[0]?.newCommits === true');
+    expect(wiring).toContain('focus.pr?.newCommits === true');
+    expect(wiring).not.toContain('prs[0]');
   });
 
   it('contributes the view as a webview and no longer contributes refreshPreview', () => {

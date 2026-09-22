@@ -15,7 +15,7 @@
  */
 import crypto from 'node:crypto';
 import { uncommittedLine, worktreeLine, type SessionChanges } from '../model/changes';
-import { detailSignatureOf, lifecycleSlots } from '../model/lifecycle';
+import { detailSignatureOf, lifecycleSlots, verdictFocusOf } from '../model/lifecycle';
 import { hoistVerbs, itemParts } from '../model/item-parts';
 import { prFactLines, ticketLineOf, verdictView, type RowVerdict } from '../model/row-composition';
 import { readTitle } from '../model/item-title';
@@ -611,9 +611,15 @@ export class PanelView implements WebviewViewProviderLike {
     const description = own === '' ? row.description : own;
     const label = [row.identity, description].filter((part) => part !== '').join(' — ');
     const parts = expanded ? this.partsOf(row, actions) : [];
+    // ONE selection for the whole block (`verdictFocusOf`): whose conclusion is quoted, which
+    // pull request that agent is about, and therefore which document the prominent button opens.
+    // Three independent choices could describe three different things in one frame.
+    const focus = verdictFocusOf(row.item.agents, row.item.prs);
     // §e.7 — placement, finally read: one primary, two supporting, the rest in the disclosure.
     // A hoisted verb leaves the part it came from, so no verb is said twice in one open row.
-    const hoisted = expanded ? hoistVerbs(parts, actions) : { verbs: [], parts };
+    const hoisted = expanded
+      ? hoistVerbs(parts, actions, focus.agent === null ? null : `agent:${focus.agent.sessionId}`)
+      : { verbs: [], parts };
     return {
       id: row.id,
       list: row.list,
@@ -643,7 +649,10 @@ export class PanelView implements WebviewViewProviderLike {
       detailsOpen: expanded && this.detailsOpen,
       // Round 3 — the ANSWER, above every button, and only on the row that is open.
       verdict: expanded ? this.verdictOf(row) : null,
-      facts: expanded ? prFactLines(row.item.prs[0], this.deps.me?.() ?? '') : [],
+      // The facts describe the pull request the VERDICT is about. Where that cannot be
+      // identified the block says nothing about a pull request at all — `prs[0]` is the most
+      // recently updated one, which on a two-PR ticket is routinely the wrong one (MG-12).
+      facts: expanded ? prFactLines(focus.pr ?? undefined, this.deps.me?.() ?? '') : [],
       ticketLine: expanded ? ticketLineOf(row.item.ticket) : '',
       changes: expanded ? this.changesView(row.id) : null,
       actions,
