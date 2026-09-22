@@ -60,7 +60,7 @@ describe('task 2 — line one is keys, line two is prose, line three is signals'
     expect(lines(rows().get('parkingLot/pr:acme/web#102') as WorkRow)).toEqual([
       '#102',
       'Drop the legacy shim',
-      ['web', '◈ review_ready', '5d', 'L', '3 files +20/−400', 'CI failing'],
+      ['web', '◈ review ready', '5d', 'L', '3 files +20/−400', 'CI failing'],
     ]);
   });
 
@@ -71,7 +71,7 @@ describe('task 2 — line one is keys, line two is prose, line three is signals'
       [
         'web',
         'In Progress',
-        '∴ plan_ready',
+        '∴ plan ready',
         '◆ developing',
         // P: a running agent is unmistakable on the collapsed row.
         'running',

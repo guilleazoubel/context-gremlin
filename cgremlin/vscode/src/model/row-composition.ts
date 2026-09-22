@@ -15,6 +15,7 @@
  *
  * Pure: no editor API, no DOM, no clock of its own (a `now` is always an argument).
  */
+import { reasonText } from './needs-you';
 import type {
   CiStatus,
   QaVerdict,
@@ -341,8 +342,13 @@ export function rowMetaCells(
   const primary = item.prs[0];
   const cells: RowMetaCell[] = [];
 
+  // The reason describes the ITEM, so it is said once — on the furthest agent that has finished,
+  // which is the one whose state the row is actually reporting. An earlier stage keeps its own
+  // phase rather than echoing a reason that is not about it.
+  const reason = item.attention.reasons[0] ?? null;
+  const reasonAgent = lastFinishedAgent(item.agents);
   const pushAgent = (agent: WorkItemAgent): void => {
-    cells.push(phaseCell(agent));
+    cells.push(phaseCell(agent, agent === reasonAgent ? reason : null));
     if (agent.running) cells.push(runningCell(agent, now));
   };
 
@@ -430,9 +436,29 @@ function qaDeployCell(deploy: { state: 'awaiting' | 'verified'; sha: string }): 
   };
 }
 
-function phaseCell(agent: WorkItemAgent): RowMetaCell {
+/** The last agent that is neither running nor QA — whose phase the reason speaks for. */
+function lastFinishedAgent(agents: readonly WorkItemAgent[]): WorkItemAgent | null {
+  let found: WorkItemAgent | null = null;
+  for (const agent of agents) if (!agent.running && agent.mode !== 'qa') found = agent;
+  return found;
+}
+
+/**
+ * Round 3 — the row's state token is the REASON the item wants the user, not the phase the
+ * pipeline is in. `◆ ready` said which mode and which phase and neither was an outcome; the
+ * core's own `attention.reasons` already says WHY, and `reasonText` already words it (it was
+ * spent on the needs-you strip alone). No new field, no new vocabulary.
+ *
+ * Two agents keep their phase. A RUNNING one, because there the phase is genuine progress and
+ * the reason is about the answer that does not exist yet. And QA, whose token is already an
+ * outcome (`qaStateText`) rather than a phase — swapping it for a reason would LOSE information.
+ */
+function phaseCell(agent: WorkItemAgent, reason: string | null): RowMetaCell {
   const glyph = MODE_GLYPH[agent.mode] ?? '•';
-  if (agent.mode !== 'qa') return { kind: 'agentPhase', text: `${glyph} ${agent.phase}` };
+  if (agent.mode !== 'qa') {
+    const word = !agent.running && reason !== null && reason !== '' ? reasonText(reason) : agent.phase;
+    return { kind: 'agentPhase', text: `${glyph} ${word}` };
+  }
   // §8's one toned cell: a verification that came back short of ready is the top of my work,
   // and the row has to say so without a second composition site (R72 does the ordering).
   const bad = agent.phase === 'not_ready' || agent.phase === 'failed';

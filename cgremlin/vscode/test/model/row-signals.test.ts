@@ -173,7 +173,7 @@ describe('§2 L3 my work reads as state', () => {
   it('reads repo, ticket status and every agent phase, on the signals line itself', () => {
     const row = rowOf(lists(), 'myWork', 'ticket:HB-627');
     expect(kinds(row.meta).slice(0, 4)).toEqual(['repo', 'ticketStatus', 'agentPhase', 'agentPhase']);
-    expect(texts(row.meta).slice(0, 4)).toEqual(['web', 'In Progress', '∴ plan_ready', '◆ developing']);
+    expect(texts(row.meta).slice(0, 4)).toEqual(['web', 'In Progress', '∴ plan ready', '◆ developing']);
   });
 
   it('says nothing of the sort on a parking-lot row, which asks a different question', () => {
