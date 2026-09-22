@@ -35,7 +35,7 @@ interface Built {
   ready(): void;
 }
 
-function build(over: { response?: ItemsResponse | null } = {}): Built {
+function build(over: { response?: ItemsResponse | null; me?: string } = {}): Built {
   const host = new FakeHost();
   const opened: string[] = [];
   const children: [string, string][] = [];
@@ -55,6 +55,7 @@ function build(over: { response?: ItemsResponse | null } = {}): Built {
     },
     now: () => Date.parse('2026-09-10T12:00:00.000Z'),
     nonce: () => 'test-nonce',
+    me: () => over.me ?? '',
   });
   const view = new FakeWebviewView();
   panel.resolveWebviewView(view);
@@ -740,5 +741,29 @@ describe('the per-section accents', () => {
     expect(css).toMatch(/\.row-id\s*\{[^}]*font-weight:\s*700/);
     expect(css).toMatch(/\.row-desc\s*\{[^}]*font-size:\s*12px/);
     expect(css).toMatch(/\.row-signals\s*\{[^}]*font-size:\s*11px/);
+  });
+});
+
+/**
+ * Round 3 §e.9 — phase 11 §8(a) ("the panel never learns `me`") is retired. `CoreConfigView.me`
+ * arrives on `GET /config` and reaches the composer by the same thunk `qaRepos` uses, so the PR
+ * part stops reporting the user to himself.
+ */
+describe('the panel knows who the user is', () => {
+  function detailOf(me: string): string {
+    const h = build({ me });
+    h.ready();
+    h.view.webview.emit({ type: 'toggleRow', id: 'pr:acme/api#55', expanded: true });
+    const row = h
+      .state()
+      .sections.flatMap((section) => section.rows)
+      .find((r) => r.id === 'pr:acme/api#55');
+    return row?.parts.find((part) => part.kind === 'pr')?.detail ?? '';
+  }
+
+  it('drops the user from the PR part he is looking at', () => {
+    expect(detailOf('')).toBe('@dana reviewed, @kim commented');
+    expect(detailOf('dana')).toBe('@kim commented');
+    expect(detailOf('kim')).toBe('@dana reviewed');
   });
 });

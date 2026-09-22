@@ -7,7 +7,7 @@
  */
 import { CoreHttpError, EngineNotRunningError, type CoreClient } from '../core-client';
 import { troubleOf } from '../model/engine-trouble';
-import { qaReposOf, qaStatusesOf } from '../model/items';
+import { meOf, qaReposOf, qaStatusesOf } from '../model/items';
 import { currentAgentOf } from '../model/lifecycle';
 import { itemPathOf, type ItemArtifactListing } from '../model/work-items';
 import type { NotificationLevel } from '../model/notify-policy';
@@ -89,6 +89,8 @@ export function createUi(options: UiOptions): Ui {
     qaRepos: () => qaReposOf(coordinator.config()),
     /** Phase 18 — and which statuses mean "in QA", so a blocked row knows it wants one. */
     qaStatuses: () => qaStatusesOf(coordinator.config()),
+    /** Round 3 §e.9 — who the user is, so a line never reports him to himself. */
+    me: () => meOf(coordinator.config()),
     onSelect: async (id) => {
       const agent = currentAgentOf(coordinator.itemOf(id)?.agents ?? []);
       if (agent?.worktreePath == null) return;

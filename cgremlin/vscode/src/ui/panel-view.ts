@@ -112,6 +112,12 @@ export interface PanelViewDeps {
   qaRepos?: () => readonly string[];
   /** Phase 18 — `jira.qaStatuses` (`model/items.qaStatusesOf`), for the same gate's other half. */
   qaStatuses?: () => readonly string[];
+  /**
+   * Round 3 §e.9 — the user's own login (`CoreConfigView.me`), through the same thunk pattern
+   * `qaRepos` uses: the config resolves after the panel is constructed, and an empty answer
+   * simply means the people line keeps every handle, exactly as it did before.
+   */
+  me?: () => string;
 }
 
 /** The extra the detail routes carry for the ONE expanded row (§4, amended). */
@@ -628,6 +634,7 @@ export class PanelView implements WebviewViewProviderLike {
       list: row.list,
       qaRepos,
       qaStatuses,
+      me: this.deps.me?.() ?? '',
       slots: lifecycleSlots({
         agents: row.item.agents,
         facts,

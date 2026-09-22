@@ -302,6 +302,24 @@ export function humanInteractions(pr: WorkItemPr | undefined, now: number): Huma
   ];
 }
 
+/**
+ * Round 3 §e.9 — who has been on the PR, EXCEPT me.
+ *
+ * `@guilleazoubel reviewed` on the user's own screen is a line telling him he did the thing he
+ * did; the question the row answers is whether anyone ELSE has looked. When the remainder is
+ * empty the line says so out loud — "nobody else has" is a decision input, and a blank line is
+ * not. `me` empty (an engine that sent no `me`) keeps every login rather than guessing.
+ */
+export function peopleLine(pr: WorkItemPr | undefined, me: string): string {
+  if (pr === undefined) return '';
+  const others = (logins: readonly string[] | null | undefined): string[] =>
+    [...(logins ?? [])].filter((login) => me === '' || login !== me);
+  const reviewed = others(pr.humanActivity?.reviewedBy).map((login) => `@${login} reviewed`);
+  const commented = others(pr.humanActivity?.commentedBy).map((login) => `@${login} commented`);
+  const line = [...reviewed, ...commented].join(', ');
+  return line === '' ? 'Nobody else has reviewed it yet' : line;
+}
+
 /** The one line the collapsed row shows: the stronger kind, every handle in it, and the age. */
 export function humanActivitySummary(pr: WorkItemPr | undefined, now: number): string {
   if (pr === undefined) return '';

@@ -14,7 +14,9 @@
  *
  * Pure module — no editor API (MG-B1).
  */
-import { MODE_GLYPH, MODE_NAME, prLabel, prRefOf, qaDeployText, qaStateText } from './row-composition';
+import {
+  MODE_GLYPH, MODE_NAME, peopleLine, prLabel, prRefOf, qaDeployText, qaStateText,
+} from './row-composition';
 import type { LifecycleSlot } from './lifecycle';
 import { chatTargetOfAgents, isLandedPr, prState, sizeOf, type WorkItem, type WorkListKind } from './work-items';
 import {
@@ -70,6 +72,8 @@ export interface ItemPartsInput {
   qaRepos?: readonly string[];
   /** Phase 18 — `jira.qaStatuses`, so a blocked QA part knows the item wants QA at all. */
   qaStatuses?: readonly string[];
+  /** Round 3 §e.9 — the user's own login (`CoreConfigView.me`), so a line can leave him out. */
+  me?: string;
   /** Already built by `lifecycleSlots`, so the state wording is said in exactly one place. */
   slots: readonly LifecycleSlot[];
   /** The list's own rule table — the only source of a verb (P0-2). */
@@ -129,7 +133,7 @@ export function itemParts(input: ItemPartsInput): ItemPart[] {
       // because the row is still here for its ticket, not for the change.
       state: isLandedPr(pr) ? prState(pr) : '',
       stateText: prStateText(pr, input.now),
-      detail: peopleLine(pr),
+      detail: peopleLine(pr, input.me ?? ''),
       childId,
       actions: openAction(childId, 'pr').concat(
         find(input.actions, 'cgremlin.openPr', childId, 'Open on GitHub'),
@@ -329,11 +333,4 @@ function openedOn(createdAt: string | null): string {
   const at = Date.parse(createdAt);
   if (Number.isNaN(at)) return '';
   return `Opened ${new Date(at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`;
-}
-
-/** Who has already been on the PR — the evidence `people` used to carry on its own block. */
-function peopleLine(pr: WorkItem['prs'][number]): string {
-  const reviewed = (pr.humanActivity?.reviewedBy ?? []).map((login) => `@${login} reviewed`);
-  const commented = (pr.humanActivity?.commentedBy ?? []).map((login) => `@${login} commented`);
-  return [...reviewed, ...commented].join(', ');
 }
