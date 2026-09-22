@@ -157,8 +157,21 @@ export class ClaudeCodeRunner implements AgentRunner {
       }
     }
 
-    if (record.type === 'result' && typeof record.session_id === 'string') {
-      state.claudeSessionId = record.session_id;
+    if (record.type === 'result') {
+      if (typeof record.session_id === 'string') state.claudeSessionId = record.session_id;
+      // Defect 2 — the turn's own verdict. A failed turn puts the reason HERE
+      // and, in the case that cost the user a run, nowhere else: nothing on
+      // stderr, an exit code of 1, and a `result` event saying "Failed to
+      // authenticate: OAuth session expired and could not be refreshed".
+      // Harvesting only `session_id` threw that sentence away. Forwarded on
+      // stderr because it is what went wrong, and only when it went wrong —
+      // a successful turn's `result` text is the answer, already delivered
+      // as assistant text above.
+      if (record.is_error === true && typeof record.result === 'string' && record.result !== '') {
+        for (const callback of state.outputCallbacks) {
+          callback({ stream: 'stderr', data: record.result });
+        }
+      }
     }
   }
 

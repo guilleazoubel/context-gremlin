@@ -56,6 +56,19 @@ if (prompt === 'HANG_FOREVER') {
   setTimeout(() => {
     process.stdout.write(fullLine.slice(mid)); // still no trailing newline
   }, 20);
+} else if (prompt === 'RESULT_ERROR') {
+  // The shape the real CLI ends a failed turn with: the reason lives in the
+  // `result` event, and nowhere else — nothing is written to stderr at all.
+  process.stdout.write(
+    JSON.stringify({
+      type: 'result',
+      subtype: 'error_during_execution',
+      is_error: true,
+      result: 'Failed to authenticate: OAuth session expired and could not be refreshed',
+      session_id: sessionId,
+    }) + '\n',
+  );
+  process.exitCode = 1;
 } else if (prompt === 'FAIL_LOUDLY') {
   process.stderr.write('simulated failure on stderr\n');
   process.exitCode = 1;

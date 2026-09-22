@@ -43,6 +43,30 @@ describe('ClaudeCodeRunner', () => {
     expect(stderrChunks.join('')).toContain('simulated failure');
   });
 
+  // Defect 2 — the `result` event was parsed ONLY to harvest `session_id`;
+  // `is_error` and the `result` text were dropped on the floor, so the one
+  // sentence explaining why the turn died never left the runner at all.
+  it('forwards the result event’s error text, and still harvests the session id', async () => {
+    const runner = new ClaudeCodeRunner({ claudeBinary: FIXTURE });
+    const handle = await runner.start({ sessionId: 'inv-1', workingDirectory: process.cwd() });
+    const chunks: string[] = [];
+    runner.onOutput(handle, (chunk) => chunks.push(chunk.data));
+    await runner.sendPrompt(handle, 'RESULT_ERROR');
+    expect(chunks.join('')).toContain(
+      'Failed to authenticate: OAuth session expired and could not be refreshed',
+    );
+    expect(runner.getClaudeSessionId(handle)).toBe('fresh-session-1');
+  });
+
+  it('forwards no result text when the turn ended fine', async () => {
+    const runner = new ClaudeCodeRunner({ claudeBinary: FIXTURE });
+    const handle = await runner.start({ sessionId: 'inv-1', workingDirectory: process.cwd() });
+    const chunks: string[] = [];
+    runner.onOutput(handle, (chunk) => chunks.push(chunk.data));
+    await runner.sendPrompt(handle, 'hello');
+    expect(chunks).toEqual(['echo: hello']);
+  });
+
   it('resumes the previous session id on a second sendPrompt call', async () => {
     const runner = new ClaudeCodeRunner({ claudeBinary: FIXTURE });
     const handle = await runner.start({ sessionId: 'inv-1', workingDirectory: process.cwd() });

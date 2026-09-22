@@ -6,6 +6,7 @@ import type { Session } from '../schema/session';
 import type { LastRun, StageName } from '../schema/stage';
 import { KeyedLock } from '../api/keyed-lock';
 import { refreshWorkspaceGuardrails } from '../workspace/workspace-manager';
+import { redactSecrets } from '../config/core-config';
 
 export class RunInProgressError extends Error {
   constructor(sessionId: string) {
@@ -55,6 +56,36 @@ export interface StageRunnerDeps {
   lock: KeyedLock;
 }
 export interface StageRunInput { sessionId: string; stage: StageName; brief: string | null; prompt: string }
+/**
+ * Defect 2 — the engine captured the reason a run died and threw it away.
+ *
+ * The agent's output reached `run.output`, and the only thing that ever persisted one was the
+ * engine log, behind `--verbose`. So a findings run that died three seconds in because
+ * "Failed to authenticate: OAuth session expired and could not be refreshed" was recorded as
+ * `agent exited with code 1` — a number, synthesized here, that folded in nothing the process
+ * had actually said.
+ *
+ * A bounded TAIL is kept instead: 4 KB, which is a few screens of the very end of the run and is
+ * where a dying process says why. It is held in memory for the length of one run, never written
+ * anywhere on a run that succeeded, and the one line drawn out of it is capped again and passed
+ * through `redactSecrets` before it is persisted — an auth failure is exactly the kind of message
+ * that carries a token.
+ */
+const OUTPUT_TAIL_CAP = 4096;
+const FAILURE_REASON_CAP = 400;
+
+/**
+ * The LAST thing the process said, as one line. A dying agent's final line is its complaint; the
+ * lines above it are the work it was doing, which the exit code already summarizes.
+ */
+function failureReasonFrom(tail: string): string | null {
+  const lines = tail.split('\n').map((line) => line.trim());
+  const last = lines.filter((line) => line !== '').pop();
+  if (last === undefined) return null;
+  const capped = last.length > FAILURE_REASON_CAP ? `${last.slice(0, FAILURE_REASON_CAP)}…` : last;
+  return redactSecrets(capped);
+}
+
 export interface StageRunResult { exit: AgentExitResult; outcome: 'succeeded' | 'failed' | 'stopped'; session: Session }
 
 interface ActiveRun { handle: AgentHandle | null; stopRequested: boolean }
@@ -233,6 +264,7 @@ export class StageRunner {
         runStarted = true;
 
         let startupError: unknown = undefined;
+        let outputTail = '';
         const exitPromise = new Promise<AgentExitResult>((resolve) => {
           void (async () => {
             const handle = await this.deps.runner.start({
@@ -242,7 +274,10 @@ export class StageRunner {
               resumeId: seedResumeId ?? undefined,
             });
             active.handle = handle;
-            this.deps.runner.onOutput(handle, (chunk) => this.deps.events.emit('run.output', { sessionId, stage, chunk }));
+            this.deps.runner.onOutput(handle, (chunk) => {
+              outputTail = (outputTail + chunk.data).slice(-OUTPUT_TAIL_CAP);
+              this.deps.events.emit('run.output', { sessionId, stage, chunk });
+            });
             this.deps.runner.onExit(handle, resolve);
             if (active.stopRequested) {
               // A stop() arrived before the agent actually started (e.g.
@@ -266,9 +301,13 @@ export class StageRunner {
         const outcome: StageRunResult['outcome'] = active.stopRequested
           ? 'stopped'
           : exit.code === 0 && exit.signal === null ? 'succeeded' : 'failed';
+        // Defect 2: the exit code says THAT it died, the tail says WHY. Only on a failure — a
+        // run that succeeded records nothing of its output, here or anywhere else.
+        const said = outcome === 'failed' ? failureReasonFrom(outputTail) : null;
+        const howItDied = exit.signal ? `agent killed by ${exit.signal}` : `agent exited with code ${exit.code}`;
         let error =
           outcome === 'stopped' ? 'stopped by user'
-          : outcome === 'failed' ? (exit.signal ? `agent killed by ${exit.signal}` : `agent exited with code ${exit.code}`)
+          : outcome === 'failed' ? (said === null ? howItDied : `${howItDied}: ${said}`)
           : null;
         if (outcome === 'succeeded' && runnerMismatch) {
           error = `runner changed from ${priorAgent!.runner} to ${this.deps.runnerKind}; started a fresh conversation`;

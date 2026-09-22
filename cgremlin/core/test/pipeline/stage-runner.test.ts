@@ -147,6 +147,65 @@ describe('StageRunner.run', () => {
     expect((await p2).session.lastRun).toMatchObject({ outcome: 'failed', signal: 'SIGKILL', error: 'agent killed by SIGKILL' });
   });
 
+  /**
+   * Defect 2 — the engine CAPTURED the reason a run died and threw it away.
+   *
+   * The user's findings run died after three seconds. The agent said why 362ms before it exited
+   * ("Failed to authenticate: OAuth session expired and could not be refreshed"), the sentence
+   * reached `run.output`, and the only thing that ever persisted a `run.output` was the verbose
+   * engine log — which was off. What the user got was `agent exited with code 1`.
+   */
+  it('records what the process actually said on a non-zero exit, not just the exit code', async () => {
+    const { runner, sr } = await setup();
+    const p = sr.run({ sessionId: 'inv-1', stage: 'findings', brief: null, prompt: 'go' });
+    await flush();
+    const h = runner.lastHandle();
+    runner.emitOutput(h, { stream: 'stdout', data: 'Reading the ticket…\n' });
+    runner.emitOutput(h, {
+      stream: 'stderr',
+      data: 'Failed to authenticate: OAuth session expired and could not be refreshed\n',
+    });
+    runner.emitExit(h, { code: 1, signal: null });
+    expect((await p).session.lastRun?.error).toBe(
+      'agent exited with code 1: Failed to authenticate: OAuth session expired and could not be refreshed',
+    );
+  });
+
+  it('redacts a secret in that output before it is persisted', async () => {
+    const { runner, sr } = await setup();
+    const p = sr.run({ sessionId: 'inv-1', stage: 'findings', brief: null, prompt: 'go' });
+    await flush();
+    const h = runner.lastHandle();
+    runner.emitOutput(h, { stream: 'stderr', data: 'refresh rejected: authorization=sk-live-9f8e7d6c5b4a\n' });
+    runner.emitExit(h, { code: 1, signal: null });
+    const error = (await p).session.lastRun?.error ?? '';
+    expect(error).toContain('authorization=<redacted>');
+    expect(error).not.toContain('sk-live-9f8e7d6c5b4a');
+  });
+
+  it('keeps only a bounded tail, so a chatty agent cannot write an unbounded error', async () => {
+    const { runner, sr } = await setup();
+    const p = sr.run({ sessionId: 'inv-1', stage: 'findings', brief: null, prompt: 'go' });
+    await flush();
+    const h = runner.lastHandle();
+    for (let i = 0; i < 200; i++) runner.emitOutput(h, { stream: 'stdout', data: `${'x'.repeat(200)}\n` });
+    runner.emitOutput(h, { stream: 'stderr', data: 'the last thing it said\n' });
+    runner.emitExit(h, { code: 1, signal: null });
+    const error = (await p).session.lastRun?.error ?? '';
+    expect(error).toBe('agent exited with code 1: the last thing it said');
+    expect(error.length).toBeLessThan(600);
+  });
+
+  it('says nothing about the output when the run succeeded', async () => {
+    const { runner, sr } = await setup();
+    const p = sr.run({ sessionId: 'inv-1', stage: 'findings', brief: null, prompt: 'go' });
+    await flush();
+    const h = runner.lastHandle();
+    runner.emitOutput(h, { stream: 'stdout', data: 'wrote FINDINGS.md\n' });
+    runner.emitExit(h, { code: 0, signal: null });
+    expect((await p).session.lastRun?.error).toBeNull();
+  });
+
   it('does not treat sendPrompt resolving as completion — the run stays running until onExit fires', async () => {
     const { store, runner, sr } = await setup();
     const p = sr.run({ sessionId: 'inv-1', stage: 'findings', brief: null, prompt: 'go' });
