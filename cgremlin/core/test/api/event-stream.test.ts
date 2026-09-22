@@ -8,6 +8,7 @@ import {
   serializeFrame,
   type RingEntry,
 } from '../../src/api/event-stream';
+import { ToolActivityLog } from '../../src/agent/tool-activity';
 
 interface StubRes {
   destroyed: boolean;
@@ -456,6 +457,38 @@ describe('handleEventStream', () => {
       expect(ids).toEqual([...new Set(ids)]);
       expect(ids).toEqual([...ids].sort((a, b) => a - b));
     });
+  });
+
+  // Defect 5 — the work log carries tool commands and tool output, either of which can hold a
+  // credential. It is deliberately NOT redacted where it is written: it rides the same
+  // `run.output` chunk agent prose already did, and this is the proof that the one redaction
+  // point covers it.
+  it('redacts a secret in a tool line before it leaves the engine', () => {
+    const ring = new EventRing();
+    const opted = stubRes();
+    handleEventStream(stubReq('/events?include=run.output').as(), opted.as(), { ring });
+    const log = new ToolActivityLog();
+    const use = log.noteToolUse({
+      type: 'tool_use',
+      id: 'toolu_1',
+      name: 'Bash',
+      input: { command: 'curl -H "Authorization: Bearer S3CRET-TOKEN-VALUE" https://h/api' },
+    }) as string;
+    const result = log.noteToolResult({
+      type: 'tool_result',
+      tool_use_id: 'toolu_1',
+      content: 'requesting https://h/?x-vercel-protection-bypass=S3CRET-VALUE\nok\n',
+    }) as string;
+    expect(use).toContain('S3CRET-TOKEN-VALUE');
+    expect(result).toContain('S3CRET-VALUE');
+    for (const data of [use, result]) {
+      ring.push('run.output', { sessionId: 'a', stage: 'review', chunk: { stream: 'stdout', data } });
+    }
+    const frames = framesOf(opted).join('');
+    expect(frames).toContain('Bearer <redacted>');
+    expect(frames).toContain('x-vercel-protection-bypass=<redacted>');
+    expect(frames).not.toContain('S3CRET-TOKEN-VALUE');
+    expect(frames).not.toContain('S3CRET-VALUE');
   });
 
   it('never writes to a destroyed response', () => {

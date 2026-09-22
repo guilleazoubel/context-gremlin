@@ -69,6 +69,18 @@ if (prompt === 'HANG_FOREVER') {
     }) + '\n',
   );
   process.exitCode = 1;
+} else if (prompt === 'TOOL_ACTIVITY') {
+  // Defect 5 — replays REAL stream-json records (a live run's transcript, long strings
+  // truncated) so the runner's forwarding is exercised against shapes nobody invented.
+  const fixture = JSON.parse(
+    fs.readFileSync(require('node:path').join(__dirname, 'claude-stream-json-tool-activity.json'), 'utf8'),
+  );
+  for (const record of fixture.records) {
+    process.stdout.write(JSON.stringify(record) + '\n');
+  }
+  process.stdout.write(
+    JSON.stringify({ type: 'result', session_id: sessionId, is_error: false }) + '\n',
+  );
 } else if (prompt === 'FAIL_LOUDLY') {
   process.stderr.write('simulated failure on stderr\n');
   process.exitCode = 1;
