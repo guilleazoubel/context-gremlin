@@ -24,6 +24,7 @@ import {
   isLandedPr,
   WORK_LIST_KINDS,
   type QaVerdict,
+  type RunOutcome,
   type WorkItem,
   type WorkListKind,
 } from './work-items';
@@ -70,6 +71,11 @@ export interface ActionAgent {
   runFailed?: boolean;
   /** Gap 1 — so `qaPart` can ask the ONE composer for the right word. */
   qaVerdict?: QaVerdict | null;
+  /**
+   * Task 2 — the engine's own `lastRun.outcome`, so the QA part can say `run failed` where the
+   * run died rather than reporting the phase it died in as though it were a verdict.
+   */
+  runOutcome?: RunOutcome | null;
   /**
    * Phase 21 — the artifact the core would open this session on (`WorkItemAgent.primaryArtifact`).
    * The panel's only evidence that a stage produced its output, which is what tells a run that

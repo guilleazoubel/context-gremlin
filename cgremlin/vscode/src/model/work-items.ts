@@ -554,7 +554,9 @@ export type RowMetaKind =
   /** Gap 2 — an abandoned auto-verify attempt, muted, alongside the row's other tokens. */
   | 'qaAttempt'
   /** Phase 16 — which qa build the row's change is measured against, muted. */
-  | 'qaDeploy';
+  | 'qaDeploy'
+  /** Task 2 — merged work that NO verification has ever run against. */
+  | 'qaNone';
 
 export interface RowMetaCell {
   kind: RowMetaKind;

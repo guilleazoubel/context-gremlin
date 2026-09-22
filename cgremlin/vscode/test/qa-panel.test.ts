@@ -71,12 +71,14 @@ describe('the mode, said once (§8)', () => {
 
   it('turns every QA phase into the word the row shows', () => {
     expect(qaStateText('verifying')).toBe('verifying');
-    expect(qaStateText('ready')).toBe('ready');
+    // Task 2 — the contract's own verdict label, because `ready` alone is the word EVERY
+    // finished agent's phase reads as, and the QA row was indistinguishable from the rest.
+    expect(qaStateText('ready')).toBe('ready to deploy');
     expect(qaStateText('not_ready')).toBe('not ready');
     // Gap 1 — a run failure (no verdict was ever reached) reads as its own
     // word now: 'blocked' is reserved for the QA VERDICT of the same name,
     // and conflating the two is exactly the ambiguity Gap 1 removes.
-    expect(qaStateText('failed')).toBe('failed');
+    expect(qaStateText('failed')).toBe('run failed');
     expect(qaStateText('queued')).toBe('queued');
   });
 
@@ -90,8 +92,18 @@ describe('the mode, said once (§8)', () => {
     expect(qaStateText('not_ready')).toBe('not ready');
   });
 
-  it('a run failure stays "failed" no matter what verdict is passed', () => {
-    expect(qaStateText('failed', 'blocked')).toBe('failed');
+  it('a run failure stays a run failure no matter what verdict is passed', () => {
+    expect(qaStateText('failed', 'blocked')).toBe('run failed');
+  });
+
+  // Task 2 — a run that is still going, or that died, has no verdict to report whatever the
+  // phase it is sitting in says; and a verdict about a build QA has moved past says so.
+  it('a live, a dead and a stale verification each say what they are', () => {
+    expect(qaStateText('ready', 'ready', { running: true })).toBe('verifying');
+    expect(qaStateText('verifying', null, { runOutcome: 'failed' })).toBe('run failed');
+    expect(qaStateText('verifying', null, { runOutcome: 'stopped' })).toBe('run stopped');
+    expect(qaStateText('ready', 'ready', { staleVerdict: true })).toBe('ready to deploy · older build');
+    expect(qaStateText('queued', null, { staleVerdict: true })).toBe('queued');
   });
 });
 
@@ -99,10 +111,12 @@ describe('MG-27 — the collapsed row, through the ONE composer', () => {
   it('a landed myWork row mid-verification draws merged, the ticket status, then the QA cell', () => {
     const cells = meta(item({ agents: [qaAgent()] }));
     expect(cells.map((c) => c.kind)).toEqual([
-      'repo', 'prState', 'ticketStatus', 'agentPhase', 'running', 'age', 'tier', 'size', 'ci',
+      'repo', 'prState', 'ticketStatus', 'agentPhase', 'age', 'tier', 'size', 'ci',
     ]);
-    expect(cells.map((c) => c.text).slice(0, 5)).toEqual([
-      'grace-frontend', 'merged', 'UAT', '⛋ verifying', 'running',
+    // Task 2 — one cell, not two: the QA cell carries the live stage itself, so the generic
+    // `running` token beside it would only repeat it.
+    expect(cells.map((c) => c.text).slice(0, 4)).toEqual([
+      'grace-frontend', 'merged', 'UAT', '⛋ QA verifying',
     ]);
   });
 
@@ -113,13 +127,13 @@ describe('MG-27 — the collapsed row, through the ONE composer', () => {
     const kinds = cells.map((c) => c.kind);
     expect(kinds.indexOf('ticketStatus')).toBeLessThan(kinds.indexOf('agentPhase'));
     const phase = cells.find((c) => c.kind === 'agentPhase');
-    expect(phase).toEqual({ kind: 'agentPhase', text: '⛋ not ready', tone: 'bad' });
+    expect(phase).toEqual({ kind: 'agentPhase', text: '⛋ QA not ready', tone: 'bad' });
   });
 
   it('a ready verdict is quiet — the word is there, the tone is not', () => {
     const phase = meta(item({ agents: [qaAgent({ phase: 'ready', running: false })] }))
       .find((c) => c.kind === 'agentPhase');
-    expect(phase).toEqual({ kind: 'agentPhase', text: '⛋ ready' });
+    expect(phase).toEqual({ kind: 'agentPhase', text: '⛋ QA ready to deploy' });
   });
 
   // Gap 1 — a Blocked verdict (agent could not test) must not read as the
@@ -128,12 +142,12 @@ describe('MG-27 — the collapsed row, through the ONE composer', () => {
     const blocked = meta(
       item({ agents: [qaAgent({ phase: 'not_ready', running: false, needsYou: true, qaVerdict: 'blocked' })] }),
     ).find((c) => c.kind === 'agentPhase');
-    expect(blocked).toEqual({ kind: 'agentPhase', text: '⛋ blocked', tone: 'bad' });
+    expect(blocked).toEqual({ kind: 'agentPhase', text: '⛋ QA blocked', tone: 'bad' });
 
     const notReady = meta(
       item({ agents: [qaAgent({ phase: 'not_ready', running: false, needsYou: true, qaVerdict: 'not_ready' })] }),
     ).find((c) => c.kind === 'agentPhase');
-    expect(notReady).toEqual({ kind: 'agentPhase', text: '⛋ not ready', tone: 'bad' });
+    expect(notReady).toEqual({ kind: 'agentPhase', text: '⛋ QA not ready', tone: 'bad' });
   });
 });
 
@@ -353,7 +367,7 @@ describe('Phase 16 §5 — merged, but not in QA yet', () => {
         agents: [qaAgent({ phase: 'ready', running: false })],
       }),
     );
-    expect(cells.find((c) => c.kind === 'agentPhase')?.text).toBe('⛋ ready');
+    expect(cells.find((c) => c.kind === 'agentPhase')?.text).toBe('⛋ QA ready to deploy');
     expect(cells.find((c) => c.kind === 'qaDeploy')?.text).toBe('build 088ce5e');
   });
 

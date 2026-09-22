@@ -625,6 +625,28 @@ body {
   color: var(--cg-accent);
 }
 
+/*
+ * Task 2 — the QA verdict is the one cell on the line a person is deciding on, so the three
+ * states that need a decision are coloured and the one that does not is left in plain ink: a
+ * verification that passed is good news, and good news does not need to shout. `not verified` is
+ * muted for the same reason the landed marker is — it is the absence of a thing, not a failure.
+ */
+.cell-agentPhase.tone-bad {
+  color: var(--vscode-charts-red);
+}
+
+.cell-agentPhase.tone-warn {
+  color: var(--vscode-editorWarning-foreground);
+}
+
+.cell-agentPhase.tone-active {
+  color: var(--cg-accent);
+}
+
+.cell-qaNone {
+  opacity: 0.7;
+}
+
 /* --- the buttons, which now live only in the block a row opens into ------ */
 
 .part-action,
