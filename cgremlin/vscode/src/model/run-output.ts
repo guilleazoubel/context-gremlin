@@ -38,6 +38,19 @@ export function droppedNotice(dropped: number): string {
   return `The first ${dropped} ${dropped === 1 ? 'line' : 'lines'} scrolled out of this view.`;
 }
 
+/**
+ * Defect 5 — the answer to "shouldnt i be able to ... interact?", said where the user asks it.
+ *
+ * They cannot, and it is not a missing button: the runner spawns `claude -p <prompt>` headless
+ * with no open stdin (`core/src/agent/claude-code-runner.ts`), so no channel to type into exists
+ * mid-run. The designed path is the other way round — an agent that needs the human writes
+ * `AGENT_STATE=needs-input` and STOPS; the run ends, the row says it wants them, and Chat opens
+ * with the full history. So this says both halves: the rule, and the way through. A control
+ * either does what it names or says in a sentence why it cannot and offers the way on.
+ */
+export const INTERACTION_NOTE =
+  'You are watching a log of the work, not a conversation: the agent cannot be interrupted or answered while it runs. If it needs you it stops and asks, and Chat opens here with the full history. Stop ends the run and keeps whatever it has already written to files.';
+
 export function endedNotice(outcome: string | null): string {
   const how = outcome === null || outcome === '' ? 'The run ended' : `The run ended (${outcome})`;
   return `${how}. This is only the work it did while the pane was open, summarised; the artifact it wrote is the record.`;
@@ -54,6 +67,12 @@ export interface RunOutputView {
   notice: string;
   /** The terminal line a finished run freezes on, `null` while it is still live. */
   ending: string | null;
+  /**
+   * The standing rule about interacting with a LIVE run, `null` when there is no run to
+   * interrupt. Not an empty-state hint: it stays up while the log flows, because that is exactly
+   * when somebody tries to type at it.
+   */
+  interaction: string | null;
   /** Which stage is printing, where the caller knew. Never guessed. */
   stage: string | null;
   /** How many lines fell out of the front of the buffer. */
@@ -160,6 +179,7 @@ export class RunOutputStore {
       joinedMidRun: buffer.joinedMidRun,
       notice: noticeOf(buffer),
       ending: buffer.ending,
+      interaction: buffer.ending === null && buffer.live ? INTERACTION_NOTE : null,
       stage: buffer.stage,
       dropped: buffer.dropped,
     };

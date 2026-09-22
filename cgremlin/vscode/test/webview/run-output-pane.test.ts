@@ -146,3 +146,27 @@ describe('the pane is cheap to keep open', () => {
     expect(dom.document.writes).toEqual([]);
   });
 });
+
+/**
+ * Defect 5 — "shouldnt i be able to see the actual run and interact?". The pane is a log and the
+ * run cannot be typed into; the honest answer belongs where the user hits the question, not in a
+ * commit message.
+ */
+describe('what the pane says about interacting', () => {
+  it('states the rule and the way through while the run is live', () => {
+    render(opened(false));
+    const said = byClass('run-output-interaction');
+    expect(said.hidden).toBe(false);
+    expect(said.textContent).toMatch(/cannot/i);
+    expect(said.textContent).toMatch(/stops and asks/i);
+    expect(said.textContent).toMatch(/Stop ends the run/);
+  });
+
+  it('drops it once the run has ended — there is nothing left to interrupt', () => {
+    const store = opened(false);
+    store.finish(SESSION, { outcome: 'succeeded' });
+    render(store);
+    expect(byClass('run-output-interaction').hidden).toBe(true);
+    expect(byClass('run-output-interaction').textContent).toBe('');
+  });
+});

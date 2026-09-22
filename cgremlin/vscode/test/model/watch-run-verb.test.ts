@@ -66,6 +66,11 @@ describe('a run in flight offers the watch it CAN give', () => {
 
   it('says so in the refusal, rather than naming a way through the user has to find', () => {
     expect(CHAT_BUSY_REASON).toMatch(/watch/i);
+    // Defect 5 — the refusal must state BOTH halves: what is impossible and the way through.
+    expect(CHAT_BUSY_REASON).toMatch(/cannot be interrupted|cannot interrupt/i);
+    expect(CHAT_BUSY_REASON).toMatch(/stops and asks/i);
+    expect(CHAT_BUSY_REASON).toMatch(/Stop ends the run/);
+    expect(CHAT_BUSY_REASON).toMatch(/already written/i);
   });
 
   it('is not offered when nothing is running — there is nothing to watch', () => {

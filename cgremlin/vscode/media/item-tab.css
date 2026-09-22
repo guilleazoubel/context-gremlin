@@ -494,6 +494,14 @@ body {
   color: var(--vscode-descriptionForeground);
 }
 
+.run-output-interaction {
+  margin: 0 0 12px;
+  padding: 8px 12px;
+  border-left: 2px solid var(--vscode-focusBorder);
+  color: var(--vscode-foreground);
+  background: var(--vscode-textBlockQuote-background);
+}
+
 .run-output-notice,
 .run-output-ending {
   margin: 0 0 12px;

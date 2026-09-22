@@ -23,6 +23,7 @@ import { el, reconcile, setHidden, setText } from './dom';
 
 interface Parts {
   meta: HTMLElement;
+  interaction: HTMLElement;
   notice: HTMLElement;
   lines: HTMLElement;
   ending: HTMLElement;
@@ -40,6 +41,8 @@ export function createRunOutputPane(): HTMLElement {
   const pane = el('section', 'pane run-output-pane');
   const parts: Parts = {
     meta: el('p', 'run-output-meta'),
+    // Defect 5 — the standing rule about a LIVE run, above the log it governs.
+    interaction: el('p', 'run-output-interaction'),
     notice: el('p', 'run-output-notice'),
     // `log` rather than `list`: this is append-only output, and a screen reader should announce
     // new lines rather than re-read the whole thing. `polite` — it must never interrupt.
@@ -48,7 +51,9 @@ export function createRunOutputPane(): HTMLElement {
   };
   parts.lines.setAttribute('role', 'log');
   parts.lines.setAttribute('aria-live', 'polite');
-  for (const node of [parts.meta, parts.notice, parts.lines, parts.ending]) pane.appendChild(node);
+  for (const node of [parts.meta, parts.interaction, parts.notice, parts.lines, parts.ending]) {
+    pane.appendChild(node);
+  }
   PARTS.set(pane, parts);
   return pane;
 }
@@ -57,6 +62,8 @@ export function patchRunOutputPane(pane: HTMLElement, view: RunOutputView): void
   const parts = PARTS.get(pane);
   if (parts === undefined) return;
   setText(parts.meta, metaOf(view));
+  setText(parts.interaction, view.interaction ?? '');
+  setHidden(parts.interaction, view.interaction === null);
   setText(parts.notice, view.notice);
   setHidden(parts.notice, view.notice === '');
   reconcile(

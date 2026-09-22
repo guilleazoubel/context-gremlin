@@ -256,8 +256,14 @@ export function qaVerbLabel(facts: ActionFacts): string {
  * whatever else renders a disabled reason (`aria-describedby`, `webview/panel/expanded.ts` and
  * `webview/item-tab.ts` both wire it off `enabled === false` generically) cannot drift apart.
  */
+/**
+ * Defect 5 — the refusal now says BOTH halves. "shouldnt i be able to ... interact?": no, and the
+ * reason is structural (the agent runs headless, with no stdin to type into), so the sentence
+ * that refuses also carries the way through — watch what it is doing, it stops and asks when it
+ * needs you, and Stop ends it without throwing away what it has already written.
+ */
 export const CHAT_BUSY_REASON =
-  'The agent is working on this now — chat opens when it finishes. You can watch its output meanwhile.';
+  'The agent is working on this now and cannot be interrupted or answered mid-run. You can watch what it is doing; if it needs you it stops and asks, and chat opens here with the full history. Stop ends the run and keeps whatever it has already written to files.';
 
 /**
  * Defect 4 — the verb the busy Chat can offer instead of nothing.

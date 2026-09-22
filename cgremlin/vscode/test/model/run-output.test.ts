@@ -12,6 +12,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  INTERACTION_NOTE,
   JOINED_MID_RUN_NOTICE,
   MAX_RUN_OUTPUT_LINES,
   NOT_STARTED_NOTICE,
@@ -192,5 +193,42 @@ describe('the five states read as a work log, not as a print stream', () => {
       expect(sentence).not.toMatch(/print/i);
       expect(sentence).not.toMatch(/\btranscript\b|\bcomplete\b|\bfull record\b/i);
     }
+  });
+});
+
+/**
+ * Defect 5, the third question — "shouldnt i be able to ... interact?". No: the runner spawns
+ * `claude -p <prompt>` headless with no open stdin, so there is no channel to type into mid-run,
+ * and the designed path is that an agent needing the human writes `AGENT_STATE=needs-input` and
+ * STOPS. That is a real answer and the user has twice been told only the half of it that refuses.
+ */
+describe('what the pane says about interacting with a live run', () => {
+  it('says what cannot be done AND the way through, while the run is live', () => {
+    expect(view(opened(false)).interaction).toBe(INTERACTION_NOTE);
+    // Cannot: type at it, interrupt it.
+    expect(INTERACTION_NOTE).toMatch(/cannot/i);
+    // The way through: it stops and asks, chat opens then, Stop keeps the work already written.
+    expect(INTERACTION_NOTE).toMatch(/stops and asks/i);
+    expect(INTERACTION_NOTE).toMatch(/chat/i);
+    expect(INTERACTION_NOTE).toMatch(/Stop ends the run/);
+    expect(INTERACTION_NOTE).toMatch(/already written/i);
+  });
+
+  it('keeps saying it once output is flowing — it is a standing rule, not an empty-state hint', () => {
+    const store = opened(false);
+    store.append(SESSION, 'Read src/foo.ts');
+    expect(view(store).interaction).toBe(INTERACTION_NOTE);
+  });
+
+  it('drops it when the run has ended — there is nothing left to interrupt', () => {
+    const store = opened(false);
+    store.finish(SESSION, { outcome: 'succeeded' });
+    expect(view(store).interaction).toBeNull();
+  });
+
+  it('drops it when nothing is running at all', () => {
+    const store = new RunOutputStore();
+    store.open(SESSION, { alreadyRunning: false, stage: null, live: false });
+    expect(view(store).interaction).toBeNull();
   });
 });
