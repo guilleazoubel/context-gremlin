@@ -1022,12 +1022,13 @@ export function actionsFor(
   if (dismissed) {
     return [{ command: 'cgremlin.undismissItem', label: 'Undismiss', placement: 'primary' }];
   }
-  // Round 3, ruling 5: `Ack` leaves the ROW entirely. It clears a flag and does nothing else, and
-  // nobody opens a sidebar in order to say "seen" — reading is acknowledging. It survives where
-  // dismissing an alert without acting IS the intent: the needs-you strip's vocabulary
-  // (`model/needs-you`) and the Item tab, whose buttons are about the work rather than the panel.
+  // §4: the acknowledgement renders only while something needs you AND you have not already
+  // said so. The rule table cannot see the acknowledgement, so the one field it lacks is applied
+  // here. Round 3 moved it into the disclosure (it is housekeeping, not work) and named it by
+  // its effect — but it stays ON the row: it is what clears the item from the needs-you count,
+  // and the strip cannot hold it (every strip entry is itself a button).
   const actions = rowActions(itemActionFacts(item, qaRepos, qaStatuses), list).filter(
-    (action) => action.command !== 'cgremlin.ack',
+    (action) => action.command !== 'cgremlin.ack' || !item.attention.acked,
   );
   // Item 1: naming a row is never a rule about a list, which is why it is added here rather than
   // in the shared table — the Item tab's buttons are about the WORK, and this is about the panel.

@@ -219,13 +219,22 @@ describe('the verbs', () => {
     ]);
   });
 
-  it('keeps the housekeeping inside the disclosure, and says Ack nowhere', () => {
-    const node = build({ detailsOpen: true });
+  it('keeps the housekeeping inside the disclosure, the acknowledgement included', () => {
+    const node = build({
+      detailsOpen: true,
+      verbs: [...VERBS, { command: 'cgremlin.ack', label: 'Mark as seen', placement: 'overflow' }],
+    });
     expect(node.byClass('row-action').map((b) => b.textContent)).toEqual([
       'Rename this item',
       'Hide from the panel',
+      'Mark as seen',
     ]);
+    // Named by its effect, never by the jargon the user read as a no-op.
     expect(node.textContent).not.toContain('Ack');
+    node.byClass('row-action')[2].emit('click');
+    expect(posted).toEqual([
+      { type: 'command', command: 'cgremlin.ack', id: 'ticket:HB-627' },
+    ]);
   });
 });
 

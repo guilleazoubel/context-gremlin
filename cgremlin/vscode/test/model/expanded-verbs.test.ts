@@ -81,9 +81,26 @@ describe('the open block resolves placement once', () => {
     expect(labels(hoistVerbs(parts, actions).verbs, 'primary')).toEqual(['Retry']);
   });
 
-  it('drops Ack from the row entirely — reading is acknowledging', () => {
-    const all = actionsFor(itemOf('pr:acme/web#102'), 'parkingLot');
-    expect(all.map((action) => action.command)).not.toContain('cgremlin.ack');
+  /**
+   * Ruling 5, revised — the acknowledgement stays ON the row, in the disclosure, named by its
+   * effect. Reading is not acknowledging when the acknowledgement is what clears the item from
+   * the needs-you count, and a capability the model has with no way to reach it in the panel is
+   * worse than a jargon label. (The strip cannot hold it: every strip entry is itself a
+   * `<button>`, and a button inside a button is not markup.)
+   */
+  it('keeps the acknowledgement reachable, in the disclosure, named by its effect', () => {
+    const { verbs } = hoisted('pr:acme/web#102', 'parkingLot');
+    const ack = verbs.find((verb) => verb.command === 'cgremlin.ack');
+    expect(ack?.label).toBe('Mark as seen');
+    expect(ack?.placement).toBe('overflow');
+  });
+
+  it('withdraws it once the item has been acknowledged, and where nothing needs you', () => {
+    const item = itemOf('pr:acme/web#102');
+    const acked = { ...item, attention: { ...item.attention, acked: true } };
+    expect(actionsFor(acked, 'parkingLot').map((a) => a.command)).not.toContain('cgremlin.ack');
+    const quiet = { ...item, needsYou: false };
+    expect(actionsFor(quiet, 'parkingLot').map((a) => a.command)).not.toContain('cgremlin.ack');
   });
 
   it('names the housekeeping verbs by their effect', () => {

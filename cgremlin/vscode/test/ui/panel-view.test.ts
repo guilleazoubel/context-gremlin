@@ -423,16 +423,25 @@ describe('R42/R51/P0-2 the row actions are a rule about the LIST', () => {
   });
 
   /**
-   * Round 3, ruling 5 — `Ack` leaves the row entirely, on every row, needing you or not. It
-   * clears a flag and does nothing else, and nobody opens a sidebar in order to say "seen":
-   * reading is acknowledging. It survives in the Item tab (`rowActionsForLists`), where the
-   * buttons are about the work rather than about the panel.
+   * P0-2, and round 3's amendment: the acknowledgement is offered only where something needs
+   * you, and it is HOUSEKEEPING — it belongs in the open block's disclosure rather than beside
+   * the verb that does the work. It stays on the row because clearing the needs-you count is
+   * the one thing reading the artifact does not do.
    */
-  it('offers Ack on no row at all, whether or not the item needs you', () => {
+  it('offers the acknowledgement only where the item needs you, and only in the disclosure', () => {
     const h = build();
     h.ready();
     expect(actionsOf(h, 'parkingLot', 'pr:acme/api#55')).not.toContain('cgremlin.ack');
-    expect(actionsOf(h, 'parkingLot', 'pr:acme/web#102')).not.toContain('cgremlin.ack');
+    expect(actionsOf(h, 'parkingLot', 'pr:acme/web#102')).toContain('cgremlin.ack');
+    h.view.webview.emit({ type: 'toggleRow', id: 'pr:acme/web#102', expanded: true });
+    const row = h
+      .state()
+      .sections.flatMap((section) => section.rows)
+      .find((candidate) => candidate.id === 'pr:acme/web#102');
+    expect(row?.verbs.find((verb) => verb.command === 'cgremlin.ack')).toMatchObject({
+      label: 'Mark as seen',
+      placement: 'overflow',
+    });
   });
 
   it('P1-5 — every row flags exactly one primary action', () => {
