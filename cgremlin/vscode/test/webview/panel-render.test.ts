@@ -143,16 +143,19 @@ describe('P0-4 the row keeps its height', () => {
     expect(dom.document.log.filter((m) => m.kind === 'create')).toEqual([]);
   });
 
-  it('still shows the change counts the host has since read', () => {
-    panel.render(stateOf({ expanded: 'ticket:HB-627' }));
-    expect(dom.root.byClass('committed-value')[0].textContent).toBe('—');
+  it('still shows the change counts the host has since read, inside the disclosure', () => {
+    panel.render(stateOf({ expanded: 'ticket:HB-627', detailsOpen: true }));
+    expect(dom.root.byClass('change-worktree')[0].textContent).toBe('Agent worktree: —');
     panel.render(
       stateOf({
         expanded: 'ticket:HB-627',
-        changes: { committed: '8 files +240/−31', workingTree: '—' },
+        detailsOpen: true,
+        changes: { worktree: 'Agent worktree since main: 8 files +240/−31', uncommitted: null },
       }),
     );
-    expect(dom.root.byClass('committed-value')[0].textContent).toBe('8 files +240/−31');
+    expect(dom.root.byClass('change-worktree')[0].textContent).toBe(
+      'Agent worktree since main: 8 files +240/−31',
+    );
   });
 });
 

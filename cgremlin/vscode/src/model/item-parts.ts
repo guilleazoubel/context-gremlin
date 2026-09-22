@@ -334,3 +334,66 @@ function openedOn(createdAt: string | null): string {
   if (Number.isNaN(at)) return '';
   return `Opened ${new Date(at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}`;
 }
+
+
+/**
+ * Round 3 §e.7 — the open block's verbs, with `ActionPlacement` finally READ.
+ *
+ * The field is computed through three modules (`rowActions` decides it, `rowActionsForLists`
+ * merges it, `item-tab.ts` honours it) and the panel threw it away: every leftover action drew an
+ * identical button, which is why `Ack`, `Rename` and `Dismiss` sat at the same weight as the verb
+ * that does the work, and why two buttons could both read `Open`.
+ *
+ * The rule, once, here:
+ *   - ONE primary — the recommended next action, full width. A failed run's `Retry` takes it over
+ *     anything else, for the same reason `rowActions` pushes it first: it is the most urgent
+ *     thing the row has to say.
+ *   - At most TWO supporting verbs beside it. A third would be a button row again.
+ *   - Everything else that is not a part's own verb goes to the disclosure as housekeeping.
+ *
+ * A verb that is hoisted LEAVES the part it came from, so nothing is said twice; a part's
+ * remaining verbs stay under it, where a second `Chat` is unambiguous about which agent it means.
+ * No verb is invented (P0-2): every one of these came out of `rowActions`.
+ */
+const SUPPORTING_LIMIT = 2;
+
+/** Generic over the part shape, so the host may hand it either an `ItemPart` or its view. */
+export function hoistVerbs<P extends { actions: RowAction[] }>(
+  parts: readonly P[],
+  actions: readonly RowAction[],
+): { verbs: RowAction[]; parts: P[] } {
+  const key = (action: RowAction): string => `${action.command}:${action.childId ?? ''}`;
+  const pool: RowAction[] = [];
+  const seen = new Set<string>();
+  for (const action of [...parts.flatMap((part) => part.actions), ...actions]) {
+    if (seen.has(key(action))) continue;
+    seen.add(key(action));
+    pool.push(action);
+  }
+
+  const retry = pool.find((action) => action.command === 'cgremlin.retry');
+  const primary = retry ?? pool.find((action) => action.placement === 'primary') ?? null;
+  const supporting = pool
+    .filter((action) => action !== primary && action.placement !== 'overflow')
+    .slice(0, SUPPORTING_LIMIT);
+  const hoistedKeys = new Set([...(primary === null ? [] : [primary]), ...supporting].map(key));
+
+  // The disclosure's own verbs: the row-level ones no part offers and nothing hoisted — which in
+  // practice is the housekeeping, which is exactly where it belongs.
+  const onParts = new Set(parts.flatMap((part) => part.actions.map(key)));
+  const housekeeping = actions.filter(
+    (action) => !hoistedKeys.has(key(action)) && !onParts.has(key(action)),
+  );
+
+  return {
+    verbs: [
+      ...(primary === null ? [] : [{ ...primary, placement: 'primary' as const }]),
+      ...supporting.map((action) => ({ ...action, placement: 'inline' as const })),
+      ...housekeeping.map((action) => ({ ...action, placement: 'overflow' as const })),
+    ],
+    parts: parts.map((part) => ({
+      ...part,
+      actions: part.actions.filter((action) => !hoistedKeys.has(key(action))),
+    })),
+  };
+}

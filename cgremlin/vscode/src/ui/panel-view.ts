@@ -14,9 +14,9 @@
  * Takes its editor surface as a parameter (no editor import).
  */
 import crypto from 'node:crypto';
-import { changeSummary, type SessionChanges } from '../model/changes';
+import { uncommittedLine, worktreeLine, type SessionChanges } from '../model/changes';
 import { detailSignatureOf, lifecycleSlots } from '../model/lifecycle';
-import { itemParts } from '../model/item-parts';
+import { hoistVerbs, itemParts } from '../model/item-parts';
 import { prFactLines, ticketLineOf, verdictView, type RowVerdict } from '../model/row-composition';
 import { readTitle } from '../model/item-title';
 import { itemActionFacts, rowActions } from '../model/row-actions';
@@ -160,6 +160,12 @@ const PENDING_START_FRAMES = 2;
 export const COLLAPSED_STATE_KEY = COLLAPSE_STATE_KEY;
 export const EXPANDED_STATE_KEY = 'cgremlin.panel.expanded';
 /**
+ * §e.7 — whether the open block's disclosure is open. One flag for the panel, not one per row:
+ * at most one row is open at a time, and "I want the machinery" is a way of working rather than
+ * a fact about an item (R64).
+ */
+export const DETAILS_OPEN_STATE_KEY = 'cgremlin.panel.detailsOpen';
+/**
  * P10: "Not now", remembered for good. The offer to open the managed workspace used to be a popup
  * on every row click; the notice that replaces it is dismissed once, in the host's global state,
  * and only `cgremlin.openManagedWorkspace` brings it back — the user asking for it again.
@@ -191,6 +197,8 @@ export class PanelView implements WebviewViewProviderLike {
   private connected = false;
   /** Accordion: at most one row is open, and it survives a reload (§4, amended). */
   private expandedId: string | null;
+  /** §e.7 — whether the open row's disclosure is showing its parts and its housekeeping. */
+  private detailsOpen: boolean;
   private selectedId: string | null;
   private detail: { id: string; detail: ExpandedDetail } | null = null;
   private loading: string | null = null;
@@ -235,6 +243,7 @@ export class PanelView implements WebviewViewProviderLike {
     this.collapsed = readCollapsed(deps.host);
     this.selectedId = deps.host.getState<string>(SELECTED_STATE_KEY) ?? null;
     this.expandedId = deps.host.getState<string>(EXPANDED_STATE_KEY) ?? null;
+    this.detailsOpen = deps.host.getState<boolean>(DETAILS_OPEN_STATE_KEY) === true;
     this.noticeDismissed = deps.host.getState<boolean>(WORKSPACE_NOTICE_DISMISSED_KEY) === true;
     this.focus = readFocus(deps.host);
     this.showDismissed = readShowDismissed(deps.host);
@@ -599,6 +608,10 @@ export class PanelView implements WebviewViewProviderLike {
     const own = readTitle(this.deps.host, row.item);
     const description = own === '' ? row.description : own;
     const label = [row.identity, description].filter((part) => part !== '').join(' — ');
+    const parts = expanded ? this.partsOf(row, actions) : [];
+    // §e.7 — placement, finally read: one primary, two supporting, the rest in the disclosure.
+    // A hoisted verb leaves the part it came from, so no verb is said twice in one open row.
+    const hoisted = expanded ? hoistVerbs(parts, actions) : { verbs: [], parts };
     return {
       id: row.id,
       list: row.list,
@@ -623,15 +636,15 @@ export class PanelView implements WebviewViewProviderLike {
       expanded,
       selected: this.selectedId === row.id,
       // §4: the item's OWN parts, each already carrying only the buttons the list allows.
-      parts: expanded ? this.partsOf(row, actions) : [],
+      parts: hoisted.parts,
+      verbs: hoisted.verbs,
+      detailsOpen: expanded && this.detailsOpen,
       // Round 3 — the ANSWER, above every button, and only on the row that is open.
       verdict: expanded ? this.verdictOf(row) : null,
       facts: expanded ? prFactLines(row.item.prs[0], this.deps.me?.() ?? '') : [],
       ticketLine: expanded ? ticketLineOf(row.item.ticket) : '',
       changes: expanded ? this.changesView(row.id) : null,
       actions,
-      // The notice again, where the user is actually looking — the open row, and only it.
-      hint: expanded && this.noticeView() !== null ? MANAGED_WORKSPACE_HINT : null,
       detailNotice: expanded && this.detailOf(row.id)?.offline === true ? OFFLINE_DETAIL : null,
     };
   }
@@ -690,10 +703,7 @@ export class PanelView implements WebviewViewProviderLike {
   /** `—` until the engine has answered, and `—` forever on an engine that has no such route. */
   private changesView(id: string): PanelChangesView {
     const changes = this.detailOf(id)?.changes ?? null;
-    return {
-      committed: changeSummary(changes?.committed),
-      workingTree: changeSummary(changes?.workingTree),
-    };
+    return { worktree: worktreeLine(changes), uncommitted: uncommittedLine(changes) };
   }
 
   /**
@@ -871,6 +881,11 @@ export class PanelView implements WebviewViewProviderLike {
         writeShowDismissed(this.deps.host, message.show);
         this.render();
         return;
+      case 'toggleDetails':
+        this.detailsOpen = message.open;
+        void this.deps.host.setState(DETAILS_OPEN_STATE_KEY, message.open);
+        this.render();
+        return;
       case 'toggleRow':
         // The keyboard's way of opening a row, and it reads the detail for the same reason a
         // click does: an expand is the one moment the row is certainly worth a round trip.
@@ -1003,16 +1018,27 @@ export function actionsFor(
   // Item 2: a row the user has put aside offers exactly one verb — stop putting it aside. Every
   // other verb would start work on something he has just said he does not care about.
   if (dismissed) {
-    return [{ command: 'cgremlin.undismissItem', label: 'Undismiss', placement: 'inline' }];
+    return [{ command: 'cgremlin.undismissItem', label: 'Undismiss', placement: 'primary' }];
   }
-  // §4: `Ack` renders only while something needs you AND you have not already said so. The rule
-  // table cannot see the acknowledgement, so the one field it lacks is applied here.
+  // Round 3, ruling 5: `Ack` leaves the ROW entirely. It clears a flag and does nothing else, and
+  // nobody opens a sidebar in order to say "seen" — reading is acknowledging. It survives where
+  // dismissing an alert without acting IS the intent: the needs-you strip's vocabulary
+  // (`model/needs-you`) and the Item tab, whose buttons are about the work rather than the panel.
   const actions = rowActions(itemActionFacts(item, qaRepos, qaStatuses), list).filter(
-    (action) => action.command !== 'cgremlin.ack' || !item.attention.acked,
+    (action) => action.command !== 'cgremlin.ack',
   );
   // Item 1: naming a row is never a rule about a list, which is why it is added here rather than
   // in the shared table — the Item tab's buttons are about the WORK, and this is about the panel.
-  actions.push({ command: 'cgremlin.renameItem', label: 'Rename', placement: 'inline' });
-  actions.push({ command: 'cgremlin.dismissItem', label: 'Dismiss', placement: 'inline' });
+  // Both name their EFFECT, and both are housekeeping, so both sit in the disclosure (§e.7).
+  actions.push({
+    command: 'cgremlin.renameItem',
+    label: 'Rename this item',
+    placement: 'overflow',
+  });
+  actions.push({
+    command: 'cgremlin.dismissItem',
+    label: 'Hide from the panel',
+    placement: 'overflow',
+  });
   return actions;
 }

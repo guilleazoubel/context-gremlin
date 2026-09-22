@@ -71,8 +71,13 @@ describe('the five part marks', () => {
     ]);
   });
 
-  it('draws them in the theme’s own muted foreground, not in an emoji palette', () => {
+  /**
+   * Round 3 §e.5 — the marks are still the model's (the Item tab draws them), but the PANEL's
+   * open block no longer has a glyph column at all. It was a 14px cost with no payoff and the
+   * direct cause of the stranded lone mark, so it is gone from the stylesheet with the node.
+   */
+  it('draws no glyph column in the panel`s open block', () => {
     const css = fs.readFileSync(path.resolve(__dirname, '../../media/panel.css'), 'utf8');
-    expect(css).toMatch(/\.part-glyph\s*\{[^}]*color:\s*var\(--vscode-descriptionForeground\)/);
+    expect(css).not.toContain('.part-glyph');
   });
 });

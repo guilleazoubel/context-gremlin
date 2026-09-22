@@ -424,11 +424,17 @@ describe('R42/R51/P0-2 the row actions are a rule about the LIST', () => {
     expect(actionsOf(h, 'waitingForReview', 'pr:acme/web#200')).not.toContain('cgremlin.chat');
   });
 
-  it('P0-2 — Ack only where the item needs you, never unconditionally', () => {
+  /**
+   * Round 3, ruling 5 — `Ack` leaves the row entirely, on every row, needing you or not. It
+   * clears a flag and does nothing else, and nobody opens a sidebar in order to say "seen":
+   * reading is acknowledging. It survives in the Item tab (`rowActionsForLists`), where the
+   * buttons are about the work rather than about the panel.
+   */
+  it('offers Ack on no row at all, whether or not the item needs you', () => {
     const h = build();
     h.ready();
     expect(actionsOf(h, 'parkingLot', 'pr:acme/api#55')).not.toContain('cgremlin.ack');
-    expect(actionsOf(h, 'parkingLot', 'pr:acme/web#102')).toContain('cgremlin.ack');
+    expect(actionsOf(h, 'parkingLot', 'pr:acme/web#102')).not.toContain('cgremlin.ack');
   });
 
   it('P1-5 — every row flags exactly one primary action', () => {
@@ -493,6 +499,10 @@ describe('R66/R54 the panel is an accessible tree, and the keys are the tree mod
     const h = build();
     h.ready();
     h.view.webview.emit({ type: 'toggleRow', id: 'ticket:HB-627', expanded: true });
+    // Round 3 §e.7: the parts live inside a disclosure, and §6's rule holds one level down — a
+    // part the user cannot see is a part the keyboard cannot reach.
+    expect(nodes(h).filter((n) => n.kind === 'child')).toEqual([]);
+    h.view.webview.emit({ type: 'toggleDetails', open: true });
     const seen = nodes(h);
     // §5: a section header is a disclosure BUTTON, not a tree item, so the tree is rows and
     // parts and nothing else — the browser owns the header's own Enter and Space.
@@ -552,6 +562,7 @@ describe('R66/R54 the panel is an accessible tree, and the keys are the tree mod
     });
 
     h.view.webview.emit({ type: 'toggleRow', id: 'ticket:HB-627', expanded: true });
+    h.view.webview.emit({ type: 'toggleDetails', open: true });
     const opened = nodes(h);
     const openedRow = opened.find((n) => n.id === 'ticket:HB-627');
     if (openedRow === undefined) throw new Error('no row');

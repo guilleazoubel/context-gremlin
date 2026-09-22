@@ -23,12 +23,12 @@ describe('item 1 — the title the user writes', () => {
     expect(row?.descriptionIsOwn).toBe(false);
   });
 
-  it('offers Rename in the expanded area of every row', async () => {
+  it('offers renaming in the disclosure of every row, named by its effect', async () => {
     const h = await panelHarness();
     expect(h.rowOf(PARKING_ITEM)?.actions).toContainEqual({
       command: 'cgremlin.renameItem',
-      label: 'Rename',
-      placement: 'inline',
+      label: 'Rename this item',
+      placement: 'overflow',
     });
   });
 

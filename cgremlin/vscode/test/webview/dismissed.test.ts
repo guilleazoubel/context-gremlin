@@ -101,6 +101,9 @@ describe('item 2 — the dismissed section', () => {
   it('offers Undismiss, and nothing that would start work, in the row it opens into', () => {
     panel.render(stateOf({ dismissed: [ITEM], showDismissed: true, expanded: ITEM }));
     const expanded = dom.root.byClass('expanded').at(-1);
-    expect(expanded?.byClass('row-action').map((node) => node.textContent)).toEqual(['Undismiss']);
+    // It is the row's ONE recommended verb, so it is the full-width primary rather than a
+    // button in the housekeeping group (§e.7).
+    expect(expanded?.byClass('row-verb').map((node) => node.textContent)).toEqual(['Undismiss']);
+    expect(expanded?.byClass('row-action')).toEqual([]);
   });
 });

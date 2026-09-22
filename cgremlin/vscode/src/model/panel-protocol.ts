@@ -85,11 +85,17 @@ export interface PanelRowView {
   /** The row's own actions, already decided by the host (which ones apply is not the view's job). */
   actions: PanelActionView[];
   /**
-   * P10: the panel's one-line notice, repeated where the user is actually looking. Non-null only
-   * on the EXPANDED row, and only while the notice itself stands — a hint on every line would be
-   * the toast again, in ink.
+   * §e.7 — the open block's buttons with their placements RESOLVED (`model/item-parts.hoistVerbs`):
+   * one `primary`, at most two `inline`, the housekeeping `overflow`. The view reads `placement`
+   * and lays them out; it decides nothing.
    */
-  hint: string | null;
+  verbs: PanelActionView[];
+  /**
+   * Whether the open block's disclosure — the object list, the worktree diff and the
+   * housekeeping — is open. Host state, like a section's collapse, because the keyboard tree
+   * must not reach a part the user cannot see (§6's rule, applied one level down).
+   */
+  detailsOpen: boolean;
   /**
    * One line inside the expanded block when its detail could not be read because there is no
    * engine: the parts and the links above it came out of the last snapshot and still work, and
@@ -116,9 +122,10 @@ export interface PanelPartView {
 }
 
 export interface PanelChangesView {
-  /** Already rendered — `8 files +240/−31`, or `—` (MG-12). */
-  committed: string;
-  workingTree: string;
+  /** §e.3 — `Agent worktree since main: 8 files +240/−31`, naming the ref it is measured against. */
+  worktree: string;
+  /** `The agent left 3 uncommitted files in your worktree`, or `null` when there are none. */
+  uncommitted: string | null;
 }
 
 export interface PanelActionView {
@@ -238,6 +245,8 @@ export type PanelToHost =
   /** Item 2: reveal (or hide) what the user has put aside. Persisted by the host (R64). */
   | { type: 'setShowDismissed'; show: boolean }
   | { type: 'toggleRow'; id: string; expanded: boolean }
+  /** §e.7 — open (or close) the expanded block's disclosure. Persisted by the host, like §5's. */
+  | { type: 'toggleDetails'; open: boolean }
   /** P10's "Not now": remembered in the host's global state, not in the webview. */
   | { type: 'dismissNotice' }
   | { type: 'command'; command: string; id: string; childId?: string };
@@ -313,6 +322,10 @@ export function parsePanelMessage(raw: unknown): PanelToHost | null {
         key === DISMISSED_SECTION_KEY || PANEL_SECTIONS.some((section) => section.key === key);
       if (!drawn) return null;
       return { type: 'toggleSection', key, collapsed };
+    }
+    case 'toggleDetails': {
+      const open = message.open;
+      return typeof open !== 'boolean' ? null : { type: 'toggleDetails', open };
     }
     case 'toggleRow': {
       const id = text(message.id);

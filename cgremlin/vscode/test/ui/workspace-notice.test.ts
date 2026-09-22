@@ -90,13 +90,18 @@ describe('the offer to open the managed workspace', () => {
     expect(h.state().notice).toBeNull();
   });
 
-  it('repeats the same hint inside the expanded row', () => {
+  /**
+   * Round 3 §e.6 — the hint leaves the row. Until it was dismissed it occupied the FIRST line of
+   * the expansion on every row, which is the exact position the verdict must own; and it is a
+   * sentence with its verb amputated, since the row drew no control for it. The offer itself is
+   * unchanged, in the panel header, where a panel-wide setting belongs.
+   */
+  it('keeps the offer in the header and puts nothing at all inside the open row', () => {
     const h = build();
     h.panel.setWorkspaceOffer(true);
     h.click(ROW);
-    expect(h.row(ROW)?.hint).toBe(MANAGED_WORKSPACE_HINT);
-    // A shut row carries no hint — the notice is not repeated on every line of the panel.
-    expect(h.row(OTHER)?.hint).toBeNull();
+    expect(h.state().notice?.message).toBe(MANAGED_WORKSPACE_HINT);
+    expect(JSON.stringify(h.row(ROW))).not.toContain(MANAGED_WORKSPACE_HINT);
   });
 });
 
@@ -107,7 +112,7 @@ describe('"Not now"', () => {
     h.click(ROW);
     h.view.webview.emit({ type: 'dismissNotice' });
     expect(h.state().notice).toBeNull();
-    expect(h.row(ROW)?.hint).toBeNull();
+    expect(JSON.stringify(h.row(ROW))).not.toContain(MANAGED_WORKSPACE_HINT);
   });
 
   it('is remembered in the host state, so a refresh does not bring it back', () => {
@@ -127,7 +132,7 @@ describe('"Not now"', () => {
     h.click(ROW);
     h.click(OTHER);
     expect(h.state().notice).toBeNull();
-    expect(h.row(OTHER)?.hint).toBeNull();
+    expect(JSON.stringify(h.row(OTHER))).not.toContain(MANAGED_WORKSPACE_HINT);
   });
 
   it('survives a window reload — the flag is read back from global state', () => {

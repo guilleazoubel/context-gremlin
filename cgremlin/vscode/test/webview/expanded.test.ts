@@ -1,10 +1,11 @@
 /**
- * What a row opens into: the item's parts, and the size of the change (§4).
+ * What a row opens into (round 3): the ANSWER, then one verb, then the machinery behind a
+ * disclosure.
  *
  * The point of the block being a sibling of the row is asserted in `panel-render`; here the
- * question is what it says and what each of its buttons does — in particular that a part never
- * offers Open for a stage that never ran, and that a Start is only ever the verb the host put on
- * that part.
+ * question is what it SAYS and what each of its buttons does — in particular that the verdict
+ * leads, that `placement` is finally read rather than computed and discarded, and that nothing
+ * is ever drawn as a fabricated zero.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -42,20 +43,17 @@ function part(over: Partial<PanelPartView> & { key: string }): PanelPartView {
   };
 }
 
-const OPEN = (childId: string): PanelActionView => ({
-  command: 'cgremlin.openChild',
-  label: 'Open',
-  childId,
-  placement: 'inline',
-});
+const VERBS: PanelActionView[] = [
+  { command: 'cgremlin.openChild', label: 'Read the review', childId: 'agent:rev-1', placement: 'primary' },
+  { command: 'cgremlin.chat', label: 'Chat', childId: 'agent:rev-1', placement: 'inline' },
+  { command: 'cgremlin.openPr', label: 'Open on GitHub', childId: 'pr:acme/web#310', placement: 'inline' },
+  { command: 'cgremlin.renameItem', label: 'Rename this item', placement: 'overflow' },
+  { command: 'cgremlin.dismissItem', label: 'Hide from the panel', placement: 'overflow' },
+];
 
 function rowView(over: Partial<PanelRowView> = {}): PanelRowView {
   return {
-    hint: null,
     detailNotice: null,
-    verdict: null,
-    facts: [],
-    ticketLine: '',
     id: 'ticket:HB-627',
     list: 'myWork',
     label: 'HB-627 — Convert the tour scheduler to RSC',
@@ -76,6 +74,17 @@ function rowView(over: Partial<PanelRowView> = {}): PanelRowView {
     hasChildren: true,
     expanded: true,
     selected: true,
+    verdict: {
+      tone: 'mixed',
+      label: 'Request changes',
+      sentence: 'the payment retry loop can double-charge.',
+      counts: '1 critical · 1 high',
+      stale: null,
+      notice: null,
+    },
+    facts: ['Your PR, open · 14 files +455/−51', 'Large · CI passing · opened 21 Sep'],
+    ticketLine: 'HB-627 · In Review',
+    detailsOpen: false,
     parts: [
       part({
         key: 'investigation',
@@ -85,7 +94,6 @@ function rowView(over: Partial<PanelRowView> = {}): PanelRowView {
         stateText: 'done · 2h',
         childId: 'agent:inv-1',
         actions: [
-          OPEN('agent:inv-1'),
           { command: 'cgremlin.chat', label: 'Chat', childId: 'agent:inv-1', placement: 'inline' },
         ],
       }),
@@ -95,9 +103,7 @@ function rowView(over: Partial<PanelRowView> = {}): PanelRowView {
         name: 'Review',
         state: 'notStarted',
         stateText: 'not started',
-        actions: [
-          { command: 'cgremlin.startReview', label: 'Start self-review', placement: 'primary' },
-        ],
+        actions: [],
       }),
       part({
         key: 'pr:acme/web#310',
@@ -106,19 +112,12 @@ function rowView(over: Partial<PanelRowView> = {}): PanelRowView {
         stateText: 'open · 12 files +300/−80 · Opened 4 Sep',
         detail: '@jane reviewed',
         childId: 'pr:acme/web#310',
-        actions: [
-          OPEN('pr:acme/web#310'),
-          {
-            command: 'cgremlin.openPr',
-            label: 'Open on GitHub',
-            childId: 'pr:acme/web#310',
-            placement: 'inline',
-          },
-        ],
+        actions: [],
       }),
     ],
     changes: null,
     actions: [],
+    verbs: VERBS,
     ...over,
   };
 }
@@ -132,66 +131,169 @@ function build(over: Partial<PanelRowView> = {}): FakeElement {
 
 const parts = (node: FakeElement): FakeElement[] => node.byClass('part');
 const textOf = (node: FakeElement, cls: string): string => node.byClass(cls)[0]?.textContent ?? '';
-const labels = (node: FakeElement): string[] =>
-  node.byClass('part-action').map((b) => b.textContent);
+const verbs = (node: FakeElement): FakeElement[] => node.byClass('row-verb');
 
-describe('§4 the parts', () => {
-  it('assign nothing at all on a patch over identical data', () => {
+/**
+ * AC 1 — "an expanded review row states the verdict and finding counts as TEXT, above every
+ * button, with no hover". The whole round is this test.
+ */
+describe('the verdict leads', () => {
+  it('states the label, the sentence and the counts, above the first button', () => {
     const node = build();
-    patchExpanded(node as unknown as HTMLElement, rowView(), null);
-    expect(doc.log).toEqual([]);
-    expect(doc.writes).toEqual([]);
+    expect(textOf(node, 'verdict-answer')).toBe('The agent says: Request changes');
+    expect(textOf(node, 'verdict-sentence')).toBe('the payment retry loop can double-charge.');
+    expect(textOf(node, 'verdict-counts')).toBe('1 critical · 1 high');
+    const order = node.children.map((child) => child.className);
+    expect(order.indexOf('verdict')).toBeLessThan(order.indexOf('verbs'));
+    expect(order.indexOf('verbs')).toBeLessThan(order.indexOf('facts'));
+    expect(order.indexOf('facts')).toBeLessThan(order.indexOf('ticket-line'));
+    expect(order.indexOf('ticket-line')).toBeLessThan(order.indexOf('details'));
   });
 
-  it('are exactly the parts the host sent, in order, as tree items', () => {
+  it('carries the tone as data, never as the only signal', () => {
+    expect(build().byClass('verdict')[0].getAttribute('data-tone')).toBe('mixed');
+  });
+
+  it('draws NO block at all where nothing parsed — and no zero anywhere', () => {
+    const node = build({ verdict: null });
+    expect(node.byClass('verdict')[0].hidden).toBe(true);
+    expect(node.byClass('verdict')[0].textContent).toBe('');
+    expect(node.textContent).not.toContain('0 findings');
+  });
+
+  it('says the report could not be read, and keeps the facts and the verbs', () => {
+    const node = build({
+      verdict: { tone: null, label: '', sentence: '', counts: '', stale: null, notice: 'The review could not be read' },
+    });
+    expect(textOf(node, 'verdict-notice')).toBe('The review could not be read');
+    expect(node.byClass('verdict-answer')[0].hidden).toBe(true);
+    expect(node.byClass('verdict-counts')[0].hidden).toBe(true);
+    expect(verbs(node).length).toBeGreaterThan(0);
+    expect(node.byClass('fact')).toHaveLength(2);
+  });
+
+  it('puts the staleness sentence WITH the verdict, and first — it outranks it', () => {
+    const node = build({
+      verdict: {
+        tone: 'pass',
+        label: 'Approve',
+        sentence: '',
+        counts: '',
+        stale: 'The pull request changed after the agent looked at it',
+        notice: null,
+      },
+    });
+    const block = node.byClass('verdict')[0];
+    expect(block.hidden).toBe(false);
+    expect(block.children[0].className).toBe('verdict-stale');
+    expect(block.children[0].textContent).toBe(
+      'The pull request changed after the agent looked at it',
+    );
+  });
+});
+
+/** AC 4 and §e.7 — the placements are read, not recomputed and not discarded. */
+describe('the verbs', () => {
+  it('draws one primary, the supporting ones beside it, and the housekeeping nowhere near', () => {
     const node = build();
+    expect(verbs(node).map((b) => `${b.className}|${b.textContent}`)).toEqual([
+      'row-verb primary|Read the review',
+      'row-verb inline|Chat',
+      'row-verb inline|Open on GitHub',
+    ]);
+  });
+
+  it('is labelled `Open` nowhere at all', () => {
+    const node = build();
+    const buttons = [...verbs(node), ...node.byClass('row-action'), ...node.byClass('part-action')];
+    expect(buttons.map((b) => b.textContent)).not.toContain('Open');
+  });
+
+  it('posts openChild for the document verb and the command for everything else', () => {
+    const node = build();
+    verbs(node)[0].emit('click');
+    verbs(node)[1].emit('click');
+    expect(posted).toEqual([
+      { type: 'openChild', id: 'ticket:HB-627', childId: 'agent:rev-1' },
+      { type: 'command', command: 'cgremlin.chat', id: 'ticket:HB-627', childId: 'agent:rev-1' },
+    ]);
+  });
+
+  it('keeps the housekeeping inside the disclosure, and says Ack nowhere', () => {
+    const node = build({ detailsOpen: true });
+    expect(node.byClass('row-action').map((b) => b.textContent)).toEqual([
+      'Rename this item',
+      'Hide from the panel',
+    ]);
+    expect(node.textContent).not.toContain('Ack');
+  });
+});
+
+/**
+ * §e.7's disclosure — the object list, the worktree diff and the housekeeping, behind one click.
+ * Its state is the HOST's, so the keyboard tree (which is built from the state, not the DOM)
+ * cannot walk onto a part the user cannot see.
+ */
+describe('the disclosure', () => {
+  it('is closed by default, and the machinery is not on screen', () => {
+    const node = build();
+    expect(node.byClass('details-toggle')[0].getAttribute('aria-expanded')).toBe('false');
+    expect(node.byClass('details-body')[0].hidden).toBe(true);
+  });
+
+  it('asks the host to open it, rather than opening itself', () => {
+    build().byClass('details-toggle')[0].emit('click');
+    expect(posted).toEqual([{ type: 'toggleDetails', open: true }]);
+  });
+
+  it('asks the host to close it again when it is open', () => {
+    build({ detailsOpen: true }).byClass('details-toggle')[0].emit('click');
+    expect(posted).toEqual([{ type: 'toggleDetails', open: false }]);
+  });
+
+  it('shows the parts and the housekeeping once the host says it is open', () => {
+    const node = build({ detailsOpen: true });
+    expect(node.byClass('details-body')[0].hidden).toBe(false);
+    expect(parts(node).map((p) => textOf(p, 'part-name'))).toEqual([
+      'Investigation',
+      'Review',
+      'acme/web#310',
+    ]);
+  });
+});
+
+describe('the parts, inside the disclosure', () => {
+  it('are exactly the parts the host sent, in order, as tree items', () => {
+    const node = build({ detailsOpen: true });
     expect(parts(node).map((p) => p.dataset.key)).toEqual([
       'part:ticket:HB-627:investigation',
       'part:ticket:HB-627:review',
       'part:ticket:HB-627:pr:acme/web#310',
     ]);
     expect(parts(node).map((p) => p.getAttribute('aria-level'))).toEqual(['2', '2', '2']);
-    expect(parts(node).map((p) => textOf(p, 'part-name'))).toEqual([
-      'Investigation',
-      'Review',
-      'acme/web#310',
-    ]);
-    expect(parts(node).map((p) => textOf(p, 'part-state'))).toEqual([
-      'done · 2h',
-      'not started',
-      'open · 12 files +300/−80 · Opened 4 Sep',
-    ]);
   });
 
   it('renders the second line only where a part has one', () => {
-    const node = build();
+    const node = build({ detailsOpen: true });
     expect(parts(node).map((p) => p.byClass('part-detail')[0].hidden)).toEqual([true, true, false]);
     expect(textOf(parts(node)[2], 'part-detail')).toBe('@jane reviewed');
   });
 
-  it('shows each part exactly the buttons the host put on it, and no others', () => {
-    const node = build();
+  it('keeps a part`s own verbs under it, where a second Chat is unambiguous', () => {
+    const node = build({ detailsOpen: true });
     expect(parts(node).map((p) => p.byClass('part-action').map((b) => b.textContent))).toEqual([
-      ['Open', 'Chat'],
-      ['Start self-review'],
-      ['Open', 'Open on GitHub'],
+      ['Chat'],
+      [],
+      [],
     ]);
-  });
-
-  it('opens the item tab on that part, chats to that agent, and starts with the host’s verb', () => {
-    const node = build();
     parts(node)[0].byClass('part-action')[0].emit('click');
-    parts(node)[0].byClass('part-action')[1].emit('click');
-    parts(node)[1].byClass('part-action')[0].emit('click');
     expect(posted).toEqual([
-      { type: 'openChild', id: 'ticket:HB-627', childId: 'agent:inv-1' },
       { type: 'command', command: 'cgremlin.chat', id: 'ticket:HB-627', childId: 'agent:inv-1' },
-      { type: 'command', command: 'cgremlin.startReview', id: 'ticket:HB-627' },
     ]);
   });
 
   it('opens a part on a click on the part itself, and nothing where no session exists', () => {
-    const node = build();
+    const node = build({ detailsOpen: true });
     parts(node)[2].emit('click');
     parts(node)[1].emit('click');
     expect(posted).toEqual([
@@ -200,91 +302,131 @@ describe('§4 the parts', () => {
   });
 
   it('patches a part in place when its stage moves on', () => {
-    const node = build();
+    const node = build({ detailsOpen: true });
     const investigation = parts(node)[0];
     const next = rowView().parts;
-    next[0] = { ...next[0], state: 'needsYou', stateText: 'needs you · plan_ready' };
-    patchExpanded(node as unknown as HTMLElement, rowView({ parts: next }), null);
+    next[0] = { ...next[0], state: 'needsYou', stateText: 'needs you' };
+    patchExpanded(
+      node as unknown as HTMLElement,
+      rowView({ parts: next, detailsOpen: true }),
+      null,
+    );
     expect(parts(node)[0]).toBe(investigation);
     expect(doc.log.map((m) => m.detail)).toEqual([
-      'needs you · plan_ready',
-      'aria-label=Investigation needs you · plan_ready',
+      'needs you',
+      'aria-label=Investigation needs you',
     ]);
   });
 
   it('drops a part that stopped applying, and creates only the one that appeared', () => {
-    const node = build();
+    const node = build({ detailsOpen: true });
     const next = rowView().parts.slice(1);
-    patchExpanded(node as unknown as HTMLElement, rowView({ parts: next }), null);
+    patchExpanded(
+      node as unknown as HTMLElement,
+      rowView({ parts: next, detailsOpen: true }),
+      null,
+    );
     expect(parts(node).map((p) => textOf(p, 'part-name'))).toEqual(['Review', 'acme/web#310']);
     expect(doc.log.filter((m) => m.kind === 'create')).toEqual([]);
   });
 });
 
-describe('§4 the change counts and the one leftover verb', () => {
-  it('says `—` for a change the engine has not reported, and never a zero', () => {
-    const node = build();
-    expect(textOf(node, 'committed-value')).toBe('—');
-    expect(textOf(node, 'working-value')).toBe('—');
-  });
-
-  it('writes the counts once they arrive, and nothing else', () => {
-    const node = build();
-    patchExpanded(
-      node as unknown as HTMLElement,
-      rowView({ changes: { committed: '8 files +240/−31', workingTree: '2 files +12/−0' } }),
-      null,
-    );
-    expect(doc.log.map((m) => m.detail)).toEqual(['8 files +240/−31', '2 files +12/−0']);
-  });
-
-  it('leaves only what no part already offers — which is Ack', () => {
+/**
+ * §e.3 — one size measurement above the disclosure, and the second one NAMES its base.
+ *
+ * Three numbers used to sit in the open row with three different bases and nothing on screen
+ * saying so. `Working tree 0 files +0/−0` is gone: zero is the normal case, and a whole line to
+ * say nothing happened is what the user was reading.
+ */
+describe('the change counts, demoted and named', () => {
+  it('draws the worktree line with its ref, and no uncommitted line when there is none', () => {
     const node = build({
-      actions: [
-        { command: 'cgremlin.startReview', label: 'Start self-review', placement: 'primary' },
-        { command: 'cgremlin.chat', label: 'Chat', childId: 'agent:inv-1', placement: 'inline' },
-        {
-          command: 'cgremlin.openPr',
-          label: 'Open acme/web#310',
-          childId: 'pr:acme/web#310',
-          placement: 'overflow',
-        },
-        { command: 'cgremlin.ack', label: 'Ack', placement: 'overflow' },
-      ],
+      detailsOpen: true,
+      changes: { worktree: 'Agent worktree since main: 8 files +240/−31', uncommitted: null },
     });
-    expect(node.byClass('row-action').map((b) => b.textContent)).toEqual(['Ack']);
-    node.byClass('row-action')[0].emit('click');
-    expect(posted).toEqual([{ type: 'command', command: 'cgremlin.ack', id: 'ticket:HB-627' }]);
+    expect(textOf(node, 'change-worktree')).toBe('Agent worktree since main: 8 files +240/−31');
+    expect(node.byClass('change-uncommitted')[0].hidden).toBe(true);
   });
 
-  it('hides the line entirely when the parts already say everything', () => {
-    const node = build({ actions: [] });
-    expect(node.byClass('row-action')).toEqual([]);
-    expect(node.byClass('actions')[0].hidden).toBe(true);
-  });
-});
-
-describe('§4 nothing is said twice', () => {
-  it('renders no lifecycle spine, no people block and no go-to column', () => {
-    const node = build();
-    expect(node.byClass('slot')).toEqual([]);
-    expect(node.byClass('people')).toEqual([]);
-    expect(node.byClass('part-goto')).toEqual([]);
-    expect(labels(node)).toHaveLength(5);
+  it('draws the uncommitted line only where it is news', () => {
+    const node = build({
+      detailsOpen: true,
+      changes: {
+        worktree: 'Agent worktree since main: 8 files +240/−31',
+        uncommitted: 'The agent left 3 uncommitted files in your worktree',
+      },
+    });
+    expect(node.byClass('change-uncommitted')[0].hidden).toBe(false);
+    expect(textOf(node, 'change-uncommitted')).toBe(
+      'The agent left 3 uncommitted files in your worktree',
+    );
   });
 });
 
-describe('§4 a part that opens nothing is not a pointer target', () => {
+/** The PR's facts, in words — defect 10's answer. */
+describe('the facts', () => {
+  it('draws one line per fact, and nothing at all on a row with no PR', () => {
+    expect(build().byClass('fact').map((f) => f.textContent)).toEqual([
+      'Your PR, open · 14 files +455/−51',
+      'Large · CI passing · opened 21 Sep',
+    ]);
+    const bare = build({ facts: [], ticketLine: '' });
+    expect(bare.byClass('facts')[0].hidden).toBe(true);
+    expect(bare.byClass('ticket-line')[0].hidden).toBe(true);
+  });
+
+  it('puts the ticket and its status on one line', () => {
+    expect(textOf(build(), 'ticket-line')).toBe('HB-627 · In Review');
+  });
+});
+
+/**
+ * AC 5 — "At 280px, 300px and 380px, no part line renders a glyph or label with nothing beside
+ * it."
+ *
+ * A fake DOM has no layout engine, so this asserts the two things that DECIDE the layout: the
+ * markup (there is no lone-mark node left to strand — the glyph column is gone) and the flex
+ * bases that choose the line break. `flex: 1 1 0` is the whole fix: line-breaking uses the flex
+ * BASE size, so `auto` (max-content) pushed the long state string to line two and left the 14px
+ * mark alone on line one; `min-width: 0` cannot help, because it governs shrinking AFTER the
+ * line has been chosen.
+ */
+describe('AC 5 — nothing is left alone on a line at any sidebar width', () => {
   const css = fs.readFileSync(path.resolve(__dirname, '../../media/panel.css'), 'utf8');
 
-  it('marks a stage with no session as such, and drops the hand over it', () => {
-    const node = build();
-    expect(parts(node).map((p) => p.dataset.childId)).toEqual([
-      'agent:inv-1',
-      '',
-      'pr:acme/web#310',
-    ]);
-    expect(css).toMatch(/\.part\[data-child-id=''\]\s*\{[^}]*cursor:\s*default/);
+  function ruleOf(selector: string): string {
+    const found = new RegExp(`\\${selector}\\s*\\{([^}]*)\\}`).exec(css);
+    return found?.[1] ?? '';
+  }
+
+  for (const width of [280, 300, 380]) {
+    it(`renders no node whose whole content is a bare mark at ${width}px`, () => {
+      const node = build({ detailsOpen: true });
+      // Every leaf that carries text carries WORDS. A 14px glyph column would show up here as a
+      // one-character leaf with no text of its own beside it — which is the defect.
+      const leaves = node
+        .findAll((el) => el.children.length === 0 && el.textContent.trim() !== '');
+      expect(leaves.map((leaf) => leaf.textContent).filter((text) => text.trim().length <= 2)).toEqual([]);
+      expect(node.byClass('part-glyph')).toEqual([]);
+      expect(width).toBeGreaterThan(0);
+    });
+  }
+
+  it('gives the text a ZERO flex base, so the wrap decision cannot strand anything', () => {
+    expect(ruleOf('.part-text')).toMatch(/flex:\s*1\s+1\s+0/);
+  });
+
+  it('gives the verbs a row of their own rather than a share of the text`s line', () => {
+    expect(ruleOf('.part-actions')).toMatch(/flex:\s*1\s+0\s+100%/);
+  });
+
+  it('draws no glyph column in the open block at all', () => {
+    expect(css).not.toContain('.part-glyph');
+    const source = fs.readFileSync(
+      path.resolve(__dirname, '../../src/webview/panel/expanded.ts'),
+      'utf8',
+    );
+    expect(source).not.toContain('part-glyph');
   });
 });
 
@@ -297,8 +439,8 @@ describe('§4 a part that opens nothing is not a pointer target', () => {
 describe('an expanded row with no engine behind it', () => {
   const OFFLINE = 'Engine offline — showing what was last loaded';
 
-  it('draws the line under the hint, with the parts still there', () => {
-    const node = build({ detailNotice: OFFLINE });
+  it('draws the line at the top, with everything else still there', () => {
+    const node = build({ detailNotice: OFFLINE, detailsOpen: true });
     const line = node.byClass('expanded-offline')[0];
     expect(line?.textContent).toBe(OFFLINE);
     expect(line?.hidden).toBe(false);
@@ -311,61 +453,78 @@ describe('an expanded row with no engine behind it', () => {
 });
 
 /**
- * Phase 18 item 1 — a verb whose gate failed is DRAWN, inert, with one sentence under it.
- *
- * The defect it replaces is silence: `Verify in QA` simply was not there on three of the user's
- * four QA tickets. A tooltip would not fix that (a browser will not show one on a disabled
- * control, and the panel ships no `title` at all), so the reason is ink and the button points at
- * it with `aria-describedby`.
+ * Phase 18 item 1 — a verb whose gate failed is DRAWN, inert, with one sentence under it. A
+ * tooltip would not do: a browser will not show one on a disabled control, and the panel ships
+ * no `title` at all.
  */
-describe('Phase 18 — a disabled part verb names its reason', () => {
+describe('Phase 18 — a disabled verb names its reason', () => {
   const REASON = 'No pull request is linked to this ticket yet.';
-  const qaPart = (actions: PanelActionView[]): PanelPartView =>
-    part({ key: 'qa', kind: 'qa', name: 'QA verification', stateText: 'not started', actions });
+  const disabled: PanelActionView = {
+    command: 'cgremlin.verifyInQa',
+    label: 'Verify in QA',
+    placement: 'primary',
+    enabled: false,
+    reason: REASON,
+  };
 
-  it('disables the button and points it at the reason line under the part', () => {
-    const node = build({
-      parts: [
-        qaPart([
-          { command: 'cgremlin.verifyInQa', label: 'Verify in QA', placement: 'inline', enabled: false, reason: REASON },
-        ]),
-      ],
-    });
-    const qa = node.byClass('part').find((p) => p.dataset.key?.endsWith(':qa'))!;
-    const button = qa.byClass('part-actions')[0].children[0];
-    const reason = qa.byClass('action-reason')[0];
+  it('disables the button and points it at the reason line under the group', () => {
+    const node = build({ verbs: [disabled] });
+    const button = verbs(node)[0];
+    const reason = node.byClass('action-reason')[0];
     expect(button.disabled).toBe(true);
     expect(reason.id).not.toBe('');
     expect(button.getAttribute('aria-describedby')).toBe(reason.id);
     expect(reason.textContent).toBe(`Verify in QA: ${REASON}`);
-    // Never a tooltip, and never an emoji.
     expect(button.getAttribute('title')).toBeNull();
   });
 
   it('leaves an enabled verb undescribed, and draws no reason line at all', () => {
-    const node = build({
-      parts: [qaPart([{ command: 'cgremlin.verifyInQa', label: 'Verify in QA', placement: 'inline' }])],
-    });
-    const qa = node.byClass('part').find((p) => p.dataset.key?.endsWith(':qa'))!;
-    const button = qa.byClass('part-actions')[0].children[0];
-    expect(button.disabled).toBe(false);
-    expect(button.getAttribute('aria-describedby')).toBeNull();
-    expect(qa.byClass('action-reason').length).toBe(0);
+    const node = build({ verbs: [{ ...disabled, enabled: undefined, reason: undefined }] });
+    expect(verbs(node)[0].disabled).toBe(false);
+    expect(verbs(node)[0].getAttribute('aria-describedby')).toBeNull();
+    expect(node.byClass('action-reason')).toHaveLength(0);
+  });
+});
+
+/** P0-4 — the reconciler patches in place, and an identical frame writes NOTHING. */
+describe('P0-4 the block mutates nothing on identical data', () => {
+  it('assigns nothing at all on a patch over the same row, closed', () => {
+    const node = build();
+    patchExpanded(node as unknown as HTMLElement, rowView(), null);
+    expect(doc.log).toEqual([]);
+    expect(doc.writes).toEqual([]);
   });
 
-  it('mutates nothing on a re-render over the same data (P0-4)', () => {
-    const row = rowView({
-      parts: [
-        qaPart([
-          { command: 'cgremlin.verifyInQa', label: 'Verify in QA', placement: 'inline', enabled: false, reason: REASON },
-          { command: 'cgremlin.discoverPrs', label: 'Find merged PRs', placement: 'inline' },
-        ]),
-      ],
-    });
-    const node = createExpanded() as unknown as FakeElement;
-    patchExpanded(node as unknown as HTMLElement, row, null);
-    doc.clearLog();
-    patchExpanded(node as unknown as HTMLElement, row, null);
+  it('assigns nothing at all on a patch over the same row, open', () => {
+    const node = build({ detailsOpen: true });
+    patchExpanded(node as unknown as HTMLElement, rowView({ detailsOpen: true }), null);
     expect(doc.log).toEqual([]);
+    expect(doc.writes).toEqual([]);
+  });
+});
+
+/**
+ * §2.2 rule 10 — one accent in the whole panel, and colour is never the only signal.
+ * `--vscode-charts-red` stays reserved for a failing build (§5), so a `fail` verdict does not
+ * borrow it.
+ */
+describe('the verdict borrows no palette of its own', () => {
+  const css = fs.readFileSync(path.resolve(__dirname, '../../media/panel.css'), 'utf8');
+
+  it('tints a verdict that wants you with the one accent, and nothing else', () => {
+    const rule = /\.verdict\[data-tone='fail'\][\s\S]*?\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    expect(rule).toContain('var(--cg-accent)');
+    expect(rule).not.toContain('charts-red');
+  });
+
+  it('says the verdict in weight as well as colour, so colour is never the only signal', () => {
+    const rule = /\n\.verdict-answer\s*\{([^}]*)\}/.exec(css)?.[1] ?? '';
+    expect(rule).toMatch(/font-weight:\s*600/);
+  });
+
+  it('invents no palette anywhere in the panel stylesheet', () => {
+    expect(css).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
+    expect(css).not.toMatch(/\brgba?\(/);
+    expect(css).not.toMatch(/\bhsla?\(/);
   });
 });

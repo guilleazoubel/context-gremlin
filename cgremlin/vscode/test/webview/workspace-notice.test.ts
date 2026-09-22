@@ -72,23 +72,20 @@ describe('the workspace notice', () => {
   });
 });
 
-describe('the same hint inside the expanded row', () => {
+/**
+ * Round 3 §e.6 — the hint no longer floats inside the open row. It was the first line of every
+ * expansion until it was dismissed, which is the line the verdict now owns, and it was a
+ * sentence with no control attached to it. The header notice — which HAS its buttons — stands.
+ */
+describe('the hint does not follow the user into the open row', () => {
   const ROW = 'ticket:HB-627';
 
-  it('carries the hint when the row is open and the offer stands', () => {
-    const state = withNotice(ROW);
-    for (const section of state.sections) {
-      for (const row of section.rows) if (row.expanded) row.hint = NOTICE.message;
-    }
-    panel.render(state);
-    // The fixture's row appears in more than one list; every open copy carries the same line.
-    const hints = dom.root.byClass('expanded-hint').filter((node) => !node.hidden);
-    expect(hints.length).toBeGreaterThan(0);
-    expect(hints.every((node) => node.textContent === NOTICE.message)).toBe(true);
-  });
-
-  it('shows no hint line on an open row when there is nothing to offer', () => {
-    panel.render(stateOf({ expanded: ROW }));
-    expect(dom.root.byClass('expanded-hint').filter((node) => !node.hidden)).toHaveLength(0);
+  it('draws the notice once, in the header, and nothing inside the expansion', () => {
+    panel.render(withNotice(ROW));
+    expect(dom.root.byClass('notice')).toHaveLength(1);
+    expect(dom.root.byClass('expanded-hint')).toHaveLength(0);
+    const open = dom.root.byClass('expanded');
+    expect(open.length).toBeGreaterThan(0);
+    expect(open.every((node) => !node.textContent.includes(NOTICE.message))).toBe(true);
   });
 });

@@ -267,12 +267,6 @@ body {
   color: var(--vscode-descriptionForeground);
 }
 
-.expanded-hint {
-  padding: 2px 0 6px;
-  color: var(--vscode-descriptionForeground);
-  font-size: 11px;
-}
-
 /*
  * P11 — the engine went away while this row was open. Everything under it came out of the last
  * snapshot and still opens, so this reads as a note rather than an alert.
@@ -464,7 +458,7 @@ body {
   box-shadow: inset 3px 0 0 var(--cg-accent);
 }
 
-/* The rare verbs, on one line at the foot of the open block — never a popover. */
+/* The housekeeping, on one line at the foot of the DISCLOSURE — never beside the work (§e.7). */
 .actions {
   display: flex;
   flex-wrap: wrap;
@@ -673,6 +667,25 @@ body {
   cursor: pointer;
 }
 
+/*
+ * §e.5 — the stranded lone mark, at the root.
+ *
+ * Flex line-breaking uses the FLEX BASE SIZE, and `flex-basis: auto` means max-content: at
+ * sidebar widths the long PR state string measured wider than the line, so it was pushed to line
+ * two and left the 14px glyph sitting alone on line one. `min-width: 0` cannot help — it governs
+ * shrinking AFTER the line has been chosen. A zero base is what makes the text share the first
+ * line, and the verbs take a row of their own rather than competing for it.
+ *
+ * The glyph column itself is gone from the open block, so the bug is also unreachable.
+ */
+.part-text {
+  flex: 1 1 0;
+}
+
+.part-actions {
+  flex: 1 0 100%;
+}
+
 /* A stage that never ran has no session to open, so it is not a pointer target — its own Start
  * button still is. A hand that changes shape over something that does nothing is a lie. */
 .part[data-child-id=''] {
@@ -683,17 +696,7 @@ body {
   border-top: 1px solid var(--cg-divider);
 }
 
-.part-glyph {
-  flex: 0 0 auto;
-  width: 14px;
-  color: var(--vscode-descriptionForeground);
-  font-size: 11px;
-  line-height: 1.5;
-  text-align: center;
-}
-
 .part-text {
-  flex: 1 1 auto;
   min-width: 0;
 }
 
@@ -724,7 +727,6 @@ body {
 
 .part-actions {
   display: flex;
-  flex: 0 0 auto;
   flex-wrap: wrap;
   gap: 2px;
 }
@@ -760,23 +762,14 @@ body {
   font-size: 11px;
 }
 
-.changes-title {
-  margin-bottom: 2px;
-  color: var(--vscode-descriptionForeground);
-}
-
+/* ONE line, naming the ref it is measured against, and a second only when it is news (§e.3). */
 .change {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.change-label {
   color: var(--vscode-descriptionForeground);
+  font-variant-numeric: tabular-nums;
 }
 
-.change-value {
-  font-variant-numeric: tabular-nums;
+.change-uncommitted {
+  color: var(--vscode-foreground);
 }
 
 /* --- focus and motion --------------------------------------------------- */
@@ -788,6 +781,160 @@ body {
 .sort:focus-visible,
 .row-action:focus-visible,
 .part-action:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+/* --- round 3: the answer, then the verbs, then the machinery ------------- */
+
+/*
+ * The verdict leads, and it is TYPE that says so — there is no typeface to spend
+ * (`font-src 'none'`), so the weight and the one accent do the work. Never colour alone: the
+ * label is 600 whatever the tone, and the tone only tints it.
+ */
+.verdict {
+  margin: 2px 0 8px;
+}
+
+.verdict-answer {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--vscode-foreground);
+}
+
+.verdict-sentence {
+  font-size: 12px;
+  color: var(--vscode-foreground);
+}
+
+.verdict-counts {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+}
+
+/*
+ * Staleness outranks the verdict: a conclusion about code that has since changed is the one gap
+ * that makes a user act WRONGLY rather than late, so it reads first and in the accent that means
+ * "this wants you".
+ */
+.verdict-stale {
+  margin-bottom: 2px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--cg-accent);
+}
+
+.verdict-notice {
+  margin-bottom: 2px;
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+  font-style: italic;
+}
+
+/*
+ * §2.2 rule 10, unchanged: ONE accent in the entire panel, and it means "this wants you". A
+ * verdict that asks for something takes it; `pass` and `neutral` stay on the plain foreground,
+ * where the weight alone carries them. Never colour alone — the label is 600 either way — and
+ * `--vscode-charts-red` stays reserved for a failing build (§5).
+ */
+.verdict[data-tone='fail'] .verdict-answer,
+.verdict[data-tone='blocked'] .verdict-answer,
+.verdict[data-tone='mixed'] .verdict-answer {
+  color: var(--cg-accent);
+}
+
+/*
+ * §(d) — one recommended verb, full width, then at most two beside it. The primary is the only
+ * filled button in the panel; everything else is quiet, which is what makes it findable.
+ */
+.verbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.row-verb {
+  min-height: 24px;
+  padding: 4px 8px;
+  border: 1px solid var(--cg-divider);
+  border-radius: 3px;
+  background: var(--vscode-button-secondaryBackground, transparent);
+  color: var(--vscode-foreground);
+  font-family: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.row-verb.primary {
+  flex: 1 0 100%;
+  border-color: var(--vscode-button-background, var(--cg-divider));
+  background: var(--vscode-button-background, transparent);
+  color: var(--vscode-button-foreground, var(--vscode-foreground));
+  font-weight: 600;
+}
+
+.row-verb.inline {
+  flex: 1 1 auto;
+}
+
+.row-verb:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.row-verb:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: -1px;
+}
+
+/* The PR's facts, in words — where `L` and the bare dot are finally spelled out. */
+.facts {
+  margin-bottom: 6px;
+}
+
+.fact,
+.ticket-line {
+  font-size: 11px;
+  color: var(--vscode-descriptionForeground);
+}
+
+.ticket-line {
+  margin-bottom: 6px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The disclosure: the object list, the worktree diff, the housekeeping. Closed by default. */
+.details {
+  margin-top: 4px;
+  border-top: 1px solid var(--cg-divider);
+  padding-top: 4px;
+}
+
+.details-toggle {
+  display: block;
+  width: 100%;
+  padding: 4px 0;
+  border: 0;
+  background: none;
+  color: var(--vscode-descriptionForeground);
+  font-family: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.details-toggle::before {
+  content: '\25B8';
+  padding-right: 6px;
+}
+
+.details-toggle[aria-expanded='true']::before {
+  content: '\25BE';
+}
+
+.details-toggle:focus-visible {
   outline: 1px solid var(--vscode-focusBorder);
   outline-offset: -1px;
 }

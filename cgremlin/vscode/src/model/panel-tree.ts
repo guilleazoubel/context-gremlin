@@ -56,7 +56,10 @@ export function panelTreeNodes(state: PanelState): PanelTreeNode[] {
         id: row.id,
         group: section.group,
       });
-      if (!row.expanded) continue;
+      // §6's rule, one level down: a part inside a CLOSED disclosure is not on screen, so the
+      // keyboard must not be able to walk onto it. The disclosure's state is the host's for
+      // exactly this reason — the tree cannot ask the DOM.
+      if (!row.expanded || !row.detailsOpen) continue;
       for (const part of row.parts) {
         nodes.push({
           key: `part:${row.id}:${part.key}`,

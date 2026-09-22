@@ -594,9 +594,10 @@ describe('MG-B3 no-extension-host-restart (host half)', () => {
     expect(
       h.host.callsOf('executeCommand').filter((c) => c.args[0] === 'vscode.openFolder'),
     ).toEqual([]);
-    // The offer is in the panel instead, and the expanded row repeats it inline.
+    // The offer is in the panel header instead — never inside the row, where round 3 gave the
+    // first line to the verdict (§e.6).
     expect(h.state().notice).toMatchObject({ command: 'cgremlin.openManagedWorkspace' });
-    expect(h.rowOf(REVIEW_ITEM).hint).toBe(h.state().notice?.message);
+    expect(JSON.stringify(h.rowOf(REVIEW_ITEM))).not.toContain(h.state().notice?.message ?? '');
 
     // A second click still says nothing, and does not rewrite a managed file already there.
     h.toPanel({ type: 'selectRow', id: REVIEW_ITEM, list: 'myWork' });
