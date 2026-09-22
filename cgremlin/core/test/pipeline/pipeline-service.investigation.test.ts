@@ -157,7 +157,11 @@ describe('PipelineService — investigation', () => {
     const devId = h.runner.getContext(devHandle).sessionId;
     expect(devId).not.toBe(inv.id);
     const devDir = `${SESSIONS_DIR}/${devId}`;
-    expect(await h.fs.readFile(`${devDir}/BRIEF.md`)).toContain('your approved plan');
+    // Phase 21 — the handoff has to carry the PLAN, not a path to it. A brief that only names
+    // `PLAN.md` is a promotion that loses the work the moment the agent does not open the file.
+    const devBrief = await h.fs.readFile(`${devDir}/BRIEF.md`);
+    expect(devBrief).toContain('your approved plan');
+    expect(devBrief).toContain(APPROVED_PLAN.trim());
     expect(await h.fs.readFile(`${devDir}/PLAN.md`)).toBe(APPROVED_PLAN);
     expect(await h.fs.readFile(`${devDir}/FINDINGS.md`)).toBe('# Findings\nroot cause found');
 

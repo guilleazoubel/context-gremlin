@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  bareSkillName, EMPTY_ENVIRONMENT, renderDevelopBrief, renderFindingsBrief, renderPlanBrief,
+  bareSkillName, EMPTY_ENVIRONMENT, PLAN_MAX_SECTION_CHARS, renderDevelopBrief, renderFindingsBrief, renderPlanBrief,
   renderRereviewBrief, renderRereviewPrompt, renderReviewBrief, renderReviewContract,
   renderReviewPrompt, renderUiCheckProtocol, renderEnvironmentSection, renderTicketSection, renderRespondBrief,
   STAGE_ENTRY_PROMPT,
@@ -660,5 +660,37 @@ describe('renderRespondBrief (R50)', () => {
     expect(text).not.toContain('--reply-comment');
     expect(text).not.toContain('--resolve-comment');
     expect(text).not.toContain('--push-fix');
+  });
+});
+
+/**
+ * Phase 21 — the promoted child's brief carries the plan's SUBSTANCE. `promote()` copies PLAN.md
+ * into the development session directory and the brief has always named that path; a path is not
+ * a handoff, because the one thing that must not depend on the agent choosing to open a file is
+ * the plan it was promoted to implement.
+ */
+describe('renderDevelopBrief carries the approved plan itself', () => {
+  const sessionDir = '/s/dev-1';
+  const PLAN = '# Plan\n\n1. Rename `foo` to `bar` in src/app.ts\n2. Cover it in app.test.ts\n';
+
+  it('inlines the plan text under its own heading', () => {
+    const brief = renderDevelopBrief({ sessionDir, ticket: 'APP-1', hasPlan: true, plan: PLAN });
+    expect(brief).toContain('## The approved plan');
+    expect(brief).toContain('1. Rename `foo` to `bar` in src/app.ts');
+    expect(brief).toContain(PLAN.trim());
+    // The path stays: the agent still reads the file for anything the cap trimmed.
+    expect(brief).toContain(`${sessionDir}/PLAN.md`);
+  });
+
+  it('says nothing at all when there is no plan to carry', () => {
+    const brief = renderDevelopBrief({ sessionDir, ticket: 'APP-1', hasPlan: false });
+    expect(brief).not.toContain('## The approved plan');
+  });
+
+  it('caps a runaway plan and says it was capped', () => {
+    const huge = `# Plan\n${'x'.repeat(PLAN_MAX_SECTION_CHARS + 500)}`;
+    const brief = renderDevelopBrief({ sessionDir, ticket: 'APP-1', hasPlan: true, plan: huge });
+    expect(brief).toContain('_(truncated by the engine)_');
+    expect(brief.length).toBeLessThan(huge.length + 4000);
   });
 });
