@@ -517,6 +517,15 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
       if (surface(await send(() => client.stop(id)))) coordinator.schedule();
     }),
     host.registerCommand('cgremlin.retry', (arg) => onSession(arg, (id) => client.retry(id))),
+    /**
+     * Phase 21 — Retry's opposite number for a session whose failed run already produced its
+     * artifact. `retry` re-runs `lastRun.stage`; this runs the stage that never got to run, which
+     * `runPlan` has always accepted from `findings` (it re-checks FINDINGS.md under the session's
+     * own lock, and its refusal is the sentence the user gets).
+     */
+    host.registerCommand('cgremlin.continueToPlan', (arg, childArg) =>
+      onNamedSession(arg, childArg, (id) => client.run(id, 'plan')),
+    ),
 
     // R31: one request. The core fans the ack out over every ref the item contributes.
     host.registerCommand('cgremlin.ack', async (arg) => {

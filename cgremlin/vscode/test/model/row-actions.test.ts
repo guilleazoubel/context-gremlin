@@ -418,3 +418,62 @@ describe('the handoff: Start development continues from the investigation', () =
     expect(start?.enabled).toBe(false);
   });
 });
+
+/**
+ * Phase 21 — a finished artifact behind a failed run. The live wedge:
+ * `inv-…-HB-1492` has `stageStatus: 'findings'`, `lastRun.outcome: 'failed'` and a complete 30 KB
+ * FINDINGS.md. The findings run died AFTER writing its artifact, so the plan stage never chained;
+ * the session can never reach `plan_ready`, so nothing in the approve/promote flow can rescue it.
+ * `Retry` would re-run the stage that failed — throwing away findings that are already right.
+ * The way out is the stage that never ran, against the artifact that is already there.
+ */
+describe('the handoff: recovering an investigation wedged behind a failed findings run', () => {
+  const wedged = (over: Record<string, unknown> = {}) =>
+    agent('investigation', {
+      phase: 'findings',
+      runFailed: true,
+      primaryArtifact: 'FINDINGS.md',
+      ...over,
+    });
+
+  it('offers Continue to plan as the row primary, ahead of Retry', () => {
+    const actions = rowActions(facts({ agents: [wedged()] }), 'investigations');
+    const resume = actions.find((a) => a.command === 'cgremlin.continueToPlan');
+    expect(resume?.label).toBe('Continue to plan');
+    expect(resume?.placement).toBe('primary');
+    expect(resume?.childId).toBe('agent:s-investigation');
+    // Retry survives — re-running findings is still a legitimate ask — but never as the one click.
+    const retry = actions.find((a) => a.command === 'cgremlin.retry');
+    expect(retry?.placement).toBe('inline');
+  });
+
+  it('offers only Retry when the failed run left no findings behind', () => {
+    const actions = rowActions(
+      facts({ agents: [wedged({ primaryArtifact: null })] }),
+      'investigations',
+    );
+    expect(actions.map((a) => a.command)).not.toContain('cgremlin.continueToPlan');
+    expect(actions.find((a) => a.command === 'cgremlin.retry')?.placement).toBe('primary');
+  });
+
+  it('offers nothing to continue where the run did not fail, or the stage has moved on', () => {
+    for (const over of [{ runFailed: false }, { phase: 'planning' }, { running: true }]) {
+      const offered = rowActions(facts({ agents: [wedged(over)] }), 'investigations').map(
+        (a) => a.command,
+      );
+      expect(offered, JSON.stringify(over)).not.toContain('cgremlin.continueToPlan');
+    }
+  });
+
+  it('never offers it for a development session sitting on the same artifact', () => {
+    const offered = rowActions(
+      facts({
+        agents: [
+          agent('development', { phase: 'findings', runFailed: true, primaryArtifact: 'FINDINGS.md' }),
+        ],
+      }),
+      'myWork',
+    ).map((a) => a.command);
+    expect(offered).not.toContain('cgremlin.continueToPlan');
+  });
+});

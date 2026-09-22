@@ -70,6 +70,12 @@ export interface ActionAgent {
   runFailed?: boolean;
   /** Gap 1 — so `qaPart` can ask the ONE composer for the right word. */
   qaVerdict?: QaVerdict | null;
+  /**
+   * Phase 21 — the artifact the core would open this session on (`WorkItemAgent.primaryArtifact`).
+   * The panel's only evidence that a stage produced its output, which is what tells a run that
+   * failed EMPTY apart from a run that failed after writing what it was for.
+   */
+  primaryArtifact?: string | null;
 }
 
 export interface ActionPr {
@@ -197,6 +203,29 @@ function anyInvestigation(facts: ActionFacts): ActionAgent | undefined {
  */
 export const DEVELOPMENT_NEEDS_APPROVAL_REASON =
   'Development continues from this investigation — approve its plan first.';
+
+/**
+ * Phase 21 — an investigation wedged behind a failed findings run that nevertheless WROTE its
+ * findings. The live case: `stageStatus: 'findings'`, `lastRun.outcome: 'failed'`, a complete
+ * 30 KB FINDINGS.md. The plan stage never chained, so the session can never reach `plan_ready`
+ * and nothing in the approve/promote flow above can reach it. `Retry` re-runs the stage that
+ * failed — the one whose output is already right — so it is the wrong first offer here.
+ *
+ * `primaryArtifact === 'FINDINGS.md'` is the evidence the file is there. It is not proof the file
+ * is NON-EMPTY (the core ranks a listing, it does not read it): `runPlan` re-checks that under
+ * the session's own lock and refuses with its own sentence, which is the refusal the user sees.
+ */
+export function resumableInvestigation(facts: ActionFacts): ActionAgent | undefined {
+  return facts.agents.find(
+    (agent) =>
+      agent.mode === 'investigation' &&
+      agent.phase === 'findings' &&
+      agent.runFailed === true &&
+      agent.primaryArtifact === 'FINDINGS.md' &&
+      !agent.running &&
+      agent.pending !== true,
+  );
+}
 
 /** Phase 16 — a verification has been run before, so the verb says `again`. */
 export function qaVerbLabel(facts: ActionFacts): string {
@@ -377,6 +406,20 @@ export function rowActions(facts: ActionFacts, list: WorkListKind): RowAction[] 
   // heals the session, and this is the click that starts it over. Pushed
   // FIRST, so it takes the row's one primary wherever nothing else has: a
   // failed run is the most urgent thing the row has to say.
+  // Phase 21 — pushed BEFORE Retry, so it takes the row's one click. The stage that failed has
+  // already produced what it was for; the stage that never ran is the way out.
+  const resumable = resumableInvestigation(facts);
+  if (resumable !== undefined) {
+    push(
+      {
+        command: 'cgremlin.continueToPlan',
+        label: 'Continue to plan',
+        childId: agentChildId(resumable.sessionId),
+      },
+      'primary',
+    );
+  }
+
   const failed = failedAgent(facts);
   if (failed !== undefined) {
     push(

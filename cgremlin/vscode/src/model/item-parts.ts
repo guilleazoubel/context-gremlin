@@ -395,6 +395,9 @@ export function hoistVerbs<P extends { actions: RowAction[]; childId?: string | 
     pool.push(action);
   }
 
+  // Phase 21 — the wedge's way out outranks Retry here for the reason it does on the row: Retry
+  // re-runs the stage whose output is already on disk.
+  const resume = pool.find((action) => action.command === 'cgremlin.continueToPlan');
   const retry = pool.find((action) => action.command === 'cgremlin.retry');
   const quoted =
     focusChildId === null
@@ -402,7 +405,7 @@ export function hoistVerbs<P extends { actions: RowAction[]; childId?: string | 
       : pool.find(
           (action) => action.command === 'cgremlin.openChild' && action.childId === focusChildId,
         );
-  const primary = retry ?? quoted ?? pool.find((action) => action.placement === 'primary') ?? null;
+  const primary = resume ?? retry ?? quoted ?? pool.find((action) => action.placement === 'primary') ?? null;
   const supporting = pool
     .filter((action) => action !== primary && action.placement !== 'overflow')
     .slice(0, SUPPORTING_LIMIT);

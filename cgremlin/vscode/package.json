@@ -106,6 +106,11 @@
         "category": "cgremlin"
       },
       {
+        "command": "cgremlin.continueToPlan",
+        "title": "Continue this investigation to its plan",
+        "category": "cgremlin"
+      },
+      {
         "command": "cgremlin.promoteToDevelopment",
         "title": "Start development from this investigation",
         "category": "cgremlin"
@@ -266,6 +271,10 @@
         },
         {
           "command": "cgremlin.startDevelopment",
+          "when": "false"
+        },
+        {
+          "command": "cgremlin.continueToPlan",
           "when": "false"
         },
         {
