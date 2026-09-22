@@ -673,8 +673,7 @@ function lastFinishedAgent(agents: readonly WorkItemAgent[]): WorkItemAgent | nu
 function phaseCell(agent: WorkItemAgent, reason: string | null): RowMetaCell {
   const glyph = MODE_GLYPH[agent.mode] ?? '•';
   if (agent.mode !== 'qa') {
-    const word = !agent.running && reason !== null && reason !== '' ? reasonText(reason) : agent.phase;
-    return { kind: 'agentPhase', text: `${glyph} ${word}` };
+    return { kind: 'agentPhase', text: `${glyph} ${stateWordOf(agent, reason)}` };
   }
   // §8's one toned cell: a verification that came back short of ready is the top of my work,
   // and the row has to say so without a second composition site (R72 does the ordering).
@@ -682,6 +681,27 @@ function phaseCell(agent: WorkItemAgent, reason: string | null): RowMetaCell {
   const text = qaStateText(agent.phase, agent.qaVerdict ?? null);
   const cell: RowMetaCell = { kind: 'agentPhase', text: `${glyph} ${text}` };
   return bad ? { ...cell, tone: 'bad' } : cell;
+}
+
+/**
+ * Defect 2 — the one word a finished agent's cell shows, in the order the user needs it.
+ *
+ * `runOutcome` reached `WorkItemAgent` a round ago and only `lifecycleSlots` (the EXPANDED row)
+ * ever asked for it, so the collapsed row kept reporting the STAGE a killed run died in as
+ * though it were a state: `∴ findings · 5d` on a session that was killed on day one and wrote
+ * nothing. The phase is what an agent was DOING; it is not how the run ENDED.
+ *
+ * The order is deliberate and nothing is displaced. A running agent keeps its phase, because
+ * there the phase is genuine progress. An attention reason still outranks the outcome: the
+ * reason is what the item wants FROM THE USER, which is a stronger thing to say than how the
+ * last run finished. Only where the cell would otherwise have fallen back to the raw phase does
+ * the outcome speak — and an engine that sends none leaves the phase exactly where it was.
+ */
+function stateWordOf(agent: WorkItemAgent, reason: string | null): string {
+  if (agent.running) return agent.phase;
+  if (reason !== null && reason !== '') return reasonText(reason);
+  if (agent.runOutcome === 'stopped' || agent.runOutcome === 'failed') return agent.runOutcome;
+  return agent.phase;
 }
 
 /**
