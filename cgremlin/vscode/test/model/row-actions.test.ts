@@ -315,3 +315,45 @@ describe('P0-2 — Stop beside a live run', () => {
     expect(union.map((a) => a.command)).toContain('cgremlin.stop');
   });
 });
+
+// ---------------------------------------------------------------------------
+
+/**
+ * The handoff (Phase 21). The engine has had `approve-plan` and `promote` since Phase 2, and the
+ * panel reached neither: `approvePlan` was a registered command no row ever offered. "Before i
+ * would say to the agent approve and it would start the development session" — this is that
+ * sentence, as a button.
+ */
+describe('the handoff: approving an investigation plan', () => {
+  const investigation = (phase: string, over: Record<string, unknown> = {}) =>
+    agent('investigation', { phase, ...over });
+
+  it('makes the approve verb the row PRIMARY at plan_ready, and nothing else claims primary', () => {
+    const actions = rowActions(facts({ agents: [investigation('plan_ready')] }), 'investigations');
+    const approve = actions.find((a) => a.command === 'cgremlin.approvePlan');
+    expect(approve).toBeDefined();
+    expect(approve?.placement).toBe('primary');
+    expect(approve?.label).toBe('Approve the plan');
+    // R26: the verb names the session it approves, so a second agent cannot steal the click.
+    expect(approve?.childId).toBe('agent:s-investigation');
+    expect(actions.filter((a) => a.placement === 'primary')).toHaveLength(1);
+  });
+
+  it('offers nothing to approve before the plan is ready', () => {
+    for (const phase of ['findings', 'planning', 'approved', 'promoted_to_development']) {
+      const offered = rowActions(
+        facts({ agents: [investigation(phase)] }),
+        'investigations',
+      ).map((a) => a.command);
+      expect(offered, phase).not.toContain('cgremlin.approvePlan');
+    }
+  });
+
+  it('never offers it for a non-investigation session at the same phase', () => {
+    const offered = rowActions(
+      facts({ agents: [agent('development', { phase: 'plan_ready' })] }),
+      'myWork',
+    ).map((a) => a.command);
+    expect(offered).not.toContain('cgremlin.approvePlan');
+  });
+});

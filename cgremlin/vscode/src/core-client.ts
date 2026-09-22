@@ -333,6 +333,17 @@ export class CoreClient {
     return await this.request('POST', `/sessions/${assertSessionId(id)}/approve-plan`);
   }
 
+  /**
+   * Phase 21 — the second half of the handoff, and the reason the first half was worth nothing on
+   * its own. `POST /sessions/:id/promote` creates the CHILD development session: same workspace,
+   * `lineage.parentSessionId` set to this investigation, FINDINGS.md and PLAN.md copied across,
+   * and the develop turn started. It is refused while a human turn is claimed (R19) — the refusal
+   * is the engine's to make and its sentence is the one the panel surfaces.
+   */
+  async promote(id: string): Promise<HttpResult> {
+    return await this.request('POST', `/sessions/${assertSessionId(id)}/promote`);
+  }
+
   async stop(id: string): Promise<HttpResult> {
     return await this.request('POST', `/sessions/${assertSessionId(id)}/stop`);
   }

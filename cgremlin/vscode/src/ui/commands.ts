@@ -169,6 +169,26 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
   };
 
   /**
+   * Phase 21 — `onSession`, but for a verb the rule table addressed at ONE named session
+   * (`childId: 'agent:<id>'`). Falls back to the item's chat target so a caller without a child id
+   * behaves exactly as it did.
+   */
+  const onNamedSession = async (
+    arg: unknown,
+    childArg: unknown,
+    call: (id: string) => Promise<HttpResult>,
+  ): Promise<void> => {
+    const item = needsItem(arg);
+    if (item === null) return;
+    const id = agentOfChildId(idOf(childArg)) ?? sessionOf(item);
+    if (id === null) {
+      void host.showWarningMessage('That item has no session to act on.', undefined);
+      return;
+    }
+    if (surface(await send(() => call(id)))) coordinator.schedule();
+  };
+
+  /**
    * §8's two verbs address the item through its MERGED PR's own path — `pr:<slug>#<n>` is the
    * key the API route locks on and the key the automatic leg reserves under (E2/E9). A row with
    * no PR cannot reach QA at all (the core refuses it), and says so rather than sending a call
@@ -461,8 +481,13 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
       await host.openExternal(item.ticket.url);
     }),
 
-    host.registerCommand('cgremlin.approvePlan', (arg) =>
-      onSession(arg, (id) => client.approvePlan(id)),
+    /**
+     * Phase 21 — the human's decision, addressed at the session the row's verb NAMED. It used to
+     * take `sessionOf(item)` (the chat target), which on an item carrying two sessions is not
+     * necessarily the investigation whose plan is ready.
+     */
+    host.registerCommand('cgremlin.approvePlan', (arg, childArg) =>
+      onNamedSession(arg, childArg, (id) => client.approvePlan(id)),
     ),
     host.registerCommand('cgremlin.stop', async (arg, childArg) => {
       const item = needsItem(arg);

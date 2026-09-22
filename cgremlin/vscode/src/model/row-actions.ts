@@ -152,6 +152,19 @@ function failedAgent(facts: ActionFacts): ActionAgent | undefined {
   return facts.agents.find((agent) => agent.runFailed === true && agent.pending !== true);
 }
 
+/**
+ * Phase 21 — the investigation whose plan is waiting on the human. `plan_ready` is the ONE stage
+ * `PipelineService.approvePlan` accepts (it refuses every other with `UnsupportedStageError`), so
+ * the button is offered exactly where the engine would say yes. A PENDING agent is excluded for
+ * the reason `failedAgent` excludes it: it has no session to POST to yet.
+ */
+export function approvableInvestigation(facts: ActionFacts): ActionAgent | undefined {
+  return facts.agents.find(
+    (agent) =>
+      agent.mode === 'investigation' && agent.phase === 'plan_ready' && agent.pending !== true,
+  );
+}
+
 /** Phase 16 — a verification has been run before, so the verb says `again`. */
 export function qaVerbLabel(facts: ActionFacts): string {
   return facts.agents.some((agent) => agent.mode === 'qa') ? 'Verify in QA again' : 'Verify in QA';
@@ -374,6 +387,22 @@ export function rowActions(facts: ActionFacts, list: WorkListKind): RowAction[] 
     }
   } else {
     // My own work (`myWork`, `investigations`): the forward-only ladder.
+    //
+    // Phase 21 — but FIRST the one decision that is the human's alone. An investigation that has
+    // written an approved plan is waiting on a person to say the work is right, and that moment
+    // outranks every verb below it: nothing further can legitimately happen until it is taken.
+    // The wording is the decision, not the route (`POST /sessions/:id/approve-plan`).
+    const approvable = approvableInvestigation(facts);
+    if (approvable !== undefined) {
+      push(
+        {
+          command: 'cgremlin.approvePlan',
+          label: 'Approve the plan',
+          childId: agentChildId(approvable.sessionId),
+        },
+        'primary',
+      );
+    }
     for (const stage of nextStages(facts)) {
       if (stage === 'investigation') {
         // R49: an investigation is the *no-PR* mode. Where a PR exists the question is settled.
@@ -423,7 +452,7 @@ export function rowActions(facts: ActionFacts, list: WorkListKind): RowAction[] 
   // needs-you count, which is the one thing reading it does not do, so it stays reachable.
   if (facts.needsYou) push({ command: 'cgremlin.ack', label: 'Mark as seen' }, 'overflow');
 
-  if (!primaryTaken) promote(out);
+  if (!primaryTaken) promoteFallbackPrimary(out);
   return out;
 }
 
@@ -464,7 +493,7 @@ function pushQa(
  * A row with no verb of its own still gets one click that does something useful — the
  * conversation if there is one, else the PR, else the ticket. Never a verb that would 409.
  */
-function promote(actions: RowAction[]): void {
+function promoteFallbackPrimary(actions: RowAction[]): void {
   for (const command of ['cgremlin.chat', 'cgremlin.openPr', 'cgremlin.openTicket']) {
     const found = actions.find((action) => action.command === command);
     if (found !== undefined) {
