@@ -1327,3 +1327,90 @@ describe('the panel degrades to its snapshot when the engine goes', () => {
     expect(h.host.callsOf('showWarningMessage')).toEqual([]);
   });
 });
+
+/**
+ * Phase 21 — the handoff, end to end through the panel. "before i would say to the agent approve
+ * and it would start the development session. how do i do it with the plugin?" The answer has to
+ * be: click what the row offers, and the request that leaves is the one that keeps the work.
+ */
+describe('the handoff: approve, then continue into development', () => {
+  const INV_ITEM = 'session:inv-stacktrace-1';
+  const INV_SESSION = 'inv-stacktrace-1';
+
+  /** The items fixture with that one investigation moved to a phase of our choosing. */
+  const atPhase = (phase: string): StubHandler => {
+    const items = JSON.parse(JSON.stringify(fixtures.items)) as {
+      items: { id: string; agents: { phase: string }[] }[];
+    };
+    const item = items.items.find((i) => i.id === INV_ITEM);
+    if (item === undefined) throw new Error('fixture item vanished');
+    item.agents[0].phase = phase;
+    return (req) => (req.path === '/items' ? { status: 200, body: items } : undefined);
+  };
+
+  it('offers Approve the plan as the row’s one click, and it POSTs approve-plan', async () => {
+    const h = await connected({ handler: atPhase('plan_ready') });
+    const primary = h.rowOf(INV_ITEM).actions.find((a) => a.placement === 'primary');
+    expect(primary?.label).toBe('Approve the plan');
+    const mark = h.mark();
+    await h.host.invoke(primary?.command ?? '', INV_ITEM, primary?.childId);
+    expect(paths(h, mark)).toContain(`POST /sessions/${INV_SESSION}/approve-plan`);
+  });
+
+  it('once approved, the row’s Start development PROMOTES rather than starting fresh', async () => {
+    const h = await connected({ handler: atPhase('approved') });
+    const primary = h.rowOf(INV_ITEM).actions.find((a) => a.placement === 'primary');
+    expect(primary?.label).toBe('Start development');
+    const mark = h.mark();
+    await h.host.invoke(primary?.command ?? '', INV_ITEM, primary?.childId);
+    const sent = paths(h, mark);
+    expect(sent).toContain(`POST /sessions/${INV_SESSION}/promote`);
+    // The fresh, self-rooted start — the request that loses the plan — must not be among them.
+    expect(sent.some((p) => p.includes('/items/') && p.startsWith('POST'))).toBe(false);
+  });
+
+  it('surfaces the engine’s own refusal when a human turn is claimed on the investigation', async () => {
+    const base = atPhase('approved');
+    const h = await connected({
+      handler: (req) =>
+        req.method === 'POST' && req.path === `/sessions/${INV_SESSION}/promote`
+          ? { status: 409, body: { error: { message: `session '${INV_SESSION}' has a human turn in progress` } } }
+          : base(req),
+    });
+    await h.host.invoke('cgremlin.promoteToDevelopment', INV_ITEM, `agent:${INV_SESSION}`);
+    const warned = h.host.callsOf('showWarningMessage').map((c) => String(c.args[0]));
+    expect(warned.join('\n')).toContain('human turn in progress');
+  });
+});
+
+/**
+ * Phase 21 — the wedge. A session with a finished artifact behind a failed run had a Retry that
+ * would re-run the stage whose output is already right; the way out is the stage that never ran.
+ */
+describe('the handoff: continuing a wedged investigation into its plan stage', () => {
+  const INV_ITEM = 'session:inv-stacktrace-1';
+  const INV_SESSION = 'inv-stacktrace-1';
+
+  it('offers Continue to plan and POSTs the plan stage against the findings already on disk', async () => {
+    const items = JSON.parse(JSON.stringify(fixtures.items)) as {
+      items: { id: string; agents: { phase: string; runFailed: boolean; primaryArtifact: string }[] }[];
+    };
+    const item = items.items.find((i) => i.id === INV_ITEM);
+    if (item === undefined) throw new Error('fixture item vanished');
+    Object.assign(item.agents[0], {
+      phase: 'findings',
+      runFailed: true,
+      primaryArtifact: 'FINDINGS.md',
+    });
+    const h = await connected({
+      handler: (req) => (req.path === '/items' ? { status: 200, body: items } : undefined),
+    });
+    const primary = h.rowOf(INV_ITEM).actions.find((a) => a.placement === 'primary');
+    expect(primary?.label).toBe('Continue to plan');
+    const mark = h.mark();
+    await h.host.invoke(primary?.command ?? '', INV_ITEM, primary?.childId);
+    const sent = h.since(mark).filter((r) => r.path === `/sessions/${INV_SESSION}/run`);
+    expect(sent.map((r) => r.method)).toEqual(['POST']);
+    expect(sent[0].body).toEqual({ stage: 'plan' });
+  });
+});

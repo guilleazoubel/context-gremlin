@@ -169,6 +169,26 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
   };
 
   /**
+   * Phase 21 — `onSession`, but for a verb the rule table addressed at ONE named session
+   * (`childId: 'agent:<id>'`). Falls back to the item's chat target so a caller without a child id
+   * behaves exactly as it did.
+   */
+  const onNamedSession = async (
+    arg: unknown,
+    childArg: unknown,
+    call: (id: string) => Promise<HttpResult>,
+  ): Promise<void> => {
+    const item = needsItem(arg);
+    if (item === null) return;
+    const id = agentOfChildId(idOf(childArg)) ?? sessionOf(item);
+    if (id === null) {
+      void host.showWarningMessage('That item has no session to act on.', undefined);
+      return;
+    }
+    if (surface(await send(() => call(id)))) coordinator.schedule();
+  };
+
+  /**
    * §8's two verbs address the item through its MERGED PR's own path — `pr:<slug>#<n>` is the
    * key the API route locks on and the key the automatic leg reserves under (E2/E9). A row with
    * no PR cannot reach QA at all (the core refuses it), and says so rather than sending a call
@@ -441,6 +461,16 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
     host.registerCommand('cgremlin.startDevelopment', (arg) =>
       startFromItem(deps, arg, 'development'),
     ),
+    /**
+     * Phase 21 — the SAME verb as `startDevelopment` wherever the rule table decided this item
+     * has an investigation to continue from (`row-actions.promotableInvestigation`). The engine
+     * creates the child session, copies FINDINGS.md and PLAN.md across and starts the develop
+     * turn; the refusals it owns (a claimed human turn, an unapproved plan) reach the user as the
+     * engine's own sentence rather than as a second opinion from here.
+     */
+    host.registerCommand('cgremlin.promoteToDevelopment', (arg, childArg) =>
+      onNamedSession(arg, childArg, (id) => client.promote(id)),
+    ),
 
     host.registerCommand('cgremlin.openPr', async (arg, childArg) => {
       const item = needsItem(arg);
@@ -461,8 +491,13 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
       await host.openExternal(item.ticket.url);
     }),
 
-    host.registerCommand('cgremlin.approvePlan', (arg) =>
-      onSession(arg, (id) => client.approvePlan(id)),
+    /**
+     * Phase 21 — the human's decision, addressed at the session the row's verb NAMED. It used to
+     * take `sessionOf(item)` (the chat target), which on an item carrying two sessions is not
+     * necessarily the investigation whose plan is ready.
+     */
+    host.registerCommand('cgremlin.approvePlan', (arg, childArg) =>
+      onNamedSession(arg, childArg, (id) => client.approvePlan(id)),
     ),
     host.registerCommand('cgremlin.stop', async (arg, childArg) => {
       const item = needsItem(arg);
@@ -482,6 +517,15 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
       if (surface(await send(() => client.stop(id)))) coordinator.schedule();
     }),
     host.registerCommand('cgremlin.retry', (arg) => onSession(arg, (id) => client.retry(id))),
+    /**
+     * Phase 21 — Retry's opposite number for a session whose failed run already produced its
+     * artifact. `retry` re-runs `lastRun.stage`; this runs the stage that never got to run, which
+     * `runPlan` has always accepted from `findings` (it re-checks FINDINGS.md under the session's
+     * own lock, and its refusal is the sentence the user gets).
+     */
+    host.registerCommand('cgremlin.continueToPlan', (arg, childArg) =>
+      onNamedSession(arg, childArg, (id) => client.run(id, 'plan')),
+    ),
 
     // R31: one request. The core fans the ack out over every ref the item contributes.
     host.registerCommand('cgremlin.ack', async (arg) => {

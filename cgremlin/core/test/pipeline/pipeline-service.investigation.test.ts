@@ -134,6 +134,35 @@ describe('PipelineService — investigation', () => {
     expect(() => h.runner.lastHandle()).toThrow();
   });
 
+  /**
+   * Phase 21 — the user's own wedge, as a fixture. `inv-…-HB-1492` sits at `stageStatus:
+   * 'findings'` with `lastRun.outcome: 'failed'` and a COMPLETE 30 KB FINDINGS.md beside it: the
+   * findings run died AFTER writing its artifact, so the plan stage never chained and the session
+   * can never reach `plan_ready`. Nothing in the approve/promote flow can rescue it. What CAN is
+   * the plan stage run against the findings that are already on disk — which `runPlan` has always
+   * accepted from `findings` (it checks the file, then transitions to `planning`). Pinned here so
+   * the panel's recovery verb is pointed at a route the engine really honours.
+   */
+  it('a findings run that FAILED after writing FINDINGS.md still runs the plan stage against it', async () => {
+    const h = createHarness();
+    const inv = await createInvestigation(h.service, { intent: 'development' });
+
+    // The wedge: the artifact lands, the run exits non-zero.
+    const findings = h.service.runFindings(inv.id);
+    await h.finishRun({ 'FINDINGS.md': '# Findings\nroot cause found' }, { code: 1, signal: null });
+    const wedged = await findings;
+    expect(wedged.stageStatus).toBe('findings');
+    expect(wedged.lastRun?.outcome).toBe('failed');
+    expect(await h.fs.exists(`${SESSIONS_DIR}/${inv.id}/FINDINGS.md`)).toBe(true);
+
+    // The recovery: the plan stage, against the findings that are already there.
+    const plan = h.service.runStage(inv.id, 'plan');
+    await flush();
+    expect((await h.store.load(inv.id)).stageStatus).toBe('planning');
+    await h.finishRun({ 'PLAN.md': APPROVED_PLAN }, { code: 0, signal: null });
+    expect((await plan).stageStatus).toBe('plan_ready');
+  });
+
   it('runPlan approved with driveToCompletion false stops at plan_ready; promote requires approvePlan first, then creates and starts development', async () => {
     const h = createHarness();
     const inv = await createInvestigation(h.service, { intent: 'development', driveToCompletion: false });
@@ -157,7 +186,11 @@ describe('PipelineService — investigation', () => {
     const devId = h.runner.getContext(devHandle).sessionId;
     expect(devId).not.toBe(inv.id);
     const devDir = `${SESSIONS_DIR}/${devId}`;
-    expect(await h.fs.readFile(`${devDir}/BRIEF.md`)).toContain('your approved plan');
+    // Phase 21 — the handoff has to carry the PLAN, not a path to it. A brief that only names
+    // `PLAN.md` is a promotion that loses the work the moment the agent does not open the file.
+    const devBrief = await h.fs.readFile(`${devDir}/BRIEF.md`);
+    expect(devBrief).toContain('your approved plan');
+    expect(devBrief).toContain(APPROVED_PLAN.trim());
     expect(await h.fs.readFile(`${devDir}/PLAN.md`)).toBe(APPROVED_PLAN);
     expect(await h.fs.readFile(`${devDir}/FINDINGS.md`)).toBe('# Findings\nroot cause found');
 

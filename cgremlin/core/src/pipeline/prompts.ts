@@ -39,7 +39,17 @@ export interface TicketBriefContext {
 export interface BriefCommon { sessionDir: string; ticket: string | null; ticketContext?: TicketBriefContext | null }
 export interface FindingsBriefParams extends BriefCommon { intent: 'investigate_only' | 'development'; env?: EnvironmentBriefContext }
 export interface PlanBriefParams extends BriefCommon { driveToCompletion: boolean }
-export interface DevelopBriefParams extends BriefCommon { hasPlan: boolean; env?: EnvironmentBriefContext }
+export interface DevelopBriefParams extends BriefCommon {
+  hasPlan: boolean;
+  /**
+   * Phase 21 — the approved plan's own TEXT, for a session promoted out of an investigation.
+   * `promote()` copies PLAN.md into this session directory and the brief has always named that
+   * path; a path is not a handoff. `null`/absent renders nothing, which is what keeps a
+   * development session that has no plan byte-identical to what it was.
+   */
+  plan?: string | null;
+  env?: EnvironmentBriefContext;
+}
 export interface ReviewBriefParams {
   sessionDir: string;
   prNumber: number;
@@ -115,6 +125,12 @@ export function renderEnvironmentSection(ctx: EnvironmentBriefContext): string {
 export const TICKET_MAX_COMMENTS = 5;
 export const TICKET_MAX_COMMENT_CHARS = 2000;
 export const TICKET_MAX_SECTION_CHARS = 12_000;
+/**
+ * Phase 21 — how much of PLAN.md the develop brief carries inline. Generous, because the plan is
+ * the ONE thing the promotion exists to hand over, and the file stays beside it in the session
+ * directory for whatever the cap trims.
+ */
+export const PLAN_MAX_SECTION_CHARS = 24_000;
 
 const TRUNCATION_NOTE = '_(truncated by the engine)_';
 
@@ -469,6 +485,24 @@ ${tail}
 `;
 }
 
+/**
+ * The approved plan, inline. FINDINGS.md deliberately stays a path: it is the long artifact (tens
+ * of kilobytes is normal), it sits in the same directory, and step 1 already sends the agent to
+ * it — whereas the plan is what "promotion was authorized" actually means, and must not depend on
+ * the agent choosing to open a file.
+ */
+function renderPlanSection(plan: string | null | undefined): string {
+  if (plan === null || plan === undefined || plan.trim() === '') return '';
+  let body = plan.trim();
+  let truncated = false;
+  if (body.length > PLAN_MAX_SECTION_CHARS) {
+    body = body.slice(0, PLAN_MAX_SECTION_CHARS);
+    truncated = true;
+  }
+  const head = '## The approved plan\n\nReviewed and approved (PM + Principal Engineer) in the investigation this session was promoted from. This is the same text as `PLAN.md` beside you; read the file for anything quoted here in part.\n\n';
+  return truncated ? `${head}${body}\n\n${TRUNCATION_NOTE}` : `${head}${body}`;
+}
+
 export function renderDevelopBrief(p: DevelopBriefParams): string {
   const env = p.env ?? EMPTY_ENVIRONMENT;
   const key = p.ticket ?? '(no ticket)';
@@ -489,11 +523,13 @@ export function renderDevelopBrief(p: DevelopBriefParams): string {
   const envBlock = envSection ? `\n\n${envSection}` : '';
   const ticketSection = renderTicketSection(p.ticketContext);
   const ticketBlock = ticketSection ? `\n\n${ticketSection}` : '';
+  const planSection = renderPlanSection(p.plan);
+  const planBlock = planSection ? `\n\n${planSection}` : '';
   return `# DEVELOP — ${key}
 
 You are running in an isolated git worktree on the session branch. Keep a running plan/progress log in \`${p.sessionDir}/DEVELOPMENT.md\`.
 
-${notes(p.sessionDir)}${envBlock}${ticketBlock}
+${notes(p.sessionDir)}${envBlock}${ticketBlock}${planBlock}
 
 ## What to do
 ${planStep}

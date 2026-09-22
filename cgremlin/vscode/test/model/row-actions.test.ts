@@ -9,6 +9,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   CHAT_BUSY_REASON,
+  DEVELOPMENT_NEEDS_APPROVAL_REASON,
   furthestStage,
   itemActionFacts,
   nextStages,
@@ -206,9 +207,11 @@ describe('P0-2 the forward-only stage ladder (design amendment §4)', () => {
 
   it('promotes an investigation to development, and never back to investigation', () => {
     const investigating = facts({ agents: [agent('investigation')] });
-    const offered = rowActions(investigating, 'investigations').map((a) => a.command);
-    expect(offered).toContain('cgremlin.startDevelopment');
-    expect(offered).not.toContain('cgremlin.startInvestigation');
+    const actions = rowActions(investigating, 'investigations');
+    // Phase 21 — the ladder's next rung is still `Start development`; which ROUTE that verb takes
+    // is the chaining rule's business, asserted on its own below.
+    expect(actions.map((a) => a.label)).toContain('Start development');
+    expect(actions.map((a) => a.command)).not.toContain('cgremlin.startInvestigation');
   });
 
   it('offers a self-review once development has produced a PR of mine, and nothing after a review', () => {
@@ -313,5 +316,164 @@ describe('P0-2 — Stop beside a live run', () => {
     });
     const union = rowActionsForLists(running, ['waitingForReview']);
     expect(union.map((a) => a.command)).toContain('cgremlin.stop');
+  });
+});
+
+// ---------------------------------------------------------------------------
+
+/**
+ * The handoff (Phase 21). The engine has had `approve-plan` and `promote` since Phase 2, and the
+ * panel reached neither: `approvePlan` was a registered command no row ever offered. "Before i
+ * would say to the agent approve and it would start the development session" — this is that
+ * sentence, as a button.
+ */
+describe('the handoff: approving an investigation plan', () => {
+  const investigation = (phase: string, over: Record<string, unknown> = {}) =>
+    agent('investigation', { phase, ...over });
+
+  it('makes the approve verb the row PRIMARY at plan_ready, and nothing else claims primary', () => {
+    const actions = rowActions(facts({ agents: [investigation('plan_ready')] }), 'investigations');
+    const approve = actions.find((a) => a.command === 'cgremlin.approvePlan');
+    expect(approve).toBeDefined();
+    expect(approve?.placement).toBe('primary');
+    expect(approve?.label).toBe('Approve the plan');
+    // R26: the verb names the session it approves, so a second agent cannot steal the click.
+    expect(approve?.childId).toBe('agent:s-investigation');
+    expect(actions.filter((a) => a.placement === 'primary')).toHaveLength(1);
+  });
+
+  it('offers nothing to approve before the plan is ready', () => {
+    for (const phase of ['findings', 'planning', 'approved', 'promoted_to_development']) {
+      const offered = rowActions(
+        facts({ agents: [investigation(phase)] }),
+        'investigations',
+      ).map((a) => a.command);
+      expect(offered, phase).not.toContain('cgremlin.approvePlan');
+    }
+  });
+
+  it('never offers it for a non-investigation session at the same phase', () => {
+    const offered = rowActions(
+      facts({ agents: [agent('development', { phase: 'plan_ready' })] }),
+      'myWork',
+    ).map((a) => a.command);
+    expect(offered).not.toContain('cgremlin.approvePlan');
+  });
+});
+
+/**
+ * The handoff, second half. `cgremlin.startDevelopment` starts a FRESH, self-rooted development
+ * session (`POST /items/… {mode:'development'}`), so an item with an investigation behind it lost
+ * the plan and the findings on the way over — the user's exact complaint. Where there is an
+ * investigation to continue from, the verb keeps its wording and changes its route.
+ */
+describe('the handoff: Start development continues from the investigation', () => {
+  const investigation = (phase: string, over: Record<string, unknown> = {}) =>
+    agent('investigation', { phase, ...over });
+
+  it('chains through promote, addressed at the investigation, once its plan is approved', () => {
+    const actions = rowActions(facts({ agents: [investigation('approved')] }), 'investigations');
+    const start = actions.find((a) => a.label === 'Start development');
+    expect(start?.command).toBe('cgremlin.promoteToDevelopment');
+    expect(start?.childId).toBe('agent:s-investigation');
+    expect(start?.placement).toBe('primary');
+    expect(start?.enabled).toBeUndefined();
+    // The fresh, self-rooted start is exactly what must NOT be reachable here.
+    expect(actions.map((a) => a.command)).not.toContain('cgremlin.startDevelopment');
+  });
+
+  it('still starts FRESH when there is no investigation to chain from', () => {
+    const actions = rowActions(facts({ ticketKey: 'HB-1' }), 'myWork');
+    const start = actions.find((a) => a.label === 'Start development');
+    expect(start?.command).toBe('cgremlin.startDevelopment');
+    expect(start?.childId).toBeUndefined();
+    expect(start?.placement).toBe('primary');
+  });
+
+  it('draws the verb DISABLED, never fresh, while the investigation is not approved yet', () => {
+    for (const phase of ['findings', 'planning', 'plan_ready']) {
+      const actions = rowActions(facts({ agents: [investigation(phase)] }), 'investigations');
+      const start = actions.find((a) => a.label === 'Start development');
+      expect(start?.command, phase).toBe('cgremlin.promoteToDevelopment');
+      expect(start?.enabled, phase).toBe(false);
+      expect(start?.reason, phase).toBe(DEVELOPMENT_NEEDS_APPROVAL_REASON);
+      expect(start?.placement, phase).not.toBe('primary');
+      expect(actions.map((a) => a.command), phase).not.toContain('cgremlin.startDevelopment');
+    }
+  });
+
+  it('leaves Approve the plan as the one primary at plan_ready', () => {
+    const actions = rowActions(facts({ agents: [investigation('plan_ready')] }), 'investigations');
+    const primaries = actions.filter((a) => a.placement === 'primary');
+    expect(primaries).toHaveLength(1);
+    expect(primaries[0].command).toBe('cgremlin.approvePlan');
+  });
+
+  it('withdraws the chained verb while the investigation is mid-run', () => {
+    const actions = rowActions(
+      facts({ agents: [investigation('approved', { running: true })] }),
+      'investigations',
+    );
+    const start = actions.find((a) => a.label === 'Start development');
+    expect(start?.enabled).toBe(false);
+  });
+});
+
+/**
+ * Phase 21 — a finished artifact behind a failed run. The live wedge:
+ * `inv-…-HB-1492` has `stageStatus: 'findings'`, `lastRun.outcome: 'failed'` and a complete 30 KB
+ * FINDINGS.md. The findings run died AFTER writing its artifact, so the plan stage never chained;
+ * the session can never reach `plan_ready`, so nothing in the approve/promote flow can rescue it.
+ * `Retry` would re-run the stage that failed — throwing away findings that are already right.
+ * The way out is the stage that never ran, against the artifact that is already there.
+ */
+describe('the handoff: recovering an investigation wedged behind a failed findings run', () => {
+  const wedged = (over: Record<string, unknown> = {}) =>
+    agent('investigation', {
+      phase: 'findings',
+      runFailed: true,
+      primaryArtifact: 'FINDINGS.md',
+      ...over,
+    });
+
+  it('offers Continue to plan as the row primary, ahead of Retry', () => {
+    const actions = rowActions(facts({ agents: [wedged()] }), 'investigations');
+    const resume = actions.find((a) => a.command === 'cgremlin.continueToPlan');
+    expect(resume?.label).toBe('Continue to plan');
+    expect(resume?.placement).toBe('primary');
+    expect(resume?.childId).toBe('agent:s-investigation');
+    // Retry survives — re-running findings is still a legitimate ask — but never as the one click.
+    const retry = actions.find((a) => a.command === 'cgremlin.retry');
+    expect(retry?.placement).toBe('inline');
+  });
+
+  it('offers only Retry when the failed run left no findings behind', () => {
+    const actions = rowActions(
+      facts({ agents: [wedged({ primaryArtifact: null })] }),
+      'investigations',
+    );
+    expect(actions.map((a) => a.command)).not.toContain('cgremlin.continueToPlan');
+    expect(actions.find((a) => a.command === 'cgremlin.retry')?.placement).toBe('primary');
+  });
+
+  it('offers nothing to continue where the run did not fail, or the stage has moved on', () => {
+    for (const over of [{ runFailed: false }, { phase: 'planning' }, { running: true }]) {
+      const offered = rowActions(facts({ agents: [wedged(over)] }), 'investigations').map(
+        (a) => a.command,
+      );
+      expect(offered, JSON.stringify(over)).not.toContain('cgremlin.continueToPlan');
+    }
+  });
+
+  it('never offers it for a development session sitting on the same artifact', () => {
+    const offered = rowActions(
+      facts({
+        agents: [
+          agent('development', { phase: 'findings', runFailed: true, primaryArtifact: 'FINDINGS.md' }),
+        ],
+      }),
+      'myWork',
+    ).map((a) => a.command);
+    expect(offered).not.toContain('cgremlin.continueToPlan');
   });
 });

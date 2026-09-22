@@ -656,12 +656,18 @@ export class PipelineService {
       throw new HumanTurnInProgressError(id);
     }
     const sessionDir = this.sessionDir(id);
-    const hasPlan = await this.deps.fs.exists(`${sessionDir}/PLAN.md`);
+    // Phase 21 — the plan is READ, not merely detected. `promote()` copies PLAN.md in from the
+    // investigation, and the brief carries its text so the handoff does not depend on the agent
+    // choosing to open the file. A read that fails is treated as no plan rather than as a failed
+    // run: the path below still names the file.
+    const plan = await this.deps.fs.readFile(`${sessionDir}/PLAN.md`).catch(() => null);
+    const hasPlan = plan !== null;
     const prep = await this.prepareEnvironment(id, 'develop', session);
     const brief = renderDevelopBrief({
       sessionDir,
       ticket: session.lineage.ticket,
       hasPlan,
+      plan,
       env: prep.ctx,
       ticketContext: await this.ticketContext(session.lineage.ticket),
     });

@@ -70,6 +70,12 @@ export interface ActionAgent {
   runFailed?: boolean;
   /** Gap 1 — so `qaPart` can ask the ONE composer for the right word. */
   qaVerdict?: QaVerdict | null;
+  /**
+   * Phase 21 — the artifact the core would open this session on (`WorkItemAgent.primaryArtifact`).
+   * The panel's only evidence that a stage produced its output, which is what tells a run that
+   * failed EMPTY apart from a run that failed after writing what it was for.
+   */
+  primaryArtifact?: string | null;
 }
 
 export interface ActionPr {
@@ -150,6 +156,75 @@ function runningQaAgent(facts: ActionFacts): ActionAgent | undefined {
  */
 function failedAgent(facts: ActionFacts): ActionAgent | undefined {
   return facts.agents.find((agent) => agent.runFailed === true && agent.pending !== true);
+}
+
+/**
+ * Phase 21 — the investigation whose plan is waiting on the human. `plan_ready` is the ONE stage
+ * `PipelineService.approvePlan` accepts (it refuses every other with `UnsupportedStageError`), so
+ * the button is offered exactly where the engine would say yes. A PENDING agent is excluded for
+ * the reason `failedAgent` excludes it: it has no session to POST to yet.
+ */
+export function approvableInvestigation(facts: ActionFacts): ActionAgent | undefined {
+  return facts.agents.find(
+    (agent) =>
+      agent.mode === 'investigation' && agent.phase === 'plan_ready' && agent.pending !== true,
+  );
+}
+
+/**
+ * Phase 21 — the investigation this item's development must continue FROM.
+ *
+ * `PipelineService.canPromote` accepts `approved`, or `plan_ready` only when the session was
+ * created `driveToCompletion` — a flag the wire does not carry, so the panel cannot tell the
+ * second case from the case the engine refuses. It offers the narrow one: `approved`, which is
+ * always legal, and never a button that would come back with a `PlanGateError`.
+ *
+ * A RUNNING investigation is excluded because `promote` refuses one (its own stage run would be
+ * in flight), and a pending one has no session to POST to.
+ */
+export function promotableInvestigation(facts: ActionFacts): ActionAgent | undefined {
+  return facts.agents.find(
+    (agent) =>
+      agent.mode === 'investigation' &&
+      agent.phase === 'approved' &&
+      !agent.running &&
+      agent.pending !== true,
+  );
+}
+
+/** Any investigation on the item — the reason a development start must not be self-rooted. */
+function anyInvestigation(facts: ActionFacts): ActionAgent | undefined {
+  return facts.agents.find((agent) => agent.mode === 'investigation' && agent.pending !== true);
+}
+
+/**
+ * Phase 21 — said once, beside the QA sentences, for the same reason they are: a disabled verb
+ * without a sentence is the defect, and a sentence in two places drifts from its cause.
+ */
+export const DEVELOPMENT_NEEDS_APPROVAL_REASON =
+  'Development continues from this investigation — approve its plan first.';
+
+/**
+ * Phase 21 — an investigation wedged behind a failed findings run that nevertheless WROTE its
+ * findings. The live case: `stageStatus: 'findings'`, `lastRun.outcome: 'failed'`, a complete
+ * 30 KB FINDINGS.md. The plan stage never chained, so the session can never reach `plan_ready`
+ * and nothing in the approve/promote flow above can reach it. `Retry` re-runs the stage that
+ * failed — the one whose output is already right — so it is the wrong first offer here.
+ *
+ * `primaryArtifact === 'FINDINGS.md'` is the evidence the file is there. It is not proof the file
+ * is NON-EMPTY (the core ranks a listing, it does not read it): `runPlan` re-checks that under
+ * the session's own lock and refuses with its own sentence, which is the refusal the user sees.
+ */
+export function resumableInvestigation(facts: ActionFacts): ActionAgent | undefined {
+  return facts.agents.find(
+    (agent) =>
+      agent.mode === 'investigation' &&
+      agent.phase === 'findings' &&
+      agent.runFailed === true &&
+      agent.primaryArtifact === 'FINDINGS.md' &&
+      !agent.running &&
+      agent.pending !== true,
+  );
 }
 
 /** Phase 16 — a verification has been run before, so the verb says `again`. */
@@ -331,6 +406,20 @@ export function rowActions(facts: ActionFacts, list: WorkListKind): RowAction[] 
   // heals the session, and this is the click that starts it over. Pushed
   // FIRST, so it takes the row's one primary wherever nothing else has: a
   // failed run is the most urgent thing the row has to say.
+  // Phase 21 — pushed BEFORE Retry, so it takes the row's one click. The stage that failed has
+  // already produced what it was for; the stage that never ran is the way out.
+  const resumable = resumableInvestigation(facts);
+  if (resumable !== undefined) {
+    push(
+      {
+        command: 'cgremlin.continueToPlan',
+        label: 'Continue to plan',
+        childId: agentChildId(resumable.sessionId),
+      },
+      'primary',
+    );
+  }
+
   const failed = failedAgent(facts);
   if (failed !== undefined) {
     push(
@@ -374,13 +463,52 @@ export function rowActions(facts: ActionFacts, list: WorkListKind): RowAction[] 
     }
   } else {
     // My own work (`myWork`, `investigations`): the forward-only ladder.
+    //
+    // Phase 21 — but FIRST the one decision that is the human's alone. An investigation that has
+    // written an approved plan is waiting on a person to say the work is right, and that moment
+    // outranks every verb below it: nothing further can legitimately happen until it is taken.
+    // The wording is the decision, not the route (`POST /sessions/:id/approve-plan`).
+    const approvable = approvableInvestigation(facts);
+    if (approvable !== undefined) {
+      push(
+        {
+          command: 'cgremlin.approvePlan',
+          label: 'Approve the plan',
+          childId: agentChildId(approvable.sessionId),
+        },
+        'primary',
+      );
+    }
     for (const stage of nextStages(facts)) {
       if (stage === 'investigation') {
         // R49: an investigation is the *no-PR* mode. Where a PR exists the question is settled.
         if (facts.prs.length > 0) continue;
         push({ command: 'cgremlin.startInvestigation', label: 'Start investigation' }, 'inline');
       } else if (stage === 'development') {
-        push({ command: 'cgremlin.startDevelopment', label: 'Start development' }, 'primary');
+        // Phase 21 — the wording is the same verb; the ROUTE is the whole bug. An item with an
+        // investigation behind it must reach development through `POST /sessions/:id/promote`,
+        // which creates the CHILD session (`lineage.parentSessionId`, FINDINGS.md and PLAN.md
+        // carried across). `cgremlin.startDevelopment` is a fresh, self-rooted session, so where
+        // an investigation exists it is never the right route — not even while that investigation
+        // is unfinished, which is why the unapproved case is DISABLED rather than swapped back.
+        const investigation = anyInvestigation(facts);
+        if (investigation === undefined) {
+          push({ command: 'cgremlin.startDevelopment', label: 'Start development' }, 'primary');
+        } else {
+          const ready = promotableInvestigation(facts);
+          push(
+            {
+              command: 'cgremlin.promoteToDevelopment',
+              label: 'Start development',
+              childId: agentChildId((ready ?? investigation).sessionId),
+              ...(ready === undefined
+                ? { enabled: false as const, reason: DEVELOPMENT_NEEDS_APPROVAL_REASON }
+                : {}),
+            },
+            // A disabled control must never be the row's one click (the QA gate's rule).
+            ready === undefined ? 'inline' : 'primary',
+          );
+        }
       } else {
         push(
           {
@@ -423,7 +551,7 @@ export function rowActions(facts: ActionFacts, list: WorkListKind): RowAction[] 
   // needs-you count, which is the one thing reading it does not do, so it stays reachable.
   if (facts.needsYou) push({ command: 'cgremlin.ack', label: 'Mark as seen' }, 'overflow');
 
-  if (!primaryTaken) promote(out);
+  if (!primaryTaken) promoteFallbackPrimary(out);
   return out;
 }
 
@@ -464,7 +592,7 @@ function pushQa(
  * A row with no verb of its own still gets one click that does something useful — the
  * conversation if there is one, else the PR, else the ticket. Never a verb that would 409.
  */
-function promote(actions: RowAction[]): void {
+function promoteFallbackPrimary(actions: RowAction[]): void {
   for (const command of ['cgremlin.chat', 'cgremlin.openPr', 'cgremlin.openTicket']) {
     const found = actions.find((action) => action.command === command);
     if (found !== undefined) {
