@@ -28,7 +28,7 @@ afterEach(() => {
 
 const NOTICE: PanelNoticeView = {
   message: 'Open the cgremlin workspace to follow the code in the editor',
-  actionLabel: 'Open',
+  actionLabel: 'Open the workspace',
   command: 'cgremlin.openManagedWorkspace',
   dismissLabel: 'Not now',
 };
@@ -47,7 +47,7 @@ describe('the workspace notice', () => {
     panel.render(withNotice());
     const notice = dom.root.byClass('notice')[0];
     expect(notice.children[0].textContent).toBe(NOTICE.message);
-    expect(notice.children[1].textContent).toBe('Open');
+    expect(notice.children[1].textContent).toBe('Open the workspace');
     expect(notice.children[2].textContent).toBe('Not now');
   });
 

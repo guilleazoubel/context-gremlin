@@ -82,13 +82,39 @@ export function identityOf(item: WorkItem): string {
 
 export function identityKeysOf(item: WorkItem): string[] {
   const keys: string[] = [];
-  if (item.ticket !== null) keys.push(item.ticket.key);
+  // §e.8 — a key the panel has a FIELD for should not have to survive inside 14 characters of
+  // conventional-commit prefix. Where the core linked no ticket, the key is lifted out of the
+  // title's prefix or the branch; both are shapes the convention actually produces, and a row
+  // with neither gets nothing rather than a guess (MG-12).
+  const key = item.ticket?.key ?? ticketKeyIn(item);
+  if (key !== null) keys.push(key);
   // The FIRST PR only: a second `#88` on the same line is the other PR's number, which reads as
   // part of the first one. Every PR is named in the block the row opens into (§4).
   const primary = item.prs[0];
   if (primary !== undefined) keys.push(`#${primary.number}`);
   return keys.length === 0 ? [item.title] : keys;
 }
+
+/** `PROJ-123`, read off the title's prefix or the branch. Nothing else is looked at. */
+const TICKET_SHAPE = /\b([A-Z][A-Z0-9]+-\d+)\b/;
+
+function ticketKeyIn(item: WorkItem): string | null {
+  const title = item.prs[0]?.title ?? item.title;
+  const prefix = CONVENTIONAL_PREFIX.exec(title)?.[0] ?? '';
+  const sources = [prefix, item.prs[0]?.branch ?? ''];
+  for (const source of sources) {
+    const found = TICKET_SHAPE.exec(source);
+    if (found !== null) return found[1];
+  }
+  return null;
+}
+
+/**
+ * `feat(HB-1555): `, `fix: ` — the conventional-commit head, and only where it IS one. The
+ * type is a short lowercase word from a closed-ish set and the scope carries no spaces, so
+ * `Offer list: the second page is off by one` is prose and stays whole.
+ */
+const CONVENTIONAL_PREFIX = /^[a-z][a-z0-9]{1,9}(?:\([^()\s]{1,40}\))?!?:\s+/;
 
 /**
  * §2 L2 — the prose, once. Empty means the line is not rendered, not that it is blank.
@@ -114,7 +140,9 @@ export function descriptionOf(item: WorkItem): string {
     item.prs[0]?.branch ?? '',
   ];
   for (const rung of rungs) {
-    const text = rung.trim();
+    // §e.8 — `feat(HB-1555): ` is chrome twice over: the type says nothing a human is deciding
+    // on, and the scope is a key L1 now carries. What is left is the half he reads.
+    const text = rung.trim().replace(CONVENTIONAL_PREFIX, '');
     if (text !== '' && text !== identity) return text;
   }
   return '';

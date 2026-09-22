@@ -176,7 +176,9 @@ export const MANAGED_WORKSPACE_HINT =
   'Open the cgremlin workspace to follow the code in the editor';
 /** P11: the one line an expanded row gains when there is no engine to re-read it from. */
 export const OFFLINE_DETAIL = 'Engine offline — showing what was last loaded';
-const OPEN_MANAGED_LABEL = 'Open';
+// AC 4 — no button in the panel is labelled `Open` alone. A verb names what it opens, here as
+// much as on a row: the notice is about a WORKSPACE, and the word for it is not "open".
+const OPEN_MANAGED_LABEL = 'Open the workspace';
 const DISMISS_LABEL = 'Not now';
 /**
  * What the panel says when it could not build its own state. The sentence names the two ways out

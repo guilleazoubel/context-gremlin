@@ -78,7 +78,7 @@ describe('the offer to open the managed workspace', () => {
     h.panel.setWorkspaceOffer(true);
     expect(h.state().notice).toEqual({
       message: MANAGED_WORKSPACE_HINT,
-      actionLabel: 'Open',
+      actionLabel: 'Open the workspace',
       command: OPEN_MANAGED_COMMAND,
       dismissLabel: 'Not now',
     });
