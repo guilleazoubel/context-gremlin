@@ -20,21 +20,40 @@ export const MAX_RUN_OUTPUT_LINES = 500;
 
 export type RunOutputState = 'notStarted' | 'waiting' | 'streaming' | 'ended';
 
+/**
+ * Defect 5 — these five sentences were written for a stream of the agent's prose, and the pane
+ * now carries a work log: each file read or edited, each command run, each capped answer. So each
+ * one says WORK rather than printing — "has printed nothing yet" was the wrong question to ask
+ * about an agent that is working hard and saying nothing.
+ */
 export const WAITING_NOTICE =
-  'The run is live and has not printed anything yet. Output appears here as the agent writes it.';
+  'The run is live and has not done anything yet. Each file it reads or edits, and each command it runs, appears here as it happens.';
 export const JOINED_MID_RUN_NOTICE =
-  'You joined this run in progress. Earlier output was not kept — this is everything since the pane opened.';
+  'You joined this run in progress. What it did before is not kept — this is only what it has done since the pane opened.';
 export const NOT_STARTED_NOTICE =
-  'Nothing is running for this session right now. Output appears here while a stage runs.';
+  'Nothing is running for this session right now. What a run does appears here while a stage is running.';
 
 /** `dropped > 0`: the cap bit, and the pane must not imply it is showing the whole run. */
 export function droppedNotice(dropped: number): string {
   return `The first ${dropped} ${dropped === 1 ? 'line' : 'lines'} scrolled out of this view.`;
 }
 
+/**
+ * Defect 5 — the answer to "shouldnt i be able to ... interact?", said where the user asks it.
+ *
+ * They cannot, and it is not a missing button: the runner spawns `claude -p <prompt>` headless
+ * with no open stdin (`core/src/agent/claude-code-runner.ts`), so no channel to type into exists
+ * mid-run. The designed path is the other way round — an agent that needs the human writes
+ * `AGENT_STATE=needs-input` and STOPS; the run ends, the row says it wants them, and Chat opens
+ * with the full history. So this says both halves: the rule, and the way through. A control
+ * either does what it names or says in a sentence why it cannot and offers the way on.
+ */
+export const INTERACTION_NOTE =
+  'You are watching a log of the work, not a conversation: the agent cannot be interrupted or answered while it runs. If it needs you it stops and asks, and Chat opens here with the full history. Stop ends the run and keeps whatever it has already written to files.';
+
 export function endedNotice(outcome: string | null): string {
   const how = outcome === null || outcome === '' ? 'The run ended' : `The run ended (${outcome})`;
-  return `${how}. This is only what it printed while the pane was open; the artifact it wrote is the record.`;
+  return `${how}. This is only the work it did while the pane was open, summarised; the artifact it wrote is the record.`;
 }
 
 export interface RunOutputView {
@@ -48,6 +67,12 @@ export interface RunOutputView {
   notice: string;
   /** The terminal line a finished run freezes on, `null` while it is still live. */
   ending: string | null;
+  /**
+   * The standing rule about interacting with a LIVE run, `null` when there is no run to
+   * interrupt. Not an empty-state hint: it stays up while the log flows, because that is exactly
+   * when somebody tries to type at it.
+   */
+  interaction: string | null;
   /** Which stage is printing, where the caller knew. Never guessed. */
   stage: string | null;
   /** How many lines fell out of the front of the buffer. */
@@ -154,6 +179,7 @@ export class RunOutputStore {
       joinedMidRun: buffer.joinedMidRun,
       notice: noticeOf(buffer),
       ending: buffer.ending,
+      interaction: buffer.ending === null && buffer.live ? INTERACTION_NOTE : null,
       stage: buffer.stage,
       dropped: buffer.dropped,
     };

@@ -5,8 +5,12 @@
  * the record of the run and must never read as one — the artifact the run wrote is the record,
  * and `run-output.ts` explains why nothing else is possible. So the sentences above and below the
  * lines are as load-bearing as the lines themselves, and the empty case is the most important of
- * them: a live run with nothing printed yet SAYS so, because an empty box and a wedged agent look
+ * them: a live run that has done nothing yet SAYS so, because an empty box and a wedged agent look
  * identical and the user spent an afternoon unable to tell them apart.
+ *
+ * Defect 5 — the lines are a WORK LOG (each file read or edited, each command run, each capped
+ * answer), not the agent's prose and not its conversation. Every sentence around them is worded
+ * for that.
  *
  * Lines are keyed by their ABSOLUTE line number (`dropped + index`), so appending writes only the
  * new nodes and the cap scrolling the front off writes none of the survivors.
@@ -19,6 +23,7 @@ import { el, reconcile, setHidden, setText } from './dom';
 
 interface Parts {
   meta: HTMLElement;
+  interaction: HTMLElement;
   notice: HTMLElement;
   lines: HTMLElement;
   ending: HTMLElement;
@@ -36,6 +41,8 @@ export function createRunOutputPane(): HTMLElement {
   const pane = el('section', 'pane run-output-pane');
   const parts: Parts = {
     meta: el('p', 'run-output-meta'),
+    // Defect 5 — the standing rule about a LIVE run, above the log it governs.
+    interaction: el('p', 'run-output-interaction'),
     notice: el('p', 'run-output-notice'),
     // `log` rather than `list`: this is append-only output, and a screen reader should announce
     // new lines rather than re-read the whole thing. `polite` — it must never interrupt.
@@ -44,7 +51,9 @@ export function createRunOutputPane(): HTMLElement {
   };
   parts.lines.setAttribute('role', 'log');
   parts.lines.setAttribute('aria-live', 'polite');
-  for (const node of [parts.meta, parts.notice, parts.lines, parts.ending]) pane.appendChild(node);
+  for (const node of [parts.meta, parts.interaction, parts.notice, parts.lines, parts.ending]) {
+    pane.appendChild(node);
+  }
   PARTS.set(pane, parts);
   return pane;
 }
@@ -53,6 +62,8 @@ export function patchRunOutputPane(pane: HTMLElement, view: RunOutputView): void
   const parts = PARTS.get(pane);
   if (parts === undefined) return;
   setText(parts.meta, metaOf(view));
+  setText(parts.interaction, view.interaction ?? '');
+  setHidden(parts.interaction, view.interaction === null);
   setText(parts.notice, view.notice);
   setHidden(parts.notice, view.notice === '');
   reconcile(

@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { readFileSync } from 'node:fs';
 import { readFile, rm } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
@@ -7,6 +8,20 @@ import { ClaudeCodeRunner, UnknownAgentHandleError } from '../../src/agent/claud
 import { describeAgentRunnerContract } from '../support/agent-runner-contract';
 
 const FIXTURE = path.join(__dirname, '../fixtures/fake-claude-cli.js');
+
+const STREAM_JSON = JSON.parse(
+  readFileSync(path.join(__dirname, '../fixtures/claude-stream-json-tool-activity.json'), 'utf8'),
+) as { records: Array<{ message: { content: Array<Record<string, never>> } }> };
+
+function partAt(index: number): Record<string, never> {
+  return STREAM_JSON.records[index].message.content[0];
+}
+function fixtureText(): string {
+  return (partAt(0) as unknown as { text: string }).text;
+}
+function fixtureWriteBody(): string {
+  return (partAt(3) as unknown as { input: { content: string } }).input.content;
+}
 
 describe('ClaudeCodeRunner', () => {
   it('spawns the CLI and delivers assistant text via onOutput', async () => {
@@ -56,6 +71,31 @@ describe('ClaudeCodeRunner', () => {
       'Failed to authenticate: OAuth session expired and could not be refreshed',
     );
     expect(runner.getClaudeSessionId(handle)).toBe('fresh-session-1');
+  });
+
+  // Defect 5 — the pane was blank while the agent worked: only `type: 'text'` parts were
+  // forwarded, so every read, edit, command and test run — all of them `tool_use`/`tool_result`
+  // parts — was dropped. A working agent and a wedged one looked identical.
+  it('forwards each real tool call and its capped result as one work-log line', async () => {
+    const runner = new ClaudeCodeRunner({ claudeBinary: FIXTURE });
+    const handle = await runner.start({ sessionId: 'inv-1', workingDirectory: process.cwd() });
+    const chunks: string[] = [];
+    runner.onOutput(handle, (chunk) => {
+      if (chunk.stream === 'stdout') chunks.push(chunk.data);
+    });
+    await runner.sendPrompt(handle, 'TOOL_ACTIVITY');
+    // Each forwarded part is its own chunk — the pane appends chunk by chunk, so a work line
+    // never runs into the prose line before it.
+    const log = chunks.join('');
+    expect(chunks.some((chunk) => chunk.startsWith('Ran: cd /Users/'))).toBe(true);
+    expect(log).toMatch(/^ {2}-> Bash ok, \d+ lines$/m);
+    expect(log).toMatch(/^ {5}\.\.\. \d+ lines omitted \.\.\.$/m);
+    expect(log).toMatch(/^Wrote \/Users\/.*PLAN\.md$/m);
+    expect(log).toMatch(/^Delegated to general-purpose: PM review of PLAN\.md$/m);
+    // The prose parts still flow — this ADDS to them.
+    expect(log).toContain(fixtureText());
+    // A Write's input is the whole new file. Not one word of it may reach a watcher.
+    expect(log).not.toContain(fixtureWriteBody().slice(0, 40));
   });
 
   it('forwards no result text when the turn ended fine', async () => {

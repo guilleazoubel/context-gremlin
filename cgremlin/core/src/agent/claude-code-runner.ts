@@ -8,6 +8,7 @@ import type {
   SessionContext,
 } from './agent-runner';
 import { UnknownAgentHandleError } from './agent-runner-errors';
+import { ToolActivityLog } from './tool-activity';
 
 // Re-exported so existing `import { UnknownAgentHandleError } from
 // './claude-code-runner'` call sites keep working after the move to
@@ -20,6 +21,8 @@ interface ClaudeAgentState {
   exitCallbacks: Array<(result: AgentExitResult) => void>;
   claudeSessionId?: string;
   currentProcess?: ChildProcessByStdio<null, Readable, Readable>;
+  /** Defect 5 — turns this handle's tool calls into the work log a watcher reads. */
+  activity: ToolActivityLog;
 }
 
 export interface ClaudeCodeRunnerOptions {
@@ -43,7 +46,13 @@ export class ClaudeCodeRunner implements AgentRunner {
 
   async start(ctx: SessionContext): Promise<AgentHandle> {
     const id = `claude-agent-${this.nextId++}`;
-    this.handles.set(id, { ctx, outputCallbacks: [], exitCallbacks: [], claudeSessionId: ctx.resumeId });
+    this.handles.set(id, {
+      ctx,
+      outputCallbacks: [],
+      exitCallbacks: [],
+      claudeSessionId: ctx.resumeId,
+      activity: new ToolActivityLog(),
+    });
     return { id };
   }
 
@@ -123,6 +132,12 @@ export class ClaudeCodeRunner implements AgentRunner {
     });
   }
 
+  private emitStdout(state: ClaudeAgentState, data: string): void {
+    for (const callback of state.outputCallbacks) {
+      callback({ stream: 'stdout', data });
+    }
+  }
+
   private handleLine(state: ClaudeAgentState, line: string): void {
     let event: unknown;
     try {
@@ -138,22 +153,33 @@ export class ClaudeCodeRunner implements AgentRunner {
     if (!event || typeof event !== 'object') return;
     const record = event as Record<string, unknown>;
 
-    if (record.type === 'assistant' && record.message && typeof record.message === 'object') {
+    // Defect 5 — an agent's time is spent in TOOL calls, not in prose. Forwarding only
+    // `type: 'text'` left a watcher with a near-empty pane (one frame in 45 seconds, measured
+    // against a real run), which is indistinguishable from a broken button. `assistant` records
+    // carry the calls, `user` records carry their results, and `tool-activity.ts` reduces each to
+    // one short line — never the raw input, and never a whole result.
+    if (
+      (record.type === 'assistant' || record.type === 'user') &&
+      record.message &&
+      typeof record.message === 'object'
+    ) {
       const message = record.message as Record<string, unknown>;
       const content = Array.isArray(message.content) ? message.content : [];
       for (const part of content) {
-        if (
-          part &&
-          typeof part === 'object' &&
-          (part as Record<string, unknown>).type === 'text'
-        ) {
+        if (!part || typeof part !== 'object') continue;
+        const kind = (part as Record<string, unknown>).type;
+        if (kind === 'text' && record.type === 'assistant') {
           const text = (part as Record<string, unknown>).text;
-          if (typeof text === 'string') {
-            for (const callback of state.outputCallbacks) {
-              callback({ stream: 'stdout', data: text });
-            }
-          }
+          if (typeof text === 'string') this.emitStdout(state, text);
+          continue;
         }
+        const line =
+          kind === 'tool_use'
+            ? state.activity.noteToolUse(part)
+            : kind === 'tool_result'
+              ? state.activity.noteToolResult(part)
+              : null;
+        if (line !== null) this.emitStdout(state, line);
       }
     }
 
