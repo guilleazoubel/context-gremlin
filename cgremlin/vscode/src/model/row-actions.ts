@@ -192,6 +192,19 @@ export function promotableInvestigation(facts: ActionFacts): ActionAgent | undef
   );
 }
 
+/**
+ * Defect 3 — the verb, said once. It is the exact inverse of the claim `ChatSessions.open` takes.
+ */
+export const RELEASE_CONVERSATION_LABEL = 'Release the conversation';
+
+/**
+ * The session a human is holding the agent conversation on, if any. A PENDING agent is excluded
+ * for the reason every other lookup here excludes it: it has no session to POST to yet.
+ */
+export function claimedAgent(facts: ActionFacts): ActionAgent | undefined {
+  return facts.agents.find((agent) => agent.claimed && agent.pending !== true);
+}
+
 /** Any investigation on the item — the reason a development start must not be self-rooted. */
 function anyInvestigation(facts: ActionFacts): ActionAgent | undefined {
   return facts.agents.find((agent) => agent.mode === 'investigation' && agent.pending !== true);
@@ -524,6 +537,23 @@ export function rowActions(facts: ActionFacts, list: WorkListKind): RowAction[] 
     pushQa(facts, list, push);
     if (chatAction !== null) push(chatAction, 'inline');
     if (stopAction !== null) push(stopAction, 'inline');
+  }
+
+  // Defect 3 — the way to give the conversation BACK, on every list, wherever somebody is
+  // holding one. Taking the claim is invisible (opening Chat does it), holding it refuses every
+  // stage, and until now nothing in the extension called
+  // `POST /sessions/:id/conversation/release` at all — the user was told to release it and given
+  // no way to. Never `primary`: it is an undo, not the work.
+  const held = claimedAgent(facts);
+  if (held !== undefined) {
+    push(
+      {
+        command: 'cgremlin.releaseConversation',
+        label: RELEASE_CONVERSATION_LABEL,
+        childId: agentChildId(held.sessionId),
+      },
+      'inline',
+    );
   }
 
   // The parts, always in the overflow: they are links, not decisions (R26).

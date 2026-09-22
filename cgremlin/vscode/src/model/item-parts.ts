@@ -272,6 +272,10 @@ function stagePart(slot: LifecycleSlot, input: ItemPartsInput): ItemPart {
       actions.push(...find(input.actions, command, undefined, null));
     }
   }
+  // Defect 3 — and the undo for the claim this stage is holding, beside the work it is blocking.
+  if (childId !== null) {
+    actions.push(...find(input.actions, 'cgremlin.releaseConversation', childId, null));
+  }
   // The one verb that is not a Start and not a Chat: answering a review that has landed (§4).
   if (slot.stage === 'review' && input.list === 'waitingForReview') {
     actions.push(...find(input.actions, 'cgremlin.addressReview', undefined, null));

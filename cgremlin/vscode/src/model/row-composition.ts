@@ -245,6 +245,15 @@ export function qaDeployText(deploy: { state: 'awaiting' | 'verified'; sha: stri
   return deploy.state === 'awaiting' ? QA_AWAITING_DEPLOY : `build ${deploy.sha.slice(0, 7)}`;
 }
 
+/**
+ * Defect 3 — the words for a conversation a human is holding, said HERE and nowhere else.
+ *
+ * Deliberately not `you hold this`: the wire carries `claimed: boolean` and nothing about WHO,
+ * and a row that named the wrong person would be worse than one that named none (MG-12). The
+ * engine's own refusal sentence is what tells the user it is them.
+ */
+export const CLAIM_HELD_TEXT = 'conversation held';
+
 /** Claim, then a live run, then the gate — the precedence the tree used before the panel (R18). */
 export function agentGlyph(agent: WorkItemAgent): string {
   if (agent.claimed) return '◉';
@@ -698,6 +707,11 @@ function phaseCell(agent: WorkItemAgent, reason: string | null): RowMetaCell {
  * the outcome speak — and an engine that sends none leaves the phase exactly where it was.
  */
 function stateWordOf(agent: WorkItemAgent, reason: string | null): string {
+  // Defect 3 — first, because it is the fact that will REFUSE whatever the user tries next. A
+  // human holding the agent conversation used to be a glyph (`agentGlyph`'s `◉`) and nothing
+  // else, so the user took the claim by opening Chat, saw a phase, and read the stage refusal
+  // forty-three seconds later as the panel breaking.
+  if (agent.claimed) return CLAIM_HELD_TEXT;
   if (agent.running) return agent.phase;
   if (reason !== null && reason !== '') return reasonText(reason);
   if (agent.runOutcome === 'stopped' || agent.runOutcome === 'failed') return agent.runOutcome;

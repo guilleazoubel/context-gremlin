@@ -87,7 +87,8 @@ describe('task 2 — line one is keys, line two is prose, line three is signals'
     expect(lines(rows().get('investigations/session:inv-stacktrace-1') as WorkRow)).toEqual([
       'Investigate the nightly crash',
       '',
-      ['∴ investigating', '7h'],
+      // Defect 3 — `inv-stacktrace-1` is claimed, and the row now says so (see row-signals).
+      ['∴ conversation held', '7h'],
     ]);
   });
 

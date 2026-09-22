@@ -202,6 +202,28 @@ describe('MG-A6 human-turn-blocks-every-headless-turn', () => {
     });
   }
 
+  /**
+   * Defect 3 — the panel now offers `Release the conversation` beside this refusal and re-sends
+   * the verb. That is only honest if releasing is genuinely what lifts it: the lock is unchanged,
+   * a claim somebody is holding still refuses, and the release is the whole remedy.
+   */
+  it('release — and only release — lifts the refusal, with the lock otherwise untouched', async () => {
+    const { h, env } = harnessWithEnvironment();
+    await h.store.save(withClaim(development('dev-release-run'), LIVE));
+    await expectRefused(h, h.service.runDevelop('dev-release-run'));
+    expect(env.startCalls).toEqual([]);
+
+    await h.service.releaseConversation('dev-release-run');
+    expect(isClaimed(await h.store.load('dev-release-run'), NOW)).toBe(false);
+
+    const run = h.service.runDevelop('dev-release-run');
+    await flush();
+    await flush();
+    expect(agentStarted(h)).toBe(true);
+    h.runner.emitExit(h.runner.lastHandle(), { code: 0, signal: null });
+    await run;
+  });
+
   it('the refusal message names the session', async () => {
     const { h } = harnessWithEnvironment();
     await h.store.save(withClaim(development('dev-msg'), LIVE));

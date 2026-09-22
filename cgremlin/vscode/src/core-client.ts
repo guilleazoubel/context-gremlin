@@ -321,8 +321,21 @@ export class CoreClient {
     await this.expect('POST', `/sessions/${assertSessionId(id)}/conversation/claim`);
   }
 
+  /**
+   * Defect 3 — the release as a RESULT, for the command that offers it beside a refusal: there
+   * the engine's wording is the thing being shown, so a throw would be the wrong shape.
+   */
+  async releaseConversation(id: string): Promise<HttpResult> {
+    return await this.request('POST', `/sessions/${assertSessionId(id)}/conversation/release`);
+  }
+
+  /** The same route, as a throw — the terminal's close path wants the failure, not a result. */
   async release(id: string): Promise<void> {
-    await this.expect('POST', `/sessions/${assertSessionId(id)}/conversation/release`);
+    const path = `/sessions/${assertSessionId(id)}/conversation/release`;
+    const result = await this.request('POST', path);
+    if (result.status < 200 || result.status >= 300) {
+      throw new CoreHttpError(result.status, result.body, 'POST', path);
+    }
   }
 
   async startReview(repo: string, number: number): Promise<HttpResult> {
