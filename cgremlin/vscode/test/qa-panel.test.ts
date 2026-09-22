@@ -10,7 +10,12 @@ import { describe, expect, it } from 'vitest';
 import { artifactLabel, artifactRole, primaryArtifactName } from '../src/model/artifact-labels';
 import { itemParts } from '../src/model/item-parts';
 import { lifecycleSlots } from '../src/model/lifecycle';
-import { itemActionFacts, rowActions } from '../src/model/row-actions';
+import {
+  QA_NO_TICKET_REASON,
+  QA_RUNNING_REASON,
+  itemActionFacts,
+  rowActions,
+} from '../src/model/row-actions';
 import { MODE_GLYPH, MODE_LETTER, MODE_NAME, qaStateText } from '../src/model/row-composition';
 import {
   buildWorkLists,
@@ -201,17 +206,29 @@ describe('§8 — the two verbs, offered only when the gate passes', () => {
     expect(actions.some((a) => a.command === 'cgremlin.askQa')).toBe(false);
   });
 
-  it('offers neither on a parking-lot row, nor on an item with no ticket', () => {
+  it('offers neither on a parking-lot row — somebody else\'s change is not mine to verify', () => {
     expect(labels({}, 'waitingForReview').length).toBeGreaterThan(0);
     expect(rowActions(facts(), 'parkingLot').map((a) => a.label).join(' ')).not.toContain('QA');
-    expect(labels({ ticket: null }).join(' ')).not.toContain('QA');
   });
 
-  it('withdraws both once a live QA agent exists, and Chat takes over', () => {
+  // Task 3 amends the second half of the above: merged work with no ticket is the user's dead
+  // end, not an item QA does not apply to, so it gets the sentence rather than the silence.
+  it('says which link is missing on merged work with no ticket, instead of vanishing', () => {
+    const verb = rowActions(facts({ ticket: null }), 'myWork')
+      .find((a) => a.command === 'cgremlin.verifyInQa');
+    expect(verb).toMatchObject({ enabled: false, reason: QA_NO_TICKET_REASON });
+  });
+
+  // Task 3 amends this too: a run in flight used to be returned on BEFORE the gate was asked,
+  // so the row offered nothing and explained nothing. It now says what is happening.
+  it('disables it with a sentence while a QA agent is live, and Chat takes over', () => {
     const live = labels({ agents: [qaAgent()] });
-    expect(live.join(' ')).not.toContain('Verify in QA');
     expect(live.join(' ')).not.toContain('Ask about QA');
     expect(live).toContain('Chat:primary');
+    const verb = rowActions(facts({ agents: [qaAgent()] }), 'myWork')
+      .find((a) => a.command === 'cgremlin.verifyInQa');
+    expect(verb).toMatchObject({ enabled: false, reason: QA_RUNNING_REASON });
+    expect(verb?.placement).not.toBe('primary');
   });
 
   // Phase 16 amends this: a closed session is still a verification that
@@ -238,7 +255,10 @@ describe('§8 — the QA part of the expanded row', () => {
       key: 'qa', name: 'QA verification', glyph: '⛋', state: 'running', stateText: 'verifying',
       childId: 'agent:qa-grace-frontend-HB-6210-20260915',
     });
-    expect(qa?.actions.map((a) => a.label)).toEqual(['Read the QA result', 'Chat']);
+    // Task 3 — the re-verify is drawn beside them, disabled, carrying the reason it cannot run.
+    expect(qa?.actions.map((a) => a.label)).toEqual([
+      'Read the QA result', 'Chat', 'Verify in QA again',
+    ]);
   });
 
   it('says the verdict once it has one', () => {
@@ -325,8 +345,10 @@ describe('Phase 16 §4 — Verify in QA again', () => {
     expect(labels().join(' ')).not.toContain('again');
   });
 
-  it('withdraws it only while a run is in flight', () => {
-    expect(labels({ agents: [qaAgent()] }).join(' ')).not.toContain('Verify in QA');
+  it('never RUNS while a run is in flight — it says one is running instead', () => {
+    const verb = rowActions(facts({ agents: [qaAgent()] }), 'myWork')
+      .find((a) => a.command === 'cgremlin.verifyInQa');
+    expect(verb?.enabled).toBe(false);
   });
 
   it('carries the re-verify in the expanded QA part, beside Open and Chat', () => {
@@ -454,12 +476,14 @@ describe('Phase 18 §1 — a blocked QA verb says why', () => {
     expect(noEnv).toContain('cgremlin.openCoreConfig');
   });
 
-  it('stays hidden where QA could never apply: no ticket, a parking-lot row, a live run', () => {
-    expect(qaAction({ ticket: null })).toBeUndefined();
+  // Task 3 — two of the three cases here were silences the user hit. Only the parking lot, where
+  // the change is somebody else's, has nothing to say at all.
+  it('stays hidden only on a parking-lot row; the other two now say why', () => {
     expect(
       rowActions(facts(), 'parkingLot').some((a) => a.command === 'cgremlin.verifyInQa'),
     ).toBe(false);
-    expect(qaAction({ agents: [qaAgent()] })).toBeUndefined();
+    expect(qaAction({ ticket: null })).toMatchObject({ reason: QA_NO_TICKET_REASON });
+    expect(qaAction({ agents: [qaAgent()] })).toMatchObject({ reason: QA_RUNNING_REASON });
   });
 
   it('stays hidden on a ticket that is not in a QA status and has nothing merged', () => {
