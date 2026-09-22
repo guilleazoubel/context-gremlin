@@ -112,6 +112,12 @@ function stateOf(agent: LifecycleAgent | undefined): SlotState {
  * `done` carries the artifact's age when the engine told us one — "done" with no date is the
  * state the user said tells him nothing. No mtime is `done` alone, never a fabricated one
  * (MG-12), and a `running` slot says which phase rather than a date it does not have yet.
+ *
+ * Round 3 §e.2: the phase word is spent on `running` and NOWHERE else. The gate followed by a
+ * middle dot and the raw pipeline phase read as an answer and never was one — a gate (`needs
+ * you`) and a phase (`ready`) are two different axes, and the separator claimed they were the
+ * same kind of thing. What the user wanted out of `ready` is the verdict, which the expanded
+ * block now states in its own words.
  */
 function stateTextOf(
   state: SlotState,
@@ -121,7 +127,7 @@ function stateTextOf(
 ): string {
   if (state === 'notStarted' || agent === undefined) return 'not started';
   if (state === 'running') return `running · ${agent.phase}`;
-  if (state === 'needsYou') return `needs you · ${agent.phase}`;
+  if (state === 'needsYou') return 'needs you';
   const age = artifactAt === null ? '—' : compactAge(artifactAt, now);
   return age === '—' ? 'done' : `done · ${age}`;
 }

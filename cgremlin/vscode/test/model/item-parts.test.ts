@@ -54,7 +54,7 @@ describe('§4 — which parts a row has', () => {
       'pr:acme/web#310',
       'pr:acme/api#88',
     ]);
-    expect(parts[0].stateText).toBe('needs you · plan_ready');
+    expect(parts[0].stateText).toBe('needs you');
     expect(parts[1].stateText).toBe('running · developing');
     expect(parts[3].stateText).toBe('In Progress');
     expect(parts[4].stateText).toContain('approved');
