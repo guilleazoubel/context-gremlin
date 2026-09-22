@@ -74,8 +74,15 @@ export type SseEventName = 'frame' | 'open' | 'resync' | 'offline';
 export interface SseClientOptions {
   /** Resolved per connection *attempt* when it is a function, so a reconnect can land elsewhere. */
   socketPath: SocketPathSource;
-  /** Opt in to the engine's high-volume `run.output` frames (R8). */
-  includeRunOutput?: boolean;
+  /**
+   * Opt in to the engine's high-volume `run.output` frames (R8).
+   *
+   * Defect 4 — a PROVIDER when it is a function, re-read per connection *attempt*, because the
+   * include must be on only while a pane is watching. `EventRing` holds 256 entries of every type
+   * mixed, so a chatty run subscribed to permanently would evict `item.changed` frames from the
+   * reconnect replay window and cost every other surface its updates for one open pane.
+   */
+  includeRunOutput?: boolean | (() => boolean);
   /** Reconnect delays, one per consecutive failure; the last one repeats. */
   backoffMs?: readonly number[];
 }
@@ -96,6 +103,8 @@ export class SseClient {
   private stopped = true;
   private failures = 0;
   private lastId: number | null = null;
+  /** A reconnect this client asked for, so `dropped()` does not report it as a failure. */
+  private renegotiating = false;
   private currentEpoch: string | null = null;
 
   constructor(opts: SseClientOptions) {
@@ -143,10 +152,31 @@ export class SseClient {
 
   private path(): string {
     const query = new URLSearchParams();
-    if (this.opts.includeRunOutput === true) query.set('include', 'run.output');
+    if (this.wantsRunOutput()) query.set('include', 'run.output');
     if (this.currentEpoch !== null) query.set('epoch', this.currentEpoch);
     const suffix = query.toString();
     return suffix === '' ? '/events' : `/events?${suffix}`;
+  }
+
+  private wantsRunOutput(): boolean {
+    const want = this.opts.includeRunOutput;
+    return typeof want === 'function' ? want() === true : want === true;
+  }
+
+  /**
+   * Defect 4 — re-open the stream so the engine re-reads the `include` (it is a query parameter,
+   * fixed for the life of a connection). Deliberately NOT a drop: no `offline` verdict and no
+   * backoff, because nothing went wrong. `Last-Event-ID` still goes up, so the engine replays
+   * everything since — or answers `resync`, which the consumer already handles with a full
+   * refresh. No other surface can lose a frame over it.
+   */
+  renegotiate(): void {
+    if (this.stopped || this.request === null) return;
+    this.renegotiating = true;
+    const request = this.request;
+    this.request = null;
+    request.destroy();
+    this.connect();
   }
 
   private connect(): void {
@@ -198,6 +228,12 @@ export class SseClient {
   }
 
   private dropped(): void {
+    // The socket we deliberately tore down in `renegotiate` — its `end`/`error` arrives after the
+    // replacement connection is already in flight, and it is not news.
+    if (this.renegotiating) {
+      this.renegotiating = false;
+      return;
+    }
     if (this.stopped || this.request === null) return;
     this.request = null;
     this.emit('offline', null);

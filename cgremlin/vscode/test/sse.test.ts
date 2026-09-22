@@ -198,4 +198,59 @@ describe('SseClient', () => {
     await waitFor(() => server.eventRequests.length === 2);
     expect(server.eventRequests[1]?.query.get('include')).toBe('run.output');
   });
+
+  /**
+   * Defect 4 — the include is negotiated only while a pane is open.
+   *
+   * `EventRing` holds 256 entries of every type mixed, so leaving `run.output` on for every
+   * window would let one chatty run evict `item.changed` frames from the reconnect replay window
+   * and quietly degrade every other surface. The flag is therefore a PROVIDER, re-read per
+   * connection attempt, and `renegotiate()` is how a pane opening applies it.
+   */
+  it('re-reads the run.output provider per attempt and renegotiates without going offline', async () => {
+    const server = await stub();
+    let watching = false;
+    const client = track(
+      new SseClient({
+        socketPath: server.socketPath,
+        includeRunOutput: () => watching,
+        backoffMs: [20],
+      }),
+    );
+    const offlines: unknown[] = [];
+    const frames: unknown[] = [];
+    client.on('offline', (p) => offlines.push(p));
+    client.on('frame', (p) => frames.push(p));
+    client.start();
+
+    await waitFor(() => server.eventRequests.length === 1);
+    expect(server.eventRequests[0]?.query.get('include')).toBeNull();
+    server.push('item.changed', { id: 'one' });
+    await waitFor(() => frames.length === 1);
+
+    // A pane opens.
+    watching = true;
+    client.renegotiate();
+    await waitFor(() => server.eventRequests.length === 2);
+    expect(server.eventRequests[1]?.query.get('include')).toBe('run.output');
+    // A deliberate reconnect is not a drop: no offline verdict, and the replay resumes from the
+    // last id rather than from now, so no other surface loses a frame over it.
+    expect(offlines).toEqual([]);
+    expect(server.eventRequests[1]?.headers['last-event-id']).toBe('1');
+
+    // And back off again when the pane closes.
+    watching = false;
+    client.renegotiate();
+    await waitFor(() => server.eventRequests.length === 3);
+    expect(server.eventRequests[2]?.query.get('include')).toBeNull();
+    expect(offlines).toEqual([]);
+  });
+
+  it('renegotiating a stopped client connects nothing', async () => {
+    const server = await stub();
+    const client = track(new SseClient({ socketPath: server.socketPath, backoffMs: [20] }));
+    client.renegotiate();
+    await sleep(50);
+    expect(server.eventRequests).toHaveLength(0);
+  });
 });
