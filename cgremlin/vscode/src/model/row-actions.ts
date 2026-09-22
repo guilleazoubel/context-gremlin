@@ -165,6 +165,39 @@ export function approvableInvestigation(facts: ActionFacts): ActionAgent | undef
   );
 }
 
+/**
+ * Phase 21 — the investigation this item's development must continue FROM.
+ *
+ * `PipelineService.canPromote` accepts `approved`, or `plan_ready` only when the session was
+ * created `driveToCompletion` — a flag the wire does not carry, so the panel cannot tell the
+ * second case from the case the engine refuses. It offers the narrow one: `approved`, which is
+ * always legal, and never a button that would come back with a `PlanGateError`.
+ *
+ * A RUNNING investigation is excluded because `promote` refuses one (its own stage run would be
+ * in flight), and a pending one has no session to POST to.
+ */
+export function promotableInvestigation(facts: ActionFacts): ActionAgent | undefined {
+  return facts.agents.find(
+    (agent) =>
+      agent.mode === 'investigation' &&
+      agent.phase === 'approved' &&
+      !agent.running &&
+      agent.pending !== true,
+  );
+}
+
+/** Any investigation on the item — the reason a development start must not be self-rooted. */
+function anyInvestigation(facts: ActionFacts): ActionAgent | undefined {
+  return facts.agents.find((agent) => agent.mode === 'investigation' && agent.pending !== true);
+}
+
+/**
+ * Phase 21 — said once, beside the QA sentences, for the same reason they are: a disabled verb
+ * without a sentence is the defect, and a sentence in two places drifts from its cause.
+ */
+export const DEVELOPMENT_NEEDS_APPROVAL_REASON =
+  'Development continues from this investigation — approve its plan first.';
+
 /** Phase 16 — a verification has been run before, so the verb says `again`. */
 export function qaVerbLabel(facts: ActionFacts): string {
   return facts.agents.some((agent) => agent.mode === 'qa') ? 'Verify in QA again' : 'Verify in QA';
@@ -409,7 +442,30 @@ export function rowActions(facts: ActionFacts, list: WorkListKind): RowAction[] 
         if (facts.prs.length > 0) continue;
         push({ command: 'cgremlin.startInvestigation', label: 'Start investigation' }, 'inline');
       } else if (stage === 'development') {
-        push({ command: 'cgremlin.startDevelopment', label: 'Start development' }, 'primary');
+        // Phase 21 — the wording is the same verb; the ROUTE is the whole bug. An item with an
+        // investigation behind it must reach development through `POST /sessions/:id/promote`,
+        // which creates the CHILD session (`lineage.parentSessionId`, FINDINGS.md and PLAN.md
+        // carried across). `cgremlin.startDevelopment` is a fresh, self-rooted session, so where
+        // an investigation exists it is never the right route — not even while that investigation
+        // is unfinished, which is why the unapproved case is DISABLED rather than swapped back.
+        const investigation = anyInvestigation(facts);
+        if (investigation === undefined) {
+          push({ command: 'cgremlin.startDevelopment', label: 'Start development' }, 'primary');
+        } else {
+          const ready = promotableInvestigation(facts);
+          push(
+            {
+              command: 'cgremlin.promoteToDevelopment',
+              label: 'Start development',
+              childId: agentChildId((ready ?? investigation).sessionId),
+              ...(ready === undefined
+                ? { enabled: false as const, reason: DEVELOPMENT_NEEDS_APPROVAL_REASON }
+                : {}),
+            },
+            // A disabled control must never be the row's one click (the QA gate's rule).
+            ready === undefined ? 'inline' : 'primary',
+          );
+        }
       } else {
         push(
           {

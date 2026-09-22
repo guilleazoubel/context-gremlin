@@ -59,10 +59,15 @@ const STAGE_GLYPHS: Record<StageKind, string> = {
   review: '◈',
 };
 
-const START_COMMAND: Record<StageKind, string> = {
-  investigation: 'cgremlin.startInvestigation',
-  development: 'cgremlin.startDevelopment',
-  review: 'cgremlin.startReview',
+/**
+ * The command(s) that START a stage. Development has two: a fresh, self-rooted session, and the
+ * promote that continues from an investigation (Phase 21). They are one VERB with two routes, so
+ * the part shows whichever the rule table chose — never neither because it looked for one name.
+ */
+const START_COMMANDS: Record<StageKind, readonly string[]> = {
+  investigation: ['cgremlin.startInvestigation'],
+  development: ['cgremlin.startDevelopment', 'cgremlin.promoteToDevelopment'],
+  review: ['cgremlin.startReview'],
 };
 
 export interface ItemPartsInput {
@@ -259,7 +264,9 @@ function stagePart(slot: LifecycleSlot, input: ItemPartsInput): ItemPart {
   // The Start comes from the row's own actions or not at all — a slot that offered a verb the row
   // refuses is exactly the engine error P0-2 is about.
   if (slot.next) {
-    actions.push(...find(input.actions, START_COMMAND[slot.stage], undefined, null));
+    for (const command of START_COMMANDS[slot.stage]) {
+      actions.push(...find(input.actions, command, undefined, null));
+    }
   }
   // The one verb that is not a Start and not a Chat: answering a review that has landed (§4).
   if (slot.stage === 'review' && input.list === 'waitingForReview') {

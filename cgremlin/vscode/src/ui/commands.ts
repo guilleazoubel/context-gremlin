@@ -461,6 +461,16 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
     host.registerCommand('cgremlin.startDevelopment', (arg) =>
       startFromItem(deps, arg, 'development'),
     ),
+    /**
+     * Phase 21 — the SAME verb as `startDevelopment` wherever the rule table decided this item
+     * has an investigation to continue from (`row-actions.promotableInvestigation`). The engine
+     * creates the child session, copies FINDINGS.md and PLAN.md across and starts the develop
+     * turn; the refusals it owns (a claimed human turn, an unapproved plan) reach the user as the
+     * engine's own sentence rather than as a second opinion from here.
+     */
+    host.registerCommand('cgremlin.promoteToDevelopment', (arg, childArg) =>
+      onNamedSession(arg, childArg, (id) => client.promote(id)),
+    ),
 
     host.registerCommand('cgremlin.openPr', async (arg, childArg) => {
       const item = needsItem(arg);

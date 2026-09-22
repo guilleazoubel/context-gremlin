@@ -9,6 +9,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   CHAT_BUSY_REASON,
+  DEVELOPMENT_NEEDS_APPROVAL_REASON,
   furthestStage,
   itemActionFacts,
   nextStages,
@@ -206,9 +207,11 @@ describe('P0-2 the forward-only stage ladder (design amendment §4)', () => {
 
   it('promotes an investigation to development, and never back to investigation', () => {
     const investigating = facts({ agents: [agent('investigation')] });
-    const offered = rowActions(investigating, 'investigations').map((a) => a.command);
-    expect(offered).toContain('cgremlin.startDevelopment');
-    expect(offered).not.toContain('cgremlin.startInvestigation');
+    const actions = rowActions(investigating, 'investigations');
+    // Phase 21 — the ladder's next rung is still `Start development`; which ROUTE that verb takes
+    // is the chaining rule's business, asserted on its own below.
+    expect(actions.map((a) => a.label)).toContain('Start development');
+    expect(actions.map((a) => a.command)).not.toContain('cgremlin.startInvestigation');
   });
 
   it('offers a self-review once development has produced a PR of mine, and nothing after a review', () => {
@@ -355,5 +358,63 @@ describe('the handoff: approving an investigation plan', () => {
       'myWork',
     ).map((a) => a.command);
     expect(offered).not.toContain('cgremlin.approvePlan');
+  });
+});
+
+/**
+ * The handoff, second half. `cgremlin.startDevelopment` starts a FRESH, self-rooted development
+ * session (`POST /items/… {mode:'development'}`), so an item with an investigation behind it lost
+ * the plan and the findings on the way over — the user's exact complaint. Where there is an
+ * investigation to continue from, the verb keeps its wording and changes its route.
+ */
+describe('the handoff: Start development continues from the investigation', () => {
+  const investigation = (phase: string, over: Record<string, unknown> = {}) =>
+    agent('investigation', { phase, ...over });
+
+  it('chains through promote, addressed at the investigation, once its plan is approved', () => {
+    const actions = rowActions(facts({ agents: [investigation('approved')] }), 'investigations');
+    const start = actions.find((a) => a.label === 'Start development');
+    expect(start?.command).toBe('cgremlin.promoteToDevelopment');
+    expect(start?.childId).toBe('agent:s-investigation');
+    expect(start?.placement).toBe('primary');
+    expect(start?.enabled).toBeUndefined();
+    // The fresh, self-rooted start is exactly what must NOT be reachable here.
+    expect(actions.map((a) => a.command)).not.toContain('cgremlin.startDevelopment');
+  });
+
+  it('still starts FRESH when there is no investigation to chain from', () => {
+    const actions = rowActions(facts({ ticketKey: 'HB-1' }), 'myWork');
+    const start = actions.find((a) => a.label === 'Start development');
+    expect(start?.command).toBe('cgremlin.startDevelopment');
+    expect(start?.childId).toBeUndefined();
+    expect(start?.placement).toBe('primary');
+  });
+
+  it('draws the verb DISABLED, never fresh, while the investigation is not approved yet', () => {
+    for (const phase of ['findings', 'planning', 'plan_ready']) {
+      const actions = rowActions(facts({ agents: [investigation(phase)] }), 'investigations');
+      const start = actions.find((a) => a.label === 'Start development');
+      expect(start?.command, phase).toBe('cgremlin.promoteToDevelopment');
+      expect(start?.enabled, phase).toBe(false);
+      expect(start?.reason, phase).toBe(DEVELOPMENT_NEEDS_APPROVAL_REASON);
+      expect(start?.placement, phase).not.toBe('primary');
+      expect(actions.map((a) => a.command), phase).not.toContain('cgremlin.startDevelopment');
+    }
+  });
+
+  it('leaves Approve the plan as the one primary at plan_ready', () => {
+    const actions = rowActions(facts({ agents: [investigation('plan_ready')] }), 'investigations');
+    const primaries = actions.filter((a) => a.placement === 'primary');
+    expect(primaries).toHaveLength(1);
+    expect(primaries[0].command).toBe('cgremlin.approvePlan');
+  });
+
+  it('withdraws the chained verb while the investigation is mid-run', () => {
+    const actions = rowActions(
+      facts({ agents: [investigation('approved', { running: true })] }),
+      'investigations',
+    );
+    const start = actions.find((a) => a.label === 'Start development');
+    expect(start?.enabled).toBe(false);
   });
 });
