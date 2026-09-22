@@ -197,7 +197,11 @@ function qaPart(facts: ActionFacts, input: ItemPartsInput): ItemPart | null {
     stateText:
       agent === undefined
         ? (awaiting === null ? 'not started' : qaDeployText(awaiting))
-        : qaStateText(agent.phase, agent.qaVerdict ?? null),
+        : qaStateText(agent.phase, agent.qaVerdict ?? null, {
+            running: agent.running,
+            runOutcome: agent.runOutcome ?? null,
+            staleVerdict: awaiting !== null,
+          }),
     detail: '',
     childId,
     actions,

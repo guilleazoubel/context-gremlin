@@ -24,6 +24,7 @@ import {
   isLandedPr,
   WORK_LIST_KINDS,
   type QaVerdict,
+  type RunOutcome,
   type WorkItem,
   type WorkListKind,
 } from './work-items';
@@ -70,6 +71,11 @@ export interface ActionAgent {
   runFailed?: boolean;
   /** Gap 1 — so `qaPart` can ask the ONE composer for the right word. */
   qaVerdict?: QaVerdict | null;
+  /**
+   * Task 2 — the engine's own `lastRun.outcome`, so the QA part can say `run failed` where the
+   * run died rather than reporting the phase it died in as though it were a verdict.
+   */
+  runOutcome?: RunOutcome | null;
   /**
    * Phase 21 — the artifact the core would open this session on (`WorkItemAgent.primaryArtifact`).
    * The panel's only evidence that a stage produced its output, which is what tells a run that
@@ -256,6 +262,15 @@ export const CHAT_BUSY_REASON = 'The agent is working on this now — chat opens
 export const QA_NOTHING_MERGED_REASON = 'Nothing is merged yet — QA verifies code that has landed.';
 export const QA_NO_PR_REASON = 'No pull request is linked to this ticket yet.';
 export const QA_UNREACHABLE_REASON = 'QA is unreachable right now.';
+/**
+ * Task 3 — the two sentences that used to be silence. A run in flight was returned on BEFORE the
+ * gate was asked, so the row offered nothing and explained nothing; and merged work with no Jira
+ * ticket answered `hidden`, which is the same silence as an item nobody proposed for QA.
+ */
+export const QA_RUNNING_REASON =
+  'A verification is running now — it will report here when it finishes.';
+export const QA_NO_TICKET_REASON =
+  'A verification hangs off a Jira ticket, and no ticket is linked to this work yet.';
 export function qaNoEnvironmentReason(slug: string): string {
   return (
     'This repo has no QA environment configured — ' +
@@ -297,9 +312,6 @@ const HIDDEN: QaGate = { kind: 'hidden' };
  */
 export function qaGate(facts: ActionFacts, list: WorkListKind): QaGate {
   if (list !== 'myWork' && list !== 'waitingForReview') return HIDDEN;
-  // Every sentence below is about a ticket ("...linked to this ticket yet"), and the engine
-  // needs one for the session's lineage, so an item without one has nothing to say.
-  if (facts.ticketKey === null) return HIDDEN;
   const qaStatuses = facts.qaStatuses ?? [];
   const wantsQa =
     (facts.ticketStatus !== null &&
@@ -309,6 +321,14 @@ export function qaGate(facts: ActionFacts, list: WorkListKind): QaGate {
   const blocked = (reason: string, remedy: Omit<RowAction, 'placement'> | null = null): QaGate =>
     wantsQa ? { kind: 'blocked', reason, remedy } : HIDDEN;
 
+  // Task 3 — asked FIRST, and not through `blocked`: a verification that is running is proof
+  // the item wants QA, whatever its ticket status or its repo config says.
+  if (runningQaAgent(facts) !== undefined) {
+    return { kind: 'blocked', reason: QA_RUNNING_REASON, remedy: null };
+  }
+  // The engine needs a ticket for the session's lineage. Merged work without one is the user's
+  // dead end rather than an item QA does not apply to, so it gets the sentence, not the silence.
+  if (facts.ticketKey === null) return blocked(QA_NO_TICKET_REASON);
   if (facts.prs.length === 0) {
     // R84's case, and the user's normal one: teammates merge without a cgremlin session, so the
     // engine has never seen the PR. The remedy goes and looks for it.
@@ -597,9 +617,8 @@ function pushQa(
   list: WorkListKind,
   push: (action: Omit<RowAction, 'placement'>, want: ActionPlacement) => void,
 ): void {
-  // A run in flight is the ONE silence that stays: there is nothing to explain and nothing to
-  // fix — the row is already showing the verification it would start.
-  if (runningQaAgent(facts) !== undefined) return;
+  // Task 3 — a run in flight is no longer a silence: `qaGate` answers it with a sentence, and
+  // the disabled verb is what tells the user the ask was heard and is being worked on.
   const gate = qaGate(facts, list);
   if (gate.kind === 'hidden') return;
   if (gate.kind === 'blocked') {

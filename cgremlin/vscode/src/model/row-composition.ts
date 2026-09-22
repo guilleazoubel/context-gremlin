@@ -21,6 +21,7 @@ import type {
   CiStatus,
   QaVerdict,
   RowMetaCell,
+  RunOutcome,
   SizeTier,
   WorkAgentMode,
   WorkItem,
@@ -93,6 +94,18 @@ export function identityKeysOf(item: WorkItem): string[] {
   const primary = item.prs[0];
   if (primary !== undefined) keys.push(`#${primary.number}`);
   return keys.length === 0 ? [item.title] : keys;
+}
+
+/**
+ * §2 — the item's ONE headline: its keys, then its prose, in the row's own order.
+ *
+ * The Item tab used to be named by the engine's raw `WorkItem.title` (`HB-1490 — <ticket
+ * summary>`), which carries no pull request number and never could, while the row beside it read
+ * `HB-1490 #2037`. Two names for one piece of work is the defect ("it doesnt show the pr on the
+ * title either, just the jira number"), so both surfaces read this.
+ */
+export function headlineOf(item: WorkItem): string {
+  return [identityOf(item), descriptionOf(item)].filter((part) => part !== '').join(' — ');
 }
 
 /** `PROJ-123`, read off the title's prefix or the branch. Nothing else is looked at. */
@@ -221,13 +234,56 @@ export const MODE_NAME: Record<WorkAgentMode, string> = {
  *    more literal word.
  */
 const QA_STATE_TEXT: Record<string, string> = {
+  ready: 'ready to deploy',
   not_ready: 'not ready',
-  failed: 'failed',
+  failed: 'run failed',
 };
 
-export function qaStateText(phase: string, verdict: QaVerdict | null = null): string {
-  if (phase === 'not_ready' && verdict === 'blocked') return 'blocked';
-  return QA_STATE_TEXT[phase] ?? phase;
+/**
+ * Task 2 — the contract's own three verdict labels (core `prompts.ts` writes them as
+ * `Ready to deploy`, `Not ready` and `Blocked`), lowercased for a row. The `ready` phase rendered
+ * as the bare word `ready`, which is what EVERY finished agent's phase reads as — so the one row
+ * that carried a QA verdict looked exactly like a row that had merely finished something.
+ */
+const QA_VERDICT_TEXT: Record<QaVerdict, string> = {
+  ready: 'ready to deploy',
+  not_ready: 'not ready',
+  blocked: 'blocked',
+};
+
+/** Whether the phase/verdict pair IS a verdict — the only thing a build can be stale against. */
+function hasQaVerdict(phase: string, verdict: QaVerdict | null): boolean {
+  return verdict !== null || phase === 'ready' || phase === 'not_ready';
+}
+
+/** Task 2 — the verdict is about an EARLIER build than the one QA is serving now. */
+export const QA_OLDER_BUILD = 'older build';
+
+export interface QaStateOptions {
+  /** The run is in flight: there is no verdict yet, whatever the phase still says. */
+  running?: boolean;
+  /**
+   * The engine's own `lastRun.outcome`. A run that died or was killed wrote no verdict at all,
+   * and the stale phase it left behind must never be read as one (MG-12).
+   */
+  runOutcome?: RunOutcome | null;
+  /** `qaDeploy.state === 'awaiting'`: QA is serving a build that predates this change. */
+  staleVerdict?: boolean;
+}
+
+export function qaStateText(
+  phase: string,
+  verdict: QaVerdict | null = null,
+  options: QaStateOptions = {},
+): string {
+  if (options.running === true) return 'verifying';
+  if (options.runOutcome === 'stopped') return 'run stopped';
+  if (options.runOutcome === 'failed' || phase === 'failed') return 'run failed';
+  const word =
+    verdict !== null ? QA_VERDICT_TEXT[verdict] : (QA_STATE_TEXT[phase] ?? phase);
+  return options.staleVerdict === true && hasQaVerdict(phase, verdict)
+    ? `${word} · ${QA_OLDER_BUILD}`
+    : word;
 }
 
 /**
@@ -574,8 +630,10 @@ export function rowMetaCells(
   const reason = item.attention.reasons[0] ?? null;
   const reasonAgent = lastFinishedAgent(item.agents);
   const pushAgent = (agent: WorkItemAgent): void => {
-    cells.push(phaseCell(agent, agent === reasonAgent ? reason : null));
-    if (agent.running) cells.push(runningCell(agent, now));
+    cells.push(phaseCell(agent, agent === reasonAgent ? reason : null, item.qaDeploy ?? null, now));
+    // Task 2 — a QA cell already carries its own stage and elapsed time (`qaPhaseCell`), so a
+    // second `running` beside it would say `⛋ QA verifying · running` and mean nothing more.
+    if (agent.running && agent.mode !== 'qa') cells.push(runningCell(agent, now));
   };
 
   if (list === 'investigations') {
@@ -618,6 +676,8 @@ export function rowMetaCells(
     cells.push({ kind: 'author', text: `@${primary.author}` });
   }
 
+  // Task 2 — merged work nothing has ever verified says so, in the slot a verdict would hold.
+  if (neverVerified(item, list)) cells.push(qaNeverCell());
   // Gap 2 — an abandoned auto-verify attempt, muted, wherever the item sits: the core has
   // already decided it applies (a real QA session, if any, supersedes it there).
   if (item.qaAttempt != null) cells.push(qaAttemptCell(item.qaAttempt));
@@ -679,17 +739,76 @@ function lastFinishedAgent(agents: readonly WorkItemAgent[]): WorkItemAgent | nu
  * the reason is about the answer that does not exist yet. And QA, whose token is already an
  * outcome (`qaStateText`) rather than a phase — swapping it for a reason would LOSE information.
  */
-function phaseCell(agent: WorkItemAgent, reason: string | null): RowMetaCell {
+function phaseCell(
+  agent: WorkItemAgent,
+  reason: string | null,
+  deploy: WorkItem['qaDeploy'],
+  now: number,
+): RowMetaCell {
   const glyph = MODE_GLYPH[agent.mode] ?? '•';
   if (agent.mode !== 'qa') {
     return { kind: 'agentPhase', text: `${glyph} ${stateWordOf(agent, reason)}` };
   }
-  // §8's one toned cell: a verification that came back short of ready is the top of my work,
-  // and the row has to say so without a second composition site (R72 does the ordering).
-  const bad = agent.phase === 'not_ready' || agent.phase === 'failed';
-  const text = qaStateText(agent.phase, agent.qaVerdict ?? null);
-  const cell: RowMetaCell = { kind: 'agentPhase', text: `${glyph} ${text}` };
-  return bad ? { ...cell, tone: 'bad' } : cell;
+  return qaPhaseCell(agent, deploy, now, glyph);
+}
+
+/**
+ * Task 2 — the one cell that answers "did a verification run, and did it pass?".
+ *
+ * `⛋ ready` answered neither: `ready` is the word every finished agent's phase reads as, and the
+ * build the verdict was about was nowhere on the line. Four things are said here instead, in the
+ * order they can invalidate each other: a run in flight has no verdict yet; a run that DIED wrote
+ * none at all (`runOutcome`, MG-12); a verdict is one of the contract's own three labels; and a
+ * verdict about a build QA has since moved past says so on the same line, so it can never be read
+ * on its own as a claim about the code QA is serving now.
+ */
+function qaPhaseCell(
+  agent: WorkItemAgent,
+  deploy: WorkItem['qaDeploy'],
+  now: number,
+  glyph: string,
+): RowMetaCell {
+  const stale = deploy != null && deploy.state === 'awaiting';
+  const text = qaStateText(agent.phase, agent.qaVerdict ?? null, {
+    running: agent.running,
+    runOutcome: agent.runOutcome ?? null,
+    staleVerdict: stale,
+  });
+  // A live run says which stage and for how long wherever the engine dates it (Phase 19).
+  const busy = agent.running && agent.lastRun != null ? agentBusyText(agent, now) : text;
+  const dead =
+    agent.runOutcome === 'failed' || agent.runOutcome === 'stopped' || agent.phase === 'failed';
+  const short = agent.phase === 'not_ready';
+  const tone: RowMetaCell['tone'] | undefined = agent.running
+    ? 'active'
+    : dead || short
+      ? 'bad'
+      : stale && hasQaVerdict(agent.phase, agent.qaVerdict ?? null)
+        ? 'warn'
+        : undefined;
+  const cell: RowMetaCell = { kind: 'agentPhase', text: `${glyph} QA ${agent.running ? busy : text}` };
+  return tone === undefined ? cell : { ...cell, tone };
+}
+
+/**
+ * Task 2 — "an item never verified reads as never verified". Merged work with no verification
+ * behind it used to draw NOTHING about QA, which reads exactly like work that passed. It states
+ * a fact off the wire (every pull request merged, no `qa` agent), never a gate: why a
+ * verification cannot be started is the disabled verb's sentence (`row-actions`), not a cell.
+ */
+function qaNeverCell(): RowMetaCell {
+  return {
+    kind: 'qaNone',
+    text: `${MODE_GLYPH.qa} QA not verified`,
+    label: 'the code has merged and no QA verification has run against it',
+  };
+}
+
+function neverVerified(item: WorkItem, list: WorkListKind): boolean {
+  if (list !== 'myWork' && list !== 'waitingForReview') return false;
+  if (item.ticket === null) return false;
+  if (item.agents.some((agent) => agent.mode === 'qa')) return false;
+  return item.prs.length > 0 && item.prs.every((pr) => pr.state === 'merged');
 }
 
 /**

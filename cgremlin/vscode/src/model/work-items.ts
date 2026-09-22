@@ -554,7 +554,9 @@ export type RowMetaKind =
   /** Gap 2 — an abandoned auto-verify attempt, muted, alongside the row's other tokens. */
   | 'qaAttempt'
   /** Phase 16 — which qa build the row's change is measured against, muted. */
-  | 'qaDeploy';
+  | 'qaDeploy'
+  /** Task 2 — merged work that NO verification has ever run against. */
+  | 'qaNone';
 
 export interface RowMetaCell {
   kind: RowMetaKind;
@@ -733,7 +735,7 @@ export function toRow(item: WorkItem, list: WorkListKind, now: number): WorkRow 
     id: item.id,
     list,
     item,
-    label: [identity, description].filter((part) => part !== '').join(' — '),
+    label: headlineOf(item),
     identity,
     identityKeys,
     description,
@@ -769,6 +771,7 @@ export {
   ciDot,
   compactAge,
   descriptionOf,
+  headlineOf,
   humanActivitySummary,
   humanInteractions,
   identityKeysOf,
@@ -793,6 +796,7 @@ import {
   ciDot,
   compactAge,
   descriptionOf,
+  headlineOf,
   humanActivitySummary,
   identityKeysOf,
   isLandedItem,

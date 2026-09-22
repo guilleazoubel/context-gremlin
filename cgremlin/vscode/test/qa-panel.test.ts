@@ -10,7 +10,12 @@ import { describe, expect, it } from 'vitest';
 import { artifactLabel, artifactRole, primaryArtifactName } from '../src/model/artifact-labels';
 import { itemParts } from '../src/model/item-parts';
 import { lifecycleSlots } from '../src/model/lifecycle';
-import { itemActionFacts, rowActions } from '../src/model/row-actions';
+import {
+  QA_NO_TICKET_REASON,
+  QA_RUNNING_REASON,
+  itemActionFacts,
+  rowActions,
+} from '../src/model/row-actions';
 import { MODE_GLYPH, MODE_LETTER, MODE_NAME, qaStateText } from '../src/model/row-composition';
 import {
   buildWorkLists,
@@ -71,12 +76,14 @@ describe('the mode, said once (§8)', () => {
 
   it('turns every QA phase into the word the row shows', () => {
     expect(qaStateText('verifying')).toBe('verifying');
-    expect(qaStateText('ready')).toBe('ready');
+    // Task 2 — the contract's own verdict label, because `ready` alone is the word EVERY
+    // finished agent's phase reads as, and the QA row was indistinguishable from the rest.
+    expect(qaStateText('ready')).toBe('ready to deploy');
     expect(qaStateText('not_ready')).toBe('not ready');
     // Gap 1 — a run failure (no verdict was ever reached) reads as its own
     // word now: 'blocked' is reserved for the QA VERDICT of the same name,
     // and conflating the two is exactly the ambiguity Gap 1 removes.
-    expect(qaStateText('failed')).toBe('failed');
+    expect(qaStateText('failed')).toBe('run failed');
     expect(qaStateText('queued')).toBe('queued');
   });
 
@@ -90,8 +97,18 @@ describe('the mode, said once (§8)', () => {
     expect(qaStateText('not_ready')).toBe('not ready');
   });
 
-  it('a run failure stays "failed" no matter what verdict is passed', () => {
-    expect(qaStateText('failed', 'blocked')).toBe('failed');
+  it('a run failure stays a run failure no matter what verdict is passed', () => {
+    expect(qaStateText('failed', 'blocked')).toBe('run failed');
+  });
+
+  // Task 2 — a run that is still going, or that died, has no verdict to report whatever the
+  // phase it is sitting in says; and a verdict about a build QA has moved past says so.
+  it('a live, a dead and a stale verification each say what they are', () => {
+    expect(qaStateText('ready', 'ready', { running: true })).toBe('verifying');
+    expect(qaStateText('verifying', null, { runOutcome: 'failed' })).toBe('run failed');
+    expect(qaStateText('verifying', null, { runOutcome: 'stopped' })).toBe('run stopped');
+    expect(qaStateText('ready', 'ready', { staleVerdict: true })).toBe('ready to deploy · older build');
+    expect(qaStateText('queued', null, { staleVerdict: true })).toBe('queued');
   });
 });
 
@@ -99,10 +116,12 @@ describe('MG-27 — the collapsed row, through the ONE composer', () => {
   it('a landed myWork row mid-verification draws merged, the ticket status, then the QA cell', () => {
     const cells = meta(item({ agents: [qaAgent()] }));
     expect(cells.map((c) => c.kind)).toEqual([
-      'repo', 'prState', 'ticketStatus', 'agentPhase', 'running', 'age', 'tier', 'size', 'ci',
+      'repo', 'prState', 'ticketStatus', 'agentPhase', 'age', 'tier', 'size', 'ci',
     ]);
-    expect(cells.map((c) => c.text).slice(0, 5)).toEqual([
-      'grace-frontend', 'merged', 'UAT', '⛋ verifying', 'running',
+    // Task 2 — one cell, not two: the QA cell carries the live stage itself, so the generic
+    // `running` token beside it would only repeat it.
+    expect(cells.map((c) => c.text).slice(0, 4)).toEqual([
+      'grace-frontend', 'merged', 'UAT', '⛋ QA verifying',
     ]);
   });
 
@@ -113,13 +132,13 @@ describe('MG-27 — the collapsed row, through the ONE composer', () => {
     const kinds = cells.map((c) => c.kind);
     expect(kinds.indexOf('ticketStatus')).toBeLessThan(kinds.indexOf('agentPhase'));
     const phase = cells.find((c) => c.kind === 'agentPhase');
-    expect(phase).toEqual({ kind: 'agentPhase', text: '⛋ not ready', tone: 'bad' });
+    expect(phase).toEqual({ kind: 'agentPhase', text: '⛋ QA not ready', tone: 'bad' });
   });
 
   it('a ready verdict is quiet — the word is there, the tone is not', () => {
     const phase = meta(item({ agents: [qaAgent({ phase: 'ready', running: false })] }))
       .find((c) => c.kind === 'agentPhase');
-    expect(phase).toEqual({ kind: 'agentPhase', text: '⛋ ready' });
+    expect(phase).toEqual({ kind: 'agentPhase', text: '⛋ QA ready to deploy' });
   });
 
   // Gap 1 — a Blocked verdict (agent could not test) must not read as the
@@ -128,12 +147,12 @@ describe('MG-27 — the collapsed row, through the ONE composer', () => {
     const blocked = meta(
       item({ agents: [qaAgent({ phase: 'not_ready', running: false, needsYou: true, qaVerdict: 'blocked' })] }),
     ).find((c) => c.kind === 'agentPhase');
-    expect(blocked).toEqual({ kind: 'agentPhase', text: '⛋ blocked', tone: 'bad' });
+    expect(blocked).toEqual({ kind: 'agentPhase', text: '⛋ QA blocked', tone: 'bad' });
 
     const notReady = meta(
       item({ agents: [qaAgent({ phase: 'not_ready', running: false, needsYou: true, qaVerdict: 'not_ready' })] }),
     ).find((c) => c.kind === 'agentPhase');
-    expect(notReady).toEqual({ kind: 'agentPhase', text: '⛋ not ready', tone: 'bad' });
+    expect(notReady).toEqual({ kind: 'agentPhase', text: '⛋ QA not ready', tone: 'bad' });
   });
 });
 
@@ -187,17 +206,29 @@ describe('§8 — the two verbs, offered only when the gate passes', () => {
     expect(actions.some((a) => a.command === 'cgremlin.askQa')).toBe(false);
   });
 
-  it('offers neither on a parking-lot row, nor on an item with no ticket', () => {
+  it('offers neither on a parking-lot row — somebody else\'s change is not mine to verify', () => {
     expect(labels({}, 'waitingForReview').length).toBeGreaterThan(0);
     expect(rowActions(facts(), 'parkingLot').map((a) => a.label).join(' ')).not.toContain('QA');
-    expect(labels({ ticket: null }).join(' ')).not.toContain('QA');
   });
 
-  it('withdraws both once a live QA agent exists, and Chat takes over', () => {
+  // Task 3 amends the second half of the above: merged work with no ticket is the user's dead
+  // end, not an item QA does not apply to, so it gets the sentence rather than the silence.
+  it('says which link is missing on merged work with no ticket, instead of vanishing', () => {
+    const verb = rowActions(facts({ ticket: null }), 'myWork')
+      .find((a) => a.command === 'cgremlin.verifyInQa');
+    expect(verb).toMatchObject({ enabled: false, reason: QA_NO_TICKET_REASON });
+  });
+
+  // Task 3 amends this too: a run in flight used to be returned on BEFORE the gate was asked,
+  // so the row offered nothing and explained nothing. It now says what is happening.
+  it('disables it with a sentence while a QA agent is live, and Chat takes over', () => {
     const live = labels({ agents: [qaAgent()] });
-    expect(live.join(' ')).not.toContain('Verify in QA');
     expect(live.join(' ')).not.toContain('Ask about QA');
     expect(live).toContain('Chat:primary');
+    const verb = rowActions(facts({ agents: [qaAgent()] }), 'myWork')
+      .find((a) => a.command === 'cgremlin.verifyInQa');
+    expect(verb).toMatchObject({ enabled: false, reason: QA_RUNNING_REASON });
+    expect(verb?.placement).not.toBe('primary');
   });
 
   // Phase 16 amends this: a closed session is still a verification that
@@ -224,7 +255,10 @@ describe('§8 — the QA part of the expanded row', () => {
       key: 'qa', name: 'QA verification', glyph: '⛋', state: 'running', stateText: 'verifying',
       childId: 'agent:qa-grace-frontend-HB-6210-20260915',
     });
-    expect(qa?.actions.map((a) => a.label)).toEqual(['Read the QA result', 'Chat']);
+    // Task 3 — the re-verify is drawn beside them, disabled, carrying the reason it cannot run.
+    expect(qa?.actions.map((a) => a.label)).toEqual([
+      'Read the QA result', 'Chat', 'Verify in QA again',
+    ]);
   });
 
   it('says the verdict once it has one', () => {
@@ -311,8 +345,10 @@ describe('Phase 16 §4 — Verify in QA again', () => {
     expect(labels().join(' ')).not.toContain('again');
   });
 
-  it('withdraws it only while a run is in flight', () => {
-    expect(labels({ agents: [qaAgent()] }).join(' ')).not.toContain('Verify in QA');
+  it('never RUNS while a run is in flight — it says one is running instead', () => {
+    const verb = rowActions(facts({ agents: [qaAgent()] }), 'myWork')
+      .find((a) => a.command === 'cgremlin.verifyInQa');
+    expect(verb?.enabled).toBe(false);
   });
 
   it('carries the re-verify in the expanded QA part, beside Open and Chat', () => {
@@ -353,7 +389,7 @@ describe('Phase 16 §5 — merged, but not in QA yet', () => {
         agents: [qaAgent({ phase: 'ready', running: false })],
       }),
     );
-    expect(cells.find((c) => c.kind === 'agentPhase')?.text).toBe('⛋ ready');
+    expect(cells.find((c) => c.kind === 'agentPhase')?.text).toBe('⛋ QA ready to deploy');
     expect(cells.find((c) => c.kind === 'qaDeploy')?.text).toBe('build 088ce5e');
   });
 
@@ -440,12 +476,14 @@ describe('Phase 18 §1 — a blocked QA verb says why', () => {
     expect(noEnv).toContain('cgremlin.openCoreConfig');
   });
 
-  it('stays hidden where QA could never apply: no ticket, a parking-lot row, a live run', () => {
-    expect(qaAction({ ticket: null })).toBeUndefined();
+  // Task 3 — two of the three cases here were silences the user hit. Only the parking lot, where
+  // the change is somebody else's, has nothing to say at all.
+  it('stays hidden only on a parking-lot row; the other two now say why', () => {
     expect(
       rowActions(facts(), 'parkingLot').some((a) => a.command === 'cgremlin.verifyInQa'),
     ).toBe(false);
-    expect(qaAction({ agents: [qaAgent()] })).toBeUndefined();
+    expect(qaAction({ ticket: null })).toMatchObject({ reason: QA_NO_TICKET_REASON });
+    expect(qaAction({ agents: [qaAgent()] })).toMatchObject({ reason: QA_RUNNING_REASON });
   });
 
   it('stays hidden on a ticket that is not in a QA status and has nothing merged', () => {
