@@ -144,7 +144,11 @@ export function renderPostReviewHelper(target: PostTarget): string {
   // Written as ESM (the sibling package.json pins `type: module`, so the host
   // repository's own package type cannot change how this file is parsed).
   return `${renderPrologue(REVIEW_SPEC, target)}
-const EVENTS = [['approve', 'APPROVE'], ['request changes', 'REQUEST_CHANGES'], ['comment', 'COMMENT']];
+// An agent may never approve: the approval on a pull request counts toward
+// branch protection and can let the change merge, and that authority is the
+// human's. The approving event is therefore absent from this table AND
+// refused by name below — the brief carries the rule, this is the wall.
+const EVENTS = [['request changes', 'REQUEST_CHANGES'], ['comment', 'COMMENT']];
 function eventFor(verdict) {
   const text = String(verdict === undefined || verdict === null ? '' : verdict).toLowerCase();
   for (const pair of EVENTS) if (text.indexOf(pair[0]) !== -1) return pair[1];
@@ -152,7 +156,18 @@ function eventFor(verdict) {
 }
 
 const event = eventFor(doc.verdict);
-if (event === null) refuse('the verdict ' + JSON.stringify(doc.verdict) + ' is not one of: Approve, Request changes, Comment');
+if (event === null) {
+  const said = String(doc.verdict === undefined || doc.verdict === null ? '' : doc.verdict).toLowerCase();
+  if (said.indexOf('approv') !== -1 || said.indexOf('lgtm') !== -1) {
+    refuse(
+      'the verdict ' + JSON.stringify(doc.verdict) + ' would submit an approving review, and ' +
+      'approving a pull request is the human\u2019s alone. Keep that verdict in REVIEW.md, and ' +
+      're-run this with the verdict "\uD83D\uDCAC Comment" and a body that says you found nothing ' +
+      'blocking and that the approval is the human\u2019s to give.',
+    );
+  }
+  refuse('the verdict ' + JSON.stringify(doc.verdict) + ' is not one of: Request changes, Comment');
+}
 
 const findings = Array.isArray(doc.findings) ? doc.findings : [];
 const comments = [];
