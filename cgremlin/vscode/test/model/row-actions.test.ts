@@ -483,3 +483,58 @@ describe('the handoff: recovering an investigation wedged behind a failed findin
     expect(offered).not.toContain('cgremlin.continueToPlan');
   });
 });
+
+/**
+ * An agent may never approve — the helper refuses the event and the brief no longer names it.
+ * The approval is the human's, so the human needs a verb for it, and it must read as theirs:
+ * the label says "yourself", and it is never the row's one automatic click, because approving
+ * before reading the review is exactly the thing being fixed.
+ */
+describe('the human’s approve verb', () => {
+  const reviewed = (over: Record<string, unknown> = {}) =>
+    facts({ agents: [agent('review', { phase: 'ready', ...over })], prs: [teammatePr] });
+
+  const approveOf = (f: ActionFacts, list: WorkListKind = 'parkingLot') =>
+    rowActions(f, list).find((a) => a.command === 'cgremlin.approvePr');
+
+  it('is offered on a reviewed pull request, and names the approval as the user’s own', () => {
+    const action = approveOf(reviewed());
+    expect(action).toBeDefined();
+    expect(action?.label).toBe('Approve this PR yourself');
+  });
+
+  it('is never the row’s primary action', () => {
+    for (const list of ['parkingLot', 'myWork', 'waitingForReview'] as WorkListKind[]) {
+      const action = approveOf(reviewed(), list);
+      if (action === undefined) continue;
+      expect(action.placement, list).not.toBe('primary');
+    }
+  });
+
+  it('is pinned to the review session that reviewed it', () => {
+    expect(approveOf(reviewed())?.childId).toBe('agent:s-review');
+  });
+
+  it('is not offered before the review is written, nor while it is running', () => {
+    for (const over of [{ phase: 'queued' }, { phase: 'reviewing' }, { phase: 'ready', running: true }]) {
+      expect(approveOf(reviewed(over)), JSON.stringify(over)).toBeUndefined();
+    }
+  });
+
+  it('is not offered where no review agent has been near the row', () => {
+    expect(approveOf(facts({ prs: [teammatePr] }))).toBeUndefined();
+    expect(approveOf(facts({ agents: [agent('development')], prs: [teammatePr] }))).toBeUndefined();
+  });
+
+  it('is not offered once the pull request has landed', () => {
+    const landed = facts({
+      agents: [agent('review', { phase: 'ready' })],
+      prs: [{ ...teammatePr, state: 'merged' }],
+    });
+    expect(approveOf(landed)).toBeUndefined();
+  });
+
+  it('is not offered once GitHub already has the approval', () => {
+    expect(approveOf(reviewed({ phase: 'approved' }))).toBeUndefined();
+  });
+});

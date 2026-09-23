@@ -156,6 +156,11 @@
         "category": "cgremlin"
       },
       {
+        "command": "cgremlin.approvePr",
+        "title": "Approve this PR yourself",
+        "category": "cgremlin"
+      },
+      {
         "command": "cgremlin.stop",
         "title": "Stop run",
         "category": "cgremlin",
@@ -321,6 +326,10 @@
         },
         {
           "command": "cgremlin.approvePlan",
+          "when": "false"
+        },
+        {
+          "command": "cgremlin.approvePr",
           "when": "false"
         },
         {

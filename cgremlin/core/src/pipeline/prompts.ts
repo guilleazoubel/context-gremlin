@@ -552,6 +552,15 @@ ${step5}${uiCheckBlock}
  * so this section must never name a REST endpoint or a `gh` write command:
  * an instruction to run one would fail closed and cost a turn. Both the
  * review and the re-review brief carry this text.
+ *
+ * And an agent may never APPROVE. A GitHub approval counts toward branch
+ * protection and can let the pull request merge, so it is the human's to give
+ * and no agent's to take. The verdict table here therefore has two events,
+ * not three; `REVIEW.md` keeps its own `✅ Approve` verdict (the opinion is
+ * unchanged, only the authority to act on it is gone), and that conclusion
+ * posts as a COMMENT that says so. `.cgremlin/post-review` refuses the
+ * approving event whatever this text says — the prompt is the rule, the
+ * helper is the wall.
  */
 export function renderPostingProtocol(prNumber: number): string {
   return `## Posting — you post this review to GitHub yourself
@@ -561,6 +570,8 @@ export function renderPostingProtocol(prNumber: number): string {
 **What you have.** Two commands, and they are the whole of your authority to write to GitHub:
 - \`.cgremlin/post-review <findings.json>\` — submits the review itself, inline comments included.
 - \`.cgremlin/post-comment <comment.json>\` — one plain conversation comment on this same PR, for a note that is not a review. The file is \`{ "body": "<markdown>" }\`.
+
+**What you may never post: an approval.** Approving a pull request counts toward branch protection and can let the change merge, so it is the human's decision to take and never an agent's — whatever you conclude, however clean the diff. \`.cgremlin/post-review\` refuses an approving verdict outright: it posts nothing and exits non-zero. Your two events are \`REQUEST_CHANGES\` and \`COMMENT\`; step 1 below says what a review that found nothing blocking posts instead.
 
 **What is denied.** The permission guard denies every \`gh\` write verb outright, and they fail if you reach for them: \`gh api\` (every endpoint, every verb), \`gh pr review\`, \`gh pr comment\`, \`gh issue\` (every subcommand — a pull request shares the issue-comment endpoint, so \`gh issue comment <number>\` would post to it), \`gh pr create\`, \`gh pr merge|close|edit|ready\`, the administrative subcommands (\`gh repo\`, \`gh secret\`, \`gh workflow\`, \`gh release\`, …), and \`git push\` and \`git commit\`. Each of those takes a repository and a number, which is exactly why none of them is yours to run.
 
@@ -582,7 +593,7 @@ export function renderPostingProtocol(prNumber: number): string {
 }
 \`\`\`
 
-1. **\`verdict\`** is line 2 of \`REVIEW.md\` and nothing else. **The verdict picks the event**: \`🔄 Request changes\` → \`REQUEST_CHANGES\`, \`✅ Approve\` → \`APPROVE\`, \`💬 Comment\` → \`COMMENT\`. If GitHub refuses \`APPROVE\` because the PR is your own, re-run with \`💬 Comment\` and say why in \`body\`.
+1. **\`verdict\`** is line 2 of \`REVIEW.md\` and nothing else. **The verdict picks the event, and there are two**: \`🔄 Request changes\` → \`REQUEST_CHANGES\`, \`💬 Comment\` → \`COMMENT\`. A \`✅ Approve\` verdict posts as a \`COMMENT\`: leave the verdict standing in \`REVIEW.md\` — the opinion is yours and it is unchanged — and send \`"verdict": "💬 Comment"\`, with a \`body\` that says both halves plainly: that you found nothing blocking, and that the approval is the human’s to give. It must not say or imply that the pull request is approved — no "approving", no "LGTM", no ✅ beside the pull request's state. The helper refuses an approving verdict outright, so reaching for one posts nothing and costs a turn. Open that \`body\` with exactly this line, then the scope and the table as usual: \`**No blocking findings.** This is a comment, not an approval — the approval on this pull request is the human’s to give.\`
 2. **One \`findings\` entry per finding that carries a \`Where\` (\`path:line\`)** — each becomes an inline comment at exactly that path and line. Begin every inline \`body\` with the finding's anchor id and severity, exactly as shown. A finding with no \`path:line\` (📋 PM/AC, 🎨 Design) belongs in \`body\`, not in \`findings\`.
 3. **\`body\` is the one summary comment.** Do not add a \`.cgremlin/post-comment\` on top of it.
 

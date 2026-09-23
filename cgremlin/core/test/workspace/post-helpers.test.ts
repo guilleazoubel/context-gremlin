@@ -95,7 +95,6 @@ describe('the helper cannot be retargeted', () => {
 
 describe('the contract verdict picks the GitHub event', () => {
   it.each([
-    ['✅ Approve', 'APPROVE'],
     ['🔄 Request changes', 'REQUEST_CHANGES'],
     ['💬 Comment', 'COMMENT'],
   ])('%s → %s', (verdict, event) => {
@@ -104,10 +103,43 @@ describe('the contract verdict picks the GitHub event', () => {
     expect(JSON.parse(result.stdout).body.event).toBe(event);
   });
 
-  it('refuses a verdict that is not one of the three', () => {
+  it('refuses a verdict that is neither of the two', () => {
     const result = runHelper([findingsFile({ verdict: '🚀 Ship it', body: 'b' })]);
     expect(result.status).not.toBe(0);
     expect(result.stderr).toMatch(/verdict/i);
+  });
+});
+
+/**
+ * An agent may never approve. The brief says so, and this is the wall behind
+ * the rule: whatever a review concludes, an approving review does not leave
+ * this helper. Nothing is posted, the exit is non-zero, and the refusal says
+ * what to send instead.
+ */
+describe('an approving verdict is refused outright — approving is the human’s', () => {
+  it.each([
+    ['✅ Approve'],
+    ['approve'],
+    ['✅ Approved — nothing blocking'],
+    ['LGTM, approving'],
+  ])('refuses the verdict %s and posts nothing', (verdict) => {
+    const result = runHelper([findingsFile({ verdict, body: 'summary' })]);
+    expect(result.status).not.toBe(0);
+    // Dry run prints the request it WOULD send; a refusal prints nothing at all.
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('approving a pull request is the human’s alone');
+    expect(result.stderr).toContain('💬 Comment');
+  });
+
+  it('cannot be smuggled in as an `event` field beside a comment verdict', () => {
+    const result = runHelper([findingsFile({ verdict: '💬 Comment', body: 'b', event: 'APPROVE' })]);
+    expect(result.status).toBe(0);
+    expect(JSON.parse(result.stdout).body.event).toBe('COMMENT');
+  });
+
+  it('the shipped helper carries no APPROVE event at all', () => {
+    const helper = postHelperFiles(TARGET).find((f) => f.relativePath === POST_REVIEW_HELPER_PATH);
+    expect(helper?.content ?? '').not.toMatch(/APPROVE/);
   });
 });
 

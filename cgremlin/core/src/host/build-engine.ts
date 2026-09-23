@@ -30,6 +30,7 @@ import { PR_VIEW_FIELDS, failingChecks, parsePrView } from '../gh/pr-view';
 import type { JiraSource } from '../jira/jira-source';
 import { InventoryStore } from '../inventory/inventory-store';
 import { createApiServer, type EngineInfo } from '../api/server';
+import { GhTokenPrApprover } from '../gh/pr-approval';
 import { ShutdownController } from '../api/shutdown';
 import { EventRing, attachEventRing } from '../api/event-stream';
 import { NodeSessionWatcher } from '../fs/node-session-watcher';
@@ -607,6 +608,9 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     ticketDetail,
     respondFactory,
     qaFactory,
+    // The human's approve verb. It reads the user's own token and posts to the
+    // pull request the named session reviewed — never one it is handed.
+    prApprover: new GhTokenPrApprover(adapters.gh),
     // Phase 18 — R84's lookup, asked deliberately: `POST /items/ticket/<KEY>/prs/discover`.
     qaDiscovery: qaTrigger,
     now: adapters.now,

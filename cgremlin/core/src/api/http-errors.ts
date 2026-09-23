@@ -47,6 +47,10 @@ export function mapErrorToHttp(err: unknown): HttpError {
     case 'LocalAppPrereqError':
     case 'LocalAppUnhealthyError':
     case 'LocalAppSetupError':
+    case 'PrApprovalFailedError':
+      // …and `PrApprovalFailedError` joins them: the human's approval reached
+      // GitHub and GitHub said no (already approved, own pull request, no
+      // permission). A precondition the caller can act on, never an engine bug.
       return { status: 409, body: { error: message } };
     default:
       return { status: 500, body: { error: message } };

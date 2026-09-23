@@ -28,7 +28,7 @@ import type { ReviewSessionFactory, CandidatePR } from '../pipeline/review-sessi
 import type { RespondSessionFactory } from '../pipeline/respond-session-factory';
 import type { QaSessionFactory } from '../pipeline/qa-session-factory';
 import type { QaDiscoverResult } from '../qa/qa-trigger';
-import { isClaimed } from '../pipeline/pipeline-service';
+import { isClaimed, UnsupportedStageError } from '../pipeline/pipeline-service';
 import type { EnvironmentService, LocalAppStatus } from '../env/environment-service';
 import { redactSecrets, redactCoreConfig, type CoreConfig } from '../config/core-config';
 import { handleEventStream, type EventRing } from './event-stream';
@@ -39,6 +39,7 @@ import { parseWorkItemPath, type ParsedWorkItemId } from '../work/work-item-id';
 import type { AttentionService } from '../attention/attention-service';
 import { ITEM_SOURCES, parseItemRef, prRef, sessionRef, type ItemRef, type ItemSource } from '../attention/item-ref';
 import { OwnPrError } from '../gh/own-pr-error';
+import { resolveApprovalTarget, type PrApprover } from '../gh/pr-approval';
 import { parsePrUrl } from '../gh/pr-url';
 import { computeSessionChanges } from './session-changes';
 import { parseShutdownRequest, type ShutdownController } from './shutdown';
@@ -99,6 +100,12 @@ export interface ApiServerDeps {
   qaDiscovery?: { discover(ticketKey: string): Promise<QaDiscoverResult> };
   /** R51 — the respond-mode factory. Absent makes `{ mode: 'respond' }` a clean 404. */
   respondFactory?: RespondSessionFactory;
+  /**
+   * The HUMAN's approval on a reviewed pull request — the one GitHub write no
+   * agent may make. Absent makes `POST /sessions/:id/approve-pr` a clean 404,
+   * exactly like every other optional capability here.
+   */
+  prApprover?: PrApprover;
   /** Phase 15 — absent means QA verification is not configured on this wiring (404, exactly like respond). */
   qaFactory?: QaSessionFactory;
   /**
@@ -1249,6 +1256,29 @@ async function handleRequest(
       const id = parts[1];
       const session: Session = await deps.pipeline.approvePlan(id);
       sendJson(res, 200, { session });
+      return;
+    }
+
+    // The human's approval, and the ONLY pull request it can reach is the one
+    // this session reviewed: the route takes a session id, the repo slug and
+    // the number come out of `session.pr`, and a body that names a different
+    // pull request is refused rather than honoured (../gh/pr-approval.ts).
+    // The engine grows no "approve any PR" endpoint.
+    if (
+      method === 'POST' && parts.length === 3 && parts[0] === 'sessions' &&
+      parts[2] === 'approve-pr' && deps.prApprover !== undefined
+    ) {
+      const id = parts[1];
+      const session = await deps.sessionStore.load(id); // SessionNotFoundError -> 404
+      const body = req.headers['content-length'] === undefined ? undefined : await readJsonBody(req);
+      const resolved = resolveApprovalTarget(session, body);
+      if (!resolved.ok) {
+        if (resolved.kind === 'retargeted') throw new ValidationError(resolved.message);
+        throw new UnsupportedStageError(resolved.message);
+      }
+      await deps.prApprover.approve(resolved.target);
+      const updated = await deps.pipeline.transition(id, 'approved');
+      sendJson(res, 200, { session: updated });
       return;
     }
 

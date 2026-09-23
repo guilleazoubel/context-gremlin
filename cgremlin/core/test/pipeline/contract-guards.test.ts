@@ -197,10 +197,16 @@ describe('phase 20 — posting goes through the scoped helper, and nowhere else'
     expect(review).toContain('"where"');
   });
 
-  it('the review brief maps every contract verdict to its GitHub event', () => {
+  /**
+   * Two events, not three: an agent may never approve. `✅ Approve` stays a
+   * REVIEW.md verdict (the opinion), and posts as a COMMENT (the authority is
+   * the human's). `.cgremlin/post-review` refuses the approving event.
+   */
+  it('the review brief maps each postable verdict to its GitHub event, and approve to none', () => {
     expect(review).toContain('🔄 Request changes` → `REQUEST_CHANGES');
-    expect(review).toContain('✅ Approve` → `APPROVE');
     expect(review).toContain('💬 Comment` → `COMMENT');
+    expect(review).not.toMatch(/APPROVE/);
+    expect(review).toMatch(/✅ Approve` verdict posts as a `COMMENT`/);
   });
 
   it('the review brief posts a NEW review on a re-review and says how to spot its own prior comments', () => {

@@ -347,6 +347,16 @@ export class CoreClient {
   }
 
   /**
+   * The human's approval on a reviewed pull request — the one GitHub write no agent may make
+   * (`core/src/gh/pr-approval.ts`). A SESSION id is the only thing that crosses: the engine reads
+   * the repo slug and the number out of that session's own document, so there is no parameter
+   * here that could aim the approval at a different pull request.
+   */
+  async approvePr(id: string): Promise<HttpResult> {
+    return await this.request('POST', `/sessions/${assertSessionId(id)}/approve-pr`);
+  }
+
+  /**
    * Phase 21 — the second half of the handoff, and the reason the first half was worth nothing on
    * its own. `POST /sessions/:id/promote` creates the CHILD development session: same workspace,
    * `lineage.parentSessionId` set to this investigation, FINDINGS.md and PLAN.md copied across,
