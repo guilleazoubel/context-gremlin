@@ -13,7 +13,13 @@ import path from 'node:path';
 import { CoreClient, EngineNotRunningError, type HttpResult } from '../../src/core-client';
 import type { EngineState, Trigger } from '../../src/engine/manager';
 import { createUi, type Ui } from '../../src/ui/wiring';
-import { STOP_RUN_CONFIRM_LABEL, validatePrUrl, validateTicket } from '../../src/ui/commands';
+import {
+  APPROVE_PR_CONFIRM_LABEL,
+  APPROVE_PR_CONFIRM_TEXT,
+  STOP_RUN_CONFIRM_LABEL,
+  validatePrUrl,
+  validateTicket,
+} from '../../src/ui/commands';
 import { heartbeatIntervalMs } from '../../src/ui/terminal';
 import { FakeHost, FakeWebviewView } from '../support/fake-host';
 import { FakeBridge, FakeEngineManager } from '../support/fake-engine-manager';
@@ -1412,5 +1418,29 @@ describe('the handoff: continuing a wedged investigation into its plan stage', (
     const sent = h.since(mark).filter((r) => r.path === `/sessions/${INV_SESSION}/run`);
     expect(sent.map((r) => r.method)).toEqual(['POST']);
     expect(sent[0].body).toEqual({ stage: 'plan' });
+  });
+});
+
+/**
+ * The human's approve verb. An agent may never approve, so this is the only path an approval
+ * can take — and it asks first, because the whole defect was an approval nobody chose.
+ */
+describe('cgremlin.approvePr — the approval is the human’s', () => {
+  it('asks a modal naming the consequence, then POSTs to the named session and nowhere else', async () => {
+    const h = await connected();
+    h.host.messageAnswers = [APPROVE_PR_CONFIRM_LABEL];
+    const mark = h.mark();
+    await h.host.invoke('cgremlin.approvePr', HB_ITEM, 'agent:inv-hb-627');
+    expect(h.host.callsOf('showWarningMessage')[0].args[0]).toBe(APPROVE_PR_CONFIRM_TEXT);
+    expect(h.host.callsOf('showWarningMessage')[0].args[1]).toEqual({ modal: true });
+    expect(paths(h, mark)).toEqual(['POST /sessions/inv-hb-627/approve-pr']);
+  });
+
+  it('never reaches the engine when the modal is cancelled', async () => {
+    const h = await connected();
+    h.host.messageAnswers = [undefined];
+    const mark = h.mark();
+    await h.host.invoke('cgremlin.approvePr', HB_ITEM, 'agent:inv-hb-627');
+    expect(paths(h, mark)).toEqual([]);
   });
 });

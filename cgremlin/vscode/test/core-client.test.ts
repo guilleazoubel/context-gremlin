@@ -161,6 +161,8 @@ describe('CoreClient — writes', () => {
     const { core, server } = await client();
     await core.startReview('acme/web', 101);
     await core.approvePlan('inv-acme-web-7f3');
+    // The human's approval: a SESSION id and nothing else — no repo, no number.
+    await core.approvePr('pr-acme-web-101');
     await core.stop('dev-acme-api-7');
     await core.retry('dev-acme-api-7');
     await core.run('dev-acme-api-7', 'develop');
@@ -168,12 +170,13 @@ describe('CoreClient — writes', () => {
     expect(server.requests.map((r) => `${r.method} ${r.path}`)).toEqual([
       'POST /prs/acme/web/101/review',
       'POST /sessions/inv-acme-web-7f3/approve-plan',
+      'POST /sessions/pr-acme-web-101/approve-pr',
       'POST /sessions/dev-acme-api-7/stop',
       'POST /sessions/dev-acme-api-7/retry',
       'POST /sessions/dev-acme-api-7/run',
       'POST /prs/scan',
     ]);
-    expect(server.requests[4]?.body).toEqual({ stage: 'develop' });
+    expect(server.requests[5]?.body).toEqual({ stage: 'develop' });
   });
 
   it('acks through the generic path and the two aliases', async () => {
@@ -244,6 +247,7 @@ describe('path parameters can never truncate the request path', () => {
       await expect(core.claim(id)).rejects.toBeInstanceOf(InvalidPathParamError);
       await expect(core.release(id)).rejects.toBeInstanceOf(InvalidPathParamError);
       await expect(core.approvePlan(id)).rejects.toBeInstanceOf(InvalidPathParamError);
+      await expect(core.approvePr(id)).rejects.toBeInstanceOf(InvalidPathParamError);
       await expect(core.stop(id)).rejects.toBeInstanceOf(InvalidPathParamError);
       await expect(core.retry(id)).rejects.toBeInstanceOf(InvalidPathParamError);
       await expect(core.run(id, 'findings')).rejects.toBeInstanceOf(InvalidPathParamError);

@@ -84,6 +84,15 @@ export const STOP_RUN_CONFIRM_TEXT =
   "This ends the agent's current run. Work it already wrote to files is kept.";
 export const STOP_RUN_CONFIRM_LABEL = 'Stop the run';
 
+/**
+ * The approval is the human's, always — an agent may never post one (`core/src/gh/pr-approval.ts`
+ * and the post helper that refuses the event). So this verb asks, in the user's own words, before
+ * anything reaches GitHub: a click is consent, and it has to be a click that was meant.
+ */
+export const APPROVE_PR_CONFIRM_TEXT =
+  'This posts YOUR approval on this pull request, under your GitHub account. An approval counts toward branch protection and can let the pull request merge.';
+export const APPROVE_PR_CONFIRM_LABEL = 'Post my approval';
+
 export interface CommandDeps {
   host: Host;
   client: CoreClient;
@@ -536,6 +545,19 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
     host.registerCommand('cgremlin.approvePlan', (arg, childArg) =>
       onNamedSession(arg, childArg, (id) => client.approvePlan(id)),
     ),
+    /**
+     * The human's approval on the pull request the NAMED review session reviewed. The engine
+     * reads the repo and the number out of that session; nothing here can name another one.
+     */
+    host.registerCommand('cgremlin.approvePr', async (arg, childArg) => {
+      const answer = await host.showWarningMessage(
+        APPROVE_PR_CONFIRM_TEXT,
+        { modal: true },
+        APPROVE_PR_CONFIRM_LABEL,
+      );
+      if (answer !== APPROVE_PR_CONFIRM_LABEL) return;
+      await onNamedSession(arg, childArg, (id) => client.approvePr(id));
+    }),
     host.registerCommand('cgremlin.stop', async (arg, childArg) => {
       const item = needsItem(arg);
       if (item === null) return;

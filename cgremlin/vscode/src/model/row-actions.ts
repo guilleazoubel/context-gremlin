@@ -178,6 +178,26 @@ export function approvableInvestigation(facts: ActionFacts): ActionAgent | undef
 }
 
 /**
+ * The verb says WHOSE approval it is. An agent may never approve — that authority is the
+ * human's, always — so the label names the actor rather than the act.
+ */
+export const APPROVE_PR_LABEL = 'Approve this PR yourself';
+
+/**
+ * The review whose pull request the human may now approve: one that has actually WRITTEN its
+ * review (`ready` — `evaluateReview`'s clean outcome) and is not mid-run. `approved` is excluded
+ * because GitHub already has the approval, and every earlier phase because approving a review
+ * that does not exist yet is the very thing being prevented. A PENDING agent is excluded for the
+ * reason every other lookup here excludes it: it has no session to POST to.
+ */
+export function approvableReview(facts: ActionFacts): ActionAgent | undefined {
+  return facts.agents.find(
+    (agent) =>
+      agent.mode === 'review' && agent.phase === 'ready' && !agent.running && agent.pending !== true,
+  );
+}
+
+/**
  * Phase 21 — the investigation this item's development must continue FROM.
  *
  * `PipelineService.canPromote` accepts `approved`, or `plan_ready` only when the session was
@@ -585,6 +605,23 @@ export function rowActions(facts: ActionFacts, list: WorkListKind): RowAction[] 
     if (chatAction !== null) push(chatAction, 'inline');
     if (watchAction !== null) push(watchAction, 'inline');
     if (stopAction !== null) push(stopAction, 'inline');
+  }
+
+  // An agent may never approve: the post helper refuses the event and the brief no longer names
+  // it (`core/src/workspace/post-helpers.ts`, `core/src/pipeline/prompts.ts`). The approval is the
+  // human's, so the human needs a verb for it — on every list, wherever a review has actually been
+  // written. Never `primary`, and never promoted to it by the fallback below: approving BEFORE
+  // reading the review is the thing this whole change exists to stop.
+  const reviewed = approvableReview(facts);
+  if (reviewed !== undefined && !allLanded(facts)) {
+    push(
+      {
+        command: 'cgremlin.approvePr',
+        label: APPROVE_PR_LABEL,
+        childId: agentChildId(reviewed.sessionId),
+      },
+      'inline',
+    );
   }
 
   // Defect 3 — the way to give the conversation BACK, on every list, wherever somebody is
