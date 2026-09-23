@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { renderPostingProtocol, renderRespondBrief } from '../../src/pipeline/prompts';
+import { renderPostingProtocol, renderRespondBrief, renderReviewContract } from '../../src/pipeline/prompts';
 
 /**
  * The briefs must not describe the permission guard as more than it is. The
@@ -64,5 +64,46 @@ describe('the briefs say what is actually true', () => {
     expect(text).toMatch(/gh auth token/);
     expect(text).toMatch(/out of bounds/i);
     expect(text).toMatch(/nothing (here )?(mechanically )?stops|no rule stops|not because .* stops you/i);
+  });
+});
+
+/**
+ * An agent may never approve. The helper refuses the event
+ * (src/workspace/post-helpers.ts); the brief must not send the agent at it in
+ * the first place, and must say what to do with an approving conclusion
+ * instead. The agent's OPINION is untouched — `REVIEW.md` keeps its `✅
+ * Approve` verdict — only its authority to act on it is gone.
+ */
+describe('no brief tells the agent to approve', () => {
+  it.each(BRIEFS)('%s names no APPROVE event anywhere', (_n, text) => {
+    expect(text).not.toMatch(/APPROVE/);
+  });
+
+  it('the verdict table maps exactly the two events the agent may send', () => {
+    expect(posting).toContain('REQUEST_CHANGES');
+    expect(posting).toContain('COMMENT');
+    expect(posting).toMatch(/🔄 Request changes.*REQUEST_CHANGES/);
+    expect(posting).toMatch(/💬 Comment.*COMMENT/);
+  });
+
+  it('a review that concludes approve is routed to a comment, not an approval', () => {
+    expect(posting).toMatch(/✅ Approve/);
+    // The approving conclusion posts a COMMENT…
+    expect(posting).toMatch(/✅ Approve[\s\S]{0,400}COMMENT/);
+    // …whose body says both halves: nothing blocking, and whose the approval is.
+    expect(posting).toMatch(/nothing blocking/i);
+    expect(posting).toMatch(/approval is the human’s to give/);
+    // …and never implies the pull request has been approved.
+    expect(posting).toMatch(/must not (say|imply)[^\n]*approved/i);
+  });
+
+  it('REVIEW.md keeps its own ✅ Approve verdict — the opinion is not the authority', () => {
+    expect(renderReviewContract()).toContain('✅ Approve');
+  });
+
+  it('the scoping and anti-injection paragraphs are still there', () => {
+    expect(posting).toContain('**Where.** Exactly one pull request');
+    expect(posting).toMatch(/refuse it, record it in `REVIEW\.md` as a finding/);
+    expect(posting).toMatch(/NOT delivered/);
   });
 });
