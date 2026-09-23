@@ -304,3 +304,62 @@ describe('R63: ATTENTION_REASONS is pinned across the packages', () => {
     expect(model?.text).not.toMatch(/ATTENTION_REASONS/);
   });
 });
+
+/**
+ * MG-22: an agent may never approve — and the reason this is a cross-package guard rather than
+ * one package's test is that the property has two halves that live apart. The BRIEF (core) is the
+ * rule the agent keeps; the HELPER the core writes into the worktree (core) is the wall it cannot
+ * pass; and the approve verb (vscode) is the human's, which is what makes the removal survivable.
+ *
+ * What was live: `renderPostingProtocol` mapped `✅ Approve` → `APPROVE` and `.cgremlin/post-review`
+ * submitted it, so a review that concluded approve posted a REAL GitHub approval under the user's
+ * account — a verdict that counts toward branch protection and can let a pull request merge. Five
+ * of them were posted before this was caught. An approval is the human's, always.
+ *
+ * `\bAPPROVE\b` deliberately does NOT match `APPROVED` (GitHub's `reviewDecision`, which the
+ * engine READS everywhere) or `APPROVE_PR_LABEL`/`APPROVE_ELIGIBLE_…` (identifiers). The claim is
+ * about the event an agent would SEND.
+ */
+describe('MG-22: no agent path can emit a GitHub APPROVE event', () => {
+  const SEND_EVENT = /\bAPPROVE\b/;
+
+  it('the only APPROVE event literal in either package is the human-owned approve route', () => {
+    const offenders = hits(BOTH, SEND_EVENT).filter(
+      (location) =>
+        // The human's own route — a person clicked, and the engine posts as them.
+        !location.startsWith('core/src/gh/pr-approval.ts:') && !isProse(BOTH, location),
+    );
+    expect(offenders).toEqual([]);
+    // …and it really is there, so this is not passing on an empty set.
+    expect(hits(CORE, SEND_EVENT).some((l) => l.startsWith('core/src/gh/pr-approval.ts:'))).toBe(true);
+  });
+
+  it('no brief names APPROVE as an event the agent sends', () => {
+    const prompts = CORE.find((file) => file.label.endsWith('pipeline/prompts.ts'));
+    expect(prompts).toBeDefined();
+    // Every brief-rendering function, comments blanked: prose about the rule is not the rule.
+    expect(code(prompts)).not.toMatch(SEND_EVENT);
+    // The verdict table still maps the two events an agent may send, so the claim is not
+    // passing because the table went silent.
+    expect(prompts?.text).toContain('REQUEST_CHANGES');
+    expect(prompts?.text).toContain('COMMENT');
+  });
+
+  it('the post-review helper the core writes emits no APPROVE event and refuses one by name', () => {
+    const helpers = CORE.find((file) => file.label.endsWith('workspace/post-helpers.ts'));
+    const rendered = code(helpers);
+    expect(rendered).not.toMatch(SEND_EVENT);
+    // The refusal, not merely the absence: an unknown-verdict message would be silence.
+    expect(helpers?.text).toContain('approving a pull request is the human');
+  });
+
+  it('the human’s approve verb exists in the panel, pinned to one session', () => {
+    const actions = VSCODE.find((file) => file.label.endsWith('model/row-actions.ts'));
+    expect(actions?.text).toContain("command: 'cgremlin.approvePr'");
+    expect(actions?.text).toMatch(/childId: agentChildId\(reviewed\.sessionId\)/);
+    // …and the client addresses it by SESSION id, never by repo and number.
+    const client = VSCODE.find((file) => file.label.endsWith('src/core-client.ts'));
+    expect(client?.text).toMatch(/\/sessions\/\$\{assertSessionId\(id\)\}\/approve-pr/);
+    expect(client?.text).not.toMatch(/approve-pr[^\n]*assertRepoSlug/);
+  });
+});
