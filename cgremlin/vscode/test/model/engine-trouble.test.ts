@@ -187,11 +187,28 @@ describe('what Refresh says when the engine is not running', () => {
     );
   });
 
-  it('names the state, and the command, for every other kind', () => {
+  it('names an action for every other kind, never the bare internal word', () => {
     for (const kind of ['unknown', 'starting', 'stopping', 'mismatch'] as const) {
       const message = refreshBlockedMessage(health({ kind }));
-      expect(message, kind).toContain(kind);
-      expect(message, kind).toContain('cgremlin: Start the engine');
+      expect(message, kind).not.toBeNull();
+      expect(message, kind).not.toContain(`(${kind})`);
     }
+  });
+
+  it('says the engine is starting or stopping, and to try again', () => {
+    expect(refreshBlockedMessage(health({ kind: 'starting' }))).toContain('starting');
+    expect(refreshBlockedMessage(health({ kind: 'stopping' }))).toContain('stopping');
+  });
+
+  it('says a mismatch is this window replacing the running engine, not the word "mismatch"', () => {
+    const message = refreshBlockedMessage(health({ kind: 'mismatch' }));
+    expect(message).not.toContain('mismatch');
+    expect(message).toContain('replacing');
+  });
+
+  it('tells the user how to start the engine when its state is simply unknown', () => {
+    expect(refreshBlockedMessage(health({ kind: 'unknown' }))).toContain(
+      'cgremlin: Start the engine',
+    );
   });
 });

@@ -138,6 +138,10 @@ export function configLineFor(text: string, slug: string | null): number | undef
 export function registerCommands(deps: CommandDeps): DisposableLike[] {
   const { host, client, coordinator, panel, chat } = deps;
 
+  /** `cgremlin.refreshInventory`'s single in-flight probe, so a burst of clicks shares one probe
+   *  and produces one message rather than one of each per click. */
+  let refreshInFlight: Promise<void> | null = null;
+
   const idOf = (arg: unknown): string | null => (typeof arg === 'string' && arg !== '' ? arg : null);
 
   const itemOf = (arg: unknown): WorkItem | null => {
@@ -622,17 +626,37 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
       if (surface(await send(() => client.ackItem(path)))) coordinator.schedule();
     }),
 
-    host.registerCommand('cgremlin.refreshInventory', async () => {
-      // Nothing to refresh, and — the bug this replaces — no sign of why. The wording is the
-      // panel row's own, and the command re-probes so the fix (stopping an old engine) takes
-      // effect without hunting for a second command.
-      const blocked = deps.engine === undefined ? null : refreshBlockedMessage(deps.engine.health());
-      if (blocked !== null) {
-        void host.showInformationMessage(blocked, undefined);
-        await deps.engine?.reprobe();
-        return;
-      }
-      if (surface(await send(() => client.scan()))) coordinator.schedule();
+    host.registerCommand('cgremlin.refreshInventory', () => {
+      // Check first, then speak. The bug this replaces read the LAST KNOWN engine state, showed a
+      // conclusion, and only then re-probed — so a user could be told "not ready (mismatch)" by an
+      // engine that had been healthy for fourteen hours. Now the probe runs first and the message
+      // (if any) describes what it actually found.
+      //
+      // `refreshInFlight` shares one probe (and one message) across a burst of clicks: the probe
+      // itself is already bounded (`EngineManager.probeOrRetry` caps retries, and a spawn attempt
+      // is capped by `START_TIMEOUT_MS`), and a rejection is caught rather than left to hang the
+      // command or crash it — the click still gets an answer, off whatever health was last known.
+      if (refreshInFlight !== null) return refreshInFlight;
+      const run = (async () => {
+        if (deps.engine !== undefined) {
+          try {
+            await deps.engine.reprobe();
+          } catch {
+            // A probe that failed outright is not a hang: fall through and report on whatever the
+            // engine last told us rather than leaving the click with no answer at all.
+          }
+        }
+        const blocked = deps.engine === undefined ? null : refreshBlockedMessage(deps.engine.health());
+        if (blocked !== null) {
+          void host.showInformationMessage(blocked, undefined);
+          return;
+        }
+        if (surface(await send(() => client.scan()))) coordinator.schedule();
+      })();
+      refreshInFlight = run.finally(() => {
+        if (refreshInFlight === run) refreshInFlight = null;
+      });
+      return refreshInFlight;
     }),
 
     host.registerCommand('cgremlin.newInvestigation', async () => {
