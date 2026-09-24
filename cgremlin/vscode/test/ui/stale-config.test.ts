@@ -13,10 +13,12 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { CoreClient } from '../../src/core-client';
 import { createUi, type Ui } from '../../src/ui/wiring';
+import { NO_REPOS_MESSAGE, REPOS_UNREADABLE_MESSAGE } from '../../src/ui/commands';
 import { FakeHost } from '../support/fake-host';
 import { FakeBridge, FakeEngineManager } from '../support/fake-engine-manager';
 import { EngineSurface } from '../../src/ui/engine';
 import {
+  fixtures,
   startStubServer,
   type StubHandler,
   type StubServerHandle,
@@ -86,6 +88,20 @@ async function connectDuringRestart(h: Harness): Promise<void> {
   await h.server.restart();
 }
 
+const emptyRepos: StubHandler = (req) => {
+  if (req.method === 'GET' && req.path === '/config') {
+    const base = (fixtures.config as { config: Record<string, unknown> }).config;
+    return { status: 200, body: { config: { ...base, repos: [] } } };
+  }
+  return undefined;
+};
+
+function lastWarning(host: FakeHost): string {
+  const calls = host.callsOf('showWarningMessage');
+  expect(calls.length).toBeGreaterThan(0);
+  return calls[calls.length - 1].args[0] as string;
+}
+
 describe('a coordinator whose first connect failed', () => {
   it('fetches the config it never got rather than answering with nothing', async () => {
     const h = await harness();
@@ -126,4 +142,49 @@ describe('a coordinator whose first connect failed', () => {
     await h.server.restart();
     expect((await h.ui.coordinator.ensureConfig())?.repos).toEqual(['acme/web', 'acme/api']);
   });
+});
+
+describe('the repo picker distinguishes the two empty answers', () => {
+  it('names core.json only when it has the config and the config lists no repos', async () => {
+    const h = await harness(emptyRepos);
+    expect(await h.ui.connect()).toBe(true);
+    await h.host.executeCommand('cgremlin.newInvestigation');
+    expect(lastWarning(h.host)).toBe(NO_REPOS_MESSAGE);
+    expect(h.host.callsOf('showQuickPick')).toEqual([]);
+  });
+
+  it('talks about reaching the engine, and offers the way through, when it has no config', async () => {
+    const h = await harness();
+    await h.server.stop();
+    expect(await h.ui.connect()).toBe(false);
+    h.host.messageAnswers = ['Start the engine'];
+    await h.host.executeCommand('cgremlin.newInvestigation');
+
+    const warning = h.host.callsOf('showWarningMessage').at(-1);
+    expect(warning?.args[0]).toBe(REPOS_UNREADABLE_MESSAGE);
+    expect(warning?.args[0]).not.toContain('core.json');
+    // The way through, not a blamed file: the button starts the engine the message is about.
+    expect(warning?.args[2]).toEqual(['Start the engine']);
+    expect(
+      h.host.callsOf('executeCommand').some((c) => c.args[0] === 'cgremlin.engine.start'),
+    ).toBe(true);
+    expect(h.host.callsOf('showQuickPick')).toEqual([]);
+  });
+});
+
+/**
+ * The reported scenario end to end: install a new build, the engine restarts, the window's first
+ * connect lands in that gap, the engine is healthy seconds later — and the user starts an
+ * investigation.
+ */
+it('offers both repos to an investigation started after a failed first connect', async () => {
+  const h = await harness();
+  await connectDuringRestart(h);
+
+  h.host.quickPickAnswers = [undefined];
+  await h.host.executeCommand('cgremlin.newInvestigation');
+
+  const pick = h.host.callsOf('showQuickPick')[0];
+  expect(pick?.args[0]).toEqual(['acme/web', 'acme/api']);
+  expect(h.host.callsOf('showWarningMessage')).toEqual([]);
 });
