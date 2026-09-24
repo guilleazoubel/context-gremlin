@@ -142,7 +142,7 @@ describe('MG-B8 four lists and no tree', () => {
     );
   });
 
-  it('renders exactly the six sections, in §5 order', () => {
+  it('renders exactly the seven sections, in §5 order', () => {
     const h = build();
     h.ready();
     expect(h.state().sections.map((section) => section.key)).toEqual([
@@ -150,6 +150,7 @@ describe('MG-B8 four lists and no tree', () => {
       'parkingLot:reviewing',
       'parkingLot:someoneOnIt',
       'myWork',
+      'nextRelease',
       'investigations',
       'waitingForReview',
     ]);
@@ -288,9 +289,9 @@ describe('R54 the messages the panel acts on', () => {
     const h = build();
     h.ready();
     const collapsed = () => h.state().sections.map((s) => s.collapsed);
-    expect(collapsed()).toEqual([false, false, true, false, false, false]);
+    expect(collapsed()).toEqual([false, false, true, false, false, false, false]);
     h.view.webview.emit({ type: 'toggleSection', key: 'parkingLot:someoneOnIt', collapsed: false });
-    expect(collapsed()).toEqual([false, false, false, false, false, false]);
+    expect(collapsed()).toEqual([false, false, false, false, false, false, false]);
   });
 
   it('R48 — a row expands to its children, and the expansion survives a re-render', () => {
@@ -488,9 +489,9 @@ describe('R35/Phase 8 the banners', () => {
     // still expand, and the links in them never needed an engine to open.
     h.panel.setItems(response());
     expect(h.state().trouble).not.toBeNull();
-    expect(h.state().sections).toHaveLength(6);
+    expect(h.state().sections).toHaveLength(7);
     h.panel.setTrouble(null);
-    expect(h.state().sections).toHaveLength(6);
+    expect(h.state().sections).toHaveLength(7);
   });
 });
 

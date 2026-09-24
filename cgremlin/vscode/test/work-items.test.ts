@@ -64,16 +64,17 @@ class FakeState implements SortStore {
 
 // ---------------------------------------------------------------------------
 
-describe('MG-B8 buildWorkLists returns exactly the four lists', () => {
-  it('has the four R47 keys and no reviewing list', () => {
+describe('MG-B8 buildWorkLists returns exactly the five lists', () => {
+  it('has the five list keys and no reviewing list', () => {
     const built = lists();
     expect(Object.keys(built).sort()).toEqual(
-      ['investigations', 'myWork', 'parkingLot', 'waitingForReview'].sort(),
+      ['investigations', 'myWork', 'nextRelease', 'parkingLot', 'waitingForReview'].sort(),
     );
     expect(Object.keys(built)).not.toContain('reviewing');
     expect([...WORK_LIST_KINDS]).toEqual([
       'parkingLot',
       'myWork',
+      'nextRelease',
       'investigations',
       'waitingForReview',
     ]);
@@ -252,6 +253,7 @@ describe('R47 the sorts', () => {
       parkingLot: 'untouchedFirstThenOldest',
       waitingForReview: 'oldest',
       myWork: 'needsYouThenRecent',
+      nextRelease: 'needsYouThenRecent',
       investigations: 'newest',
     });
     expect(SORT_OPTIONS.parkingLot).toEqual([

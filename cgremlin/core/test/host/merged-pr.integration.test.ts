@@ -213,8 +213,10 @@ describe('the merged PR, through the real engine', () => {
     expect(item!.ticket?.key).toBe('HB-1489');
     expect(item!.ticket?.status).toBe('UAT');
     expect(item!.prs.map((p) => `${p.repo}#${p.number}`)).toEqual([`${REPO}#2180`]);
-    // It stays in My dev work: the ticket is assigned to me and still in UAT.
-    expect(lists.myWork).toContain('ticket:HB-1489');
+    // It has left My dev work: the ticket is mine, but UAT is a `jira.qaStatuses` entry, so the
+    // work has been handed on and the row belongs under Next release.
+    expect(lists.nextRelease).toContain('ticket:HB-1489');
+    expect(lists.myWork).not.toContain('ticket:HB-1489');
     expect(lists.waitingForReview).not.toContain('ticket:HB-1489');
     // And there is no second, PR-shaped row for the same work.
     expect(items.filter((i) => i.prs.some((p) => p.number === 2180)).length).toBe(1);

@@ -159,6 +159,7 @@ describe('§5 the sort control', () => {
     expect(withSorts).toEqual([
       'parkingLot:untouched',
       'myWork',
+      'nextRelease',
       'investigations',
       'waitingForReview',
     ]);

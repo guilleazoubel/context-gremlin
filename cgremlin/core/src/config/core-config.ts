@@ -119,6 +119,15 @@ export const JiraConfigSchema = z.object({
   scanBudgetMs: z.number().int().positive().default(20_000),
   /** Phase 15 — the statuses that mean "this ticket is in QA". Instance-specific. */
   qaStatuses: z.array(z.string().min(1)).default(['QA', 'UAT', 'Ready for QA']),
+  /**
+   * The statuses PAST QA — signed off, queued for a release. Its own key rather than more
+   * entries in `qaStatuses`, because that list also arms the QA trigger: "Waiting for Release"
+   * there would auto-verify work QA has already passed. The two lists TOGETHER are what moves a
+   * row out of "My dev work" and into "Next release".
+   */
+  releaseStatuses: z
+    .array(z.string().min(1))
+    .default(['Waiting for Release', 'Ready for Release', 'Ready to Release', 'Waiting for Deploy']),
 });
 export type JiraConfig = z.infer<typeof JiraConfigSchema>;
 

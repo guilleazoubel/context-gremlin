@@ -50,6 +50,9 @@ export interface WorkItemServiceDeps {
     watchAuthors: readonly string[];
     showAllRepoPrs: boolean;
     projectKeys: readonly string[];
+    /** `jira.qaStatuses` / `jira.releaseStatuses` — the "Next release" split (`handedOn`). */
+    qaStatuses?: readonly string[];
+    releaseStatuses?: readonly string[];
     botLogins?: readonly string[];
     jiraSiteUrl?: string;
   };
@@ -130,6 +133,8 @@ export class WorkItemService {
       watchAuthors: this.deps.config.watchAuthors,
       showAllRepoPrs: this.deps.config.showAllRepoPrs,
       projectKeys: this.deps.config.projectKeys,
+      qaStatuses: this.deps.config.qaStatuses ?? [],
+      releaseStatuses: this.deps.config.releaseStatuses ?? [],
       prStates,
       ...(this.deps.config.botLogins !== undefined ? { botLogins: this.deps.config.botLogins } : {}),
       ...(this.deps.config.jiraSiteUrl !== undefined ? { jiraSiteUrl: this.deps.config.jiraSiteUrl } : {}),
@@ -216,6 +221,8 @@ export class WorkItemService {
       watchAuthors: this.deps.config.watchAuthors,
       showAllRepoPrs: this.deps.config.showAllRepoPrs,
       projectKeys: this.deps.config.projectKeys,
+      qaStatuses: this.deps.config.qaStatuses ?? [],
+      releaseStatuses: this.deps.config.releaseStatuses ?? [],
       prStates,
       ...(this.deps.config.botLogins !== undefined ? { botLogins: this.deps.config.botLogins } : {}),
       ...(this.deps.config.jiraSiteUrl !== undefined ? { jiraSiteUrl: this.deps.config.jiraSiteUrl } : {}),

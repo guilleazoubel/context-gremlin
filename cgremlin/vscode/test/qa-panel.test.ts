@@ -78,8 +78,8 @@ describe('the mode, said once (§8)', () => {
     expect(qaStateText('verifying')).toBe('verifying');
     // Task 2 — the contract's own verdict label, because `ready` alone is the word EVERY
     // finished agent's phase reads as, and the QA row was indistinguishable from the rest.
-    expect(qaStateText('ready')).toBe('ready to deploy');
-    expect(qaStateText('not_ready')).toBe('not ready');
+    expect(qaStateText('ready')).toBe('passed');
+    expect(qaStateText('not_ready')).toBe('failed');
     // Gap 1 — a run failure (no verdict was ever reached) reads as its own
     // word now: 'blocked' is reserved for the QA VERDICT of the same name,
     // and conflating the two is exactly the ambiguity Gap 1 removes.
@@ -90,11 +90,11 @@ describe('the mode, said once (§8)', () => {
   // Gap 1 — `not_ready` is the one PHASE both real verdicts fold into
   // (R79); the verdict argument is what tells a failed acceptance criterion
   // apart from an agent that could not test at all.
-  it('a not_ready phase reads by its own verdict: not ready, or blocked', () => {
-    expect(qaStateText('not_ready', 'not_ready')).toBe('not ready');
+  it('a not_ready phase reads by its own verdict: failed, or blocked', () => {
+    expect(qaStateText('not_ready', 'not_ready')).toBe('failed');
     expect(qaStateText('not_ready', 'blocked')).toBe('blocked');
-    expect(qaStateText('not_ready', null)).toBe('not ready');
-    expect(qaStateText('not_ready')).toBe('not ready');
+    expect(qaStateText('not_ready', null)).toBe('failed');
+    expect(qaStateText('not_ready')).toBe('failed');
   });
 
   it('a run failure stays a run failure no matter what verdict is passed', () => {
@@ -107,7 +107,7 @@ describe('the mode, said once (§8)', () => {
     expect(qaStateText('ready', 'ready', { running: true })).toBe('verifying');
     expect(qaStateText('verifying', null, { runOutcome: 'failed' })).toBe('run failed');
     expect(qaStateText('verifying', null, { runOutcome: 'stopped' })).toBe('run stopped');
-    expect(qaStateText('ready', 'ready', { staleVerdict: true })).toBe('ready to deploy · older build');
+    expect(qaStateText('ready', 'ready', { staleVerdict: true })).toBe('passed · older build');
     expect(qaStateText('queued', null, { staleVerdict: true })).toBe('queued');
   });
 });
@@ -132,18 +132,18 @@ describe('MG-27 — the collapsed row, through the ONE composer', () => {
     const kinds = cells.map((c) => c.kind);
     expect(kinds.indexOf('ticketStatus')).toBeLessThan(kinds.indexOf('agentPhase'));
     const phase = cells.find((c) => c.kind === 'agentPhase');
-    expect(phase).toEqual({ kind: 'agentPhase', text: '⛋ QA not ready', tone: 'bad' });
+    expect(phase).toEqual({ kind: 'agentPhase', text: '⛋ QA failed', tone: 'bad' });
   });
 
   it('a ready verdict is quiet — the word is there, the tone is not', () => {
     const phase = meta(item({ agents: [qaAgent({ phase: 'ready', running: false })] }))
       .find((c) => c.kind === 'agentPhase');
-    expect(phase).toEqual({ kind: 'agentPhase', text: '⛋ QA ready to deploy' });
+    expect(phase).toEqual({ kind: 'agentPhase', text: '⛋ QA passed' });
   });
 
   // Gap 1 — a Blocked verdict (agent could not test) must not read as the
   // same word as a real not-ready verdict: they mean opposite things.
-  it('a blocked verdict reads "blocked", distinctly from "not ready"', () => {
+  it('a blocked verdict reads "blocked", distinctly from "failed"', () => {
     const blocked = meta(
       item({ agents: [qaAgent({ phase: 'not_ready', running: false, needsYou: true, qaVerdict: 'blocked' })] }),
     ).find((c) => c.kind === 'agentPhase');
@@ -152,7 +152,7 @@ describe('MG-27 — the collapsed row, through the ONE composer', () => {
     const notReady = meta(
       item({ agents: [qaAgent({ phase: 'not_ready', running: false, needsYou: true, qaVerdict: 'not_ready' })] }),
     ).find((c) => c.kind === 'agentPhase');
-    expect(notReady).toEqual({ kind: 'agentPhase', text: '⛋ QA not ready', tone: 'bad' });
+    expect(notReady).toEqual({ kind: 'agentPhase', text: '⛋ QA failed', tone: 'bad' });
   });
 });
 
@@ -264,13 +264,13 @@ describe('§8 — the QA part of the expanded row', () => {
   it('says the verdict once it has one', () => {
     const qa = partsOf({ agents: [qaAgent({ phase: 'not_ready', running: false, needsYou: true })] })
       .find((p) => p.kind === 'qa');
-    expect(qa?.stateText).toBe('not ready');
+    expect(qa?.stateText).toBe('failed');
     expect(qa?.state).toBe('needsYou');
   });
 
   // Gap 1 — the QA part must not disagree with the collapsed row about a
   // blocked verdict; both read the same composer.
-  it('says "blocked", not "not ready", when the verdict is blocked', () => {
+  it('says "blocked", not "failed", when the verdict is blocked', () => {
     const qa = partsOf({
       agents: [qaAgent({ phase: 'not_ready', running: false, needsYou: true, qaVerdict: 'blocked' })],
     }).find((p) => p.kind === 'qa');
@@ -389,8 +389,10 @@ describe('Phase 16 §5 — merged, but not in QA yet', () => {
         agents: [qaAgent({ phase: 'ready', running: false })],
       }),
     );
-    expect(cells.find((c) => c.kind === 'agentPhase')?.text).toBe('⛋ QA ready to deploy');
-    expect(cells.find((c) => c.kind === 'qaDeploy')?.text).toBe('build 088ce5e');
+    // The build is INSIDE the verdict now, so the two can never be read apart — and there is no
+    // second cell repeating it.
+    expect(cells.find((c) => c.kind === 'agentPhase')?.text).toBe('⛋ QA passed · build 088ce5e');
+    expect(cells.some((c) => c.kind === 'qaDeploy')).toBe(false);
   });
 
   it('says nothing at all where QA names no build', () => {

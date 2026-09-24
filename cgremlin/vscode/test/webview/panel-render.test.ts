@@ -192,6 +192,7 @@ describe('the per-section accents', () => {
       'parkingLot:reviewing',
       'parkingLot:someoneOnIt',
       'myWork',
+      'nextRelease',
       'investigations',
       'waitingForReview',
     ]);

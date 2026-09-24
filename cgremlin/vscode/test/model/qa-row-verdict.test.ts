@@ -50,15 +50,17 @@ function qaPartText(item: WorkItem): string {
 
 describe('a verification that passed reads as passed, with the build it is about', () => {
   it('says the verdict in words rather than the phase every agent shares', () => {
-    expect(qaCell(hb1490()).text).toBe('⛋ QA ready to deploy');
+    expect(qaCell(hb1490()).text).toBe('⛋ QA passed · build 0853456');
   });
 
-  it('names the QA build the verdict is for, on the same line', () => {
-    expect(cells(hb1490()).map((cell) => cell.text)).toContain('build 0853456');
+  it('names the QA build the verdict is for, in the verdict itself', () => {
+    expect(qaCell(hb1490()).text).toContain('build 0853456');
+    // And exactly once: a second cell repeating it is a second thing that can go stale.
+    expect(cells(hb1490()).filter((cell) => cell.text.includes('0853456'))).toHaveLength(1);
   });
 
   it('says the same words in the block the row opens into', () => {
-    expect(qaPartText(hb1490())).toBe('ready to deploy');
+    expect(qaPartText(hb1490())).toBe('passed · build 0853456');
   });
 });
 
@@ -66,12 +68,12 @@ describe('a verdict about an older build never reads as a verdict about this one
   const stale = hb1490({ qaDeploy: AWAITING });
 
   it('marks the verdict as being about an older build', () => {
-    expect(qaCell(stale).text).toBe('⛋ QA ready to deploy · older build');
+    expect(qaCell(stale).text).toBe('⛋ QA passed · older build');
     expect(qaCell(stale).tone).toBe('warn');
   });
 
   it('and the expanded block says it too', () => {
-    expect(qaPartText(stale)).toBe('ready to deploy · older build');
+    expect(qaPartText(stale)).toBe('passed · older build');
   });
 });
 
@@ -89,17 +91,17 @@ describe('the other four states a person has to tell apart', () => {
     expect(qaCell(never).text).toBe('⛋ QA not verified');
   });
 
-  it('a verification that came back not ready says not ready', () => {
+  it('a verification that came back not ready says failed', () => {
     const bad = hb1490({
       agents: [qaAgent({ phase: 'not_ready', qaVerdict: 'not_ready' })],
     });
-    expect(qaCell(bad).text).toBe('⛋ QA not ready');
+    expect(qaCell(bad).text).toBe('⛋ QA failed · build 0853456');
     expect(qaCell(bad).tone).toBe('bad');
   });
 
   it('a verification the agent could not perform reads as blocked, not as not-ready', () => {
     const blocked = hb1490({ agents: [qaAgent({ phase: 'not_ready', qaVerdict: 'blocked' })] });
-    expect(qaCell(blocked).text).toBe('⛋ QA blocked');
+    expect(qaCell(blocked).text).toBe('⛋ QA blocked · build 0853456');
     expect(qaCell(blocked).tone).toBe('bad');
   });
 

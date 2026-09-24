@@ -204,7 +204,7 @@ describe.skipIf(!coreIsBuilt())('QA verification end to end', () => {
     expect(item.attention.reasons).toContain('qa_not_ready');
     expect(item.needsYou).toBe(true);
     expect(toRow(item, 'myWork', Date.now()).meta).toContainEqual({
-      kind: 'agentPhase', text: '⛋ QA not ready', tone: 'bad',
+      kind: 'agentPhase', text: '⛋ QA failed', tone: 'bad',
     });
   }, 90_000);
 
@@ -218,7 +218,7 @@ describe.skipIf(!coreIsBuilt())('QA verification end to end', () => {
     const item = await itemOf(h);
     expect(item.attention.reasons).not.toContain('qa_not_ready');
     expect(toRow(item, 'myWork', Date.now()).meta).toContainEqual({
-      kind: 'agentPhase', text: '⛋ QA ready to deploy',
+      kind: 'agentPhase', text: '⛋ QA passed',
     });
   }, 90_000);
 

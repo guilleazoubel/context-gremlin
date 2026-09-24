@@ -198,7 +198,7 @@ afterEach(async () => {
 });
 
 describe('GET /items (R35, R47)', () => {
-  it('returns the FOUR list keys, with parkingLot an object of three ordered id arrays and no top-level reviewing', async () => {
+  it('returns the FIVE list keys, with parkingLot an object of three ordered id arrays and no top-level reviewing', async () => {
     await start();
     await scan([prFixture(10, 'bob')]);
     const res = await request('GET', '/items');
@@ -206,6 +206,7 @@ describe('GET /items (R35, R47)', () => {
     expect(Object.keys(res.body.lists).sort()).toEqual([
       'investigations',
       'myWork',
+      'nextRelease',
       'parkingLot',
       'waitingForReview',
     ]);
