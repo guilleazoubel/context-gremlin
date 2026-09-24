@@ -67,6 +67,27 @@ body {
   --cg-sec-waitingForReview: color-mix(in srgb, var(--vscode-charts-yellow, var(--cg-chart-fallback)) 78%, var(--vscode-foreground));
   /* Item 2's bin takes no hue of its own: it is not an area of the work, it is the margin. */
   --cg-sec-dismissed: var(--vscode-descriptionForeground);
+
+  /*
+   * "the sections and items all have the same backgrounds and its hard to differentiate."
+   *
+   * The two grounds that answer it. `--cg-row` raises a row off the sidebar so §7's 4 px gap
+   * separates two OBJECTS rather than two paragraphs; `--cg-band` is the ground under a section
+   * header, tinted with that section's own colour so the eye can count sections without reading
+   * them. Both are mixes of the theme's own tokens, so a light theme darkens and a dark theme
+   * lightens with no second palette to keep in step.
+   *
+   * The percentages are small on purpose, and they are an ORDER rather than a set of values:
+   * sidebar ground < resting row < hover < selection. 3% of the theme's foreground is the
+   * smallest step that survives both defaults while leaving hover a visible move above it — a
+   * card as strong as the hover colour would cost the panel its pointer feedback.
+   *
+   * `--cg-row` can live here because it names no section. The band CANNOT: a custom property
+   * substitutes its `var()`s where it is DECLARED, so a `--cg-band` written here would resolve
+   * `--cg-section` against `:root`, where there is none, and every band would come out untinted.
+   * It is written at the bar itself, which is inside the section that sets the colour.
+   */
+  --cg-row: color-mix(in srgb, var(--vscode-foreground) 3%, var(--vscode-sideBar-background));
 }
 
 /*
@@ -291,11 +312,17 @@ body {
 /* --- the one header level (§5) ------------------------------------------ */
 
 /*
- * Six sections in a 300 px sidebar need a rhythm, and §5 gives them one: a single sticky header
+ * Seven sections in a 300 px sidebar need a rhythm, and §5 gives them one: a single sticky header
  * level, sentence case, set well above the row text so the eye can skip a whole section without
  * reading it. The header TEXT stays on the editor's own section-header colour — yellow and green
  * titles fail contrast on a light theme — and the section's colour goes on the 3 px rule, the
  * glyph and the count badge instead.
+ *
+ * What §5 did not give it was a GROUND. The rule was three pixels wide against a sidebar that ran
+ * unbroken from the first header to the last row, so the colour was information nobody could see
+ * at a glance. The bar now carries the section's colour as a band — the same hue,
+ * at reading size — and the title above it is unchanged, because the contrast ruling that put it
+ * on the editor's own header colour still holds.
  */
 
 .section + .section {
@@ -310,7 +337,11 @@ body {
   top: 0;
   z-index: 3;
   padding-right: 6px;
-  background: var(--vscode-sideBarSectionHeader-background, var(--vscode-sideBar-background));
+  background: color-mix(
+    in srgb,
+    var(--cg-section, transparent) 12%,
+    var(--vscode-sideBarSectionHeader-background, var(--vscode-sideBar-background))
+  );
 }
 
 .section-header {
@@ -409,6 +440,9 @@ body {
 .row {
   display: block;
   padding: 10px;
+  /* The card §7's gap is a gap BETWEEN: without it, four pixels of the same colour read as
+   * paragraph spacing rather than as the edge of one piece of work. */
+  background: var(--cg-row);
   /* The section's rule, on every row of it (§5). Reserved even where there is no colour, so a
    * border that appeared with the accent could never move the text sideways. */
   border-left: 3px solid var(--cg-section, transparent);
