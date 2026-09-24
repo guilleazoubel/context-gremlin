@@ -234,20 +234,21 @@ export const MODE_NAME: Record<WorkAgentMode, string> = {
  *    more literal word.
  */
 const QA_STATE_TEXT: Record<string, string> = {
-  ready: 'ready to deploy',
-  not_ready: 'not ready',
+  ready: 'passed',
+  not_ready: 'failed',
   failed: 'run failed',
 };
 
 /**
- * Task 2 — the contract's own three verdict labels (core `prompts.ts` writes them as
- * `Ready to deploy`, `Not ready` and `Blocked`), lowercased for a row. The `ready` phase rendered
- * as the bare word `ready`, which is what EVERY finished agent's phase reads as — so the one row
- * that carried a QA verdict looked exactly like a row that had merely finished something.
+ * The three verdicts, in the words the user asked for them in: "some tag like passed in qa or
+ * failed in qa so i can spot". They used to be the contract's own labels (`Ready to deploy`,
+ * `Not ready` — core `prompts.ts`), which are what the REPORT says and are the right words there;
+ * on a row being scanned they are not what a person looking for a pass is looking for. `blocked`
+ * is neither, and keeps its own word: the verification could not be performed at all.
  */
 const QA_VERDICT_TEXT: Record<QaVerdict, string> = {
-  ready: 'ready to deploy',
-  not_ready: 'not ready',
+  ready: 'passed',
+  not_ready: 'failed',
   blocked: 'blocked',
 };
 
@@ -269,6 +270,17 @@ export interface QaStateOptions {
   runOutcome?: RunOutcome | null;
   /** `qaDeploy.state === 'awaiting'`: QA is serving a build that predates this change. */
   staleVerdict?: boolean;
+  /**
+   * The build this verdict was reached against — `qaDeploy.sha` where the state is `verified`,
+   * and NOTHING otherwise. It goes inside the verdict's own words rather than in a cell beside
+   * them, so the two can never be read apart: a re-test is then the same tag naming a different
+   * build, which is the only thing on the wire that says this result is a new one (the engine
+   * puts no QA run time on it).
+   *
+   * Never passed for an `awaiting` deploy: that sha is the build QA is SERVING, not the one the
+   * verdict is about, and naming it would be the exact misreading `older build` exists to stop.
+   */
+  build?: string | null;
 }
 
 export function qaStateText(
@@ -281,9 +293,10 @@ export function qaStateText(
   if (options.runOutcome === 'failed' || phase === 'failed') return 'run failed';
   const word =
     verdict !== null ? QA_VERDICT_TEXT[verdict] : (QA_STATE_TEXT[phase] ?? phase);
-  return options.staleVerdict === true && hasQaVerdict(phase, verdict)
-    ? `${word} · ${QA_OLDER_BUILD}`
-    : word;
+  if (!hasQaVerdict(phase, verdict)) return word;
+  if (options.staleVerdict === true) return `${word} · ${QA_OLDER_BUILD}`;
+  const build = options.build ?? null;
+  return build === null || build === '' ? word : `${word} · build ${build.slice(0, 7)}`;
 }
 
 /**
@@ -683,7 +696,9 @@ export function rowMetaCells(
   if (item.qaAttempt != null) cells.push(qaAttemptCell(item.qaAttempt));
   // Phase 16 — which side of the deploy this change is on. Muted in both
   // states: it is context for the verdict beside it, never the verdict.
-  if (item.qaDeploy != null) cells.push(qaDeployCell(item.qaDeploy));
+  // …unless the verdict has already taken it in (`qaPhaseCell`). Two cells naming one build is
+  // how the pair came to be read apart in the first place.
+  if (item.qaDeploy != null && !verdictNamesBuild(item)) cells.push(qaDeployCell(item.qaDeploy));
 
   cells.push({ kind: 'age', text: parts.age });
   cells.push({ kind: 'tier', text: parts.tier });
@@ -708,6 +723,23 @@ function qaAttemptCell(attempt: NonNullable<WorkItem['qaAttempt']>): RowMetaCell
     label: `automatic QA verification did not start — ${QA_ATTEMPT_TEXT[attempt.outcome]}`,
     tone: 'muted',
   };
+}
+
+/**
+ * Has some agent's QA cell already said which build this is about? Only a verified deploy and a
+ * real, finished verdict can absorb it — a run in flight, a dead run and an `awaiting` deploy all
+ * leave the build to the cell of its own, where it is context rather than part of a claim.
+ */
+function verdictNamesBuild(item: WorkItem): boolean {
+  if (item.qaDeploy?.state !== 'verified') return false;
+  return item.agents.some(
+    (agent) =>
+      agent.mode === 'qa' &&
+      !agent.running &&
+      agent.runOutcome !== 'failed' &&
+      agent.runOutcome !== 'stopped' &&
+      hasQaVerdict(agent.phase, agent.qaVerdict ?? null),
+  );
 }
 
 function qaDeployCell(deploy: { state: 'awaiting' | 'verified'; sha: string }): RowMetaCell {
@@ -773,6 +805,7 @@ function qaPhaseCell(
     running: agent.running,
     runOutcome: agent.runOutcome ?? null,
     staleVerdict: stale,
+    build: deploy != null && deploy.state === 'verified' ? deploy.sha : null,
   });
   // A live run says which stage and for how long wherever the engine dates it (Phase 19).
   const busy = agent.running && agent.lastRun != null ? agentBusyText(agent, now) : text;

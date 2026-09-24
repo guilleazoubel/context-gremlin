@@ -201,6 +201,8 @@ function qaPart(facts: ActionFacts, input: ItemPartsInput): ItemPart | null {
             running: agent.running,
             runOutcome: agent.runOutcome ?? null,
             staleVerdict: awaiting !== null,
+            // The SAME anchor the collapsed row uses, from the same composer (§8).
+            build: input.item.qaDeploy?.state === 'verified' ? input.item.qaDeploy.sha : null,
           }),
     detail: '',
     childId,
