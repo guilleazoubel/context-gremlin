@@ -262,7 +262,7 @@ describe('R24 one refresh, one request', () => {
     expect(paths(h, second)).toEqual(['GET /items']);
   });
 
-  it('renders the six sections from that one response', async () => {
+  it('renders the seven sections from that one response', async () => {
     const h = await connected();
     // §5: every section counts what it holds, and there is no level above it left to over-claim.
     expect(h.state().sections.map((s) => `${s.key}:${s.count}`)).toEqual([
@@ -270,6 +270,7 @@ describe('R24 one refresh, one request', () => {
       'parkingLot:reviewing:1',
       'parkingLot:someoneOnIt:1',
       'myWork:3',
+      'nextRelease:0',
       'investigations:1',
       'waitingForReview:3',
     ]);
@@ -321,7 +322,7 @@ describe('an engine that is not one this extension can use', () => {
     expect(h.state().trouble).not.toBeNull();
     h.engine.emit({ kind: 'running', version: '0.0.1', pid: 10, adopted: true });
     expect(h.state().trouble).toBeNull();
-    expect(h.state().sections).toHaveLength(6);
+    expect(h.state().sections).toHaveLength(7);
     expect(h.host.statusBarItems[0].warning).toBe(false);
   });
 
@@ -404,7 +405,7 @@ describe('an engine that is not one this extension can use', () => {
           : undefined,
     });
     expect(await h.ui.connect()).toBe(true);
-    expect(h.state().sections).toHaveLength(6);
+    expect(h.state().sections).toHaveLength(7);
     expect(h.state().trouble).toBeNull();
     expect(h.state().banner).toMatchObject({ kind: 'auth' });
     expect(h.host.statusBarItems[0].text).toBe('$(warning) cgremlin: jira rejected the token');
@@ -423,7 +424,7 @@ describe('an engine that is not one this extension can use', () => {
     broken = false;
     await h.ui.coordinator.refreshNow();
     expect(h.state().trouble).toBeNull();
-    expect(h.state().sections).toHaveLength(6);
+    expect(h.state().sections).toHaveLength(7);
     expect(h.host.statusBarItems[0].warning).toBe(false);
   });
 });

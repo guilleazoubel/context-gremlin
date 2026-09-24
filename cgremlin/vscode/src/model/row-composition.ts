@@ -660,7 +660,7 @@ export function rowMetaCells(
   if (list === 'waitingForReview') {
     const landed = landedOf(primary);
     if (landed !== '') cells.push({ kind: 'landed', text: landed });
-  } else if (list === 'myWork') {
+  } else if (list === 'myWork' || list === 'nextRelease') {
     if (item.ticket !== null) cells.push({ kind: 'ticketStatus', text: item.ticket.status });
     for (const agent of item.agents) pushAgent(agent);
   } else if (item.agents.length > 0) {
@@ -805,7 +805,7 @@ function qaNeverCell(): RowMetaCell {
 }
 
 function neverVerified(item: WorkItem, list: WorkListKind): boolean {
-  if (list !== 'myWork' && list !== 'waitingForReview') return false;
+  if (list !== 'myWork' && list !== 'nextRelease' && list !== 'waitingForReview') return false;
   if (item.ticket === null) return false;
   if (item.agents.some((agent) => agent.mode === 'qa')) return false;
   return item.prs.length > 0 && item.prs.every((pr) => pr.state === 'merged');

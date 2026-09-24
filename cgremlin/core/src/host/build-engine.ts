@@ -569,6 +569,8 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
       watchAuthors: config.watchAuthors,
       showAllRepoPrs: config.showAllRepoPrs,
       projectKeys: config.jira?.projectKeys ?? [],
+      qaStatuses: config.jira?.qaStatuses ?? [],
+      releaseStatuses: config.jira?.releaseStatuses ?? [],
       botLogins: config.botLogins,
       ...(config.jira?.siteUrl !== undefined ? { jiraSiteUrl: config.jira.siteUrl } : {}),
     },

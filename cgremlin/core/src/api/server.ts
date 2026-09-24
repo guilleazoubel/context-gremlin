@@ -1038,6 +1038,7 @@ async function handleRequest(
         const empty = {
           parkingLot: { reviewing: [] as string[], untouched: [] as string[], someoneOnIt: [] as string[] },
           myWork: [] as string[],
+          nextRelease: [] as string[],
           investigations: [] as string[],
           waitingForReview: [] as string[],
         };

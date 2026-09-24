@@ -230,7 +230,7 @@ function showsStage(
   ran: boolean,
   actions: readonly RowAction[],
 ): boolean {
-  const mine = list === 'myWork' || list === 'investigations';
+  const mine = list === 'myWork' || list === 'nextRelease' || list === 'investigations';
   if (stage === 'investigation') {
     // R49: an investigation is the no-PR mode. Where a PR exists and none ever ran, the question
     // is settled and the part would only ever say "not started" at a stage nobody can enter.

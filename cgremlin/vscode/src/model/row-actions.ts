@@ -347,7 +347,9 @@ const HIDDEN: QaGate = { kind: 'hidden' };
  * neither position is still hidden: an item nobody has proposed for QA is not a QA failure.
  */
 export function qaGate(facts: ActionFacts, list: WorkListKind): QaGate {
-  if (list !== 'myWork' && list !== 'waitingForReview') return HIDDEN;
+  // `nextRelease` is the handed-on half of `myWork`, and the half QA is actually ABOUT: a
+  // UAT row losing the QA verb by being drawn under a different header would be the defect.
+  if (list !== 'myWork' && list !== 'nextRelease' && list !== 'waitingForReview') return HIDDEN;
   const qaStatuses = facts.qaStatuses ?? [];
   const wantsQa =
     (facts.ticketStatus !== null &&

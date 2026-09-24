@@ -50,6 +50,7 @@ describe('§5 collapse state', () => {
       false,
       false,
       false,
+      false,
     ]);
   });
 
@@ -86,6 +87,7 @@ describe('§5 collapse state', () => {
       false,
       false,
       true,
+      false,
       false,
       false,
       false,

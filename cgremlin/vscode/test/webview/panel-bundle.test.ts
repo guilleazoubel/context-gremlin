@@ -99,10 +99,10 @@ describe('media/panel.js, over the answer a real engine gave', () => {
     expect(first.querySelector('.id-keys')?.textContent).not.toBe('');
   });
 
-  it('draws the six sections, and re-renders the same answer without mutating anything', () => {
+  it('draws the seven sections, and re-renders the same answer without mutating anything', () => {
     const state = hostState();
     const painted = run(state);
-    expect(painted.root.byClass('section')).toHaveLength(6);
+    expect(painted.root.byClass('section')).toHaveLength(7);
 
     painted.document.clearLog();
     painted.send({ type: 'render', state });

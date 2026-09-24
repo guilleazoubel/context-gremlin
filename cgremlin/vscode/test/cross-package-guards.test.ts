@@ -269,7 +269,7 @@ describe('MG-1: nothing in core/src/work reaches for session state', () => {
     // …and it is a group, never a list.
     expect(workItem?.text).toMatch(/ParkingLotGroup = 'reviewing'/);
     expect(workItem?.text).toMatch(
-      /WorkListKind = 'parkingLot' \| 'myWork' \| 'investigations' \| 'waitingForReview'/,
+      /WorkListKind = 'parkingLot' \| 'myWork' \| 'nextRelease' \| 'investigations' \| 'waitingForReview'/,
     );
   });
 });

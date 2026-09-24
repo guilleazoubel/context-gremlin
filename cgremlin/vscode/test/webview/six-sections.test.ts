@@ -34,13 +34,14 @@ afterEach(() => {
 const headers = (): FakeElement[] => dom.root.byClass('section-header');
 const titleOf = (node: FakeElement): string => node.byClass('section-title')[0]?.textContent ?? '';
 
-describe('task 4 — the six sections', () => {
+describe('task 4 — the panel sections', () => {
   it('names them in the order §5 fixes, each with its own key', () => {
     expect(PANEL_SECTIONS.map((section) => section.key)).toEqual([
       'parkingLot:untouched',
       'parkingLot:reviewing',
       'parkingLot:someoneOnIt',
       'myWork',
+      'nextRelease',
       'investigations',
       'waitingForReview',
     ]);
@@ -49,6 +50,7 @@ describe('task 4 — the six sections', () => {
       'Reviewing',
       'Someone is on it',
       'My dev work',
+      'Next release',
       'Investigations',
       'Waiting for review',
     ]);
@@ -56,12 +58,13 @@ describe('task 4 — the six sections', () => {
 
   it('gives each one a glyph and a colour class of its own', () => {
     const glyphs = PANEL_SECTIONS.map((section) => section.glyph);
-    expect(new Set(glyphs).size).toBe(6);
+    expect(new Set(glyphs).size).toBe(7);
     expect(PANEL_SECTIONS.map((section) => sectionClassOf(section.key))).toEqual([
       'sec-parkingLot-untouched',
       'sec-parkingLot-reviewing',
       'sec-parkingLot-someoneOnIt',
       'sec-myWork',
+      'sec-nextRelease',
       'sec-investigations',
       'sec-waitingForReview',
     ]);
@@ -74,6 +77,7 @@ describe('task 4 — the six sections', () => {
       'Reviewing',
       'Someone is on it',
       'My dev work',
+      'Next release',
       'Investigations',
       'Waiting for review',
     ]);
@@ -82,6 +86,7 @@ describe('task 4 — the six sections', () => {
       '1',
       '1',
       '3',
+      '0',
       '1',
       '3',
     ]);
@@ -124,7 +129,7 @@ describe('task 4 — the six sections', () => {
       sections: state.sections.map((section) => ({ ...section, count: 0, rows: [] })),
     };
     panel.render(empty);
-    expect(dom.root.byClass('section-empty')).toHaveLength(6);
+    expect(dom.root.byClass('section-empty')).toHaveLength(7);
     expect(dom.root.byClass('section-empty')[0].textContent).toBe('Nothing waiting for you');
   });
 });

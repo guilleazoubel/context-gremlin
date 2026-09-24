@@ -123,12 +123,13 @@ async function makeFixture(
 }
 
 describe('WorkItemService.list', () => {
-  it('returns the four lists, the items and ticketSource', async () => {
+  it('returns the five lists, the items and ticketSource', async () => {
     const { service } = await makeFixture([entry({ number: 1 })]);
     const listing = await service.list();
     expect(Object.keys(listing.lists).sort()).toEqual([
       'investigations',
       'myWork',
+      'nextRelease',
       'parkingLot',
       'waitingForReview',
     ]);

@@ -16,7 +16,7 @@
 // ---------------------------------------------------------------------------
 
 export type WorkItemKind = 'pr' | 'ticket' | 'pr+ticket' | 'session';
-export type WorkListKind = 'parkingLot' | 'myWork' | 'investigations' | 'waitingForReview';
+export type WorkListKind = 'parkingLot' | 'myWork' | 'nextRelease' | 'investigations' | 'waitingForReview';
 export type ParkingLotGroup = 'reviewing' | 'untouched' | 'someoneOnIt';
 export type WorkAgentMode = 'review' | 'investigation' | 'development' | 'respond' | 'qa';
 /** The wire's `QA_VERDICTS` (core `schema/session.ts`), mirrored — Gap 1. */
@@ -270,6 +270,8 @@ export interface WorkListsWire {
   /** R47: three ordered id arrays, not a flat list. */
   parkingLot: { reviewing: WorkItemId[]; untouched: WorkItemId[]; someoneOnIt: WorkItemId[] };
   myWork: WorkItemId[];
+  /** The core's split of `myWork`: handed on to QA or queued for a release (`jira.qaStatuses` + `jira.releaseStatuses`). */
+  nextRelease: WorkItemId[];
   investigations: WorkItemId[];
   waitingForReview: WorkItemId[];
 }
@@ -319,6 +321,7 @@ export interface ItemDetailResponse {
 export const WORK_LIST_KINDS = [
   'parkingLot',
   'myWork',
+  'nextRelease',
   'investigations',
   'waitingForReview',
 ] as const;
@@ -335,6 +338,7 @@ export type WorkSortKind = (typeof WORK_SORT_KINDS)[number];
 export const DEFAULT_SORT: Record<WorkListKind, WorkSortKind> = {
   parkingLot: 'untouchedFirstThenOldest',
   myWork: 'needsYouThenRecent',
+  nextRelease: 'needsYouThenRecent',
   investigations: 'newest',
   waitingForReview: 'oldest',
 };
@@ -343,6 +347,7 @@ export const DEFAULT_SORT: Record<WorkListKind, WorkSortKind> = {
 export const SORT_OPTIONS: Record<WorkListKind, readonly WorkSortKind[]> = {
   parkingLot: ['untouchedFirstThenOldest', 'oldest', 'smallestChange', 'newest'],
   myWork: ['needsYouThenRecent', 'oldest', 'newest'],
+  nextRelease: ['needsYouThenRecent', 'oldest', 'newest'],
   investigations: ['newest', 'oldest'],
   waitingForReview: ['oldest', 'newest'],
 };
@@ -350,12 +355,13 @@ export const SORT_OPTIONS: Record<WorkListKind, readonly WorkSortKind[]> = {
 export const LIST_TITLES: Record<WorkListKind, string> = {
   parkingLot: 'Parking lot',
   myWork: 'My dev work',
+  nextRelease: 'Next release',
   investigations: 'Investigations',
   waitingForReview: 'PRs waiting for review',
 };
 
 /**
- * §5 — the panel's six sections, in the one order they are ever drawn in.
+ * §5 — the panel's seven sections, in the one order they are ever drawn in.
  *
  * The parking lot's three groups are PROMOTED here rather than nested: they answer three
  * different questions (§1), and one colour and an 11 px grey title for all three was the "can't
@@ -365,7 +371,8 @@ export const LIST_TITLES: Record<WorkListKind, string> = {
  * The glyphs are unicode, never an icon font — `font-src 'none'` (R38) drops one silently. A
  * diamond is a PR: hollow means nobody has it, nested means I am inside it, half-filled means
  * somebody else is, and filled means it is my own work. An investigation gets the mark a
- * conclusion gets, and a PR of mine that is out with reviewers gets a clock.
+ * conclusion gets, and a PR of mine that is out with reviewers gets a clock. Work that has
+ * been handed on and is waiting for a release gets a crate — it is packed, not in hand.
  */
 export interface PanelSectionSpec {
   /** `myWork`, or `parkingLot:someoneOnIt` for one of the promoted groups. */
@@ -383,6 +390,7 @@ export const PANEL_SECTIONS: readonly PanelSectionSpec[] = [
   { key: 'parkingLot:reviewing', list: 'parkingLot', group: 'reviewing', title: 'Reviewing', glyph: '◈', collapsed: false },
   { key: 'parkingLot:someoneOnIt', list: 'parkingLot', group: 'someoneOnIt', title: 'Someone is on it', glyph: '◐', collapsed: true },
   { key: 'myWork', list: 'myWork', group: null, title: 'My dev work', glyph: '◆', collapsed: false },
+  { key: 'nextRelease', list: 'nextRelease', group: null, title: 'Next release', glyph: '▣', collapsed: false },
   { key: 'investigations', list: 'investigations', group: null, title: 'Investigations', glyph: '∴', collapsed: false },
   { key: 'waitingForReview', list: 'waitingForReview', group: null, title: 'Waiting for review', glyph: '◷', collapsed: false },
 ];

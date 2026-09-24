@@ -29,8 +29,13 @@ export type WorkItemKind = 'pr' | 'ticket' | 'pr+ticket' | 'session';
  * R47: FOUR lists. `reviewing` is superseded as a LIST — a PR with a review
  * agent of ours stays in `parkingLot`, in its `'reviewing'` group, and never
  * lands in `myWork` (coordinator override, 2026-09-10).
+ *
+ * FIVE since `nextRelease`: `myWork` used to hold both the work on my desk and the work I had
+ * already handed to QA, and one section could not answer "what is still mine?". `nextRelease`
+ * is a SPLIT of `myWork`, never a new source of membership — an item qualifies for exactly one
+ * of the two, on the same clause, and the ticket's status picks which.
  */
-export type WorkListKind = 'parkingLot' | 'myWork' | 'investigations' | 'waitingForReview';
+export type WorkListKind = 'parkingLot' | 'myWork' | 'nextRelease' | 'investigations' | 'waitingForReview';
 
 export type ParkingLotGroup = 'reviewing' | 'untouched' | 'someoneOnIt';
 
@@ -211,6 +216,13 @@ export interface GroupWorkItemsInput {
   /** R29/R46 — what filters a session's `lineage.ticket` AT GROUP TIME. */
   projectKeys: readonly string[];
   botLogins?: readonly string[];
+  /**
+   * `jira.qaStatuses` and `jira.releaseStatuses` — the two halves of "this ticket has left my
+   * desk" (`nextRelease`). Absent means the caller cannot tell, so NOTHING is split out and the
+   * lists read exactly as they did before this field existed.
+   */
+  qaStatuses?: readonly string[];
+  releaseStatuses?: readonly string[];
   /** Optional: lets a ticket seeded by R28 (never seen by the JQL) still carry a browse URL. */
   jiraSiteUrl?: string;
   /**
@@ -650,6 +662,27 @@ function someoneIsOnIt(pr: WorkItemPr): boolean {
   return (pr.humanActivity?.lastAt ?? null) !== null;
 }
 
+/**
+ * "This has left my desk" — the ONE place the status→section mapping lives.
+ *
+ * The names are site-specific text, so nothing here is hardcoded: they come from
+ * `jira.qaStatuses` (already the authority on "in QA", so the panel and the QA trigger can never
+ * disagree about it) and `jira.releaseStatuses`. The comparison is case- and space-insensitive,
+ * which the QA trigger's own `includes` deliberately is NOT: a trigger STARTS an agent and must
+ * match what the user configured exactly, while this only decides which header a row is drawn
+ * under, where being forgiving costs nothing.
+ *
+ * An item with NO ticket is never handed on. Membership here is a positive claim — somebody
+ * else has this now — and only a ticket can make it; without one the work stays on my desk,
+ * which is the answer that cannot hide anything.
+ */
+function handedOn(ticket: WorkItemTicket | null, input: GroupWorkItemsInput): boolean {
+  if (ticket === null) return false;
+  const key = (s: string): string => s.trim().toLowerCase();
+  const status = key(ticket.status);
+  return [...(input.qaStatuses ?? []), ...(input.releaseStatuses ?? [])].some((s) => key(s) === status);
+}
+
 function membership(
   prs: readonly WorkItemPr[],
   agents: readonly WorkItemAgent[],
@@ -712,7 +745,7 @@ function membership(
       // myWork. A teammate's PR we are reviewing is a teammate's PR, and it
       // belongs at the top of the parking lot.
       agents.some((a) => a.mode !== 'review'));
-  if (inMyWork) lists.push('myWork');
+  if (inMyWork) lists.push(handedOn(ticket, input) ? 'nextRelease' : 'myWork');
 
   return lists;
 }
@@ -806,6 +839,8 @@ function byRecency(a: WorkItem, b: WorkItem): number {
 export interface WorkLists {
   parkingLot: { reviewing: WorkItemId[]; untouched: WorkItemId[]; someoneOnIt: WorkItemId[] };
   myWork: WorkItemId[];
+  /** The split of `myWork` that has been handed on — `handedOn`. */
+  nextRelease: WorkItemId[];
   investigations: WorkItemId[];
   waitingForReview: WorkItemId[];
 }
@@ -813,6 +848,7 @@ export interface WorkLists {
 export const WORK_LIST_KINDS: readonly WorkListKind[] = [
   'parkingLot',
   'myWork',
+  'nextRelease',
   'investigations',
   'waitingForReview',
 ];
@@ -838,6 +874,9 @@ export function workListsOf(items: readonly WorkItem[]): WorkLists {
   return {
     parkingLot: { reviewing: group('reviewing'), untouched: group('untouched'), someoneOnIt: group('someoneOnIt') },
     myWork: inList('myWork').sort(byNeedsYouThenRecent).map((i) => i.id),
+    // The same order as `myWork`, deliberately: a not-ready QA verdict on handed-on work is the
+    // first thing the user has to see, and that is exactly what `byNeedsYouThenRecent` lifts.
+    nextRelease: inList('nextRelease').sort(byNeedsYouThenRecent).map((i) => i.id),
     investigations: inList('investigations').sort(byRecency).map((i) => i.id),
     waitingForReview: inList('waitingForReview').sort(byCreatedAtAscending).map((i) => i.id),
   };

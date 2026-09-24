@@ -55,13 +55,13 @@ function onlyGroup(group: ParkingLotGroup, n: number): ItemsResponse {
   return {
     ...base,
     items,
-    lists: { parkingLot: lot, myWork: [], investigations: [], waitingForReview: [] },
+    lists: { parkingLot: lot, myWork: [], nextRelease: [], investigations: [], waitingForReview: [] },
   };
 }
 
 const rows = (): FakeElement[] => dom.root.byClass('row');
 
-/** `Title (count)` per section header — the six of them, in DOM order (§5). */
+/** `Title (count)` per section header — every one of them, in DOM order (§5). */
 const headerTexts = (): string[] =>
   dom.root
     .byClass('section-header')

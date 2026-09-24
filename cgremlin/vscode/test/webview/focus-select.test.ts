@@ -50,7 +50,7 @@ describe('§6 the focus control, as the panel draws it', () => {
     expect(select().getAttribute('aria-label')).toBe('Narrow the panel to one area');
   });
 
-  it('lists All areas and the six sections, each with its own count', () => {
+  it('lists All areas and the seven sections, each with its own count', () => {
     panel.render(stateOf());
     expect(select().children.map((option) => option.textContent)).toEqual([
       'All areas (12)',
@@ -58,6 +58,7 @@ describe('§6 the focus control, as the panel draws it', () => {
       'Reviewing (1)',
       'Someone is on it (1)',
       'My dev work (3)',
+      'Next release (0)',
       'Investigations (1)',
       'Waiting for review (3)',
     ]);
@@ -67,6 +68,7 @@ describe('§6 the focus control, as the panel draws it', () => {
       'parkingLot:reviewing',
       'parkingLot:someoneOnIt',
       'myWork',
+      'nextRelease',
       'investigations',
       'waitingForReview',
     ]);
@@ -107,11 +109,11 @@ describe('§6 the focus control, as the host applies it', () => {
     return { panelView, view, state: () => panelView.state() };
   }
 
-  it('renders all six areas until the user narrows it', () => {
+  it('renders all seven areas until the user narrows it', () => {
     const { state } = build(new FakeHost());
     expect(state().focus).toBe('all');
-    expect(state().sections).toHaveLength(6);
-    expect(state().focusOptions.map((option) => option.key)).toHaveLength(7);
+    expect(state().sections).toHaveLength(7);
+    expect(state().focusOptions.map((option) => option.key)).toHaveLength(8);
   });
 
   it('renders ONLY the chosen area, and keeps the keyboard out of the others', () => {
@@ -135,7 +137,7 @@ describe('§6 the focus control, as the host applies it', () => {
     const host = new FakeHost();
     void host.setState(FOCUS_STATE_KEY, 'parkingLot:whatever');
     expect(readFocus(host)).toBe('all');
-    expect(build(host).state().sections).toHaveLength(6);
+    expect(build(host).state().sections).toHaveLength(7);
     void host.setState(FOCUS_STATE_KEY, { not: 'a string' });
     expect(readFocus(host)).toBe('all');
   });
@@ -156,7 +158,7 @@ describe('§6 the focus control, as the host applies it', () => {
     // and a filter that silently swallowed it would make the strip a dead end.
     view.webview.emit({ type: 'selectRow', id: 'pr:acme/web#102', list: 'parkingLot' });
     expect(state().focus).toBe('all');
-    expect(state().sections).toHaveLength(6);
+    expect(state().sections).toHaveLength(7);
     expect(
       state()
         .sections.flatMap((section) => section.rows)
