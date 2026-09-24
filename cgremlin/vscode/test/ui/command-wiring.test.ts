@@ -28,6 +28,7 @@ import { fixtures, startStubServer, type StubHandler, type StubServerHandle } fr
 import itemsFixture from '../support/fixtures/items.json';
 import type { NotificationLevel } from '../../src/model/notify-policy';
 import type { PanelRowView, PanelState } from '../../src/model/panel-protocol';
+import { healthOf, refreshBlockedMessage } from '../../src/model/engine-trouble';
 
 const STATE_DIR = '/tmp/cgremlin-fixture';
 const MANAGED = `${STATE_DIR}/cgremlin.code-workspace`;
@@ -460,6 +461,104 @@ describe('Refresh while the engine is not running', () => {
     const mark = h.mark();
     await h.host.invoke('cgremlin.refreshInventory');
     expect(paths(h, mark)).toEqual(['POST /prs/scan']);
+  });
+
+  /** A manager whose probe answers with a state chosen per call, simulating what the socket says
+   *  *now* rather than what the cached state last said. */
+  class ProbeAnswers extends FakeEngineManager {
+    answers: EngineState[] = [];
+
+    override async ensureRunning(trigger: Trigger = 'auto'): Promise<EngineState> {
+      await super.ensureRunning(trigger);
+      const next = this.answers.shift();
+      if (next !== undefined) this.current = next;
+      return this.current;
+    }
+  }
+
+  it(
+    'performs the scan and shows no message when the probe comes back healthy, even though the ' +
+      'cached state was a mismatch — the exact scenario the user saw (regression)',
+    async () => {
+      const h = await connected({ engine: () => new ProbeAnswers() });
+      const probing = h.engine as ProbeAnswers;
+      probing.current = { kind: 'mismatch', running: '0.0.1 (build old)', bundled: '0.0.1 (build new)', pid: 10 };
+      probing.answers = [{ kind: 'running', version: '0.0.1', pid: 11, adopted: true }];
+      const mark = h.mark();
+
+      await h.host.invoke('cgremlin.refreshInventory');
+      await h.ui.settled();
+
+      expect(paths(h, mark)).toEqual(['POST /prs/scan']);
+      expect(h.host.callsOf('showInformationMessage')).toEqual([]);
+    },
+  );
+
+  it('reports the PROBE\'s state, not the cached one, when the probe still finds it not ready', async () => {
+    const h = await connected({ engine: () => new ProbeAnswers() });
+    const probing = h.engine as ProbeAnswers;
+    probing.current = { kind: 'mismatch', running: '0.0.1 (build old)', bundled: '0.0.1 (build new)', pid: 10 };
+    probing.answers = [{ kind: 'starting', since: 0 }];
+    const mark = h.mark();
+
+    await h.host.invoke('cgremlin.refreshInventory');
+    await h.ui.settled();
+
+    expect(h.since(mark)).toEqual([]);
+    const said = h.host.callsOf('showInformationMessage');
+    expect(said).toHaveLength(1);
+    expect(String(said[0].args[0])).toContain('starting');
+    expect(String(said[0].args[0])).not.toContain('mismatch');
+  });
+
+  it('does not hang and does not crash when the probe rejects outright', async () => {
+    class FailingProbe extends FakeEngineManager {
+      override async ensureRunning(trigger: Trigger = 'auto'): Promise<EngineState> {
+        this.calls.push(`ensureRunning:${trigger}`);
+        throw new Error('socket timed out');
+      }
+    }
+    const h = await connected({ engine: () => new FailingProbe() });
+    h.engine.emit({ kind: 'stopped' });
+    const mark = h.mark();
+
+    await h.host.invoke('cgremlin.refreshInventory');
+    await h.ui.settled();
+
+    expect(h.since(mark)).toEqual([]);
+    expect(String(h.host.callsOf('showInformationMessage')[0]?.args[0])).toContain(
+      'is not running',
+    );
+  });
+
+  it('shares one probe and shows one message across two rapid clicks', async () => {
+    const h = await connected({ engine: () => new ProbeAnswers() });
+    const probing = h.engine as ProbeAnswers;
+    probing.current = { kind: 'stopped' };
+    const mark = h.mark();
+
+    const first = h.host.invoke('cgremlin.refreshInventory');
+    const second = h.host.invoke('cgremlin.refreshInventory');
+    await Promise.all([first, second]);
+    await h.ui.settled();
+
+    expect(h.since(mark)).toEqual([]);
+    expect(probing.countOf('ensureRunning:user')).toBe(1);
+    expect(h.host.callsOf('showInformationMessage')).toHaveLength(1);
+  });
+
+  it('names every not-ready state as a sentence, never the bare word', () => {
+    const kinds: EngineState[] = [
+      { kind: 'unknown' },
+      { kind: 'starting', since: 0 },
+      { kind: 'stopping', since: 0, pid: null, elapsedMs: 0 },
+      { kind: 'mismatch', running: '1', bundled: '2', pid: 1 },
+    ];
+    for (const state of kinds) {
+      const message = refreshBlockedMessage(healthOf(state, '/tmp/cgremlin.sock'));
+      expect(message).not.toBeNull();
+      expect(message).not.toContain(`(${state.kind})`);
+    }
   });
 });
 

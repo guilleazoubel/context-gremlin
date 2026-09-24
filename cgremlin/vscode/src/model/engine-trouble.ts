@@ -200,17 +200,42 @@ export function itemsTroubleOf(status: number, message: string): SourceTrouble {
 }
 
 /**
+ * `unknown`, `starting`, `stopping` and `mismatch` are not "trouble" — nothing is wrong, the
+ * engine just is not ready to answer yet — but the bare word from `EngineState['kind']` is not a
+ * sentence a person can act on. Each gets one that names what is actually happening.
+ */
+function notReadyMessage(kind: EngineHealth['kind']): string {
+  switch (kind) {
+    case 'starting':
+      return 'The cgremlin engine is starting up. Try Refresh again in a moment.';
+    case 'stopping':
+      return 'The cgremlin engine is stopping. Try Refresh again once it has stopped.';
+    // Never NEWER-replaces-OLDER told as the bare word: this window's bundled engine is newer
+    // than the one on the socket, and is in the middle of replacing it (see `EngineManager`'s
+    // `classify`) — the very state that produced the incident this fix exists for.
+    case 'mismatch':
+      return (
+        'This window is replacing the running engine with the newer one it ships. Try Refresh ' +
+        'again once it has restarted.'
+      );
+    default:
+      return (
+        `The cgremlin engine has not answered yet. Trying to reach it again — run ` +
+        `"${START_COMMAND}" if it does not come up.`
+      );
+  }
+}
+
+/**
  * What the Refresh command says when there is nothing to refresh, or `null` when the engine is
  * running and the refresh should just happen. Trouble reuses the same wording the row shows;
- * every other not-ready kind names the state, because "starting…" and "stopping…" call for
- * patience rather than for the same explanation.
+ * every other not-ready kind gets its own sentence, because "starting…" and "stopping…" call for
+ * patience rather than for the same explanation — and `mismatch` in particular is never shown as
+ * the bare internal word (see `notReadyMessage`).
  */
 export function refreshBlockedMessage(health: EngineHealth): string | null {
   if (health.kind === 'running') return null;
   const trouble = troubleOf(health);
   if (trouble !== null) return troubleMessage(trouble);
-  return (
-    `The cgremlin engine is not ready (${health.kind}), so there is nothing to refresh yet. ` +
-    `Trying to reach it again — run "${START_COMMAND}" if it does not come up.`
-  );
+  return notReadyMessage(health.kind);
 }
