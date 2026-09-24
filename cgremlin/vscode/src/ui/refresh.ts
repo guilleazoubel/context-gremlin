@@ -54,6 +54,8 @@ export class RefreshCoordinator {
   private currentSessionId: string | null = null;
   private currentWorktreePath: string | null = null;
   private inFlight: Promise<void> | null = null;
+  /** `ensureConfig`'s single in-flight attempt, so concurrent callers share one `GET /config`. */
+  private configFetch: Promise<CoreConfigView | null> | null = null;
   private timerPending = false;
   private sourceTrouble: SourceTrouble | null = null;
   /**
@@ -76,8 +78,45 @@ export class RefreshCoordinator {
     await this.refreshNow();
   }
 
+  /**
+   * What we HAVE. `null` means "never read it", which is NOT "the config lists nothing" — a
+   * caller that reports the difference must ask which of the two it is holding. Anything that
+   * can wait should ask `ensureConfig()` instead; the render-time readers cannot, and are served
+   * by the heal in `refreshNow`.
+   */
   config(): CoreConfigView | null {
     return this.resolved;
+  }
+
+  /**
+   * The config, fetching it once when `connect()` never got one. The bug this replaces latched a
+   * failed startup forever: `resolved` was assigned in exactly one place, nothing polls (R2), and
+   * so an engine restart at install time left every reader with an empty answer for the life of
+   * the window.
+   *
+   * Bounded by the request itself — ONE `GET /config` over the socket, which fails fast when
+   * there is nothing listening. No timer, no retry loop, and emphatically no poller. Concurrent
+   * callers share the one attempt, and a failed attempt still answers (`null`) rather than
+   * throwing or hanging the caller; the next ask tries again.
+   */
+  async ensureConfig(): Promise<CoreConfigView | null> {
+    if (this.resolved !== null) return this.resolved;
+    if (this.configFetch !== null) return await this.configFetch;
+    const attempt = this.deps.client
+      .config()
+      .then((config) => {
+        this.resolved = config;
+        return config;
+      })
+      .catch((err: unknown) => {
+        this.deps.host.log(`cgremlin: GET /config failed: ${String(err)}`);
+        return null;
+      });
+    this.configFetch = attempt;
+    void attempt.finally(() => {
+      if (this.configFetch === attempt) this.configFetch = null;
+    });
+    return await attempt;
   }
 
   items(): WorkItem[] {
@@ -119,6 +158,11 @@ export class RefreshCoordinator {
   async refreshNow(): Promise<void> {
     const response = await this.readItems();
     this.connected = true;
+    // The engine answered, so a config we never read is one round trip away — and the readers
+    // that run at render time (`me`, the QA gate) cannot wait for one of their own. This is the
+    // heal, not a poll: it fires only while there is no config at all, on a refresh the engine
+    // has just answered, and never again once one is in hand.
+    if (this.resolved === null) await this.ensureConfig();
     this.reportAlive();
     this.deps.notifications.reportOnline();
 

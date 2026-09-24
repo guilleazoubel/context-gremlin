@@ -881,16 +881,42 @@ async function repoUrlFor(
   if (repo !== undefined) return repoUrlOf(repo);
   const remembered = deps.host.getState<string>(repoStateKey(item.id));
   if (typeof remembered === 'string' && remembered !== '') return remembered;
-  const repos = deps.coordinator.config()?.repos ?? [];
+  const repos = (await deps.coordinator.ensureConfig())?.repos ?? [];
   if (repos.length === 1) return repoUrlOf(repos[0]);
   const picked = await pickRepo(deps, `Which repo should the ${mode} run in?`);
   return picked === undefined ? undefined : repoUrlOf(picked);
 }
 
+/** The config says there are none — the only case in which blaming a file is the true thing. */
+export const NO_REPOS_MESSAGE = 'No repos are configured in core.json.';
+
+/**
+ * The config was never read, so nothing here is known about `core.json` at all. The fact is
+ * about reaching the engine, and the message carries the way through rather than a culprit.
+ */
+export const REPOS_UNREADABLE_MESSAGE =
+  'cgremlin could not read its configuration from the engine, so it does not know your repos ' +
+  'yet. Start the engine and try again.';
+
+const START_THE_ENGINE = 'Start the engine';
+
 async function pickRepo(deps: CommandDeps, placeHolder: string): Promise<string | undefined> {
-  const repos = deps.coordinator.config()?.repos ?? [];
+  // An empty list has two very different causes, and the user was told the wrong one: a window
+  // whose first connect failed (an engine restart at install time) has NO config, and reported
+  // that as "no repos are configured" about a file it had never read.
+  const config = await deps.coordinator.ensureConfig();
+  if (config === null) {
+    const choice = await deps.host.showWarningMessage(
+      REPOS_UNREADABLE_MESSAGE,
+      undefined,
+      START_THE_ENGINE,
+    );
+    if (choice === START_THE_ENGINE) await deps.host.executeCommand('cgremlin.engine.start');
+    return undefined;
+  }
+  const repos = config.repos;
   if (repos.length === 0) {
-    void deps.host.showWarningMessage('No repos are configured in core.json.', undefined);
+    void deps.host.showWarningMessage(NO_REPOS_MESSAGE, undefined);
     return undefined;
   }
   // `ignoreFocusOut`, because the panel is a webview: it restores its own focus on the next

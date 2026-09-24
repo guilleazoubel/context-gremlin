@@ -22,9 +22,21 @@ export function managedWorkspacePath(stateDir: string): string {
   return `${stateDir}/${MANAGED_WORKSPACE_NAME}`;
 }
 
+/**
+ * The config was never read, so this command has no state directory to point at. It used to do
+ * nothing at all here — a palette command that answered a click with silence.
+ */
+export const WORKSPACE_UNREADABLE_MESSAGE =
+  'cgremlin could not read its configuration from the engine, so it does not know where the ' +
+  'managed workspace lives. Start the engine and try again.';
+
 export interface WorktreeSwapperDeps {
   host: Host;
-  config: () => CoreConfigView | null;
+  /**
+   * The resolved `GET /config`, which the caller may have to fetch: both readers below are
+   * async, so neither has to settle for whatever startup happened to leave behind.
+   */
+  config: () => CoreConfigView | null | Promise<CoreConfigView | null>;
   /**
    * P10: the window is not the managed workspace, so this click could not swap anything. It used
    * to raise a popup — on EVERY row click — and now it arms the panel's one-line notice instead.
@@ -56,9 +68,12 @@ export class WorktreeSwapper {
    */
   async openManagedWorkspace(): Promise<void> {
     const { host } = this.deps;
-    const config = this.deps.config();
+    const config = await this.deps.config();
     const managedPath = this.offered?.managedPath ?? (config === null ? null : managedWorkspacePath(config.stateDir));
-    if (managedPath === null) return;
+    if (managedPath === null) {
+      void host.showWarningMessage(WORKSPACE_UNREADABLE_MESSAGE, undefined);
+      return;
+    }
     if (!host.fileExists(managedPath)) {
       host.writeFile(managedPath, this.offered?.bootstrap ?? emptyManagedWorkspaceContent());
     }
@@ -77,8 +92,10 @@ export class WorktreeSwapper {
     // A click queued behind an older one that a still-newer click has since superseded: its turn
     // has come, but there is no confirm to even show for it (the "at most one dialog" half).
     if (myGeneration !== this.generation) return;
-    const config = this.deps.config();
-    if (config === null) return;
+    const config = await this.deps.config();
+    // Nothing is said here: this is a row click, not a command, and the click has already opened
+    // the session. An engine that cannot be reached is the panel's banner to report, once.
+    if (config === null || myGeneration !== this.generation) return;
     const offered = await applyWorkspace(
       this.deps.host,
       id,
