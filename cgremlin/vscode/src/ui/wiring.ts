@@ -175,7 +175,9 @@ export function createUi(options: UiOptions): Ui {
   });
   const swapper = new WorktreeSwapper({
     host,
-    config: () => coordinator.config(),
+    // The swap and the open are both async, so both wait for a config the window never read
+    // rather than no-opping on it (the sweep around the repo picker's empty list).
+    config: () => coordinator.ensureConfig(),
     // P10: the offer that used to be a popup on every row click. The panel decides whether to
     // paint it — it is the half that remembers a "Not now".
     onOfferManaged: () => panel.setWorkspaceOffer(true),

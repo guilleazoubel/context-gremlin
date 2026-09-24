@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { CoreClient } from '../../src/core-client';
 import { createUi, type Ui } from '../../src/ui/wiring';
 import { NO_REPOS_MESSAGE, REPOS_UNREADABLE_MESSAGE } from '../../src/ui/commands';
+import { WORKSPACE_UNREADABLE_MESSAGE } from '../../src/ui/preview';
 import { FakeHost } from '../support/fake-host';
 import { FakeBridge, FakeEngineManager } from '../support/fake-engine-manager';
 import { EngineSurface } from '../../src/ui/engine';
@@ -187,4 +188,39 @@ it('offers both repos to an investigation started after a failed first connect',
   const pick = h.host.callsOf('showQuickPick')[0];
   expect(pick?.args[0]).toEqual(['acme/web', 'acme/api']);
   expect(h.host.callsOf('showWarningMessage')).toEqual([]);
+});
+
+/**
+ * The sweep. Every other reader of `config()` degraded to an empty answer in the same window,
+ * and the two that reach the workspace did it silently: a row click that swapped nothing, and a
+ * command that opened nothing. Both of them can wait for a fetch, so both of them ask for one.
+ */
+describe('the other readers of a config that was never read', () => {
+  it('heals the render-time readers on the first refresh that reaches the engine', async () => {
+    const h = await harness();
+    await connectDuringRestart(h);
+    await h.ui.coordinator.refreshNow();
+    // `me` is the one that makes the panel quietly wrong rather than visibly broken: without it
+    // the user's own review is listed as somebody else's.
+    expect(h.ui.coordinator.config()?.me).toBe('guille');
+    expect(h.configReads()).toBe(1);
+  });
+
+  it('opens the managed workspace for a window whose first connect failed', async () => {
+    const h = await harness();
+    await connectDuringRestart(h);
+    await h.host.executeCommand('cgremlin.openManagedWorkspace');
+    const opened = h.host
+      .callsOf('executeCommand')
+      .some((call) => call.args[0] === 'vscode.openFolder');
+    expect(opened).toBe(true);
+  });
+
+  it('says why, rather than doing nothing at all, when it still cannot read the config', async () => {
+    const h = await harness();
+    await h.server.stop();
+    expect(await h.ui.connect()).toBe(false);
+    await h.host.executeCommand('cgremlin.openManagedWorkspace');
+    expect(lastWarning(h.host)).toBe(WORKSPACE_UNREADABLE_MESSAGE);
+  });
 });
