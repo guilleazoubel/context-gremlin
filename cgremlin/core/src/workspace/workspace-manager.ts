@@ -52,7 +52,7 @@ export async function refreshWorkspaceGuardrails(
   mode: SessionMode,
   pr?: PostTarget,
 ): Promise<void> {
-  await writePermissionSettings(fs, worktreePath, mode);
+  await writePermissionSettings(fs, worktreePath, { mode });
   if (pr !== undefined && shouldWritePostHelpers(mode)) {
     await writePostHelpers(fs, worktreePath, pr);
   }

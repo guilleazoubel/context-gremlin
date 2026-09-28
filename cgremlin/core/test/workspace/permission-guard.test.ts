@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   DEFAULT_PERMISSIONS,
+  permissionProfileFor,
   renderPermissionSettings,
   writePermissionSettings,
+  type PermissionSubject,
 } from '../../src/workspace/permission-guard';
 import { InMemoryFileSystem } from '../support/in-memory-file-system';
 
@@ -27,7 +29,7 @@ describe('writePermissionSettings', () => {
   it('writes the investigation deny-list to .claude/settings.local.json — an investigation posts nothing', async () => {
     const fs = new InMemoryFileSystem();
     await fs.mkdir('/work/inv-1', { recursive: true });
-    await writePermissionSettings(fs, '/work/inv-1', 'investigation');
+    await writePermissionSettings(fs, '/work/inv-1', { mode: 'investigation' });
     const content = await fs.readFile('/work/inv-1/.claude/settings.local.json');
     const parsed = JSON.parse(content);
     expect(parsed.permissions.deny).toContain('Bash(gh pr comment:*)');
@@ -37,7 +39,7 @@ describe('writePermissionSettings', () => {
   it('writes the review mode deny-list to .claude/settings.local.json', async () => {
     const fs = new InMemoryFileSystem();
     await fs.mkdir('/work/pr-1', { recursive: true });
-    await writePermissionSettings(fs, '/work/pr-1', 'review');
+    await writePermissionSettings(fs, '/work/pr-1', { mode: 'review' });
     const content = await fs.readFile('/work/pr-1/.claude/settings.local.json');
     const parsed = JSON.parse(content);
     expect(parsed.permissions.deny).toContain('Bash(git push:*)');
@@ -46,7 +48,7 @@ describe('writePermissionSettings', () => {
   it('writes the development mode deny-list (GitHub PR mutations) to .claude/settings.local.json', async () => {
     const fs = new InMemoryFileSystem();
     await fs.mkdir('/work/dev-1', { recursive: true });
-    await writePermissionSettings(fs, '/work/dev-1', 'development');
+    await writePermissionSettings(fs, '/work/dev-1', { mode: 'development' });
     const content = await fs.readFile('/work/dev-1/.claude/settings.local.json');
     const parsed = JSON.parse(content);
     expect(parsed.permissions.deny).toContain('Bash(gh pr review:*)');
@@ -99,7 +101,7 @@ const ALL_MODES = ['investigation', 'development', 'respond', 'qa', 'review'] as
 const POSTING_MODES = ['review', 'respond'] as const;
 
 describe('phase 20 — the per-mode deny table', () => {
-  it('is exactly this, for all five modes, and nothing else', () => {
+  it('is exactly this, for every profile, and nothing else', () => {
     expect(DEFAULT_PERMISSIONS).toEqual({
       investigation: {
         deny: [
@@ -133,6 +135,15 @@ describe('phase 20 — the per-mode deny table', () => {
           'Bash(gh auth switch:*)',
           'Bash(git push:*)',
           'Bash(git commit:*)',
+        ],
+      },
+      'investigation:development': {
+        deny: [
+          'Bash(gh pr review:*)',
+          'Bash(gh pr comment:*)',
+          'Bash(gh issue:*)',
+          'Bash(gh pr merge:*)',
+          'Bash(gh pr close:*)',
         ],
       },
       development: {
@@ -470,6 +481,62 @@ describe('round 3 — no mode may reach a pull request through `gh issue`', () =
     for (const mode of ALL_MODES) {
       const deny = DEFAULT_PERMISSIONS[mode].deny ?? [];
       expect(deny.filter((rule) => rule === 'Bash(gh issue:*)'), mode).toHaveLength(1);
+    }
+  });
+});
+
+/**
+ * The regression this file exists to pin. A session whose `intent` is
+ * `development` is not "an investigation that posts nothing": it is the
+ * session the human keeps working in, and `promote()` hands the development
+ * session this very worktree and branch. Keying the table on `mode` alone
+ * denied it `git commit`, `git push` and `gh pr create`, so an agent that had
+ * finished the whole job could not land any of it — and Claude Code's
+ * self-modification guard correctly stopped it from editing the file that
+ * blocked it.
+ *
+ * The fixture is shaped like the real session this was found on:
+ * `mode: investigation`, `intent: development`, `stageStatus: plan_ready`.
+ */
+const DEVELOPMENT_BOUND_INVESTIGATION = {
+  mode: 'investigation',
+  intent: 'development',
+  stageStatus: 'plan_ready',
+} as const;
+const PLAIN_INVESTIGATION = {
+  mode: 'investigation',
+  intent: 'investigate_only',
+  stageStatus: 'plan_ready',
+} as const;
+
+async function denyListFor(subject: PermissionSubject): Promise<string[]> {
+  const fs = new InMemoryFileSystem();
+  await fs.mkdir('/work/s', { recursive: true });
+  await writePermissionSettings(fs, '/work/s', subject);
+  const parsed = JSON.parse(await fs.readFile('/work/s/.claude/settings.local.json'));
+  return parsed.permissions.deny ?? [];
+}
+
+describe('a session with intent=development may land its own work', () => {
+  const LANDING = ['Bash(git commit:*)', 'Bash(git push:*)', 'Bash(gh pr create:*)'] as const;
+
+  it.each(LANDING)('does not deny %s for a development-bound investigation', async (rule) => {
+    expect(await denyListFor(DEVELOPMENT_BOUND_INVESTIGATION)).not.toContain(rule);
+  });
+
+  it.each(LANDING)('still denies %s for an investigation with no development intent', async (rule) => {
+    expect(await denyListFor(PLAIN_INVESTIGATION)).toContain(rule);
+  });
+
+  it('an investigation with no intent field at all is treated as investigate-only', async () => {
+    expect(await denyListFor({ mode: 'investigation' })).toEqual(
+      DEFAULT_PERMISSIONS.investigation.deny,
+    );
+  });
+
+  it('intent never widens a mode that is not an investigation', () => {
+    for (const mode of ['development', 'respond', 'qa', 'review'] as const) {
+      expect(permissionProfileFor({ mode, intent: 'development' })).toBe(mode);
     }
   });
 });
