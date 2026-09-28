@@ -215,13 +215,24 @@ export const DEFAULT_PERMISSIONS: Record<PermissionProfile, PermissionConfig> = 
       'Bash(git commit:*)',
     ],
   },
-  // An investigation that is development-bound: it commits, pushes and opens
-  // its own draft pull request, exactly as `development` does.
+  // An investigation that is development-bound. It commits, pushes and opens
+  // its own draft pull request — that is the WHOLE of what the intent buys.
+  // Everything else a plain investigation is denied stays denied: it reviews
+  // nothing, comments nowhere, files no issue, calls no `gh api` and
+  // administers nothing, because none of that became its job. Force-pushing
+  // stays denied too — the blanket `Bash(git push:*)` used to cover it, and
+  // dropping the blanket must not quietly hand a session the one push that
+  // destroys work (`respond` below is the precedent: push its own branch,
+  // never force it). `gh pr create` is open so it can open the draft PR;
+  // `gh pr edit|ready|merge|close` are not — marking a PR ready and landing it
+  // are the human's calls.
   'investigation:development': {
     deny: [
       ...NEVER_POST,
-      'Bash(gh pr merge:*)',
-      'Bash(gh pr close:*)',
+      ...NEVER_LAND,
+      GH_API_DENY,
+      ...NEVER_ADMINISTER,
+      ...NEVER_FORCE_PUSH,
     ],
   },
   development: {

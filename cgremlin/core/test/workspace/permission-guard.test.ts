@@ -144,6 +144,40 @@ describe('phase 20 — the per-mode deny table', () => {
           'Bash(gh issue:*)',
           'Bash(gh pr merge:*)',
           'Bash(gh pr close:*)',
+          'Bash(gh pr edit:*)',
+          'Bash(gh pr ready:*)',
+          'Bash(gh api:*)',
+          'Bash(gh repo:*)',
+          'Bash(gh ruleset:*)',
+          'Bash(gh secret:*)',
+          'Bash(gh variable:*)',
+          'Bash(gh workflow:*)',
+          'Bash(gh release:*)',
+          'Bash(gh gist:*)',
+          'Bash(gh label:*)',
+          'Bash(gh cache:*)',
+          'Bash(gh alias:*)',
+          'Bash(gh extension:*)',
+          'Bash(gh codespace:*)',
+          'Bash(gh ssh-key:*)',
+          'Bash(gh gpg-key:*)',
+          'Bash(gh auth login:*)',
+          'Bash(gh auth logout:*)',
+          'Bash(gh auth refresh:*)',
+          'Bash(gh auth setup-git:*)',
+          'Bash(gh auth switch:*)',
+          'Bash(git push --force:*)',
+          'Bash(git push -f:*)',
+          'Bash(git push --force-with-lease:*)',
+          'Bash(git push --force-with-lease=*)',
+          'Bash(git push * --force)',
+          'Bash(git push * --force *)',
+          'Bash(git push * -f)',
+          'Bash(git push * -f *)',
+          'Bash(git push * --force-with-lease)',
+          'Bash(git push * --force-with-lease *)',
+          'Bash(git push * --force-with-lease=*)',
+          'Bash(git push * +*)',
         ],
       },
       development: {
@@ -538,5 +572,86 @@ describe('a session with intent=development may land its own work', () => {
     for (const mode of ['development', 'respond', 'qa', 'review'] as const) {
       expect(permissionProfileFor({ mode, intent: 'development' })).toBe(mode);
     }
+  });
+});
+
+/**
+ * Widening the set for a development-bound investigation widens exactly ONE
+ * thing: the ability to land its own work. Reviewing, commenting, filing
+ * issues, calling `gh api` and the administrative subcommands are denied to
+ * it for the same reason they are denied to a plain investigation — a `gh`
+ * write verb honours `-R/--repo` and is therefore unscoped, and none of it is
+ * this session's job. Force-pushing goes with them: the blanket
+ * `Bash(git push:*)` used to cover it, and dropping that blanket must not
+ * quietly hand a session the one push that destroys work (`respond` is the
+ * precedent — it may push its own branch and never force it).
+ */
+describe('intent widens landing only — reviewing and administering stay denied', () => {
+  const STAYS_DENIED = [
+    'Bash(gh pr review:*)',
+    'Bash(gh pr comment:*)',
+    'Bash(gh issue:*)',
+    'Bash(gh api:*)',
+    'Bash(gh repo:*)',
+    'Bash(gh secret:*)',
+    'Bash(gh workflow:*)',
+    'Bash(gh release:*)',
+    'Bash(gh pr merge:*)',
+    'Bash(gh pr close:*)',
+    'Bash(gh pr edit:*)',
+    'Bash(gh pr ready:*)',
+  ] as const;
+
+  it.each(STAYS_DENIED)('a development-bound investigation still denies %s', async (rule) => {
+    expect(await denyListFor(DEVELOPMENT_BOUND_INVESTIGATION)).toContain(rule);
+  });
+
+  it.each(STAYS_DENIED)('a plain investigation still denies %s', async (rule) => {
+    expect(await denyListFor(PLAIN_INVESTIGATION)).toContain(rule);
+  });
+
+  it('a development-bound investigation may push its own branch but never force it', async () => {
+    const deny = await denyListFor(DEVELOPMENT_BOUND_INVESTIGATION);
+    expect(deny).not.toContain('Bash(git push:*)');
+    expect(deny).toContain('Bash(git push --force:*)');
+    expect(deny).toContain('Bash(git push -f:*)');
+    expect(deny).toContain('Bash(git push * +*)');
+  });
+
+  it('a plain investigation denies pushing at all, force included', async () => {
+    expect(await denyListFor(PLAIN_INVESTIGATION)).toContain('Bash(git push:*)');
+  });
+});
+
+/**
+ * The (mode, intent) -> profile map, pinned by value. Together with the
+ * per-profile `toEqual` above this pins the permission set for EVERY
+ * combination, so neither half can drift without this file changing too.
+ */
+describe('every (mode, intent) pair resolves to a pinned profile', () => {
+  it('is exactly this', () => {
+    const pairs: Record<string, string> = {};
+    for (const mode of ALL_MODES) {
+      for (const intent of [undefined, 'investigate_only', 'development'] as const) {
+        pairs[`${mode}/${intent ?? 'none'}`] = permissionProfileFor({ mode, intent });
+      }
+    }
+    expect(pairs).toEqual({
+      'investigation/none': 'investigation',
+      'investigation/investigate_only': 'investigation',
+      'investigation/development': 'investigation:development',
+      'development/none': 'development',
+      'development/investigate_only': 'development',
+      'development/development': 'development',
+      'respond/none': 'respond',
+      'respond/investigate_only': 'respond',
+      'respond/development': 'respond',
+      'qa/none': 'qa',
+      'qa/investigate_only': 'qa',
+      'qa/development': 'qa',
+      'review/none': 'review',
+      'review/investigate_only': 'review',
+      'review/development': 'review',
+    });
   });
 });
