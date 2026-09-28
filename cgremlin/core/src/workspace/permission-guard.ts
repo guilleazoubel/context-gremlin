@@ -1,5 +1,6 @@
 import type { SessionFileSystem } from '../fs/session-file-system';
 import type { SessionMode } from '../schema/session-mode';
+import type { Intent } from '../schema/session';
 
 /**
  * THIS TABLE IS A GUARDRAIL, NOT A SECURITY BOUNDARY. It binds a COOPERATIVE
@@ -165,7 +166,44 @@ const WRITES_NOTHING_OUTWARD = [
   'Bash(gh pr ready:*)',
 ] as const;
 
-export const DEFAULT_PERMISSIONS: Record<SessionMode, PermissionConfig> = {
+/**
+ * WHAT THIS SESSION IS FOR — the one question the table below is keyed on.
+ *
+ * `mode` alone is the wrong fact. An investigation whose `intent` is
+ * `development` is not a session that "writes findings and lands nothing": it
+ * is the session the human keeps working in, and `promote()` hands the
+ * development session this very worktree and branch. Keyed on mode alone, such
+ * a session was denied `git commit`, `git push` and `gh pr create` — an agent
+ * that had finished the whole job could not land any of it, and could not even
+ * edit the file that blocked it (Claude Code guards its own settings).
+ *
+ * So the subject is the session, not its mode, and `permissionProfileFor` is
+ * the ONLY place that answers "what is this session allowed to do". Add a new
+ * fact that changes a session's authority there and nowhere else — a second
+ * table keyed on a second fact is how this drifts again.
+ */
+export interface PermissionSubject {
+  mode: SessionMode;
+  /** Only an investigation carries one; absent is `investigate_only`. */
+  intent?: Intent;
+}
+
+/**
+ * A profile is a mode, except for the one case where the mode does not say
+ * what the session is for. Deliberately NOT `development`: a development-bound
+ * investigation gains only the ability to land ITS OWN work — reviewing,
+ * commenting and administering stay denied to it (see the entry below).
+ */
+export type PermissionProfile = SessionMode | 'investigation:development';
+
+export function permissionProfileFor(subject: PermissionSubject): PermissionProfile {
+  if (subject.mode === 'investigation' && subject.intent === 'development') {
+    return 'investigation:development';
+  }
+  return subject.mode;
+}
+
+export const DEFAULT_PERMISSIONS: Record<PermissionProfile, PermissionConfig> = {
   // An investigation writes findings into its session directory. That is all
   // it does: it posts nothing and it lands nothing.
   investigation: {
@@ -175,6 +213,26 @@ export const DEFAULT_PERMISSIONS: Record<SessionMode, PermissionConfig> = {
       ...NEVER_ADMINISTER,
       'Bash(git push:*)',
       'Bash(git commit:*)',
+    ],
+  },
+  // An investigation that is development-bound. It commits, pushes and opens
+  // its own draft pull request — that is the WHOLE of what the intent buys.
+  // Everything else a plain investigation is denied stays denied: it reviews
+  // nothing, comments nowhere, files no issue, calls no `gh api` and
+  // administers nothing, because none of that became its job. Force-pushing
+  // stays denied too — the blanket `Bash(git push:*)` used to cover it, and
+  // dropping the blanket must not quietly hand a session the one push that
+  // destroys work (`respond` below is the precedent: push its own branch,
+  // never force it). `gh pr create` is open so it can open the draft PR;
+  // `gh pr edit|ready|merge|close` are not — marking a PR ready and landing it
+  // are the human's calls.
+  'investigation:development': {
+    deny: [
+      ...NEVER_POST,
+      ...NEVER_LAND,
+      GH_API_DENY,
+      ...NEVER_ADMINISTER,
+      ...NEVER_FORCE_PUSH,
     ],
   },
   development: {
@@ -249,10 +307,10 @@ export function renderPermissionSettings(config: PermissionConfig): string {
 export async function writePermissionSettings(
   fs: SessionFileSystem,
   worktreePath: string,
-  mode: SessionMode,
+  subject: PermissionSubject,
 ): Promise<void> {
   const dir = `${worktreePath}/.claude`;
   await fs.mkdir(dir, { recursive: true });
-  const content = renderPermissionSettings(DEFAULT_PERMISSIONS[mode]);
+  const content = renderPermissionSettings(DEFAULT_PERMISSIONS[permissionProfileFor(subject)]);
   await fs.writeFile(`${dir}/settings.local.json`, content);
 }

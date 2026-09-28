@@ -366,6 +366,10 @@ export class PipelineService {
       branchName: branch,
       baseRef: input.baseRef ?? this.deps.config.defaultBaseRef,
       mode: 'investigation',
+      // Decides whether this worktree may land its own work — a
+      // development-bound investigation commits, pushes and opens its draft
+      // PR (src/workspace/permission-guard.ts).
+      intent: input.intent,
     });
 
     const session: InvestigationSession = {
@@ -528,7 +532,12 @@ export class PipelineService {
       throw new HumanTurnInProgressError(id);
     }
     const sessionDir = this.sessionDir(id);
-    const brief = renderPlanBrief({ sessionDir, ticket: session.lineage.ticket, driveToCompletion: session.driveToCompletion });
+    const brief = renderPlanBrief({
+      sessionDir,
+      ticket: session.lineage.ticket,
+      driveToCompletion: session.driveToCompletion,
+      intent: session.intent,
+    });
     const prompt = STAGE_ENTRY_PROMPT(sessionDir);
     // The stageStatus/FINDINGS.md eligibility check is race-sensitive and
     // must run on a FRESH load inside the lock, not the snapshot above.
