@@ -366,6 +366,10 @@ export class PipelineService {
       branchName: branch,
       baseRef: input.baseRef ?? this.deps.config.defaultBaseRef,
       mode: 'investigation',
+      // Decides whether this worktree may land its own work — a
+      // development-bound investigation commits, pushes and opens its draft
+      // PR (src/workspace/permission-guard.ts).
+      intent: input.intent,
     });
 
     const session: InvestigationSession = {

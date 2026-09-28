@@ -285,3 +285,61 @@ describe('a stage run refuses a worktree whose directory is gone', () => {
     );
   });
 });
+
+/**
+ * The refresh rewrites `.claude/settings.local.json` before EVERY stage run,
+ * which is what makes a policy change reach sessions already on disk. The
+ * same property cuts the other way: a session that legitimately has MORE
+ * authority than its mode implies must keep it across runs. Passing only
+ * `session.mode` to the refresh reverted a development-bound investigation to
+ * the plain-investigation table on its next stage — it could commit and push
+ * right up until the engine ran another stage for it, and then it could not.
+ * So the refresh is computed from the SESSION each time, never latched.
+ *
+ * The fixture is shaped like the session this was found on: `investigation` /
+ * `intent: development` / `stageStatus: plan_ready`.
+ */
+describe('the refresh preserves an intent-derived permission set', () => {
+  function developmentBoundInvestigation(id: string): Session {
+    return SessionSchema.parse({
+      schemaVersion: 2,
+      id,
+      mode: 'investigation',
+      createdAt: '2026-09-24T20:28:09.000Z',
+      workspace: { repoUrl: 'git@github.com:acme/app.git', worktreePath: `/w/${id}`, branch: 'b' },
+      lineage: { pipelineId: id, parentSessionId: null, ticket: 'HB-1409', selfReview: false },
+      agent: null,
+      lastRun: null,
+      pr: null,
+      stageStatus: 'plan_ready',
+      intent: 'development',
+      driveToCompletion: false,
+    });
+  }
+
+  it('writes the development-bound table, not the plain-investigation one', async () => {
+    const session = developmentBoundInvestigation('inv-dev-1');
+    const fs = await runStage(session, async (memfs, worktree) => {
+      await memfs.mkdir(`${worktree}/.claude`, { recursive: true });
+      await memfs.writeFile(`${worktree}/.claude/settings.local.json`, STALE_REVIEW_SETTINGS);
+    });
+    const written = await fs.readFile('/w/inv-dev-1/.claude/settings.local.json');
+    expect(written).toBe(
+      renderPermissionSettings(DEFAULT_PERMISSIONS['investigation:development']),
+    );
+    const deny = JSON.parse(written).permissions.deny as string[];
+    expect(deny).not.toContain('Bash(git commit:*)');
+    expect(deny).not.toContain('Bash(git push:*)');
+    expect(deny).not.toContain('Bash(gh pr create:*)');
+    expect(deny).toContain('Bash(gh api:*)');
+  });
+
+  it('keeps it across a SECOND stage run — the authority is recomputed, never latched', async () => {
+    const session = developmentBoundInvestigation('inv-dev-2');
+    const fs = await runStage(session);
+    const first = await fs.readFile('/w/inv-dev-2/.claude/settings.local.json');
+    const again = await runStage(developmentBoundInvestigation('inv-dev-2'));
+    expect(await again.readFile('/w/inv-dev-2/.claude/settings.local.json')).toBe(first);
+    expect(first).toBe(renderPermissionSettings(DEFAULT_PERMISSIONS['investigation:development']));
+  });
+});

@@ -232,7 +232,11 @@ export class StageRunner {
         await refreshWorkspaceGuardrails(
           this.deps.fs,
           worktreePath,
-          session.mode,
+          // The whole session, not `session.mode`: what a session may do is
+          // answered by permissionProfileFor (src/workspace/permission-guard.ts)
+          // and recomputed here on every run, so authority an `intent` confers
+          // survives the refresh instead of being reverted by it.
+          session,
           session.pr === null
             ? undefined
             : { repoSlug: session.pr.repo, prNumber: session.pr.number },

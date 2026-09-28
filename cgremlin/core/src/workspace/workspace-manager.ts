@@ -1,9 +1,10 @@
 import type { GitRunner } from '../git/git-runner';
 import type { SessionFileSystem } from '../fs/session-file-system';
 import type { SessionMode } from '../schema/session-mode';
+import type { Intent } from '../schema/session';
 import { ensureMirror, mirrorDirName } from './repo-mirror';
 import { createWorktree, removeWorktree } from './worktree';
-import { writePermissionSettings } from './permission-guard';
+import { writePermissionSettings, type PermissionSubject } from './permission-guard';
 import {
   shouldWritePostHelpers,
   writePostHelpers,
@@ -16,6 +17,12 @@ export interface CreateWorkspaceParams {
   branchName: string;
   baseRef: string;
   mode: SessionMode;
+  /**
+   * Only an investigation carries one, and it is what decides whether this
+   * session may land its own work — see ./permission-guard.ts. Absent is
+   * `investigate_only`.
+   */
+  intent?: Intent;
   /** R51: reset an EXISTING branch (the PR's own head) instead of inventing one — see worktree.ts. */
   resetBranch?: boolean;
   /**
@@ -49,11 +56,17 @@ export interface CreateWorkspaceParams {
 export async function refreshWorkspaceGuardrails(
   fs: SessionFileSystem,
   worktreePath: string,
-  mode: SessionMode,
+  /**
+   * The SESSION, not its mode. The permission set is recomputed from it on
+   * every run, so a session whose `intent` gives it more authority than its
+   * mode implies keeps that authority across runs instead of being reverted
+   * by the very refresh that exists to keep policy current.
+   */
+  subject: PermissionSubject,
   pr?: PostTarget,
 ): Promise<void> {
-  await writePermissionSettings(fs, worktreePath, { mode });
-  if (pr !== undefined && shouldWritePostHelpers(mode)) {
+  await writePermissionSettings(fs, worktreePath, subject);
+  if (pr !== undefined && shouldWritePostHelpers(subject.mode)) {
     await writePostHelpers(fs, worktreePath, pr);
   }
 }
@@ -76,7 +89,12 @@ export class WorkspaceManager {
       { resetBranch: params.resetBranch === true },
     );
     try {
-      await refreshWorkspaceGuardrails(this.fs, params.worktreePath, params.mode, params.pr);
+      await refreshWorkspaceGuardrails(
+        this.fs,
+        params.worktreePath,
+        { mode: params.mode, intent: params.intent },
+        params.pr,
+      );
     } catch (err) {
       // Best-effort rollback so a retry with the same branchName doesn't
       // fail with "a branch already exists" — surface the original error
