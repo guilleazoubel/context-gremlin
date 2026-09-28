@@ -38,7 +38,7 @@ export interface TicketBriefContext {
 
 export interface BriefCommon { sessionDir: string; ticket: string | null; ticketContext?: TicketBriefContext | null }
 export interface FindingsBriefParams extends BriefCommon { intent: 'investigate_only' | 'development'; env?: EnvironmentBriefContext }
-export interface PlanBriefParams extends BriefCommon { driveToCompletion: boolean }
+export interface PlanBriefParams extends BriefCommon { driveToCompletion: boolean; intent?: 'investigate_only' | 'development' }
 export interface DevelopBriefParams extends BriefCommon {
   hasPlan: boolean;
   /**
@@ -432,8 +432,43 @@ export const PLAN_REVIEW_STATUS_EXAMPLE = `## Review Status
 - PM: ✅ Approved — <one-line reasoning>
 - Principal Engineer: ✅ Approved — <one-line reasoning>`;
 
+/**
+ * Item 4 — the paragraph a stuck agent needs. The permission guard is written
+ * into the worktree as `.claude/settings.local.json` and Claude Code guards
+ * that file against self-modification, so an agent that trips a deny rule gets
+ * a refusal and no explanation, and cannot lift it. The only session that ever
+ * diagnosed this went and read the engine's source. So the brief says, in this
+ * session's own terms, what it may and may not do — and says that being
+ * blocked is a REPORTABLE outcome, not something to route around.
+ *
+ * Kept in step with `DEFAULT_PERMISSIONS` in src/workspace/permission-guard.ts
+ * (`permissionProfileFor` answers which set applies); this paragraph describes
+ * that table, it does not decide anything.
+ */
+export function renderSessionAuthority(
+  sessionDir: string,
+  intent: 'investigate_only' | 'development',
+): string {
+  const landing =
+    intent === 'development'
+      ? `This investigation is development-bound, so it may land its OWN work: \`git commit\`, \`git push\` on this branch, and \`gh pr create --draft\` are yours to run.`
+      : `This investigation was not started as development-bound, so it lands nothing: \`git commit\`, \`git push\` and \`gh pr create\` are denied to it. Its deliverables are the files in \`${sessionDir}\`.`;
+  const forceLine =
+    intent === 'development'
+      ? ` A force-push is denied in every spelling — the branch history is not yours to rewrite.`
+      : '';
+  return `## What this session may and may not do
+
+${landing}${forceLine}
+
+**Denied here, whatever this session is for:** \`gh pr review\`, \`gh pr comment\`, \`gh issue\` (any subcommand — a pull request shares the issue-comment endpoint), \`gh api\` (every endpoint and verb), the administrative subcommands (\`gh repo\`, \`gh secret\`, \`gh workflow\`, \`gh release\`, …), and \`gh pr merge\`, \`gh pr close\`, \`gh pr edit\`, \`gh pr ready\`. Marking a PR ready and landing it are the human's calls, and reviewing is another session's job.
+
+**If a rule blocks you, say so — do not work around it.** The rules live in \`.claude/settings.local.json\` in this worktree; you cannot edit that file, and you are not meant to. Write \`${sessionDir}/AGENT_STATE\` = \`blocked\` and put the exact command that was refused in \`${sessionDir}/AGENT_NOTE\`, then STOP. A human can change the session's permissions in seconds; an agent that silently reaches for another shell spelling, or for the network directly, to get past the guard has broken the one rule that matters here.`;
+}
+
 export function renderPlanBrief(p: PlanBriefParams): string {
   const key = p.ticket ?? '(no ticket)';
+  const authority = renderSessionAuthority(p.sessionDir, p.intent ?? 'investigate_only');
   const tail = p.driveToCompletion
     ? `## Proceeding automatically (drive-to-completion was requested)
 Once both reviewers approve and the "## Review Status" block is written, STOP. The engine promotes this plan into development without waiting for a human.`
@@ -444,6 +479,8 @@ Once both reviewers approve and the "## Review Status" block is written, write \
 You are continuing the investigation of ${key} in the same worktree. \`${p.sessionDir}/FINDINGS.md\` is complete. Your deliverable is \`${p.sessionDir}/PLAN.md\`, reviewed by two subagents.
 
 ${notes(p.sessionDir)}
+
+${authority}
 
 ## Drafting the plan (PLAN.md)
 Write \`${p.sessionDir}/PLAN.md\`, derived from FINDINGS.md's root cause and direction. It must be bulletproof enough that a fresh developer could implement it without asking you anything. Use EXACTLY these headings, in this order, and no others:

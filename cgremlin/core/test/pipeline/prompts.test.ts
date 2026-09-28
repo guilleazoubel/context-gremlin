@@ -694,3 +694,49 @@ describe('renderDevelopBrief carries the approved plan itself', () => {
     expect(brief.length).toBeLessThan(huge.length + 4000);
   });
 });
+
+/**
+ * Item 4 — a blocked agent must be able to SAY it is blocked. The session this
+ * was found on had finished the whole job and could not commit, push or open
+ * a PR; nothing told its agent that, and the only reason the cause was ever
+ * found is that the agent went and read the engine's own source. The briefs
+ * for review and respond already carry a "What is denied" paragraph; an
+ * investigation had none, so the plan brief — the last brief a
+ * development-bound investigation gets, and the point at which it has work to
+ * land — carries one now.
+ */
+describe('renderPlanBrief states what THIS session may and may not do', () => {
+  const sessionDir = '/s';
+
+  it('tells a development-bound investigation it may commit, push and open a draft PR', () => {
+    const t = renderPlanBrief({ sessionDir, ticket: 'APP-1', driveToCompletion: false, intent: 'development' });
+    expect(t).toContain('## What this session may and may not do');
+    expect(t).toContain('`git commit`');
+    expect(t).toContain('`git push`');
+    expect(t).toContain('`gh pr create --draft`');
+    expect(t).toContain('`gh pr merge`');
+    expect(t).toContain('force-push');
+  });
+
+  it('tells an investigate-only session it lands nothing', () => {
+    const t = renderPlanBrief({ sessionDir, ticket: 'APP-1', driveToCompletion: false, intent: 'investigate_only' });
+    expect(t).toContain('## What this session may and may not do');
+    expect(t).toContain('`git commit`');
+    expect(t).toContain('lands nothing');
+  });
+
+  it('both tell the agent to REPORT being blocked rather than work around the guard', () => {
+    for (const intent of ['development', 'investigate_only'] as const) {
+      const t = renderPlanBrief({ sessionDir, ticket: 'APP-1', driveToCompletion: false, intent });
+      expect(t).toContain(`${sessionDir}/AGENT_STATE\` = \`blocked\``);
+      expect(t).toContain('.claude/settings.local.json');
+      expect(t).toContain('do not work around');
+    }
+  });
+
+  it('omitting intent is treated as investigate-only', () => {
+    expect(renderPlanBrief({ sessionDir, ticket: 'APP-1', driveToCompletion: false })).toBe(
+      renderPlanBrief({ sessionDir, ticket: 'APP-1', driveToCompletion: false, intent: 'investigate_only' }),
+    );
+  });
+});
