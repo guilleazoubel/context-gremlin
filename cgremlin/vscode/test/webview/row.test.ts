@@ -189,7 +189,16 @@ describe('§2 — one shrinkable child per line', () => {
       .map(([selector]) => selector);
     // `.id-keys` is a wrapper, not a token: it may shrink so that the line can, but nothing in
     // it ever truncates (L1 is ≤14 characters by construction).
-    expect(shrinkable).toEqual(['.id-keys', '.row-desc', '.row-desc-text', '.cell-repo']);
+    // 0c — the one other: a preflight-blocked cell carries the engine's whole sentence (up to
+    // 300 chars), and pinned it would push the age, tier, size and CI off the line. It ellipsises
+    // instead; the full text is its accessible name and the Item tab.
+    expect(shrinkable).toEqual([
+      '.id-keys',
+      '.row-desc',
+      '.row-desc-text',
+      '.row-signals > .cell.cell-blocked',
+      '.cell-repo',
+    ]);
   });
 
 
