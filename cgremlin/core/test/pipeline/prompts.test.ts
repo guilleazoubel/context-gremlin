@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  bareSkillName, EMPTY_ENVIRONMENT, PLAN_MAX_SECTION_CHARS, renderDevelopBrief, renderFindingsBrief, renderPlanBrief,
+  bareSkillName, EMPTY_ENVIRONMENT, neutralizeTag, PLAN_MAX_SECTION_CHARS, renderDevelopBrief, renderFindingsBrief, renderPlanBrief,
   renderRereviewBrief, renderRereviewPrompt, renderReviewBrief, renderReviewContract,
   renderReviewPrompt, renderUiCheckProtocol, renderEnvironmentSection, renderTicketSection, renderRespondBrief,
   RESPOND_DATA_CLOSE, RESPOND_DATA_OPEN,
@@ -641,7 +641,7 @@ describe('the ## Ticket block in the findings and develop briefs (R18)', () => {
   it('the old "fetch it via getJiraIssue" line is reworded: the engine is the only Jira source', () => {
     for (const ticketContext of [ticket, undefined]) {
       const brief = renderFindingsBrief({ sessionDir: '/s', ticket: 'HB-627', intent: 'investigate_only', ticketContext });
-      expect(brief).toContain('The ticket is HB-627. Its text is in the ## Ticket block above; do not fetch Jira yourself.');
+      expect(brief).toContain('The ticket is HB-627. Its text is in the ## Ticket block of this brief; do not fetch Jira yourself.');
       expect(brief).not.toMatch(/getJiraIssue|Atlassian MCP/i);
     }
   });
@@ -652,7 +652,7 @@ describe('the engine is the only Jira source (0c amendment A)', () => {
   const states: Array<TicketBriefState | undefined> = [
     undefined,
     { kind: 'loaded', ticket },
-    { kind: 'not_loaded', key: 'HB-627', reason: 'no credentials' } as unknown as TicketBriefState,
+    { kind: 'not_loaded', key: 'HB-627', reason: 'unavailable' },
     { kind: 'skipped', key: 'HB-627' },
   ];
   const outputs = (): Array<[string, string]> => {
@@ -691,6 +691,14 @@ describe('the engine is the only Jira source (0c amendment A)', () => {
     expect(byName.get('review-prompt')).toContain('do not fetch Jira yourself');
     expect(byName.get('review/loaded')).toMatch(/never call Jira yourself|do not fetch Jira yourself/);
     expect(byName.get('ui-check-fix')).toMatch(/never call Jira yourself|do not fetch Jira yourself/);
+    for (const k of ['rereview/loaded', 'rereview/not_loaded', 'rereview/none', 'rereview/skipped', 'rereview-prompt', 'ui-check-observe']) {
+      expect(byName.get(k), k).toMatch(/never call Jira yourself|do not fetch Jira yourself/);
+    }
+  });
+  it('the intent gate and the findings fallback name the skipped state', () => {
+    const byName = new Map(outputs());
+    expect(byName.get('review/loaded')).toContain('NOT LOADED, SKIPPED or none linked');
+    expect(byName.get('findings/loaded')).toContain('NOT LOADED, SKIPPED or none linked');
   });
   it('the UI-check designer uses Figma links from the ## Ticket description only', () => {
     const t = renderUiCheckProtocol('fix', 'https://x.example', localCtx);
@@ -705,6 +713,40 @@ describe('the engine is the only Jira source (0c amendment A)', () => {
 // ---------------------------------------------------------------------------
 // Phase 9 / Task A9 — renderRespondBrief (R50, R55).
 // ---------------------------------------------------------------------------
+
+describe('neutralizeTag cost', () => {
+  it('a "<" followed by 200k spaces does not backtrack', () => {
+    const t0 = performance.now();
+    neutralizeTag('<' + ' '.repeat(200_000), 'untrusted-ticket-data');
+    expect(performance.now() - t0).toBeLessThan(500);
+  });
+});
+
+describe('renderRespondBrief hardening (0c Task 7)', () => {
+  const base = { sessionDir: '/s/r', prRepo: 'a/b', prNumber: 1, threads: [], reviewDecision: null, changedFiles: 1, additions: 1, deletions: 1 };
+  const check = (ctx: Parameters<typeof renderRespondBrief>[0]) => {
+    const t0 = performance.now();
+    const out = renderRespondBrief(ctx);
+    expect(performance.now() - t0).toBeLessThan(1000);
+    expect(out.length).toBeLessThanOrEqual(40_000);
+    expect(out).toContain('## Posting');
+    return out;
+  };
+  it('huge reviews, author and check name are bounded and fast', () => {
+    const reviews = Array.from({ length: 5000 }, () => ({ author: 'x'.repeat(200_000), state: 'COMMENTED', body: 'b'.repeat(2000), submittedAt: '2026-09-03T00:00:00Z' }));
+    check({ ...base, reviews, failingChecks: [{ name: 'n'.repeat(200_000), detailsUrl: 'u'.repeat(200_000) }] } as never);
+  });
+  it('a "<" followed by 100k spaces in a check name stays fast', () => {
+    check({ ...base, reviews: [], failingChecks: [{ name: '<' + ' '.repeat(100_000), detailsUrl: null }] } as never);
+  });
+  it('caps author/state/name/detailsUrl at 200 chars', () => {
+    const out = check({ ...base, reviews: [{ author: 'a'.repeat(500), state: 's'.repeat(500), body: null, submittedAt: 't' }], failingChecks: [{ name: 'n'.repeat(500), detailsUrl: 'u'.repeat(500) }] } as never);
+    expect(out).not.toContain('a'.repeat(201));
+    expect(out).not.toContain('s'.repeat(201));
+    expect(out).not.toContain('n'.repeat(201));
+    expect(out).not.toContain('u'.repeat(201));
+  });
+});
 
 describe('renderRespondBrief (R50)', () => {
   const thread = (id: string, comments: Array<{ author: string; body: string }>) => ({
