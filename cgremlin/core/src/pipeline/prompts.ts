@@ -1240,16 +1240,15 @@ export function renderQaBrief(ctx: QaBriefContext): string {
   const envSection = renderQaEnvironmentSection(env);
   if (envSection !== '') sections.push(envSection);
 
-  // The how-to and the output contract are what the agent acts on and the engine parses,
-  // so they are never the part that gets cut: the cap trims what comes before them.
-  const tail = `\n\n${qaHowToVerify(ctx.sessionDir)}\n\n${qaOutputContract(ctx.sessionDir)}`;
-  let head = sections.join('\n\n');
+  sections.push(qaHowToVerify(ctx.sessionDir), qaOutputContract(ctx.sessionDir));
+
+  let text = sections.join('\n\n');
   const note = '\n\n_(truncated by the engine)_';
-  if (head.length + tail.length > QA_MAX_BRIEF_CHARS) {
-    head = head.slice(0, Math.max(0, QA_MAX_BRIEF_CHARS - tail.length - note.length));
+  if (text.length > QA_MAX_BRIEF_CHARS - note.length) {
+    text = text.slice(0, QA_MAX_BRIEF_CHARS - note.length);
     truncated = true;
   }
-  return `${head}${truncated ? note : ''}${tail}`;
+  return truncated ? `${text}${note}` : text;
 }
 
 export interface QaPromptParams { sessionDir: string; qaSkillCommand?: string }

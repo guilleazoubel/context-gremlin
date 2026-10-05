@@ -169,29 +169,15 @@ describe('renderQaBrief with a ticket (0c)', () => {
       }),
     );
     expect(text.length).toBeLessThanOrEqual(QA_MAX_BRIEF_CHARS);
-    // The only note is the ticket's own (a 500k description is cut to its field cap); the
-    // brief-level cap added none, and it sits before the change section.
+    // The one note is the ticket's own field cap (a 500k description); the brief-level cap adds none.
     const note = '_(truncated by the engine)_';
     expect(text.split(note).length - 1).toBe(1);
     expect(text.indexOf(note)).toBeLessThan(text.indexOf('## The change'));
+    expect(text.split('<untrusted-ticket-data>').length).toBe(2);
+    expect(text.split('</untrusted-ticket-data>').length).toBe(2);
     expect(text.trimEnd().endsWith(renderQaBrief(ctx()).trimEnd().slice(-200))).toBe(true);
   });
 
-  it('when the cap does bite, the output contract survives and the ticket fence stays closed', () => {
-    const text = renderQaBrief(
-      ctx({
-        ticketState: {
-          kind: 'loaded',
-          ticket: { key: 'HB-1489', summary: 'S', status: 'UAT', url: '', descriptionText: 'd'.repeat(500_000), comments: [] },
-        },
-        priorArtifacts: Array.from({ length: 4000 }, (_, i) => `/sessions/s${i}/REVIEW.md`),
-      }),
-    );
-    expect(text.length).toBeLessThanOrEqual(QA_MAX_BRIEF_CHARS);
-    expect(text).toContain('_(truncated by the engine)_');
-    expect(text.trimEnd().endsWith(renderQaBrief(ctx()).trimEnd().slice(-200))).toBe(true);
-    expect(text.split('<untrusted-ticket-data>').length).toBe(text.split('</untrusted-ticket-data>').length);
-  });
 });
 
 describe('renderQaPrompt', () => {

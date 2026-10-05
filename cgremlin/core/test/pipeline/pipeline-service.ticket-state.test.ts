@@ -100,6 +100,27 @@ describe('0c — every run method hands its brief the ticket state (via the publ
     expect(await brief(none, bare.id)).toContain('Jira linking is not configured');
   });
 
+  it('rereview: asks for session.lineage.ticket (and only that key) and renders the block', async () => {
+    const t = spy({ kind: 'not_loaded', key: 'HB-42', reason: 'unavailable' });
+    const h = createHarness({ tickets: t.deps });
+    const review = reviewSession('HB-42');
+    await h.store.save(review);
+    await h.store.transition(review.id, 'reviewing');
+    await h.store.transition(review.id, 'ready');
+    h.git.queueResponse({ stdout: 'aaa', stderr: '' }); // rev-parse HEAD
+    h.git.queueResponse({ stdout: '', stderr: '' }); // fetch
+    h.git.queueResponse({ stdout: 'bbb', stderr: '' }); // rev-parse FETCH_HEAD
+    h.git.queueResponse({ stdout: '', stderr: '' }); // reset --hard
+    h.git.queueResponse({ stdout: 'abc1234 fix', stderr: '' }); // log
+    h.git.queueResponse({ stdout: ' 1 file changed', stderr: '' }); // diff --stat
+    void h.service.runRereview(review.id).catch(() => undefined);
+    await flush();
+    expect(t.keys).toEqual(['HB-42']);
+    const text = await brief(h, review.id);
+    expect(text).toContain('# RE-REVIEW — PR #12');
+    expect(text).toContain('## Ticket — HB-42: NOT LOADED (unavailable)');
+  });
+
   it('respond: asks for the session ticket, inside the untrusted-pr-data section', async () => {
     const t = spy({ kind: 'loaded', ticket: TICKET });
     const h = createHarness({ tickets: t.deps });
