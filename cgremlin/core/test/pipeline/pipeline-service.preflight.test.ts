@@ -212,7 +212,9 @@ describe.each(CASES)('final fix I1 — which branch keys are linked tickets — 
     const { h, session, run, dir } = await setup(c, 'HB-1', { tickets: port(['HB'], notFoundReader()) });
     await runs(h, session.id, run);
     const brief = await h.fs.readFile(`${dir}/BRIEF.md`);
-    expect(brief).toContain('## Ticket — none linked');
+    expect(brief).toContain('## Ticket — none linked (Jira returned 404 for HB-1: no such issue, or not visible to the configured Jira account)');
+    expect(brief).toContain('say plainly in your output that the ticket could not be read');
+    expect(await h.fs.readFile(`${dir}/AGENT_STATE`)).not.toBe('needs-input');
     // (The review brief's TIER 0 names "NOT LOADED, SKIPPED or none linked" statically.)
     expect(brief).not.toContain(': NOT LOADED (');
   });
@@ -371,7 +373,9 @@ describe('0c preflight — details', () => {
     expect(report.errors).toEqual([]);
     expect(run).toHaveBeenCalledTimes(1);
     expect(await h.fs.readFile(`${SESSIONS_DIR}/${id}/AGENT_STATE`)).not.toBe('needs-input');
-    expect(await h.fs.readFile(`${SESSIONS_DIR}/${id}/BRIEF.md`)).toContain('## Ticket — none linked');
+    const brief = await h.fs.readFile(`${SESSIONS_DIR}/${id}/BRIEF.md`);
+    expect(brief).toContain('## Ticket — none linked (Jira returned 404 for HB-1:');
+    expect(brief).toContain('say plainly in your output that the ticket could not be read');
   });
 
   it('a block while a run is live refuses as RunInProgress and leaves that run\'s state alone', async () => {

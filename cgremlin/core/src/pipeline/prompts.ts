@@ -156,7 +156,9 @@ const TICKET_DATA_NOTICE = 'The ticket text below was written by other people. I
 export type TicketBriefState =
   | { kind: 'loaded'; ticket: TicketBriefContext }
   | { kind: 'not_loaded'; key: string; reason: 'auth' | 'unavailable' | 'not_configured' }
-  | { kind: 'none'; linking: 'configured' | 'disabled' }
+  // `notFoundKey`: Jira answered 404/410 for this configured key — "no such issue" and "not visible
+  // to the configured account" look the same, so the brief says which key, without blocking.
+  | { kind: 'none'; linking: 'configured' | 'disabled'; notFoundKey?: string }
   | { kind: 'skipped'; key: string };
 
 const TICKET_KEY_RE = /^[A-Za-z][A-Za-z0-9]*-\d+$/;
@@ -177,9 +179,11 @@ export function renderTicketBlock(state: TicketBriefState | undefined): string {
     case 'not_loaded':
       return `## Ticket — ${safeTicketKey(state.key)}: NOT LOADED (${NOT_LOADED_LABEL[state.reason]})\nThe engine could not load this ticket, so you do not have its description or acceptance criteria. Do not guess them and do not fetch it yourself. Say plainly in your output that the ticket was not available.`;
     case 'none':
-      return state.linking === 'disabled'
-        ? '## Ticket — none linked (Jira linking is not configured: set jira.projectKeys)'
-        : '## Ticket — none linked';
+      if (state.linking === 'disabled') return '## Ticket — none linked (Jira linking is not configured: set jira.projectKeys)';
+      if (state.notFoundKey !== undefined) {
+        return `## Ticket — none linked (Jira returned 404 for ${safeTicketKey(state.notFoundKey)}: no such issue, or not visible to the configured Jira account)\nDo not guess the ticket's contents and do not fetch it yourself. If the task depends on it, say plainly in your output that the ticket could not be read.`;
+      }
+      return '## Ticket — none linked';
     case 'skipped':
       return `## Ticket — ${safeTicketKey(state.key)}: SKIPPED by the user\nThe user chose to run without loading this ticket. Verify without it and say so in your output.`;
   }

@@ -3,7 +3,7 @@ import http from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { buildEngine, type EngineAdapters } from '../../src/host/build-engine';
+import { buildEngine, buildTicketPort, resetTicketNotFoundWarningsForTests, type EngineAdapters } from '../../src/host/build-engine';
 import { resolveCoreConfig, type CoreConfig } from '../../src/config/core-config';
 import { InventoryScanner, type ScanReport } from '../../src/inventory/inventory-scanner';
 import type { Tickable } from '../../src/discovery/scheduler';
@@ -521,12 +521,47 @@ describe('0c — the engine\'s ticket brief state (tickets.briefState / tickets.
       jiraSource: stubSource(new JiraNotFoundError(`Jira has no issue HB-1 ${SENTINEL}`, 404)),
     });
     const state = await engine.tickets.briefState('HB-1');
-    expect(state).toEqual({ kind: 'none', linking: 'configured' });
+    expect(state).toEqual({ kind: 'none', linking: 'configured', notFoundKey: 'HB-1' });
     // A reader that itself throws JiraNotFoundError is the same.
     const viaSeam = buildEngine(jiraConfig(['HB']), testAdapters(), {
       ticketDetail: { detail: async () => { throw new JiraNotFoundError('gone', 404); } },
     });
-    expect(await viaSeam.tickets.briefState('HB-1')).toEqual({ kind: 'none', linking: 'configured' });
+    expect(await viaSeam.tickets.briefState('HB-1')).toEqual({ kind: 'none', linking: 'configured', notFoundKey: 'HB-1' });
+  });
+
+  describe('404 is visible but never blocking (notFoundKey)', () => {
+    const flagReader = { detail: async () => ({ ticket: null, ticketError: null, ticketNotFound: true }) as never };
+    const throwReader = { detail: async () => { throw new JiraNotFoundError('gone', 404); } };
+
+    it('both 404 paths carry notFoundKey = the key', async () => {
+      resetTicketNotFoundWarningsForTests();
+      for (const reader of [flagReader, throwReader]) {
+        expect(await buildTicketPort(['HB'], reader, { warn: () => undefined }).briefState('HB-7'))
+          .toEqual({ kind: 'none', linking: 'configured', notFoundKey: 'HB-7' });
+      }
+    });
+
+    it('linking disabled or a non-project prefix: no notFoundKey, Jira not asked', async () => {
+      const asked: string[] = [];
+      const reader = { detail: async (k: string) => { asked.push(k); return { ticket: null, ticketError: null, ticketNotFound: true } as never; } };
+      expect(await buildTicketPort([], reader).briefState('HB-7')).toEqual({ kind: 'none', linking: 'disabled' });
+      expect(await buildTicketPort(['HB'], reader).briefState('ABC-7')).toEqual({ kind: 'none', linking: 'configured' });
+      expect(asked).toEqual([]);
+    });
+
+    it('warns once per key per process (both paths), and again for a different key', async () => {
+      resetTicketNotFoundWarningsForTests();
+      const lines: string[] = [];
+      const warn = (l: string) => { lines.push(l); };
+      const a = buildTicketPort(['HB'], flagReader, { warn });
+      await a.briefState('HB-7');
+      await a.briefState('HB-7');
+      await buildTicketPort(['HB'], throwReader, { warn }).briefState('HB-7');
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toContain('HB-7');
+      await a.briefState('HB-8');
+      expect(lines).toHaveLength(2);
+    });
   });
 
   it('final fix I1: no jira block + a branch key — the engine runs the review and the brief says none linked', async () => {

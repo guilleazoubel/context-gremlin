@@ -159,6 +159,12 @@ async function priorArtifactsFor(
   return paths;
 }
 
+const warnedNotFoundKeys = new Set<string>();
+/** Test-only: the once-per-key latch is process state, so a test that asserts it must clear it. */
+export function resetTicketNotFoundWarningsForTests(): void {
+  warnedNotFoundKeys.clear();
+}
+
 /**
  * 0c — the engine's ticket port: the ticket a brief carries, with the reason it is missing when
  * it is. Never throws: the detail reader already turns a Jira failure into `ticketErrorKind`, and
@@ -175,9 +181,20 @@ async function priorArtifactsFor(
 export function buildTicketPort(
   projectKeys: readonly string[],
   ticketDetail: { detail(key: string): Promise<TicketDetailResult> },
+  opts?: { warn?: (line: string) => void },
 ): PipelineTickets {
   const linking: PipelineTickets['linking'] = projectKeys.length === 0 ? 'disabled' : 'configured';
   const allowed = new Set(projectKeys);
+  // A 404 stays non-blocking but is visible: in the brief (notFoundKey) and once per key per process here.
+  const notFound = (key: string): { kind: 'none'; linking: 'configured'; notFoundKey: string } => {
+    if (!warnedNotFoundKeys.has(key)) {
+      warnedNotFoundKeys.add(key);
+      (opts?.warn ?? ((line: string) => console.warn(line)))(
+        `Jira returned 404 for ${key}: no such issue, or not visible to the configured Jira account (the brief says so; the run continues)`,
+      );
+    }
+    return { kind: 'none', linking: 'configured', notFoundKey: key };
+  };
   return {
     briefState: async (key) => {
       if (linking === 'disabled') return { kind: 'none', linking };
@@ -186,7 +203,7 @@ export function buildTicketPort(
       try {
         const { ticket, ticketErrorKind, ticketNotFound } = await ticketDetail.detail(key);
         if (ticket === null) {
-          if (ticketNotFound === true) return { kind: 'none', linking };
+          if (ticketNotFound === true) return notFound(key);
           return { kind: 'not_loaded', key, reason: ticketErrorKind ?? 'unavailable' };
         }
         return {
@@ -201,7 +218,7 @@ export function buildTicketPort(
           },
         };
       } catch (err) {
-        if (err instanceof JiraNotFoundError) return { kind: 'none', linking };
+        if (err instanceof JiraNotFoundError) return notFound(key);
         return { kind: 'not_loaded', key, reason: 'unavailable' };
       }
     },
