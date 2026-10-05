@@ -153,6 +153,47 @@ describe('renderQaBrief', () => {
   });
 });
 
+describe('renderQaBrief with a ticket (0c)', () => {
+  it('the largest realistic brief stays under the cap with its output contract intact and no truncation', () => {
+    const text = renderQaBrief(
+      ctx({
+        ticketState: {
+          kind: 'loaded',
+          ticket: { key: 'HB-1489', summary: 'S', status: 'UAT', url: 'https://x/browse/HB-1489', descriptionText: 'd'.repeat(500_000), comments: [] },
+        },
+        change: {
+          title: 'T', author: 'a', mergedAt: null, changedFiles: 100, additions: 1, deletions: 1,
+          files: Array.from({ length: 100 }, (_, i) => `src/${'deep/'.repeat(25)}file-${i}.tsx`),
+        },
+        priorArtifacts: Array.from({ length: 20 }, (_, i) => `/sessions/s${i}/REVIEW.md`),
+      }),
+    );
+    expect(text.length).toBeLessThanOrEqual(QA_MAX_BRIEF_CHARS);
+    // The only note is the ticket's own (a 500k description is cut to its field cap); the
+    // brief-level cap added none, and it sits before the change section.
+    const note = '_(truncated by the engine)_';
+    expect(text.split(note).length - 1).toBe(1);
+    expect(text.indexOf(note)).toBeLessThan(text.indexOf('## The change'));
+    expect(text.trimEnd().endsWith(renderQaBrief(ctx()).trimEnd().slice(-200))).toBe(true);
+  });
+
+  it('when the cap does bite, the output contract survives and the ticket fence stays closed', () => {
+    const text = renderQaBrief(
+      ctx({
+        ticketState: {
+          kind: 'loaded',
+          ticket: { key: 'HB-1489', summary: 'S', status: 'UAT', url: '', descriptionText: 'd'.repeat(500_000), comments: [] },
+        },
+        priorArtifacts: Array.from({ length: 4000 }, (_, i) => `/sessions/s${i}/REVIEW.md`),
+      }),
+    );
+    expect(text.length).toBeLessThanOrEqual(QA_MAX_BRIEF_CHARS);
+    expect(text).toContain('_(truncated by the engine)_');
+    expect(text.trimEnd().endsWith(renderQaBrief(ctx()).trimEnd().slice(-200))).toBe(true);
+    expect(text.split('<untrusted-ticket-data>').length).toBe(text.split('</untrusted-ticket-data>').length);
+  });
+});
+
 describe('renderQaPrompt', () => {
   it('names the skill, degrades to the brief, and forbids every outward action', () => {
     const text = renderQaPrompt({ sessionDir: '/sessions/qa-1', qaSkillCommand: '/cgremlin:qa-verify' });

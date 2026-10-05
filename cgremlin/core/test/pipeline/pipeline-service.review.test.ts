@@ -56,8 +56,8 @@ describe('PipelineService — review', () => {
     const handle = h.runner.lastHandle();
     expect(h.runner.getPrompts(handle)).toEqual([renderReviewPrompt({ sessionDir })]);
     // Since Phase 5 review writes a BRIEF.md; with no environment wired it is
-    // the env-less render (no ## Environment, no ## LIVE UI CHECK).
-    expect(await h.fs.readFile(`${sessionDir}/BRIEF.md`)).toBe(renderReviewBrief({ sessionDir, prNumber: 12 }));
+    // the env-less render (no ## Environment, no ## LIVE UI CHECK) plus the 0c ticket state.
+    expect(await h.fs.readFile(`${sessionDir}/BRIEF.md`)).toBe(renderReviewBrief({ sessionDir, prNumber: 12, ticketState: { kind: 'none', linking: 'disabled' } }));
 
     await h.finishRun({ 'REVIEW.md': '# Review\nfindings here' }, { code: 0, signal: null });
     const session = await p;

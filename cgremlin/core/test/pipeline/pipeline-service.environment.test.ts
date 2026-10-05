@@ -555,7 +555,7 @@ describe('PipelineService — no environment wired (regression pins)', () => {
     await h.finishRun({ 'FINDINGS.md': '# f' }, { code: 0, signal: null });
     await p;
     expect(await h.fs.readFile(`${invDir}/BRIEF.md`)).toBe(
-      renderFindingsBrief({ sessionDir: invDir, ticket: 'APP-1', intent: 'investigate_only' }),
+      renderFindingsBrief({ sessionDir: invDir, ticket: 'APP-1', intent: 'investigate_only', ticketState: { kind: 'not_loaded', key: 'APP-1', reason: 'not_configured' } }),
     );
 
     const dev = await saveDevSession(h);
@@ -564,7 +564,7 @@ describe('PipelineService — no environment wired (regression pins)', () => {
     await h.finishRun({}, { code: 0, signal: null });
     await p2;
     expect(await h.fs.readFile(`${devDir}/BRIEF.md`)).toBe(
-      renderDevelopBrief({ sessionDir: devDir, ticket: 'APP-1', hasPlan: false }),
+      renderDevelopBrief({ sessionDir: devDir, ticket: 'APP-1', hasPlan: false, ticketState: { kind: 'not_loaded', key: 'APP-1', reason: 'not_configured' } }),
     );
   });
 
@@ -581,7 +581,7 @@ describe('PipelineService — no environment wired (regression pins)', () => {
     await p;
 
     const brief = await h.fs.readFile(`${sessionDir}/BRIEF.md`);
-    expect(brief).toBe(renderReviewBrief({ sessionDir, prNumber: 12 }));
+    expect(brief).toBe(renderReviewBrief({ sessionDir, prNumber: 12, ticketState: { kind: 'none', linking: 'disabled' } }));
     expect(brief).not.toContain('## Environment');
     expect(brief).not.toContain('## LIVE UI CHECK');
 
@@ -590,7 +590,7 @@ describe('PipelineService — no environment wired (regression pins)', () => {
     await h.finishRun({ 'REVIEW.md': '# Review\nx' }, { code: 0, signal: null });
     await p2;
     const rereviewBrief = await h.fs.readFile(`${sessionDir}/BRIEF.md`);
-    expect(rereviewBrief).toBe(renderRereviewBrief({ sessionDir, prNumber: 12, commitCount: 1 }));
+    expect(rereviewBrief).toBe(renderRereviewBrief({ sessionDir, prNumber: 12, commitCount: 1, ticketState: { kind: 'none', linking: 'disabled' } }));
   });
 });
 

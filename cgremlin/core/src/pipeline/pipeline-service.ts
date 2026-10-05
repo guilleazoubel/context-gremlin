@@ -31,7 +31,6 @@ import {
   renderFindingsBrief,
   renderRespondBrief,
   type RespondBriefContext,
-  type TicketBriefContext,
   type TicketBriefState,
   renderPlanBrief,
   renderRereviewBrief,
@@ -103,10 +102,10 @@ export interface PipelineServiceDeps {
   /** Optional: a wiring with no local-app adapter has no environment at all, and every stage then behaves exactly as it did before Phase 5 (R14). */
   environment?: EnvironmentService;
   /**
-   * R18 — the ticket text a brief carries, fetched by the ENGINE (never by
-   * the agent, and never a credential). Optional: with no Jira configured
-   * the `## Ticket` section renders '' and the briefs read exactly as they
-   * did before Phase 9.
+   * R18/0c — the engine's ticket port (`briefState` + `linking`); the ticket text a brief
+   * carries is fetched by the ENGINE, never by the agent, and never a credential. Optional:
+   * with none wired a named ticket renders as NOT LOADED (not configured) and no ticket as
+   * "none linked" with Jira linking disabled — every brief states which.
    */
   tickets?: PipelineTickets;
   /**
@@ -117,7 +116,7 @@ export interface PipelineServiceDeps {
    */
   respondContext?: (
     session: Session,
-  ) => Promise<Omit<RespondBriefContext, 'sessionDir' | 'prRepo' | 'prNumber' | 'ticketContext'>>;
+  ) => Promise<Omit<RespondBriefContext, 'sessionDir' | 'prRepo' | 'prNumber' | 'ticketContext' | 'ticketState'>>;
   /**
    * Phase 15 — what the QA brief carries beyond the ticket: the merged PR's
    * shape and the absolute paths of what earlier sessions on this ticket
@@ -126,7 +125,7 @@ export interface PipelineServiceDeps {
    */
   qaContext?: (
     session: Session,
-  ) => Promise<Omit<QaBriefContext, 'sessionDir' | 'ticket' | 'ticketContext' | 'env'>>;
+  ) => Promise<Omit<QaBriefContext, 'sessionDir' | 'ticket' | 'ticketContext' | 'ticketState' | 'env'>>;
   /** One line per degraded side effect (R110's release refresh). Defaults to `console.warn`, which the engine log captures. */
   log?: (line: string) => void;
 }
@@ -205,16 +204,6 @@ export class PipelineService {
     if (key === null) return { kind: 'none', linking: tickets?.linking ?? 'disabled' };
     if (tickets === undefined) return { kind: 'not_loaded', key, reason: 'not_configured' };
     return tickets.briefState(key);
-  }
-
-  /**
-   * The pre-0c `ticketContext` shape the renderers still take — loaded is the ticket,
-   * every other state is null, so briefs read exactly as before until Task 3 hands
-   * them the state itself.
-   */
-  private async ticketContext(key: string | null): Promise<TicketBriefContext | null> {
-    const state = await this.ticketState(key);
-    return state.kind === 'loaded' ? state.ticket : null;
   }
 
   private sessionDir(id: string): string {
@@ -511,7 +500,7 @@ export class PipelineService {
       ticket: session.lineage.ticket,
       intent: session.intent,
       env: prep.ctx,
-      ticketContext: await this.ticketContext(session.lineage.ticket),
+      ticketState: await this.ticketState(session.lineage.ticket),
     });
     const prompt = STAGE_ENTRY_PROMPT(sessionDir);
     try {
@@ -706,7 +695,7 @@ export class PipelineService {
       hasPlan,
       plan,
       env: prep.ctx,
-      ticketContext: await this.ticketContext(session.lineage.ticket),
+      ticketState: await this.ticketState(session.lineage.ticket),
     });
     const prompt = STAGE_ENTRY_PROMPT(sessionDir);
     try {
@@ -754,7 +743,7 @@ export class PipelineService {
       sessionDir,
       prRepo: session.pr?.repo ?? '',
       prNumber: session.pr?.number ?? 0,
-      ticketContext: await this.ticketContext(session.lineage.ticket),
+      ticketState: await this.ticketState(session.lineage.ticket),
       // R50's gate returns '' for a context with NOTHING in it. A real run
       // still needs the reconcile-first instruction, the COMMENTS.md shape
       // and the out-of-scope line, so the no-context case passes an empty
@@ -797,9 +786,9 @@ export class PipelineService {
   /**
    * The QA brief's non-ticket context: the host's `qaContext` when one is
    * wired, otherwise what the session itself already knows. Never throws —
-   * a context failure degrades the brief, exactly as `ticketContext` does.
+   * a context failure degrades the brief, exactly as `ticketState` does.
    */
-  private async qaContext(session: Session): Promise<Omit<QaBriefContext, 'sessionDir' | 'ticket' | 'ticketContext' | 'env'>> {
+  private async qaContext(session: Session): Promise<Omit<QaBriefContext, 'sessionDir' | 'ticket' | 'ticketContext' | 'ticketState' | 'env'>> {
     const fallback = {
       prRepo: session.pr?.repo ?? null,
       prNumber: session.pr?.number ?? null,
@@ -819,7 +808,7 @@ export class PipelineService {
     const brief = renderQaBrief({
       sessionDir,
       ticket: session.lineage.ticket ?? session.id,
-      ticketContext: await this.ticketContext(session.lineage.ticket),
+      ticketState: await this.ticketState(session.lineage.ticket),
       env,
       ...(await this.qaContext(session)),
     });
@@ -956,6 +945,7 @@ export class PipelineService {
       prNumber: session.pr?.number ?? 0,
       env: prep.ctx,
       selfReview: session.lineage.selfReview,
+      ticketState: await this.ticketState(session.lineage.ticket),
     });
     const prompt = renderReviewPrompt({
       sessionDir,
@@ -1090,7 +1080,13 @@ export class PipelineService {
     const prompt = renderRereviewPrompt({ sessionDir, commitCount, reviewSkillCommand: this.deps.config.reviewSkillCommand });
     // After the git work, so a fetch/reset failure never leaves a started app behind.
     const prep = await this.prepareEnvironment(id, 'rereview', session);
-    const brief = renderRereviewBrief({ sessionDir, prNumber: session.pr.number, commitCount, env: prep.ctx });
+    const brief = renderRereviewBrief({
+      sessionDir,
+      prNumber: session.pr.number,
+      commitCount,
+      env: prep.ctx,
+      ticketState: await this.ticketState(session.lineage.ticket),
+    });
     try {
       // Only mark the session 'failed' in the catch below if OUR preRun
       // actually committed the reviewing transition — a lost-race rejection

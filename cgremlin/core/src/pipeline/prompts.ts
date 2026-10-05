@@ -36,7 +36,7 @@ export interface TicketBriefContext {
   comments: Array<{ author: string; at: string; bodyText: string | null }>;
 }
 
-export interface BriefCommon { sessionDir: string; ticket: string | null; ticketContext?: TicketBriefContext | null }
+export interface BriefCommon { sessionDir: string; ticket: string | null; ticketContext?: TicketBriefContext | null; ticketState?: TicketBriefState }
 export interface FindingsBriefParams extends BriefCommon { intent: 'investigate_only' | 'development'; env?: EnvironmentBriefContext }
 export interface PlanBriefParams extends BriefCommon { driveToCompletion: boolean; intent?: 'investigate_only' | 'development' }
 export interface DevelopBriefParams extends BriefCommon {
@@ -54,10 +54,11 @@ export interface ReviewBriefParams {
   sessionDir: string;
   prNumber: number;
   env?: EnvironmentBriefContext;
+  ticketState?: TicketBriefState;
   /** Phase 10: this review session was deliberately created on the author's own PR (selfReview:true bypassed OwnPrError). */
   selfReview?: boolean;
 }
-export interface RereviewBriefParams { sessionDir: string; prNumber: number; commitCount: number; env?: EnvironmentBriefContext }
+export interface RereviewBriefParams { sessionDir: string; prNumber: number; commitCount: number; env?: EnvironmentBriefContext; ticketState?: TicketBriefState }
 export interface ReviewPromptParams { sessionDir: string; reviewSkillCommand?: string; includeLiveUiCheck?: boolean; uiCheckRendered?: boolean }
 export interface RereviewPromptParams { sessionDir: string; commitCount: number; reviewSkillCommand?: string }
 
@@ -158,6 +159,13 @@ export type TicketBriefState =
   | { kind: 'none'; linking: 'configured' | 'disabled' }
   | { kind: 'skipped'; key: string };
 
+const TICKET_KEY_RE = /^[A-Za-z][A-Za-z0-9]*-\d+$/;
+const TICKET_KEY_MAX = 40;
+/** A key is interpolated into a heading, so anything that is not a plain Jira key is replaced. */
+function safeTicketKey(key: string): string {
+  return key.length <= TICKET_KEY_MAX && TICKET_KEY_RE.test(key) ? key : '(invalid key)';
+}
+
 const NOT_LOADED_LABEL = { auth: 'auth error', unavailable: 'unavailable', not_configured: 'not configured' } as const;
 
 /** '' only for `undefined` (a caller that passes no state is unchanged). */
@@ -167,13 +175,13 @@ export function renderTicketBlock(state: TicketBriefState | undefined): string {
     case 'loaded':
       return renderTicketSection(state.ticket);
     case 'not_loaded':
-      return `## Ticket — ${state.key}: NOT LOADED (${NOT_LOADED_LABEL[state.reason]})\nThe engine could not load this ticket, so you do not have its description or acceptance criteria. Do not guess them and do not fetch it yourself. Say plainly in your output that the ticket was not available.`;
+      return `## Ticket — ${safeTicketKey(state.key)}: NOT LOADED (${NOT_LOADED_LABEL[state.reason]})\nThe engine could not load this ticket, so you do not have its description or acceptance criteria. Do not guess them and do not fetch it yourself. Say plainly in your output that the ticket was not available.`;
     case 'none':
       return state.linking === 'disabled'
         ? '## Ticket — none linked (Jira linking is not configured: set jira.projectKeys)'
         : '## Ticket — none linked';
     case 'skipped':
-      return `## Ticket — ${state.key}: SKIPPED by the user\nThe user chose to run without loading this ticket. Verify without it and say so in your output.`;
+      return `## Ticket — ${safeTicketKey(state.key)}: SKIPPED by the user\nThe user chose to run without loading this ticket. Verify without it and say so in your output.`;
   }
 }
 
@@ -194,7 +202,7 @@ export function renderTicketSection(ctx: TicketBriefContext | null | undefined):
   const clean = (t: string, max = TICKET_MAX_FIELD_CHARS): string =>
     neutralizeTag(t.length > max ? t.slice(0, max) : t, 'untrusted-ticket-data');
   let truncated = false;
-  const heading = `## Ticket ${ctx.key} — ${clean(ctx.summary, TICKET_MAX_SUMMARY_CHARS).replace(/\s*\n\s*/g, ' ')}`;
+  const heading = `## Ticket ${safeTicketKey(ctx.key)} — ${clean(ctx.summary, TICKET_MAX_SUMMARY_CHARS).replace(/\s*\n\s*/g, ' ')}`;
   const lines: string[] = [
     `Status: ${clean(ctx.status)}${ctx.url === '' ? '' : ` · ${clean(ctx.url)}`}`,
   ];
@@ -420,10 +428,11 @@ Rules for the file:
 export function renderFindingsBrief(p: FindingsBriefParams): string {
   const env = p.env ?? EMPTY_ENVIRONMENT;
   const key = p.ticket ?? '(no ticket)';
-  const ticketSection = renderTicketSection(p.ticketContext);
+  const ticketState = resolveTicketState(p);
+  const ticketSection = renderTicketBlock(ticketState);
   const ticketBlock = ticketSection ? `\n\n${ticketSection}` : '';
   const ticketLine = p.ticket
-    ? ticketSection
+    ? ticketState?.kind === 'loaded'
       // R18: reworded, not deleted — the engine already fetched the ticket,
       // so the MCP call is the fallback for detail the brief does not carry.
       ? `The ticket is ${p.ticket}. Its text is below; fetch it via the Atlassian MCP (getJiraIssue) only if you need more.`
@@ -613,7 +622,7 @@ export function renderDevelopBrief(p: DevelopBriefParams): string {
   const uiCheckBlock = uiCheck ? `\n\n${uiCheck}` : '';
   const envSection = renderEnvironmentSection(env);
   const envBlock = envSection ? `\n\n${envSection}` : '';
-  const ticketSection = renderTicketSection(p.ticketContext);
+  const ticketSection = renderTicketBlock(resolveTicketState(p));
   const ticketBlock = ticketSection ? `\n\n${ticketSection}` : '';
   const planSection = renderPlanSection(p.plan);
   const planBlock = planSection ? `\n\n${planSection}` : '';
@@ -714,6 +723,7 @@ export function renderReviewBrief(p: ReviewBriefParams): string {
   const parts = [
     `# REVIEW — PR #${p.prNumber}`,
     selfReviewNote,
+    renderTicketBlock(p.ticketState),
     TIER0_INTENT_GATE,
     EVIDENCE_BAR,
     SEVERITY_LIST,
@@ -733,6 +743,7 @@ export function renderRereviewBrief(p: RereviewBriefParams): string {
   const parts = [
     `# RE-REVIEW — PR #${p.prNumber}`,
     `${p.commitCount} new commit(s).`,
+    renderTicketBlock(p.ticketState),
     EVIDENCE_BAR,
     LINK_RULE,
     envSection,
@@ -806,6 +817,7 @@ export interface RespondBriefContext {
   additions: number | null;
   deletions: number | null;
   ticketContext?: TicketBriefContext | null;
+  ticketState?: TicketBriefState;
 }
 
 /** R50's caps. A brief is a prompt; an unbounded thread is a prompt-injection and cost surface. */
@@ -869,7 +881,8 @@ export function renderRespondBrief(ctx: RespondBriefContext): string {
     ctx.failingChecks.length > 0 ||
     ctx.reviewDecision !== null ||
     ctx.changedFiles !== null ||
-    (ctx.ticketContext ?? null) !== null;
+    // 'none' says nothing about a ticket, so it alone does not make a brief.
+    (resolveTicketState(ctx) ?? { kind: 'none' }).kind !== 'none';
   // The same gate as `renderEnvironmentSection`: nothing fetched, nothing
   // rendered — the caller decides what to do with ''.
   if (!hasAnything) return '';
@@ -963,7 +976,7 @@ Do NOT resolve threads — the reviewer who opened one closes it. Do NOT edit th
     );
   }
 
-  const ticketSection = renderTicketSection(ctx.ticketContext);
+  const ticketSection = renderTicketBlock(resolveTicketState(ctx));
   if (ticketSection !== '') data.push(ticketSection);
 
   instructions.push(`## Untrusted data
@@ -1171,6 +1184,7 @@ export interface QaBriefContext {
   /** Absolute paths to REVIEW.md / FINDINGS.md / PLAN.md / COMMENTS.md, existence-checked by the caller. */
   priorArtifacts: readonly string[];
   ticketContext?: TicketBriefContext | null;
+  ticketState?: TicketBriefState;
   env?: QaEnvironmentBriefContext;
 }
 
@@ -1206,7 +1220,7 @@ export function renderQaBrief(ctx: QaBriefContext): string {
   let truncated = false;
   const sections: string[] = [title, QA_CONDUCT_RULE];
 
-  const ticketSection = renderTicketSection(ctx.ticketContext);
+  const ticketSection = renderTicketBlock(resolveTicketState(ctx));
   if (ticketSection !== '') sections.push(ticketSection);
 
   if (ctx.change !== null) {
@@ -1226,15 +1240,16 @@ export function renderQaBrief(ctx: QaBriefContext): string {
   const envSection = renderQaEnvironmentSection(env);
   if (envSection !== '') sections.push(envSection);
 
-  sections.push(qaHowToVerify(ctx.sessionDir), qaOutputContract(ctx.sessionDir));
-
-  let text = sections.join('\n\n');
+  // The how-to and the output contract are what the agent acts on and the engine parses,
+  // so they are never the part that gets cut: the cap trims what comes before them.
+  const tail = `\n\n${qaHowToVerify(ctx.sessionDir)}\n\n${qaOutputContract(ctx.sessionDir)}`;
+  let head = sections.join('\n\n');
   const note = '\n\n_(truncated by the engine)_';
-  if (text.length > QA_MAX_BRIEF_CHARS - note.length) {
-    text = text.slice(0, QA_MAX_BRIEF_CHARS - note.length);
+  if (head.length + tail.length > QA_MAX_BRIEF_CHARS) {
+    head = head.slice(0, Math.max(0, QA_MAX_BRIEF_CHARS - tail.length - note.length));
     truncated = true;
   }
-  return truncated ? `${text}${note}` : text;
+  return `${head}${truncated ? note : ''}${tail}`;
 }
 
 export interface QaPromptParams { sessionDir: string; qaSkillCommand?: string }
