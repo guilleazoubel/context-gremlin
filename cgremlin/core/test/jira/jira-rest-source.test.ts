@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { JiraRestSource } from '../../src/jira/jira-rest-source';
-import { JiraAuthError, JiraUnavailableError } from '../../src/jira/jira-source';
+import { JiraAuthError, JiraNotFoundError, JiraUnavailableError } from '../../src/jira/jira-source';
 import { JiraScanner } from '../../src/jira/jira-scanner';
 import { JiraStore } from '../../src/jira/jira-store';
 import { InMemoryFileSystem } from '../support/in-memory-file-system';
@@ -365,6 +365,37 @@ describe('JiraRestSource: failures', () => {
   it('a 500 becomes JiraUnavailableError', async () => {
     stub.responder = (_req, res) => stub.json(res, '{}', 500);
     await expect(source().search('x')).rejects.toThrow(JiraUnavailableError);
+  });
+});
+
+describe('JiraRestSource: issue() failures (0c final fix — 404/410 means no such ticket)', () => {
+  it.each([404, 410])('a %i on the issue endpoint is a JiraNotFoundError', async (status) => {
+    stub.responder = (_req, res) => stub.json(res, '{"errorMessages":["Issue does not exist"]}', status);
+    const err = await source().issue('UTF-8').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(JiraNotFoundError);
+    expect(err).not.toBeInstanceOf(JiraUnavailableError);
+    // Nothing more was asked: no comment request after the issue said "no such ticket".
+    expect(stub.requests.map((r) => r.pathname)).toEqual(['/rest/api/3/issue/UTF-8']);
+  });
+
+  it('a 500 on the issue endpoint is still JiraUnavailableError', async () => {
+    stub.responder = (_req, res) => stub.json(res, '{}', 500);
+    const err = await source().issue('HB-1').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(JiraUnavailableError);
+    expect(err).not.toBeInstanceOf(JiraNotFoundError);
+  });
+
+  it.each([401, 403])('a %i on the issue endpoint is still JiraAuthError', async (status) => {
+    stub.responder = (_req, res) => stub.json(res, fixture(`error-${status}`), status);
+    const err = await source().issue('HB-1').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(JiraAuthError);
+  });
+
+  it('a 404 on search (/search/jql AND legacy) is unchanged: never a JiraNotFoundError', async () => {
+    stub.responder = (_req, res) => stub.json(res, '{}', 404);
+    const err = await source().search('x').catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(JiraUnavailableError);
+    expect(err).not.toBeInstanceOf(JiraNotFoundError);
   });
 });
 

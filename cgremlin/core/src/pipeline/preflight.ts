@@ -36,9 +36,9 @@ export interface PreflightDeps {
 const NOT_LOADED_LABEL = { auth: 'auth error', unavailable: 'unavailable', not_configured: 'not configured' } as const;
 
 const GH_DETAIL_MAX = 200;
-const GH_TOKEN_RE = /gh[pousr]_[A-Za-z0-9]+/g;
+const GH_TOKEN_RE = /github_pat_[A-Za-z0-9_]+|gh[pousr]_[A-Za-z0-9]+/g;
 
-/** First line only, every `gh[pousr]_…` token replaced, at most 200 characters. */
+/** First line only, every `gh[pousr]_…` and fine-grained `github_pat_…` token replaced, at most 200 characters. */
 export function redactGhDetail(detail: string): string {
   const firstLine = detail.split(/\r?\n/).find((line) => line.trim().length > 0) ?? '';
   return firstLine.replace(GH_TOKEN_RE, '[redacted]').trim().slice(0, GH_DETAIL_MAX);

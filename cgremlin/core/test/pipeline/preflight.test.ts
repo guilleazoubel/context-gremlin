@@ -18,6 +18,16 @@ const LOADED: TicketBriefState = {
   ticket: { key: 'HB-627', summary: 's', status: 'UAT', url: 'https://jira.invalid/browse/HB-627', descriptionText: 'd', comments: [] },
 };
 
+describe('redactGhDetail — final fix M5', () => {
+  it('strips fine-grained github_pat_ tokens as well as gh[pousr]_ ones', () => {
+    const pat = `github_pat_11ABCDEFG0${'a'.repeat(20)}_${'B'.repeat(59)}`;
+    const out = redactGhDetail(`bad token ${pat} and ghp_${'c'.repeat(36)} (HTTP 401)`);
+    expect(out).toBe('bad token [redacted] and [redacted] (HTTP 401)');
+    expect(out).not.toContain('github_pat_');
+    expect(out).not.toContain('_B');
+  });
+});
+
 describe('preflightAccess (0c)', () => {
   it('a linked ticket that is not loaded blocks with the Jira reason', async () => {
     const { d } = deps(NOT_LOADED_AUTH);

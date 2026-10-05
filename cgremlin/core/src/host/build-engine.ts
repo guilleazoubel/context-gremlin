@@ -28,7 +28,7 @@ import { DeployAncestry } from '../qa/qa-deploy';
 import { QaTriggerStore } from '../qa/qa-trigger-store';
 import type { WorkItem as WorkItemForQa } from '../work/work-item';
 import { PR_VIEW_FIELDS, failingChecks, parsePrView } from '../gh/pr-view';
-import type { JiraSource } from '../jira/jira-source';
+import { JiraNotFoundError, type JiraSource } from '../jira/jira-source';
 import { InventoryStore } from '../inventory/inventory-store';
 import { createApiServer, type EngineInfo } from '../api/server';
 import { GhTokenPrApprover } from '../gh/pr-approval';
@@ -160,6 +160,57 @@ async function priorArtifactsFor(
 }
 
 /**
+ * 0c — the engine's ticket port: the ticket a brief carries, with the reason it is missing when
+ * it is. Never throws: the detail reader already turns a Jira failure into `ticketErrorKind`, and
+ * a reader that rejects anyway (a seam, a bug) is `unavailable`. Only the reason crosses — never
+ * Jira's message, which is the one place a credential could ever surface.
+ *
+ * Final fix I1 — a session's `lineage.ticket` is whatever `extractTicketKey` found in the branch
+ * name, with no project filter, so it is a LINKED ticket only when Jira linking is enabled (R46:
+ * non-empty `projectKeys`) AND its prefix (before the last `-`, case-sensitive, exactly as
+ * `extractTicketKeys` filters) is one of them. Anything else is "none linked" and never reaches
+ * Jira or the preflight's block. A 404/410 for a linked key is "no such ticket": none linked too.
+ * A linked key with no Jira source at all is still `not_configured` — the user asked for Jira.
+ */
+export function buildTicketPort(
+  projectKeys: readonly string[],
+  ticketDetail: { detail(key: string): Promise<TicketDetailResult> },
+): PipelineTickets {
+  const linking: PipelineTickets['linking'] = projectKeys.length === 0 ? 'disabled' : 'configured';
+  const allowed = new Set(projectKeys);
+  return {
+    briefState: async (key) => {
+      if (linking === 'disabled') return { kind: 'none', linking };
+      const dash = key.lastIndexOf('-');
+      if (dash <= 0 || !allowed.has(key.slice(0, dash))) return { kind: 'none', linking };
+      try {
+        const { ticket, ticketErrorKind, ticketNotFound } = await ticketDetail.detail(key);
+        if (ticket === null) {
+          if (ticketNotFound === true) return { kind: 'none', linking };
+          return { kind: 'not_loaded', key, reason: ticketErrorKind ?? 'unavailable' };
+        }
+        return {
+          kind: 'loaded',
+          ticket: {
+            key: ticket.key,
+            summary: ticket.summary,
+            status: ticket.status,
+            url: ticket.url,
+            descriptionText: ticket.descriptionText,
+            comments: ticket.comments,
+          },
+        };
+      } catch (err) {
+        if (err instanceof JiraNotFoundError) return { kind: 'none', linking };
+        return { kind: 'not_loaded', key, reason: 'unavailable' };
+      }
+    },
+    // R46: an empty projectKeys means ticket linking is disabled.
+    linking,
+  };
+}
+
+/**
  * Pure wiring: builds every engine part sharing one KeyedLock/EngineEvents,
  * but starts no timers and does not listen on any socket — see `serve()` for
  * the side-effecting half.
@@ -204,35 +255,10 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
         now: adapters.now,
       })
     : null;
-  /**
-   * 0c — the ticket a brief carries, with the reason it is missing when it is. Never throws:
-   * the detail reader already turns a Jira failure into `ticketErrorKind`, and a reader that
-   * rejects anyway (a seam, a bug) is `unavailable`. Only the reason crosses — never Jira's
-   * message, which is the one place a credential could ever surface.
-   */
-  const tickets: PipelineTickets = {
-    briefState: async (key) => {
-      try {
-        const { ticket, ticketErrorKind } = await ticketDetail.detail(key);
-        if (ticket === null) return { kind: 'not_loaded', key, reason: ticketErrorKind ?? 'unavailable' };
-        return {
-          kind: 'loaded',
-          ticket: {
-            key: ticket.key,
-            summary: ticket.summary,
-            status: ticket.status,
-            url: ticket.url,
-            descriptionText: ticket.descriptionText,
-            comments: ticket.comments,
-          },
-        };
-      } catch {
-        return { kind: 'not_loaded', key, reason: 'unavailable' };
-      }
-    },
-    // R46: an empty projectKeys means ticket linking is disabled.
-    linking: (config.jira?.projectKeys ?? []).length === 0 ? 'disabled' : 'configured',
-  };
+  // `ticketDetail` is built further down (it needs the Jira scanner); the arrow defers the read.
+  const tickets: PipelineTickets = buildTicketPort(config.jira?.projectKeys ?? [], {
+    detail: (key) => ticketDetail.detail(key),
+  });
   const pipeline = new PipelineService({
     store,
     workspace,

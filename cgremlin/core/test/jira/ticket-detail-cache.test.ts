@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { TicketDetailCache, type JiraScanReport } from '../../src/jira/jira-store';
-import { JiraAuthError, JiraUnavailableError, type JiraIssueDetail, type JiraSource } from '../../src/jira/jira-source';
+import { JiraAuthError, JiraNotFoundError, JiraUnavailableError, type JiraIssueDetail, type JiraSource } from '../../src/jira/jira-source';
 
 function detailOf(key: string): JiraIssueDetail {
   return {
@@ -127,5 +127,25 @@ describe('TicketDetailCache (R36)', () => {
     // it takes no `events` dep at all, so there is nothing to subscribe with.
     expect(Object.keys(cache)).not.toContain('events');
     expect(source.calls).toEqual([]);
+  });
+});
+
+describe('TicketDetailCache — a ticket Jira does not have (0c final fix)', () => {
+  it('JiraNotFoundError: ticket null, flagged notFound, kind stays in its union, and never cached', async () => {
+    const source = fakeSource({ error: new JiraNotFoundError('Jira has no issue UTF-8 (404)') });
+    const cache = new TicketDetailCache({ source, snapshot: async () => snapshot('2026-09-09T00:00:00.000Z'), now: () => new Date(0) });
+    const first = await cache.detail('UTF-8');
+    expect(first.ticket).toBeNull();
+    expect(first.ticketNotFound).toBe(true);
+    expect(first.ticketErrorKind).toBe('unavailable');
+    await cache.detail('UTF-8');
+    expect(source.calls).toEqual(['UTF-8', 'UTF-8']);
+  });
+
+  it('any other failure is not flagged notFound', async () => {
+    for (const error of [new JiraUnavailableError('down'), new JiraAuthError('no', 401)]) {
+      const cache = new TicketDetailCache({ source: fakeSource({ error }), snapshot: async () => snapshot('2026-09-09T00:00:00.000Z') });
+      expect((await cache.detail('HB-627')).ticketNotFound).not.toBe(true);
+    }
   });
 });

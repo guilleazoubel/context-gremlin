@@ -1,6 +1,7 @@
 import { htmlToText } from './html-to-text';
 import {
   JiraAuthError,
+  JiraNotFoundError,
   JiraUnavailableError,
   type JiraIssueDetail,
   type JiraIssueSummary,
@@ -278,11 +279,16 @@ export class JiraRestSource implements JiraSource {
   }
 
   async issue(key: string, opts?: JiraRequestOptions): Promise<JiraIssueDetail> {
-    const { body } = await this.get(
+    const { status, body } = await this.get(
       `rest/api/3/issue/${encodeURIComponent(key)}`,
       { fields: this.fields, expand: 'renderedFields' },
       opts,
+      [404, 410],
     );
+    // 0c final fix: on THIS endpoint a 404/410 means "no such ticket", not "Jira is down".
+    if (status === 404 || status === 410) {
+      throw new JiraNotFoundError(`Jira has no issue ${key} (${status})`, status);
+    }
     const raw = body as RawIssue | null;
     if (raw === null || typeof raw !== 'object' || typeof raw.key !== 'string') {
       throw new JiraUnavailableError(`Jira returned no issue for ${key}`);

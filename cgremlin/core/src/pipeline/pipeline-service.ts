@@ -224,7 +224,7 @@ export class PipelineService {
    * `needs_input` from the file), and that session is the method's normal return value — or it
    * goes ahead with the `ticketState` its brief must carry: the very state the check just
    * fetched (one Jira read per run, and the brief cannot disagree with the check), or
-   * `skipped` when the user chose "Run anyway" for a linked ticket.
+   * `skipped` when the user chose "Run anyway" and the ticket indeed could not be loaded.
    *
    * The probes run unlocked (they reach Jira and `gh`); the write takes the session lock and
    * refuses while a run is live, so it never overwrites that run's state. An identical block
@@ -254,8 +254,19 @@ export class PipelineService {
       if (await this.deps.fs.exists(stagePath).catch(() => false)) {
         await this.deps.fs.remove(stagePath).catch(() => undefined);
       }
+      // Final fix M2: so is an earlier block's reason. Only a preflight reason (the `Jira ` /
+      // `GitHub ` prefixes it always writes) — a note the agent wrote is never touched.
+      const notePath = `${this.sessionDir(id)}/AGENT_NOTE`;
+      const note = await this.deps.fs.readFile(notePath).catch(() => null);
+      if (note !== null && (note.startsWith('Jira ') || note.startsWith('GitHub '))) {
+        await this.deps.fs.remove(notePath).catch(() => undefined);
+      }
+      // Final fix I1: "Run anyway" labels the brief SKIPPED only when the ticket really could not
+      // be loaded; a none-linked or loaded ticket shows its normal state. The skip waived the
+      // block, not the read, so the state is still fetched here when the check did not.
+      const state = fetched ?? (await this.ticketState(ticketKey));
       const ticketState: TicketBriefState =
-        ticketKey !== null && skipJiraCheck ? { kind: 'skipped', key: ticketKey } : (fetched ?? (await this.ticketState(ticketKey)));
+        skipJiraCheck && state.kind === 'not_loaded' ? { kind: 'skipped', key: state.key } : state;
       return { blocked: null, ticketState };
     }
     const blocked = await this.lock.withLock(id, async () => {

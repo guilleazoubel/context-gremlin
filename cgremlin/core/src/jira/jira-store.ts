@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { SessionFileSystem } from '../fs/session-file-system';
-import { JiraAuthError, type JiraIssueDetail, type JiraIssueSummary, type JiraSource } from './jira-source';
+import { JiraAuthError, JiraNotFoundError, type JiraIssueDetail, type JiraIssueSummary, type JiraSource } from './jira-source';
 
 /** R35 — four kinds, not two booleans. `kind !== 'notConfigured'` is the same answer `configured` used to give. */
 export type TicketSourceKind = 'notConfigured' | 'auth' | 'unavailable' | 'ok';
@@ -116,6 +116,12 @@ export interface TicketDetailResult {
    * `not_configured` when there is no source at all. Null whenever `ticket` is set.
    */
   ticketErrorKind: 'auth' | 'unavailable' | 'not_configured' | null;
+  /**
+   * 0c final fix — set (true) only when Jira answered 404/410 for the issue: there is no such
+   * ticket. `ticketErrorKind` stays `unavailable` (its union is unchanged) so every existing
+   * reader is unaffected; the engine's brief state reads this flag and says "none linked".
+   */
+  ticketNotFound?: true;
 }
 
 export class TicketDetailCache {
@@ -157,6 +163,8 @@ export class TicketDetailCache {
         ticketError: err instanceof Error ? err.message : String(err),
         // JiraUnavailableError and any unexpected throw are both "Jira did not answer usefully".
         ticketErrorKind: err instanceof JiraAuthError ? 'auth' : 'unavailable',
+        // Not cached either: a ticket created a minute later must load.
+        ...(err instanceof JiraNotFoundError ? { ticketNotFound: true as const } : {}),
       };
     }
   }

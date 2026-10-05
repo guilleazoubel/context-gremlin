@@ -202,8 +202,13 @@ export function renderTicketSection(ctx: TicketBriefContext | null | undefined):
   const clean = (t: string, max = TICKET_MAX_FIELD_CHARS): string =>
     neutralizeTag(t.length > max ? t.slice(0, max) : t, 'untrusted-ticket-data');
   let truncated = false;
-  const heading = `## Ticket ${safeTicketKey(ctx.key)} — ${clean(ctx.summary, TICKET_MAX_SUMMARY_CHARS).replace(/\s*\n\s*/g, ' ')}`;
+  // Final fix M1: the heading is static (the key is validated); the summary is ticket text, so it
+  // lives INSIDE the fence, on one line — every line-break character (\r, \n, U+2028, U+2029)
+  // collapsed, so it can never start a line of its own.
+  const heading = `## Ticket ${safeTicketKey(ctx.key)}`;
+  const summary = clean(ctx.summary, TICKET_MAX_SUMMARY_CHARS).replace(/\s*[\r\n\u2028\u2029]+\s*/g, ' ').trim();
   const lines: string[] = [
+    `Summary: ${summary}`,
     `Status: ${clean(ctx.status)}${ctx.url === '' ? '' : ` · ${clean(ctx.url)}`}`,
   ];
   if (ctx.descriptionText !== null && ctx.descriptionText.trim() !== '') {

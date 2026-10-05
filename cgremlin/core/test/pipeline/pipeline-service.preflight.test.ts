@@ -6,6 +6,9 @@ import { FakeGhRunner } from '../support/fake-gh-runner';
 import { ReconciliationTick } from '../../src/discovery/reconciliation';
 import type { PipelineServiceDeps } from '../../src/pipeline/pipeline-service';
 import type { TicketBriefState } from '../../src/pipeline/prompts';
+import { buildTicketPort } from '../../src/host/build-engine';
+import { TicketDetailCache, type TicketDetailResult } from '../../src/jira/jira-store';
+import { JiraNotFoundError, type JiraSource } from '../../src/jira/jira-source';
 import { migrateV1ToV2, type QaSession, type RespondSession, type Session } from '../../src/schema/session';
 
 type Tickets = NonNullable<PipelineServiceDeps['tickets']>;
@@ -154,6 +157,123 @@ describe.each(CASES)('0c preflight — $name', (c) => {
   });
 });
 
+/**
+ * Final fix I1 — the REAL engine ticket port (`buildTicketPort`, the one `buildEngine` wires),
+ * over a ticket reader: a branch key is a linked ticket only when Jira linking is enabled and
+ * its prefix is a configured project; a 404 is "no such ticket".
+ */
+function port(projectKeys: string[], reader: { detail(key: string): Promise<TicketDetailResult> }): Tickets {
+  return buildTicketPort(projectKeys, reader);
+}
+const NOT_CONFIGURED_READER = { detail: async (): Promise<TicketDetailResult> => ({ ticket: null, ticketError: null, ticketErrorKind: 'not_configured' }) };
+function notFoundReader(): TicketDetailCache {
+  const source: JiraSource = {
+    search: async () => [],
+    whoami: async () => ({ accountId: 'x', displayName: 'x' }),
+    issue: async (key) => { throw new JiraNotFoundError(`Jira has no issue ${key}`); },
+  };
+  return new TicketDetailCache({ source, snapshot: async () => { throw new Error('no snapshot'); } });
+}
+
+describe.each(CASES)('final fix I1 — which branch keys are linked tickets — $name', (c) => {
+  async function runs(h: PipelineHarness, id: string, run: ReturnType<typeof vi.spyOn>, opts?: { skipJiraCheck: boolean }): Promise<void> {
+    void h.service[c.name](id, opts).catch(() => undefined);
+    await flush();
+    expect(run).toHaveBeenCalledTimes(1);
+  }
+
+  it('(i) no Jira at all + branch key ABC-123: runs, none linked (linking not configured), no needs-input', async () => {
+    const { h, session, run, dir } = await setup(c, 'ABC-123', { tickets: port([], NOT_CONFIGURED_READER) });
+    await runs(h, session.id, run);
+    const brief = await h.fs.readFile(`${dir}/BRIEF.md`);
+    expect(brief).toContain('## Ticket — none linked');
+    expect(brief).toContain('Jira linking is not configured');
+    expect(await h.fs.readFile(`${dir}/AGENT_STATE`)).not.toBe('needs-input');
+    expect(await h.fs.exists(`${dir}/AGENT_NOTE`)).toBe(false);
+  });
+
+  it('(ii) projectKeys [HB] + key ABC-1: runs, none linked (configured wording)', async () => {
+    const { h, session, run, dir } = await setup(c, 'ABC-1', { tickets: port(['HB'], NOT_CONFIGURED_READER) });
+    await runs(h, session.id, run);
+    const brief = await h.fs.readFile(`${dir}/BRIEF.md`);
+    expect(brief).toContain('## Ticket — none linked');
+    expect(brief).not.toContain('Jira linking is not configured');
+  });
+
+  it('(iii) projectKeys [HB] + key HB-1 + no token (not_configured): BLOCKED with the Jira reason', async () => {
+    const { h, session, run, dir } = await setup(c, 'HB-1', { tickets: port(['HB'], NOT_CONFIGURED_READER) });
+    await h.service[c.name](session.id);
+    expect(run).not.toHaveBeenCalled();
+    expect(await h.fs.readFile(`${dir}/AGENT_STATE`)).toBe('needs-input');
+    expect(await h.fs.readFile(`${dir}/AGENT_NOTE`)).toBe('Jira HB-1 could not be loaded (not configured) — fix access or choose Run anyway');
+  });
+
+  it('(iv) projectKeys [HB] + key HB-1 + the issue 404s: runs, none linked', async () => {
+    const { h, session, run, dir } = await setup(c, 'HB-1', { tickets: port(['HB'], notFoundReader()) });
+    await runs(h, session.id, run);
+    const brief = await h.fs.readFile(`${dir}/BRIEF.md`);
+    expect(brief).toContain('## Ticket — none linked');
+    // (The review brief's TIER 0 names "NOT LOADED, SKIPPED or none linked" statically.)
+    expect(brief).not.toContain(': NOT LOADED (');
+  });
+
+  it('(vi) skipJiraCheck on a none-linked session: the brief is NOT labelled SKIPPED', async () => {
+    const { h, session, run, dir } = await setup(c, 'ABC-123', { tickets: port([], NOT_CONFIGURED_READER) });
+    await runs(h, session.id, run, { skipJiraCheck: true });
+    const brief = await h.fs.readFile(`${dir}/BRIEF.md`);
+    expect(brief).not.toContain('SKIPPED by the user');
+    expect(brief).toContain('## Ticket — none linked');
+  });
+
+  it('(vi) skipJiraCheck on a not_loaded session: SKIPPED by the user', async () => {
+    const { h, session, run, dir } = await setup(c, 'HB-1', { tickets: port(['HB'], NOT_CONFIGURED_READER) });
+    await runs(h, session.id, run, { skipJiraCheck: true });
+    expect(await h.fs.readFile(`${dir}/BRIEF.md`)).toContain('HB-1: SKIPPED by the user');
+  });
+
+  it('(vi) skipJiraCheck on a loaded ticket: the brief carries the ticket, not SKIPPED', async () => {
+    const loaded: TicketBriefState = { kind: 'loaded', ticket: { key: 'HB-627', summary: 'Do the thing', status: 'UAT', url: 'u', descriptionText: 'd', comments: [] } };
+    const { h, session, run, dir } = await setup(c, 'HB-627', { tickets: tickets(loaded) });
+    await runs(h, session.id, run, { skipJiraCheck: true });
+    const brief = await h.fs.readFile(`${dir}/BRIEF.md`);
+    expect(brief).toContain('## Ticket HB-627');
+    expect(brief).not.toContain('SKIPPED by the user');
+  });
+});
+
+describe.each(CASES)('final fix M2 — a passing preflight clears ITS OWN stale note — $name', (c) => {
+  it('a preflight note (Jira …) is deleted when a later run passes', async () => {
+    const { h, session, run, dir } = await setup(c, 'HB-627', { tickets: tickets(NOT_LOADED_AUTH) });
+    await h.service[c.name](session.id);
+    expect(await h.fs.readFile(`${dir}/AGENT_NOTE`)).toMatch(/^Jira /);
+    c.prime?.(h);
+    void h.service[c.name](session.id, { skipJiraCheck: true }).catch(() => undefined);
+    await flush();
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(await h.fs.exists(`${dir}/AGENT_NOTE`)).toBe(false);
+  });
+
+  it('a preflight note (GitHub …) is deleted when a later run passes', async () => {
+    const { h, session, run, dir } = await setup(c, null, { tickets: tickets(NOT_LOADED_AUTH) });
+    await h.fs.mkdir(dir, { recursive: true });
+    await h.fs.writeFile(`${dir}/AGENT_NOTE`, 'GitHub is not usable: gh: Bad credentials (HTTP 401)');
+    void h.service[c.name](session.id).catch(() => undefined);
+    await flush();
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(await h.fs.exists(`${dir}/AGENT_NOTE`)).toBe(false);
+  });
+
+  it('an agent-written note is never deleted', async () => {
+    const { h, session, run, dir } = await setup(c, null, { tickets: tickets(NOT_LOADED_AUTH) });
+    await h.fs.mkdir(dir, { recursive: true });
+    await h.fs.writeFile(`${dir}/AGENT_NOTE`, 'tracing checkout path');
+    void h.service[c.name](session.id).catch(() => undefined);
+    await flush();
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(await h.fs.readFile(`${dir}/AGENT_NOTE`)).toBe('tracing checkout path');
+  });
+});
+
 describe('0c preflight — an ineligible session keeps its 409 and gets NO needs-input', () => {
   const cases: Array<{ name: 'runReview' | 'runRereview' | 'runRespond'; session: () => Session; error: string }> = [
     { name: 'runReview', session: () => ({ ...reviewSession('HB-627', 'queued'), stageStatus: 'dismissed' }) as Session, error: 'cannot run review' },
@@ -221,6 +341,37 @@ describe('0c preflight — details', () => {
     expect(note).toContain('Jira HB-');
     expect(note).toContain('auth error');
     expect((await h.store.load(id)).stageStatus).toBe('ready');
+  });
+
+  it('final fix I1 (iv): the AUTOMATIC re-review (ReconciliationTick -> runRereview, no opts) RUNS when the linked issue 404s', async () => {
+    const h = createHarness({ tickets: port(['HB'], notFoundReader()) });
+    const gh = new FakeGhRunner();
+    const id = 'pr-app-5-x';
+    const v2 = migrateV1ToV2({
+      schemaVersion: 1, id, mode: 'review', createdAt: '2026-09-04T10:00:00.000Z',
+      workspace: { repoUrl: 'git@github.com:acme/app.git', worktreePath: `${WORKTREES_DIR}/${id}` },
+      lineage: { pipelineId: id, parentSessionId: null, ticket: 'HB-1' },
+      stageStatus: 'ready',
+    });
+    if (v2.mode !== 'review') throw new Error('mode changed');
+    await h.store.save({
+      ...v2,
+      pr: { repo: 'acme/app', number: 5, url: 'https://github.com/acme/app/pull/5', headSha: 'a'.repeat(40), reviewedSha: 'a'.repeat(40), title: 't', author: 'bob' },
+    });
+    const baseView = JSON.parse(readFileSync(path.join(__dirname, '../fixtures/gh/pr-view-open-approved.json'), 'utf8'));
+    gh.queueResponse({ stdout: JSON.stringify({ ...baseView, state: 'OPEN', reviewDecision: 'CHANGES_REQUESTED', headRefOid: 'c'.repeat(40) }) });
+    queueRereviewGit(h);
+    const run = vi.spyOn(h.stageRunner, 'run');
+
+    const tick = new ReconciliationTick({ gh, store: h.store, pipeline: h.service, events: h.events, lock: h.lock });
+    const report = await tick.run();
+    await flush();
+
+    expect(report.actions).toEqual([{ type: 'rereview', sessionId: id, reason: expect.any(String) }]);
+    expect(report.errors).toEqual([]);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(await h.fs.readFile(`${SESSIONS_DIR}/${id}/AGENT_STATE`)).not.toBe('needs-input');
+    expect(await h.fs.readFile(`${SESSIONS_DIR}/${id}/BRIEF.md`)).toContain('## Ticket — none linked');
   });
 
   it('a block while a run is live refuses as RunInProgress and leaves that run\'s state alone', async () => {

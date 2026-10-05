@@ -66,3 +66,18 @@ export class JiraUnavailableError extends Error {
     this.name = 'JiraUnavailableError';
   }
 }
+
+/**
+ * 0c final fix — a 404 or 410 on the ISSUE endpoint: Jira has no such ticket (a branch name
+ * like `fix/UTF-8-handling` that merely looks like a key, or a deleted issue). Not an outage
+ * and not an auth problem, so it never blocks a run: the brief says "none linked".
+ */
+export class JiraNotFoundError extends Error {
+  constructor(
+    message: string,
+    public readonly status: number,
+  ) {
+    super(message);
+    this.name = 'JiraNotFoundError';
+  }
+}

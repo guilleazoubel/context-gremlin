@@ -160,7 +160,8 @@ describe('0c — every run method hands its brief the ticket state (via the publ
     await flush();
     expect(t.keys).toEqual(['HB-627']);
     const text = await brief(h, session.id);
-    expect(text).toContain('## Ticket HB-627 — Do the thing');
+    expect(text).toContain('## Ticket HB-627\n');
+    expect(text).toContain('Summary: Do the thing');
     expect(text).toContain('AC1: the block renders.');
   });
 });

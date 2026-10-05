@@ -17,7 +17,7 @@ import { FakeLocalAppRunner } from '../support/fake-local-app-runner';
 import { EnvironmentService } from '../../src/env/environment-service';
 import { AttentionService } from '../../src/attention/attention-service';
 import { PR_STATE_ENTRY_DEFAULTS } from '../support/pr-state-entry';
-import { JiraAuthError, JiraUnavailableError, type JiraIssueDetail, type JiraSource } from '../../src/jira/jira-source';
+import { JiraAuthError, JiraNotFoundError, JiraUnavailableError, type JiraIssueDetail, type JiraSource } from '../../src/jira/jira-source';
 import { GhCommandError } from '../../src/gh/gh-runner';
 import { awaitRunStart } from '../../src/pipeline/run-start';
 
@@ -366,7 +366,15 @@ describe('the QA brief context (qaContext)', () => {
   }
 
   it('the brief names the ticket and its ACs, the merged PR, and every artifact that EXISTS', async () => {
-    const config = testConfig();
+    // Final fix I1: a session ticket is a LINKED ticket only for a configured Jira project.
+    const config = resolveCoreConfig(
+      {
+        repos: ['acme/app'], me: 'me-user', watchAuthors: ['bob'],
+        sessionsDir: '/sessions', worktreesDir: '/worktrees', mirrorsDir: '/mirrors',
+        jira: { siteUrl: 'https://jira.invalid', email: 'me@example.invalid', projectKeys: ['HB'] },
+      },
+      '/home/e2e',
+    );
     const adapters = testAdapters();
     await seedQa(adapters, config);
     const engine = buildEngine(config, adapters, {
@@ -389,7 +397,8 @@ describe('the QA brief context (qaContext)', () => {
     const brief = await (adapters.fs as InMemoryFileSystem).readFile('/sessions/qa-1/BRIEF.md');
 
     expect(brief).toContain('# QA VERIFICATION — HB-1489 (acme/app#12, merged abc1234)');
-    expect(brief).toContain('## Ticket HB-1489 — Web content');
+    expect(brief).toContain('## Ticket HB-1489\n');
+    expect(brief).toContain('Summary: Web content');
     expect(brief).toContain('AC1: the block renders.');
     expect(brief).toContain('AC2: the API returns 200.');
     expect(brief).toContain('## The change');
@@ -477,19 +486,77 @@ describe('0c — the engine\'s ticket brief state (tickets.briefState / tickets.
     expect(JSON.stringify(state)).not.toContain(SENTINEL);
   });
 
-  it('no Jira source (no jira block, or no apiToken) is not_configured', async () => {
-    for (const config of [testConfig(), jiraConfig(['HB'], null)]) {
-      const engine = buildEngine(config, testAdapters());
-      expect(await engine.tickets.briefState('HB-1')).toEqual({ kind: 'not_loaded', key: 'HB-1', reason: 'not_configured' });
-    }
+  it('no Jira source but linking enabled for the key (projectKeys has it, no apiToken) is not_configured', async () => {
+    const engine = buildEngine(jiraConfig(['HB'], null), testAdapters());
+    expect(await engine.tickets.briefState('HB-1')).toEqual({ kind: 'not_loaded', key: 'HB-1', reason: 'not_configured' });
   });
 
-  async function seedReview(adapters: EngineAdapters): Promise<string> {
+  it('final fix I1: no jira block at all — a branch key is NOT a linked ticket (none, linking disabled)', async () => {
+    const engine = buildEngine(testConfig(), testAdapters());
+    expect(await engine.tickets.briefState('ABC-123')).toEqual({ kind: 'none', linking: 'disabled' });
+  });
+
+  it('final fix I1: empty projectKeys — none/disabled, and Jira is never asked', async () => {
+    const asked: string[] = [];
+    const engine = buildEngine(jiraConfig([]), testAdapters(), {
+      ticketDetail: { detail: async (k) => { asked.push(k); return { ticket: null, ticketError: null, ticketErrorKind: 'unavailable' }; } },
+    });
+    expect(await engine.tickets.briefState('HB-1')).toEqual({ kind: 'none', linking: 'disabled' });
+    expect(asked).toEqual([]);
+  });
+
+  it('final fix I1: a key whose prefix is not in projectKeys is none/configured, and Jira is never asked (case-sensitive)', async () => {
+    const asked: string[] = [];
+    const engine = buildEngine(jiraConfig(['HB']), testAdapters(), {
+      ticketDetail: { detail: async (k) => { asked.push(k); return { ticket: null, ticketError: null, ticketErrorKind: 'unavailable' }; } },
+    });
+    for (const key of ['ABC-1', 'UTF-8', 'CVE-2024-1234', 'HBX-1', 'hb-1']) {
+      expect(await engine.tickets.briefState(key)).toEqual({ kind: 'none', linking: 'configured' });
+    }
+    expect(asked).toEqual([]);
+  });
+
+  it('final fix I1: a 404 from Jira for a linked key is none/configured (no such ticket), never not_loaded', async () => {
+    const engine = buildEngine(jiraConfig(['HB']), testAdapters(), {
+      jiraSource: stubSource(new JiraNotFoundError(`Jira has no issue HB-1 ${SENTINEL}`)),
+    });
+    const state = await engine.tickets.briefState('HB-1');
+    expect(state).toEqual({ kind: 'none', linking: 'configured' });
+    // A reader that itself throws JiraNotFoundError is the same.
+    const viaSeam = buildEngine(jiraConfig(['HB']), testAdapters(), {
+      ticketDetail: { detail: async () => { throw new JiraNotFoundError('gone'); } },
+    });
+    expect(await viaSeam.tickets.briefState('HB-1')).toEqual({ kind: 'none', linking: 'configured' });
+  });
+
+  it('final fix I1: no jira block + a branch key — the engine runs the review and the brief says none linked', async () => {
+    const adapters = testAdapters();
+    const fs = adapters.fs as InMemoryFileSystem;
+    const engine = buildEngine(testConfig(), adapters);
+    const id = await seedReview(adapters, 'ABC-123');
+    expect(await awaitRunStart(engine.events, id, engine.pipeline.runReview(id))).toBe(true);
+    const brief = await fs.readFile(`/sessions/${id}/BRIEF.md`);
+    expect(brief).toContain('## Ticket — none linked');
+    expect(brief).toContain('Jira linking is not configured');
+    expect(await fs.readFile(`/sessions/${id}/AGENT_STATE`)).not.toBe('needs-input');
+  });
+
+  it('final fix I1: projectKeys [HB] + HB-1 + no apiToken — the engine BLOCKS with the Jira reason', async () => {
+    const adapters = testAdapters();
+    const fs = adapters.fs as InMemoryFileSystem;
+    const engine = buildEngine(jiraConfig(['HB'], null), adapters);
+    const id = await seedReview(adapters, 'HB-1');
+    await engine.pipeline.runReview(id);
+    expect(await fs.readFile(`/sessions/${id}/AGENT_STATE`)).toBe('needs-input');
+    expect(await fs.readFile(`/sessions/${id}/AGENT_NOTE`)).toBe('Jira HB-1 could not be loaded (not configured) — fix access or choose Run anyway');
+  });
+
+  async function seedReview(adapters: EngineAdapters, ticket = 'HB-1'): Promise<string> {
     const fs = adapters.fs as InMemoryFileSystem;
     const review = {
       schemaVersion: 2, id: 'rev-0c', mode: 'review', createdAt: '2026-09-01T10:00:00.000Z',
       workspace: { repoUrl: 'https://github.com/acme/app.git', worktreePath: '/worktrees/rev-0c', branch: 'pr-12' },
-      lineage: { pipelineId: 'rev-0c', parentSessionId: null, ticket: 'HB-1', selfReview: false },
+      lineage: { pipelineId: 'rev-0c', parentSessionId: null, ticket, selfReview: false },
       agent: null, lastRun: null,
       pr: { repo: 'acme/app', number: 12, url: 'https://github.com/acme/app/pull/12', headSha: 'a'.repeat(40), reviewedSha: null, title: 'T', author: 'bob' },
       stageStatus: 'queued', reviewVersion: 0, lastRereviewSummary: null,
