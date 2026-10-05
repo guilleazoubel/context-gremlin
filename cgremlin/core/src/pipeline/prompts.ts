@@ -125,6 +125,9 @@ export function renderEnvironmentSection(ctx: EnvironmentBriefContext): string {
 export const TICKET_MAX_COMMENTS = 5;
 export const TICKET_MAX_COMMENT_CHARS = 2000;
 export const TICKET_MAX_SECTION_CHARS = 12_000;
+const TICKET_MAX_SUMMARY_CHARS = 300;
+const TICKET_MAX_FIELD_CHARS = 300;
+const TICKET_MAX_DESCRIPTION_CHARS = 20_000;
 /**
  * Phase 21 — how much of PLAN.md the develop brief carries inline. Generous, because the plan is
  * the ONE thing the promotion exists to hand over, and the file stays beside it in the session
@@ -136,8 +139,9 @@ const TRUNCATION_NOTE = '_(truncated by the engine)_';
 
 /** Untrusted text must not be able to close (or reopen) a data block named `tag`. */
 export function neutralizeTag(text: string, tag: string): string {
-  const re = new RegExp(`<\\s*(\\/?)\\s*${tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*>`, 'gi');
-  return text.replace(re, (_m, slash: string) => (slash ? `[/${tag}]` : `[${tag}]`));
+  // One `\\s*` per position: two adjacent ones split by an optional group backtrack quadratically.
+  const re = new RegExp(`<(\\s*\\/)?\\s*${tag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*>`, 'gi');
+  return text.replace(re, (_m, slash: string | undefined) => (slash ? `[/${tag}]` : `[${tag}]`));
 }
 
 export const TICKET_DATA_OPEN = '<untrusted-ticket-data>';
@@ -187,14 +191,15 @@ export function resolveTicketState(p: { ticketState?: TicketBriefState; ticketCo
  */
 export function renderTicketSection(ctx: TicketBriefContext | null | undefined): string {
   if (ctx === null || ctx === undefined) return '';
-  const clean = (t: string): string => neutralizeTag(t, 'untrusted-ticket-data');
+  const clean = (t: string, max = TICKET_MAX_FIELD_CHARS): string =>
+    neutralizeTag(t.length > max ? t.slice(0, max) : t, 'untrusted-ticket-data');
   let truncated = false;
-  const heading = `## Ticket ${ctx.key} — ${clean(ctx.summary).replace(/\s*\n\s*/g, ' ')}`;
+  const heading = `## Ticket ${ctx.key} — ${clean(ctx.summary, TICKET_MAX_SUMMARY_CHARS).replace(/\s*\n\s*/g, ' ')}`;
   const lines: string[] = [
     `Status: ${clean(ctx.status)}${ctx.url === '' ? '' : ` · ${clean(ctx.url)}`}`,
   ];
   if (ctx.descriptionText !== null && ctx.descriptionText.trim() !== '') {
-    lines.push('', clean(ctx.descriptionText.trim()));
+    lines.push('', clean(ctx.descriptionText.trim(), TICKET_MAX_DESCRIPTION_CHARS));
   }
   const comments = ctx.comments.slice(0, TICKET_MAX_COMMENTS);
   if (comments.length < ctx.comments.length) truncated = true;
