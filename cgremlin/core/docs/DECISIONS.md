@@ -760,3 +760,21 @@ extension does not know.
   Bash argv only — it stops `gh pr create`, it does not stop a `curl -X POST` or an MCP tool that
   writes. The enforceable boundary is the test identity's own permissions, and pretending
   otherwise would be worse than naming it.
+
+## 2026-10-05 — R110 (a review of someone else's PR posts only when the user asks)
+
+- **Review findings on another person's PR post only on the user's explicit request, in the
+  conversation.** Commit `1fd7bec` (2026-09-18) removed "Do NOT post to GitHub" from the review
+  prompt and told the headless run to post, so manual reviews — and the automatic re-review on
+  new commits, which nobody watches — posted findings the user had never read. A headless
+  `review`/`rereview` now writes `REVIEW.md` (and `rereview_summary`) and stops; the brief keeps
+  its `## Posting` section (own PR only, never approve, never land) for the chat agent, gated on
+  the user asking there.
+- **Enforced, not just worded.** A headless review resolves to the `review` permission profile,
+  which denies `.cgremlin/post-review` and `.cgremlin/post-comment` (bare and `./`-prefixed), and
+  the guardrail refresh *removes* the helpers from its worktree. Claiming the conversation
+  re-renders the worktree as `review:conversation` — helpers written, those denies lifted — before
+  the editor opens `claude --resume`; release, and every stage run regardless, restore the
+  headless state, so an expired or unreleased claim cannot leak into a headless run.
+- **`respond` is unchanged** — it replies on the user's own PR, headless, as Phase 20 decided. QA
+  is unchanged.
