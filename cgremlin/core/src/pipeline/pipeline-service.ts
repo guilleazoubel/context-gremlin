@@ -60,6 +60,7 @@ import { RunInProgressError, WorkspaceMissingError, type StageRunResult } from '
 import { CRASHED_RUN_ERROR, runLiveness, type RunLiveness } from './run-liveness';
 import { TERMINAL_PHASES_BY_MODE } from '../workspace/workspace-in-use';
 import { refreshWorkspaceGuardrails } from '../workspace/workspace-manager';
+import { permissionProfileFor } from '../workspace/permission-guard';
 import { repoSlugFromUrl } from '../gh/repo-slug';
 
 export interface PipelineConfig {
@@ -115,6 +116,8 @@ export interface PipelineServiceDeps {
   qaContext?: (
     session: Session,
   ) => Promise<Omit<QaBriefContext, 'sessionDir' | 'ticket' | 'ticketContext' | 'env'>>;
+  /** One line per degraded side effect (R110's release refresh). Defaults to `console.warn`, which the engine log captures. */
+  log?: (line: string) => void;
 }
 
 /** What `prepareEnvironment` hands back: the brief context, whether THIS call started the app, and the teardown that undoes both. */
@@ -1218,39 +1221,57 @@ export class PipelineService {
    * run re-renders the headless state itself (src/pipeline/stage-runner.ts),
    * so an expired or never-released claim cannot leak posting into the
    * automatic re-review. Same refresh as everywhere else, so the
-   * conversation's settings cannot drift from the headless ones. Only modes
-   * whose profile depends on it change (review); the rest re-render as they
-   * are. A worktree that is gone is left gone — the refresh would conjure it.
+   * conversation's settings cannot drift from the headless ones.
+   *
+   * Only a session whose permission profile actually DEPENDS on who drives it
+   * is touched — today that is review alone. Every other mode claimed without
+   * touching the worktree before R110, and must keep doing so: a write error
+   * on a respond or development worktree must not cost the user their chat.
+   * A worktree that is gone is left gone — the refresh would conjure it.
    * Only call from inside `this.lock` for `session.id`.
    */
   private async refreshConversationGuardrails(session: Session, conversation: boolean): Promise<void> {
+    const subject = { ...session, conversation };
+    if (permissionProfileFor({ ...subject, conversation: true }) === permissionProfileFor({ ...subject, conversation: false })) {
+      return;
+    }
     const worktreePath = session.workspace.worktreePath;
     if (!worktreePath || !(await this.deps.fs.exists(worktreePath))) return;
     await refreshWorkspaceGuardrails(
       this.deps.fs,
       worktreePath,
-      {
-        mode: session.mode,
-        intent: session.mode === 'investigation' ? session.intent : undefined,
-        conversation,
-      },
+      subject,
       session.pr === null ? undefined : { repoSlug: session.pr.repo, prNumber: session.pr.number },
     );
   }
 
   /**
    * Releases the claim. Idempotent, and a no-op on a session that has no agent
-   * record at all — except that it always puts the worktree back in its
+   * record at all — except that it puts a review's worktree back in its
    * headless state (R110), which is idempotent too.
    */
   async releaseConversation(id: string): Promise<Session> {
     return this.lock.withLock(id, async () => {
       const fresh = await this.deps.store.load(id);
-      await this.refreshConversationGuardrails(fresh, false);
-      if (fresh.agent == null || fresh.agent.humanTurn == null) return fresh;
-      const released: Session = { ...fresh, agent: { ...fresh.agent, humanTurn: null } };
-      await this.deps.store.save(released);
-      return released;
+      let result = fresh;
+      if (fresh.agent != null && fresh.agent.humanTurn != null) {
+        result = { ...fresh, agent: { ...fresh.agent, humanTurn: null } };
+        await this.deps.store.save(result);
+      }
+      // R110 — AFTER the claim is cleared, and never fatal: the restore is
+      // hygiene (every stage run re-renders the headless state before the
+      // agent starts), so a write error here must not leave the user's claim
+      // standing until its TTL runs out.
+      try {
+        await this.refreshConversationGuardrails(result, false);
+      } catch (err) {
+        (this.deps.log ?? ((line: string) => console.warn(line)))(
+          `release ${id}: could not restore the headless guardrails (the next stage run will): ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+      }
+      return result;
     });
   }
 

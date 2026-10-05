@@ -61,6 +61,8 @@ export interface HarnessOptions {
   environment?: (parts: { fs: InMemoryFileSystem; git: FakeGitRunner; lock: KeyedLock }) => EnvironmentService;
   /** R50 — what the respond brief carries beyond the ticket; omitted means an empty body. */
   respondContext?: PipelineServiceDeps['respondContext'];
+  /** PipelineServiceDeps.log — omitted means the service's own `console.warn` default. */
+  log?: (line: string) => void;
 }
 
 export function createHarness(options: HarnessOptions = {}): PipelineHarness {
@@ -103,6 +105,7 @@ export function createHarness(options: HarnessOptions = {}): PipelineHarness {
     lock,
     environment,
     ...(options.respondContext !== undefined ? { respondContext: options.respondContext } : {}),
+    ...(options.log !== undefined ? { log: options.log } : {}),
   });
 
   async function finishRun(files: Record<string, string>, exit: AgentExitResult): Promise<void> {
