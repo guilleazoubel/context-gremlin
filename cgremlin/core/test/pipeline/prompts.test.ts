@@ -128,6 +128,17 @@ describe('prompt templates', () => {
     expect(t.indexOf('Do NOT post anything to GitHub')).toBeLessThan(t.indexOf('STEP 1'));
   });
 
+  it('0b: the closing requirements are a final unconditional block after STEP 2', () => {
+    const t = renderRereviewPrompt({ sessionDir, commitCount: 3 });
+    const step1 = t.slice(t.indexOf('STEP 1'), t.indexOf('STEP 2'));
+    const closing = t.indexOf('CLOSING REQUIREMENTS (apply after STEP 1 OR STEP 2, always)');
+    expect(closing).toBeGreaterThan(t.indexOf('STEP 2'));
+    expect(t.slice(closing)).not.toMatch(/only if skill unavailable/i);
+    expect(t.slice(closing)).toContain('very last action');
+    expect(t.slice(closing)).toContain(`${sessionDir}/rereview_summary`);
+    expect(step1).toMatch(/last action|CLOSING REQUIREMENTS/);
+  });
+
   it('0b: re-review with a custom skill command carries the same guarantees', () => {
     const t = renderRereviewPrompt({ sessionDir, commitCount: 1, reviewSkillCommand: '/x:y' });
     expect(t).toContain('/x:y');
