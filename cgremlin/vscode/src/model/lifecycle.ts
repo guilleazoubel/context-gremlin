@@ -16,6 +16,7 @@
 import { prLabel } from './row-composition';
 import { nextStages, STAGE_ORDER, type ActionFacts, type StageKind } from './row-actions';
 import { compactAge, type RunOutcome } from './work-items';
+import { preflightNoteOf } from './needs-you';
 
 /**
  * Defect 1 — `done` used to be the FALLTHROUGH of three booleans, so a run that was KILLED and
@@ -61,6 +62,8 @@ export interface LifecycleAgent {
   worktreePath?: string | null;
   /** Panel-local: a start this window has asked for and not yet seen in `/items`. */
   pending?: boolean;
+  /** 0c — `WorkItemAgent.agentNote`: sent only while the session is in needs-input. */
+  agentNote?: string | null;
 }
 
 export interface LifecycleSlot {
@@ -148,7 +151,9 @@ function stateOf(agent: LifecycleAgent | undefined): SlotState {
   if (agent.running) return 'running';
   if (agent.runOutcome === 'stopped') return 'stopped';
   if (agent.runOutcome === 'failed' || agent.runFailed === true) return 'failed';
-  if (agent.needsYou) return 'needsYou';
+  // 0c — a run the preflight refused never started: whatever an earlier run wrote, the stage is
+  // waiting on the user (even once the item is acked), never `done`.
+  if (agent.needsYou || preflightNoteOf(agent) !== null) return 'needsYou';
   if (!hasRealOutput(agent)) return 'stopped';
   return 'done';
 }
@@ -292,7 +297,7 @@ export function detailSignatureOf(item: {
   const agents = item.agents
     .map(
       (a) =>
-        `${a.sessionId}|${a.mode}|${a.phase}|${a.running}|${a.needsYou}|${a.runOutcome ?? ''}|${a.primaryArtifact ?? ''}|${a.worktreePath ?? ''}`,
+        `${a.sessionId}|${a.mode}|${a.phase}|${a.running}|${a.needsYou}|${a.runOutcome ?? ''}|${a.primaryArtifact ?? ''}|${a.worktreePath ?? ''}|${a.agentNote ?? ''}`,
     )
     .join(';');
   const prs = item.prs

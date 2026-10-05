@@ -15,6 +15,7 @@ import { engineErrorText, type CoreClient, type HttpResult } from '../core-clien
 import { refreshBlockedMessage } from '../model/engine-trouble';
 import { RELEASE_CONVERSATION_LABEL } from '../model/row-actions';
 import { readTitle, writeTitle } from '../model/item-title';
+import { preflightBlockOf } from '../model/needs-you';
 import { withEngineRetry, type EngineRevival } from './engine-retry';
 import {
   agentOfChildId,
@@ -330,11 +331,20 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
       // Optimistic BEFORE the request, so the row says `running` while the
       // engine is still answering — and cleared if it refuses.
       panel.setPendingStart(item.id, 'review');
-      if (!surface(await send(() => client.startAgent(path, body)))) {
+      const result = await send(() => client.startAgent(path, body));
+      if (!surface(result)) {
         panel.clearPendingStart(item.id);
         return;
       }
       coordinator.schedule();
+      // 0c — a 2xx is not a start: the preflight answers 200 `started:false`, and the row must
+      // not keep saying `running`. It is still put on screen: the refresh just scheduled brings
+      // the reason (`needs input` worded as the engine's own line) into that row.
+      if (!startedOf(result)) {
+        panel.clearPendingStart(item.id);
+        panel.reveal(item.id);
+        return;
+      }
       // The defect this answers: the engine DID start the review (session
       // created, queued -> reviewing, run.started) and the row silently left
       // the group the user was looking at, with nothing saying so. A start
@@ -361,11 +371,18 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
       const path = itemPathOf(prRefOf(pr));
       if (path === null) return;
       panel.setPendingStart(item.id, 'respond');
-      if (!surface(await send(() => client.startAgent(path, { mode: 'respond' })))) {
+      const result = await send(() => client.startAgent(path, { mode: 'respond' }));
+      if (!surface(result)) {
         panel.clearPendingStart(item.id);
         return;
       }
       coordinator.schedule();
+      // 0c — blocked by the preflight: nothing runs, so no `running` row and no workspace swap.
+      if (!startedOf(result)) {
+        panel.clearPendingStart(item.id);
+        panel.reveal(item.id);
+        return;
+      }
       panel.reveal(item.id);
       await openTab(deps, path);
     }),
@@ -382,11 +399,17 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
       if (path === null) return;
       const item = itemOf(arg) as WorkItem;
       panel.setPendingStart(item.id, 'qa');
-      if (!surface(await send(() => client.startAgent(path, { mode: 'qa' })))) {
+      const result = await send(() => client.startAgent(path, { mode: 'qa' }));
+      if (!surface(result)) {
         panel.clearPendingStart(item.id);
         return;
       }
       coordinator.schedule();
+      if (!startedOf(result)) {
+        panel.clearPendingStart(item.id);
+        panel.reveal(item.id);
+        return;
+      }
       panel.reveal(item.id);
     }),
 
@@ -599,6 +622,37 @@ export function registerCommands(deps: CommandDeps): DisposableLike[] {
       await deps.itemTab.watchRun(id);
     }),
     host.registerCommand('cgremlin.retry', (arg) => onSession(arg, (id) => client.retry(id))),
+    /**
+     * 0c — "Run anyway": the engine's preflight could not load the linked Jira ticket and started
+     * nothing. This re-issues the SAME stage with `skipJiraCheck: true`, and the brief says the
+     * ticket was skipped. Offered only for a `Jira …` block — GitHub is never skippable, so a
+     * `GitHub …` block (or none) sends nothing.
+     */
+    host.registerCommand('cgremlin.runAnyway', async (arg) => {
+      const item = needsItem(arg);
+      if (item === null) return;
+      const block = preflightBlockOf(item);
+      if (block === null || !block.runAnyway || block.stage === null) {
+        void host.showWarningMessage(
+          `'${item.title}' has no run blocked on its Jira ticket to run anyway.`,
+          undefined,
+        );
+        return;
+      }
+      const stage = block.stage;
+      const result = await send(() =>
+        client.run(block.sessionId, stage, { skipJiraCheck: true }),
+      );
+      if (!surface(result)) return;
+      coordinator.schedule();
+      // `/sessions/:id/run` answers 202 when the run started and 200 when the preflight blocked it.
+      if (result?.status !== 202) {
+        void host.showWarningMessage(
+          'The run did not start: the engine still could not run it. The item says why.',
+          undefined,
+        );
+      }
+    }),
     /**
      * Defect 3 — the inverse of the claim `ChatSessions.open` takes, and the first button in the
      * extension ever to call `POST /sessions/:id/conversation/release`. `CoreClient.release`
@@ -855,6 +909,13 @@ async function startFromItem(
   // Only a start that WORKED settles the question of which repo this item lives in.
   if (item.prs.length === 0) void host.setState(repoStateKey(item.id), repoUrl);
   coordinator.schedule();
+  // 0c — the engine runs no preflight on these two stages today; should it ever answer
+  // `started:false`, the row must not claim `running` nor swap the workspace to it.
+  if (!startedOf(result)) {
+    panel.clearPendingStart(item.id);
+    panel.reveal(item.id);
+    return;
+  }
   // R56's answer to "nothing happened": the row this click was about is selected and open, so the
   // slot that just went `running` is on screen, and the tab swaps the workspace to its worktree.
   panel.reveal(item.id);
@@ -971,6 +1032,15 @@ async function createdThenRun(
 async function openSession(deps: CommandDeps, sessionId: string): Promise<void> {
   const path = itemPathOf(`session:${sessionId}`);
   if (path !== null) await openTab(deps, path);
+}
+
+/**
+ * 0c — did a 2xx start route actually start a run? The engine answers 200 `started:false` when
+ * its preflight blocked it. A body that says nothing (an older engine) keeps meaning "started".
+ */
+function startedOf(result: HttpResult | null): boolean {
+  const body = result?.body as { started?: unknown } | null | undefined;
+  return !(typeof body === 'object' && body !== null && body.started === false);
 }
 
 /** `{ session: { id } }` — every creation route answers this shape. */

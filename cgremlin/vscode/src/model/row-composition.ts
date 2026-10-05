@@ -16,7 +16,7 @@
  * Pure: no editor API, no DOM, no clock of its own (a `now` is always an argument).
  */
 import { severityCountsOf, verdictOf, type VerdictTone } from './artifact-outline';
-import { reasonText } from './needs-you';
+import { preflightBlockOf, reasonText } from './needs-you';
 import type {
   CiStatus,
   QaVerdict,
@@ -642,7 +642,16 @@ export function rowMetaCells(
   // phase rather than echoing a reason that is not about it.
   const reason = item.attention.reasons[0] ?? null;
   const reasonAgent = lastFinishedAgent(item.agents);
+  // 0c — the agent whose headless run the preflight refused says WHY, in the engine's own line,
+  // instead of its phase: a review left at `ready` (or a QA `passed`) read as an answer about a
+  // run that never started.
+  const blocked = preflightBlockOf(item);
   const pushAgent = (agent: WorkItemAgent): void => {
+    if (blocked !== null && blocked.sessionId === agent.sessionId) {
+      const glyph = MODE_GLYPH[agent.mode] ?? '•';
+      cells.push({ kind: 'agentPhase', text: `${glyph} ${blocked.note}`, tone: 'bad' });
+      return;
+    }
     cells.push(phaseCell(agent, agent === reasonAgent ? reason : null, item.qaDeploy ?? null, now));
     // Task 2 — a QA cell already carries its own stage and elapsed time (`qaPhaseCell`), so a
     // second `running` beside it would say `⛋ QA verifying · running` and mean nothing more.

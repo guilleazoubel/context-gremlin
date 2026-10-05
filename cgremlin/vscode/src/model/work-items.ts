@@ -165,6 +165,14 @@ export interface WorkItemAgent {
    */
   lastRun?: { stage: string; startedAt: string } | null;
   /**
+   * 0c — the session's one-line `AGENT_NOTE`, sent by the engine ONLY while its `AGENT_STATE`
+   * is `needs-input` (trimmed, at most 300 chars). The preflight writes `Jira …` / `GitHub …`
+   * there when it refused to start a headless run; `model/needs-you`'s `preflightBlockOf` is
+   * the one reader. **Optional**: an engine older than 0c sends none, and the row reads exactly
+   * as before.
+   */
+  agentNote?: string | null;
+  /**
    * PANEL-LOCAL optimism, never on the wire: this window has just asked the
    * engine to start this stage and has not yet seen it in `/items`. It makes
    * the row say so at once — the defect it answers is a click on `Start

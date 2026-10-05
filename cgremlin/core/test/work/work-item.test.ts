@@ -81,6 +81,7 @@ interface AgentOpts {
   acked?: boolean;
   qaVerdict?: 'ready' | 'not_ready' | 'blocked' | null;
   runOutcome?: 'running' | 'succeeded' | 'failed' | 'stopped' | null;
+  agentNote?: string | null;
 }
 
 function agentAttention(o: AgentOpts): AttentionItem {
@@ -115,6 +116,7 @@ function agentAttention(o: AgentOpts): AttentionItem {
     claimed: false,
     qaVerdict: o.qaVerdict ?? null,
     runOutcome: o.runOutcome ?? null,
+    agentNote: o.agentNote ?? null,
   };
 }
 
@@ -202,6 +204,26 @@ describe('groupWorkItems: runOutcome passthrough', () => {
       jira: jiraReport([{ key: 'HB-627' }]),
     });
     expect(items[0].agents[0].runOutcome).toBeNull();
+  });
+});
+
+// 0c Task 6 — the preflight's one-line reason rides on the agent, read-only.
+describe('groupWorkItems: agentNote passthrough', () => {
+  it("carries the agent's AGENT_NOTE onto the wire WorkItemAgent", () => {
+    const note = 'Jira HB-627 could not be loaded (unavailable) — fix access or choose Run anyway';
+    const items = group({
+      items: [agentAttention({ id: 'inv-1', mode: 'investigation', ticket: 'HB-627', needsYou: true, agentNote: note })],
+      jira: jiraReport([{ key: 'HB-627' }]),
+    });
+    expect(items[0].agents[0].agentNote).toBe(note);
+  });
+
+  it('defaults to null when the attention item carries none', () => {
+    const items = group({
+      items: [agentAttention({ id: 'inv-2', mode: 'investigation', ticket: 'HB-627' })],
+      jira: jiraReport([{ key: 'HB-627' }]),
+    });
+    expect(items[0].agents[0].agentNote).toBeNull();
   });
 });
 

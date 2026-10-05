@@ -126,6 +126,11 @@
         "category": "cgremlin"
       },
       {
+        "command": "cgremlin.runAnyway",
+        "title": "Run anyway, without the Jira ticket",
+        "category": "cgremlin"
+      },
+      {
         "command": "cgremlin.renameItem",
         "title": "Rename item...",
         "category": "cgremlin"
@@ -302,6 +307,10 @@
         },
         {
           "command": "cgremlin.watchRun",
+          "when": "false"
+        },
+        {
+          "command": "cgremlin.runAnyway",
           "when": "false"
         },
         {

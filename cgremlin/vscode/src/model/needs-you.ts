@@ -9,7 +9,7 @@
  *
  * Pure module — no editor API (MG-B1).
  */
-import type { WorkItem, WorkListKind } from './work-items';
+import type { WorkItem, WorkItemAgent, WorkListKind } from './work-items';
 
 export interface NeedsYouEntry {
   id: string;
@@ -43,6 +43,72 @@ export function reasonText(reason: string): string {
 }
 
 /**
+ * 0c — the engine's preflight refused to start a headless run and said why in `AGENT_NOTE`:
+ * `Jira <KEY> could not be loaded (…) — fix access or choose Run anyway`, or
+ * `GitHub is not usable: <detail>`. Those two prefixes are the contract; any other note is an
+ * agent's own words and keeps today's wording.
+ */
+const PREFLIGHT_NOTE = /^(?:Jira|GitHub) /;
+
+/** The one "Run anyway" sentence, said as ink beside the button (the webview has no tooltips). */
+export const RUN_ANYWAY_HINT = 'Runs without the ticket; the brief will say so';
+
+export interface PreflightBlock {
+  sessionId: string;
+  /** The engine's own line, verbatim — it is already written for a person. */
+  note: string;
+  /** The stage the blocked run was, which "Run anyway" re-issues; `null` where it cannot tell. */
+  stage: string | null;
+  /** Only a Jira block may be skipped, and only where the stage is known. GitHub never (R4). */
+  runAnyway: boolean;
+}
+
+/**
+ * Which stage the preflight blocked. The engine runs it before review, rereview, respond and
+ * verify only; a review session sitting at a finished phase can only have been asked to re-review
+ * (the start route restarts `queued`/`failed` as a review), so the phase decides between the two.
+ */
+function blockedStageOf(agent: WorkItemAgent): string | null {
+  if (agent.mode === 'respond') return 'respond';
+  if (agent.mode === 'qa') return 'verify';
+  if (agent.mode !== 'review') return null;
+  if (agent.phase === 'ready' || agent.phase === 'changes_requested') return 'rereview';
+  if (agent.phase === 'queued' || agent.phase === 'failed') return 'review';
+  return null;
+}
+
+/** The note an agent carries IF it is a preflight block; never for a running agent. */
+export function preflightNoteOf(agent: {
+  running: boolean;
+  agentNote?: string | null;
+}): string | null {
+  const note = agent.agentNote ?? null;
+  if (agent.running || note === null || !PREFLIGHT_NOTE.test(note)) return null;
+  return note;
+}
+
+/**
+ * The item's preflight block, or `null`. Only while the core says the item IS in `needs_input`:
+ * a later run leaves the old note on disk (the runner rewrites AGENT_STATE alone), and a stale
+ * note must never be shown as the reason.
+ */
+export function preflightBlockOf(item: WorkItem): PreflightBlock | null {
+  if (!item.attention.reasons.includes('needs_input')) return null;
+  for (const agent of [...item.agents].reverse()) {
+    const note = preflightNoteOf(agent);
+    if (note === null) continue;
+    const stage = blockedStageOf(agent);
+    return {
+      sessionId: agent.sessionId,
+      note,
+      stage,
+      runAnyway: note.startsWith('Jira ') && stage !== null,
+    };
+  }
+  return null;
+}
+
+/**
  * One entry per item the core flagged, in the order the response carried them — which is the
  * order the lists themselves are in, so the strip reads top-down like the panel below it.
  */
@@ -56,7 +122,7 @@ export function needsYouEntries(items: readonly WorkItem[]): NeedsYouEntry[] {
       id: item.id,
       list,
       label: item.title,
-      reason: reasonText(item.attention.reasons[0] ?? ''),
+      reason: preflightBlockOf(item)?.note ?? reasonText(item.attention.reasons[0] ?? ''),
     });
   }
   return entries;

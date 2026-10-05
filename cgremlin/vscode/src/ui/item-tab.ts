@@ -31,6 +31,7 @@ import { rowActionsForLists, type ActionFacts } from '../model/row-actions';
 import { qaReposOf, qaStatusesOf } from '../model/items';
 import { partsOf } from '../model/item-tab-parts';
 import { primaryArtifactName } from '../model/artifact-labels';
+import { preflightBlockOf, RUN_ANYWAY_HINT } from '../model/needs-you';
 import { RunOutputStore, type RunOutputView } from '../model/run-output';
 import type { CoreConfigView } from '../model/items';
 import { withEngineRetry, type EngineRevival } from './engine-retry';
@@ -411,6 +412,7 @@ export class ItemTab {
       qaRepos: qaReposOf(this.deps.config()),
       qaStatuses: qaStatusesOf(this.deps.config()),
       qaUnreachable: item.qaAttempt?.outcome === 'unreachable',
+      blocked: blockedViewOf(item),
       buttons: [],
       parts: [],
     };
@@ -607,6 +609,12 @@ function selectedFor(item: WorkItem | undefined, focus: ItemFocusMessage): strin
  * agent rather than about the item: a respond agent still at `triaging` renders a disabled
  * button with R50's reason, where a row simply has no Chat at all.
  */
+/** 0c — the preflight block as the tab draws it: the reason, and whether Run anyway applies. */
+function blockedViewOf(item: WorkItem): ItemTabState['blocked'] {
+  const block = preflightBlockOf(item);
+  return block === null ? null : { note: block.note, runAnyway: block.runAnyway };
+}
+
 export const CHAT_TRIAGING_REASON =
   'Chat opens once the respond agent has written up the review threads. It is still triaging them.';
 
@@ -660,6 +668,18 @@ export function buttonsFor(state: ItemTabState): TabButton[] {
       enabled: action.enabled !== false,
       placement: action.placement === 'primary' ? 'primary' : 'inline',
       ...(action.reason === undefined ? {} : { reason: action.reason }),
+    });
+  }
+  // 0c — the preflight could not load the linked Jira ticket: the one way through is to run the
+  // same stage without it (`cgremlin.runAnyway`). A GitHub block has no such button — `gh` is
+  // never skippable — and its reason alone is drawn (`state.blocked`).
+  if (state.blocked?.runAnyway === true) {
+    buttons.push({
+      id: 'cgremlin.runAnyway',
+      label: 'Run anyway',
+      enabled: true,
+      placement: 'inline',
+      hint: RUN_ANYWAY_HINT,
     });
   }
   const rank = (button: TabButton): number => {

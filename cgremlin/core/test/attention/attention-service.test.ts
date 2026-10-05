@@ -189,7 +189,7 @@ describe('AttentionService.list', () => {
     expect(all.items.map((i) => i.ref).sort()).toEqual(['pr:acme/app#7', 'session:loud', 'session:quiet']);
     const item = all.items.find((i) => i.ref === 'session:loud')!;
     expect(Object.keys(item).sort()).toEqual(
-      ['attention', 'claimed', 'id', 'links', 'mode', 'qaVerdict', 'ref', 'repoOrContext', 'running', 'runOutcome', 'source', 'stageStatus', 'title'].sort(),
+      ['agentNote', 'attention', 'claimed', 'id', 'links', 'mode', 'qaVerdict', 'ref', 'repoOrContext', 'running', 'runOutcome', 'source', 'stageStatus', 'title'].sort(),
     );
     expect(item.source).toBe('session');
     expect(item.mode).toBe('investigation');
@@ -381,6 +381,33 @@ describe('AttentionService.list', () => {
     expect((await fx.service.list()).items.map((i) => i.attention.reasons)).toEqual([['needs_input']]);
     await fx.h.fs.writeFile(`${SESSIONS_DIR}/a/AGENT_STATE`, 'wat');
     expect((await fx.service.list()).items).toEqual([]);
+  });
+
+  // 0c Task 6 — the preflight's reason, read-only, so a client can say WHY an item needs input.
+  it('carries AGENT_NOTE, trimmed and capped at 300 chars, only while AGENT_STATE is needs-input', async () => {
+    await fx.h.store.save(investigation('a'));
+    await fx.h.fs.writeFile(`${SESSIONS_DIR}/a/AGENT_STATE`, 'needs-input');
+    await fx.h.fs.writeFile(
+      `${SESSIONS_DIR}/a/AGENT_NOTE`,
+      '  Jira HB-1 could not be loaded (auth error) — fix access or choose Run anyway \n',
+    );
+    const note = async () => (await fx.service.list({ all: true })).items[0].agentNote;
+    expect(await note()).toBe('Jira HB-1 could not be loaded (auth error) — fix access or choose Run anyway');
+
+    await fx.h.fs.writeFile(`${SESSIONS_DIR}/a/AGENT_NOTE`, `GitHub is not usable: ${'x'.repeat(400)}`);
+    expect((await note())?.length).toBe(300);
+
+    // A later run set AGENT_STATE=working and left the old note behind: it is stale, never sent.
+    await fx.h.fs.writeFile(`${SESSIONS_DIR}/a/AGENT_STATE`, 'working');
+    expect(await note()).toBeNull();
+  });
+
+  it('sends no AGENT_NOTE when the file is absent or empty', async () => {
+    await fx.h.store.save(investigation('a'));
+    await fx.h.fs.writeFile(`${SESSIONS_DIR}/a/AGENT_STATE`, 'needs-input');
+    expect((await fx.service.list({ all: true })).items[0].agentNote).toBeNull();
+    await fx.h.fs.writeFile(`${SESSIONS_DIR}/a/AGENT_NOTE`, '  \n');
+    expect((await fx.service.list({ all: true })).items[0].agentNote).toBeNull();
   });
 });
 

@@ -90,6 +90,14 @@ export interface AttentionItem extends Item {
    * Optional so a source or a fixture that predates this need not supply it.
    */
   runOutcome?: RunOutcome | null;
+  /**
+   * 0c — the session's one-line `AGENT_NOTE`, read-only, trimmed and capped at
+   * 300 chars, and ONLY while `AGENT_STATE` is `needs-input` (null otherwise):
+   * the stage runner writes only AGENT_STATE when a later run starts, so a
+   * note outside needs-input is stale and is never sent. It is how a client
+   * says WHY an item needs input (the preflight's `Jira …` / `GitHub …`).
+   */
+  agentNote?: string | null;
 }
 
 /** What an adapter collects: everything but the evaluated attention state. */
@@ -109,6 +117,8 @@ export interface CollectedItem {
   qaVerdict?: QaVerdict | null;
   /** See `AttentionItem.runOutcome` — carried straight through by `evaluate()`. */
   runOutcome?: RunOutcome | null;
+  /** See `AttentionItem.agentNote` — carried straight through by `evaluate()`. */
+  agentNote?: string | null;
 }
 
 /** One per ItemSource. Adding Jira/Slack = adding an adapter to the array. */
@@ -147,6 +157,8 @@ function emptyLinks(): ItemLinks {
 
 const AGENT_STATES = ['working', 'ready', 'needs-input', 'blocked'] as const;
 type AgentState = (typeof AGENT_STATES)[number];
+/** 0c — the most of AGENT_NOTE any client is handed. */
+const AGENT_NOTE_MAX = 300;
 
 function isTerminal(session: Session): boolean {
   return TERMINAL_PHASES_BY_MODE[session.mode].has(session.stageStatus);
@@ -241,6 +253,7 @@ export class SessionSourceAdapter implements SourceAdapter {
       qaVerdict: session.mode === 'qa' ? session.qa.verdict : null,
       // Defect 1: the engine's OWN word for how the last run ended.
       runOutcome: session.lastRun?.outcome ?? null,
+      agentNote: agentState === 'needs-input' ? await this.readAgentNote(session.id) : null,
       links: {
         ...emptyLinks(),
         sessionId: session.id,
@@ -271,6 +284,20 @@ export class SessionSourceAdapter implements SourceAdapter {
     }
     const value = raw.trim();
     return (AGENT_STATES as readonly string[]).includes(value) ? (value as AgentState) : null;
+  }
+
+  /** 0c — AGENT_NOTE, trimmed and capped; null when absent, unreadable or blank. */
+  private async readAgentNote(id: string): Promise<string | null> {
+    const path = `${this.deps.sessionsDir}/${id}/AGENT_NOTE`;
+    let raw: string;
+    try {
+      if (!(await this.deps.fs.exists(path))) return null;
+      raw = await this.deps.fs.readFile(path);
+    } catch {
+      return null;
+    }
+    const value = raw.trim().slice(0, AGENT_NOTE_MAX);
+    return value === '' ? null : value;
   }
 
   private async agentStateMtime(id: string): Promise<string | null> {
@@ -660,6 +687,7 @@ export class AttentionService {
       claimed: collected.claimed,
       qaVerdict: collected.qaVerdict ?? null,
       runOutcome: collected.runOutcome ?? null,
+      agentNote: collected.agentNote ?? null,
     };
   }
 }

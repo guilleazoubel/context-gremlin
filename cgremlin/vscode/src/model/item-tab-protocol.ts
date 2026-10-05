@@ -99,6 +99,11 @@ export interface TabButton {
   placement: 'primary' | 'inline';
   /** Why it is disabled, shown as a line beneath the row — an inert, silent button is a bug. */
   reason?: string;
+  /**
+   * 0c — what an ENABLED button will do that its label does not say ("Run anyway": the brief
+   * will say the ticket was skipped). Drawn as ink under the row like `reason`; never a `title`.
+   */
+  hint?: string;
 }
 
 export interface ItemTabState {
@@ -127,6 +132,12 @@ export interface ItemTabState {
   qaStatuses?: string[];
   /** The last automatic QA attempt could not reach the environment (`qaAttempt.outcome`). */
   qaUnreachable?: boolean;
+  /**
+   * 0c — the engine's preflight refused to start this item's headless run (`model/needs-you`'s
+   * `preflightBlockOf`): its one-line reason, and whether "Run anyway" applies (Jira only).
+   * Absent or `null` when nothing is blocked.
+   */
+  blocked?: { note: string; runAnyway: boolean } | null;
   /**
    * Phase 17 §1 — the item's parts in their fixed order, which is what the tablist draws. Built
    * host-side by `model/item-tab-parts` so the webview picks no order of its own.

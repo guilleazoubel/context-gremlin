@@ -375,8 +375,14 @@ export class CoreClient {
     return await this.request('POST', `/sessions/${assertSessionId(id)}/retry`);
   }
 
-  async run(id: string, stage: string): Promise<HttpResult> {
-    return await this.request('POST', `/sessions/${assertSessionId(id)}/run`, { stage });
+  /**
+   * `POST /sessions/:id/run` — 202 when the run started, 200 when the engine's preflight blocked
+   * it (the session then says needs-input). 0c: `skipJiraCheck` is the user's "Run anyway"; it
+   * waives the Jira half of the preflight only, never GitHub.
+   */
+  async run(id: string, stage: string, opts: { skipJiraCheck?: boolean } = {}): Promise<HttpResult> {
+    const body = opts.skipJiraCheck === true ? { stage, skipJiraCheck: true } : { stage };
+    return await this.request('POST', `/sessions/${assertSessionId(id)}/run`, body);
   }
 
   /** The generic, source-agnostic ack path — preferred over the two aliases below. */

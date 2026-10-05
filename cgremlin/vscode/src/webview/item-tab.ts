@@ -15,7 +15,12 @@
  * text under the CSP of R38. It runs in a browser context, so it never imports the editor module.
  */
 import { escapeHtml, escapeAttribute, safeHref } from '../model/escape-html';
-import type { HostToWebview, ItemTabState, TabArtifact } from '../model/item-tab-protocol';
+import type {
+  HostToWebview,
+  ItemTabState,
+  TabArtifact,
+  TabButton,
+} from '../model/item-tab-protocol';
 import { partOfFocus, type TabPart } from '../model/item-tab-parts';
 import { post } from './item/channel';
 import {
@@ -45,6 +50,8 @@ interface Frame {
   chips: HTMLElement;
   buttons: HTMLElement;
   reasons: HTMLElement;
+  /** 0c — why the engine did not start this item's run (the preflight's one line). */
+  blocked: HTMLElement;
   switcher: Switcher;
   agentTabs: HTMLElement;
   paneHost: HTMLElement;
@@ -76,8 +83,11 @@ function frameOf(): Frame {
   header.appendChild(title);
   header.appendChild(chips);
   const group = el('div', 'button-group');
+  const blocked = el('p', 'blocked-reason');
+  blocked.hidden = true;
   const buttons = el('div', 'buttons');
   const reasons = el('div', 'button-reasons');
+  group.appendChild(blocked);
   group.appendChild(buttons);
   group.appendChild(reasons);
   const switcher = createSwitcher();
@@ -89,7 +99,7 @@ function frameOf(): Frame {
   const chrome = el('div', 'item-chrome');
   for (const node of [header, group, switcher.node]) chrome.appendChild(node);
   for (const node of [chrome, agentTabs, paneHost]) container.appendChild(node);
-  frame = { titleText, needsYou, chips, buttons, reasons, switcher, agentTabs, paneHost };
+  frame = { titleText, needsYou, chips, buttons, reasons, blocked, switcher, agentTabs, paneHost };
   return frame;
 }
 
@@ -132,7 +142,16 @@ function reasonIdOf(id: string): string {
   return `button-reason-${idPart(id)}`;
 }
 
+/** A button's line under the row: why it is disabled, or (0c) what an enabled one will do. */
+function lineOf(button: TabButton): string | undefined {
+  return button.enabled ? button.hint : button.reason;
+}
+
 function patchButtons(current: ItemTabState, f: Frame): void {
+  // 0c — the preflight's reason is ink, above the row, whether or not a button can act on it.
+  const note = current.blocked?.note ?? '';
+  setText(f.blocked, note);
+  setHidden(f.blocked, note === '');
   reconcile(
     f.buttons,
     current.buttons.map((button) => ({ key: button.id, data: button })),
@@ -150,18 +169,18 @@ function patchButtons(current: ItemTabState, f: Frame): void {
       setClass(node, `action ${button.placement}`);
       setDisabled(node as HTMLButtonElement, !button.enabled);
       // The reason is ink under the row; this is how a screen reader reaches it from the control.
-      const described = !button.enabled && button.reason !== undefined;
+      const described = lineOf(button) !== undefined;
       setAttr(node, 'aria-describedby', described ? reasonIdOf(button.id) : null);
     },
   );
-  const reasons = current.buttons.filter((b) => !b.enabled && b.reason !== undefined);
+  const reasons = current.buttons.filter((b) => lineOf(b) !== undefined);
   reconcile(
     f.reasons,
     reasons.map((button) => ({ key: button.id, data: button })),
     () => el('p', 'button-reason'),
     (node, button) => {
       setId(node, reasonIdOf(button.id));
-      setText(node, `${button.label}: ${button.reason ?? ''}`);
+      setText(node, `${button.label}: ${lineOf(button) ?? ''}`);
     },
   );
 }

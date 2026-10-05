@@ -157,6 +157,12 @@ export interface WorkItemAgent {
    * session that has never run. Additive on the wire.
    */
   runOutcome: RunOutcome | null;
+  /**
+   * 0c — the session's `AGENT_NOTE` while it is in needs-input (see
+   * `AttentionItem.agentNote`), so the client can say WHY: the preflight's
+   * `Jira …` / `GitHub …` reason. `null` otherwise. Read-only; additive on the wire.
+   */
+  agentNote: string | null;
 }
 
 export interface WorkItem {
@@ -518,6 +524,7 @@ export function groupWorkItems(input: GroupWorkItemsInput): WorkItem[] {
       ref: item.ref,
       qaVerdict: item.qaVerdict ?? null,
       runOutcome: item.runOutcome ?? null,
+      agentNote: item.agentNote ?? null,
     });
     cand.contributors.push(item);
     cand.sessionTitle ??= item.title;

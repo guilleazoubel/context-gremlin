@@ -133,6 +133,12 @@ body {
   font-size: 11px;
 }
 
+/* 0c — why the engine did not start this item's run: the preflight's own line, above the row. */
+.blocked-reason {
+  margin: 0 0 6px;
+  color: var(--vscode-errorForeground);
+}
+
 /* --- the part switcher -------------------------------------------------- */
 
 /*
