@@ -6,7 +6,7 @@ exports[`prompt templates > renderFindingsBrief and renderDevelopBrief are byte-
 You are running in an isolated git worktree of the repository (the current working directory). Work autonomously. Your first deliverable is a complete, self-contained \`/s/inv-1/FINDINGS.md\` — no code changes.
 
 ## Source of truth: the Jira ticket
-The ticket is APP-1. Fetch it now via the Atlassian MCP (getJiraIssue) to read the summary, description, and acceptance criteria. If the ticket is unavailable or absent, use whatever task description you were given. The ticket defines scope — investigate ONLY what it asks about.
+The ticket is APP-1. Its text is in the ## Ticket block above; do not fetch Jira yourself. If the \`## Ticket\` block says NOT LOADED or none linked, say so and work from the PR description and the repo (or whatever task description you were given). The ticket defines scope — investigate ONLY what it asks about.
 
 ## Status files (the engine reads these; you never call any CLI)
 - Progress note: overwrite \`/s/inv-1/AGENT_NOTE\` with ONE line at each milestone (e.g. "tracing checkout path", "root cause found").
@@ -49,7 +49,7 @@ exports[`prompt templates > renderFindingsBrief and renderDevelopBrief are byte-
 You are running in an isolated git worktree of the repository (the current working directory). Work autonomously. Your first deliverable is a complete, self-contained \`/s/inv-1/FINDINGS.md\` — no code changes.
 
 ## Source of truth: the Jira ticket
-The ticket is APP-1. Fetch it now via the Atlassian MCP (getJiraIssue) to read the summary, description, and acceptance criteria. If the ticket is unavailable or absent, use whatever task description you were given. The ticket defines scope — investigate ONLY what it asks about.
+The ticket is APP-1. Its text is in the ## Ticket block above; do not fetch Jira yourself. If the \`## Ticket\` block says NOT LOADED or none linked, say so and work from the PR description and the repo (or whatever task description you were given). The ticket defines scope — investigate ONLY what it asks about.
 
 ## Status files (the engine reads these; you never call any CLI)
 - Progress note: overwrite \`/s/inv-1/AGENT_NOTE\` with ONE line at each milestone (e.g. "tracing checkout path", "root cause found").

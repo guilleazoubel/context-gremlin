@@ -192,7 +192,7 @@ export function resolveTicketState(p: { ticketState?: TicketBriefState; ticketCo
 }
 
 /**
- * R18 — the gated `## Ticket` block, in the exact shape of
+ * R18 — the gated \`## Ticket\` block, in the exact shape of
  * `renderEnvironmentSection`: '' when nothing was fetched, and every caller
  * writes `const block = section ? '\n\n' + section : ''`. 0c: everything after the
  * heading is fenced as untrusted data.
@@ -246,7 +246,7 @@ export function renderUiCheckProtocol(mode: 'observe' | 'fix', target: string, c
     : `**Mode — OBSERVE:** make NO code changes. Merge PM findings as 📋 PM/AC and Designer findings as 🎨 Design into REVIEW.md (same table + detail shape, adding Expected/Actual lines and an Evidence link for design findings). These are additive — they inform the reviewer and do NOT block approval.`;
   return `## LIVE UI CHECK — PM + Designer lenses (dedicated subagents)
 
-After the code tiers, dispatch TWO focused subagents IN PARALLEL (Task tool). They inherit your MCP servers (atlassian, figma, chrome-devtools). Do NOT do their work inline.
+After the code tiers, dispatch TWO focused subagents IN PARALLEL (Task tool). They inherit your MCP servers (figma, chrome-devtools). Never call Jira yourself and do not let them: the ticket, if any, is in the \`## Ticket\` block of BRIEF.md — pass its text in each subagent prompt. Do NOT do their work inline.
 
 **Target:** ${target}
 
@@ -256,15 +256,15 @@ After the code tiers, dispatch TWO focused subagents IN PARALLEL (Task tool). Th
 - chrome-devtools runs with an isolated (fresh) profile, so there is no saved session — do the bypass/login on every run.
 
 **PM subagent (product manager verifying the ticket):**
-1. Read the Jira ticket (getJiraIssue; fall back to the PR description if Atlassian MCP is unavailable) and extract the acceptance criteria / intended behavior.
+1. Read the ticket from the \`## Ticket\` block of BRIEF.md (it is passed to you in the subagent prompt; do not fetch Jira yourself). If that block says NOT LOADED or none linked, use the PR description instead. Extract the acceptance criteria / intended behavior.
 2. Open the target in chrome-devtools and navigate to the changed feature.
 3. For each acceptance criterion, exercise it and record holds / broken / missing, with a one-line observation and a screenshot for anything not holding.
 4. Return findings only (schema below); make NO code changes.
 
 **Designer subagent (designer checking pixel fidelity):**
-1. Find a Figma link in the Jira ticket (scan the getJiraIssue description + remote links for a figma.com URL; capture any node-id).
+1. Find a Figma link in the \`## Ticket\` description (scan it for a figma.com URL; capture any node-id). Jira remote links are not available to you — do not fetch Jira yourself — so if the description has no Figma link, say so.
 2. IF a link exists: read the design via Figma MCP — get_variable_defs (color/spacing/typography tokens), get_design_context, and get_screenshot of the relevant node. In chrome-devtools, read the rendered values with evaluate_script (getComputedStyle: font-family, font-size, font-weight, color, background-color, padding, margin, width, height, border-radius). Compare against the design and flag each mismatch as design-value vs rendered-value.
-3. IF no link exists: do a general visual sanity pass — alignment, spacing consistency, responsive breakpoints (resize via chrome-devtools), obvious visual bugs — and note "no Figma link found in Jira."
+3. IF no link exists: do a general visual sanity pass — alignment, spacing consistency, responsive breakpoints (resize via chrome-devtools), obvious visual bugs — and note "no Figma link found in the ticket description."
 4. Produce SIDE-BY-SIDE evidence for each visual discrepancy (below).
 5. Return findings only; make NO code changes.
 
@@ -285,7 +285,7 @@ ${modeBlock}`;
 const TIER0_INTENT_GATE = `## TIER 0 — Intent gate (Jira is the source of truth) — ALWAYS, FIRST
 The ticket defines what this PR is supposed to do. Solving the wrong thing correctly is still a failure.
 1. Find the Jira ticket key from the branch name / PR title / context above (e.g. \`HB-627\`, \`GRAC-123\`).
-2. Fetch it: if an Atlassian MCP tool is available (e.g. getJiraIssue), use it to read the ticket's summary, description, and acceptance criteria. If not available, fall back to the PR description as the intent.
+2. Read it: the ticket is in \`## Ticket\` (summary, description, acceptance criteria). If that block says NOT LOADED or none linked, fall back to the PR description as the intent **and state that in REVIEW.md**; never call Jira yourself.
 3. Judge: **does this PR actually satisfy that intent / those acceptance criteria?**
 4. Write an \`Intent alignment:\` line at the top of REVIEW.md — ✅ satisfies / ⚠️ partial / ❌ diverges (+ one sentence).
 5. If ⚠️ or ❌, create a 🔴 finding: Expected = the ticket criterion, Actual = what the PR does. If no ticket is found, write "No ticket found — reviewed against PR description" and continue.`;
@@ -432,11 +432,7 @@ export function renderFindingsBrief(p: FindingsBriefParams): string {
   const ticketSection = renderTicketBlock(ticketState);
   const ticketBlock = ticketSection ? `\n\n${ticketSection}` : '';
   const ticketLine = p.ticket
-    ? ticketState?.kind === 'loaded'
-      // R18: reworded, not deleted — the engine already fetched the ticket,
-      // so the MCP call is the fallback for detail the brief does not carry.
-      ? `The ticket is ${p.ticket}. Its text is below; fetch it via the Atlassian MCP (getJiraIssue) only if you need more.`
-      : `The ticket is ${p.ticket}. Fetch it now via the Atlassian MCP (getJiraIssue) to read the summary, description, and acceptance criteria.`
+    ? `The ticket is ${p.ticket}. Its text is in the ## Ticket block above; do not fetch Jira yourself.`
     : '';
   const after =
     p.intent === 'development'
@@ -451,7 +447,7 @@ export function renderFindingsBrief(p: FindingsBriefParams): string {
 You are running in an isolated git worktree of the repository (the current working directory). Work autonomously. Your first deliverable is a complete, self-contained \`${p.sessionDir}/FINDINGS.md\` — no code changes.
 
 ## Source of truth: the Jira ticket
-${ticketLine} If the ticket is unavailable or absent, use whatever task description you were given. The ticket defines scope — investigate ONLY what it asks about.
+${ticketLine} If the \`## Ticket\` block says NOT LOADED or none linked, say so and work from the PR description and the repo (or whatever task description you were given). The ticket defines scope — investigate ONLY what it asks about.
 
 ${notes(p.sessionDir)}${envBlock}${ticketBlock}
 
@@ -761,7 +757,7 @@ export function renderReviewPrompt(p: ReviewPromptParams): string {
     (p.includeLiveUiCheck ?? true) && uiCheckRendered
       ? ` Then ALWAYS run the '## LIVE UI CHECK' section in ${p.sessionDir}/BRIEF.md (PM + Designer subagents) and merge its 📋/🎨 findings into REVIEW.md — this is required even when ${bareSkillName(skill)} handled the code review.`
       : '';
-  return `Run ${skill}. Whatever shape it proposes, REVIEW.md must match the output contract in ${p.sessionDir}/BRIEF.md EXACTLY — that contract is what the engine and the editor read, and it overrides the skill's own output format wherever the two differ.${ui} Proceed autonomously; do NOT ask for confirmation or a verdict. Read the PR with git (the branch is checked out) or gh pr view/diff as needed. If Jira/Atlassian MCP is unavailable, skip Jira context and proceed with the diff alone. Write the output to ${p.sessionDir}/REVIEW.md. ${HEADLESS_REVIEW_POSTS_NOTHING}`;
+  return `Run ${skill}. Whatever shape it proposes, REVIEW.md must match the output contract in ${p.sessionDir}/BRIEF.md EXACTLY — that contract is what the engine and the editor read, and it overrides the skill's own output format wherever the two differ.${ui} Proceed autonomously; do NOT ask for confirmation or a verdict. Read the PR with git (the branch is checked out) or gh pr view/diff as needed. The ticket, if any, is in \`## Ticket\` in BRIEF.md; do not fetch Jira yourself. Write the output to ${p.sessionDir}/REVIEW.md. ${HEADLESS_REVIEW_POSTS_NOTHING}`;
 }
 
 /**

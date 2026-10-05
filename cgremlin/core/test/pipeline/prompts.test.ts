@@ -638,10 +638,67 @@ describe('the ## Ticket block in the findings and develop briefs (R18)', () => {
     expect(brief).toContain('## Ticket HB-627 — Do the thing');
   });
 
-  it('the existing "fetch it via getJiraIssue" line is reworded rather than deleted', () => {
-    const brief = renderFindingsBrief({ sessionDir: '/s', ticket: 'HB-627', intent: 'investigate_only', ticketContext: ticket });
-    expect(brief).toContain('getJiraIssue');
-    expect(brief.toLowerCase()).toContain('only if you need more');
+  it('the old "fetch it via getJiraIssue" line is reworded: the engine is the only Jira source', () => {
+    for (const ticketContext of [ticket, undefined]) {
+      const brief = renderFindingsBrief({ sessionDir: '/s', ticket: 'HB-627', intent: 'investigate_only', ticketContext });
+      expect(brief).toContain('The ticket is HB-627. Its text is in the ## Ticket block above; do not fetch Jira yourself.');
+      expect(brief).not.toMatch(/getJiraIssue|Atlassian MCP/i);
+    }
+  });
+});
+
+describe('the engine is the only Jira source (0c amendment A)', () => {
+  const ticket = { key: 'HB-627', summary: 's', status: 'x', url: 'u', descriptionText: 'd', comments: [] };
+  const states: Array<TicketBriefState | undefined> = [
+    undefined,
+    { kind: 'loaded', ticket },
+    { kind: 'not_loaded', key: 'HB-627', reason: 'no credentials' } as unknown as TicketBriefState,
+    { kind: 'skipped', key: 'HB-627' },
+  ];
+  const outputs = (): Array<[string, string]> => {
+    const out: Array<[string, string]> = [];
+    for (const st of states) {
+      const n = st?.kind ?? 'none';
+      out.push(
+        [`findings/${n}`, renderFindingsBrief({ sessionDir, ticket: 'HB-627', intent: 'investigate_only', ticketState: st, env: localCtx })],
+        [`review/${n}`, renderReviewBrief({ sessionDir, prNumber: 1, ticketState: st, env: localCtx })],
+        [`rereview/${n}`, renderRereviewBrief({ sessionDir, prNumber: 1, commitCount: 2, ticketState: st, env: localCtx })],
+        [`develop/${n}`, renderDevelopBrief({ sessionDir, ticket: 'HB-627', hasPlan: false, ticketState: st })],
+        [`qa/${n}`, renderQaBrief({ sessionDir, ticket: 'HB-627', prRepo: null, prNumber: null, mergeSha: null, change: null, priorArtifacts: [], ticketState: st })],
+      );
+    }
+    out.push(
+      ['review-prompt', renderReviewPrompt({ sessionDir, uiCheckRendered: true })],
+      ['rereview-prompt', renderRereviewPrompt({ sessionDir, commitCount: 2 })],
+      ['ui-check-observe', renderUiCheckProtocol('observe', 'https://x.example', previewCtx)],
+      ['ui-check-fix', renderUiCheckProtocol('fix', 'https://x.example', localCtx)],
+      ['respond', renderRespondBrief({ sessionDir, prRepo: 'a/b', prNumber: 1, threads: [], reviews: [], reviewDecision: null, failingChecks: [], changedFiles: 0, additions: 0, deletions: 0 } as never)],
+    );
+    return out;
+  };
+
+  it('no brief or prompt tells the agent to call Atlassian or getJiraIssue', () => {
+    for (const [name, text] of outputs()) {
+      expect(text, name).not.toMatch(/getJiraIssue|Atlassian MCP|via the Atlassian MCP|fall back to the PR description if Atlassian/i);
+      expect(text, name).not.toMatch(/\(atlassian,/i);
+    }
+  });
+  it('findings, review and ui-check say not to fetch Jira', () => {
+    const byName = new Map(outputs());
+    for (const k of ['findings/loaded', 'findings/not_loaded', 'findings/none', 'findings/skipped']) {
+      expect(byName.get(k), k).toContain('do not fetch Jira yourself');
+    }
+    expect(byName.get('review-prompt')).toContain('do not fetch Jira yourself');
+    expect(byName.get('review/loaded')).toMatch(/never call Jira yourself|do not fetch Jira yourself/);
+    expect(byName.get('ui-check-fix')).toMatch(/never call Jira yourself|do not fetch Jira yourself/);
+  });
+  it('the UI-check designer uses Figma links from the ## Ticket description only', () => {
+    const t = renderUiCheckProtocol('fix', 'https://x.example', localCtx);
+    expect(t).toContain('Jira remote links are not available');
+    expect(t).toContain('(figma, chrome-devtools)');
+  });
+  it('the QA conduct safety rule still forbids writing to Jira', () => {
+    expect(renderQaBrief({ sessionDir, ticket: 'HB-627', prRepo: null, prNumber: null, mergeSha: null, change: null, priorArtifacts: [] })).toContain('write to Jira or GitHub');
   });
 });
 
