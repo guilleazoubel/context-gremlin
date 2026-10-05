@@ -152,6 +152,24 @@ const NEVER_FORCE_PUSH = [
 ] as const;
 
 /**
+ * R110 — the two helpers themselves, for the one profile that has them in
+ * neither hand: a review of someone else's PR running HEADLESS. Posting that
+ * review is the user's call, made in the conversation; 1fd7bec let the
+ * headless run post, and the automatic re-review on new commits — which no
+ * one watches — did. The real wall is that the engine does not leave the
+ * helpers in a headless review's worktree at all (./post-helpers.ts); these
+ * rules are the second wall, for a helper that is somehow still on disk.
+ * Both spellings, because a rule is matched on the command text and
+ * `./.cgremlin/post-review` does not begin with `.cgremlin/post-review`.
+ */
+const NEVER_RUN_POST_HELPERS = [
+  'Bash(.cgremlin/post-review:*)',
+  'Bash(./.cgremlin/post-review:*)',
+  'Bash(.cgremlin/post-comment:*)',
+  'Bash(./.cgremlin/post-comment:*)',
+] as const;
+
+/**
  * An investigation, and QA, write nothing outward at all: no review, no
  * comment, no issue, no API call, nothing landed. Under `bypassPermissions`
  * an empty config denied NOTHING, so investigation used to have every one of
@@ -186,6 +204,13 @@ export interface PermissionSubject {
   mode: SessionMode;
   /** Only an investigation carries one; absent is `investigate_only`. */
   intent?: Intent;
+  /**
+   * R110 — true only while the USER holds the conversation (the claim the
+   * editor takes before it opens `claude --resume` in this worktree). Absent
+   * is headless: every stage run passes the session itself, which never
+   * carries this, so a run the engine starts can never inherit it.
+   */
+  conversation?: boolean;
 }
 
 /**
@@ -194,14 +219,34 @@ export interface PermissionSubject {
  * investigation gains only the ability to land ITS OWN work — reviewing,
  * commenting and administering stay denied to it (see the entry below).
  */
-export type PermissionProfile = SessionMode | 'investigation:development';
+export type PermissionProfile =
+  | SessionMode
+  | 'investigation:development'
+  | 'review:conversation';
 
 export function permissionProfileFor(subject: PermissionSubject): PermissionProfile {
   if (subject.mode === 'investigation' && subject.intent === 'development') {
     return 'investigation:development';
   }
+  // R110 — a review posts only with the user in the conversation. No other
+  // mode's authority depends on who is driving: respond posts on the user's
+  // OWN PR either way (Phase 20), and the rest post nothing either way.
+  if (subject.mode === 'review' && subject.conversation === true) {
+    return 'review:conversation';
+  }
   return subject.mode;
 }
+
+/** What a review may never do, whoever is driving it — see `review` below. */
+const REVIEW_DENY = [
+  ...NEVER_POST,
+  ...NEVER_LAND,
+  'Bash(gh pr create:*)',
+  GH_API_DENY,
+  ...NEVER_ADMINISTER,
+  'Bash(git push:*)',
+  'Bash(git commit:*)',
+] as const;
 
 export const DEFAULT_PERMISSIONS: Record<PermissionProfile, PermissionConfig> = {
   // An investigation writes findings into its session directory. That is all
@@ -279,21 +324,21 @@ export const DEFAULT_PERMISSIONS: Record<PermissionProfile, PermissionConfig> = 
       'Bash(git commit:*)',
     ],
   },
-  // Phase 20 — the review agent posts its own review, through
-  // `.cgremlin/post-review` for the review itself and `.cgremlin/post-comment`
-  // for a plain conversation comment. It types no `gh` write verb of its own,
-  // and it still writes no code: no commit, no push, no `gh pr create` — and
-  // no `gh api`.
+  // R110 — a review RUNNING HEADLESS (a manual start, or the automatic
+  // re-review on new commits) writes REVIEW.md and stops. It posts nothing:
+  // it is denied even the two helpers, which the engine also leaves out of
+  // its worktree. It types no `gh` write verb, and it writes no code: no
+  // commit, no push, no `gh pr create` — and no `gh api`.
   review: {
-    deny: [
-      ...NEVER_POST,
-      ...NEVER_LAND,
-      'Bash(gh pr create:*)',
-      GH_API_DENY,
-      ...NEVER_ADMINISTER,
-      'Bash(git push:*)',
-      'Bash(git commit:*)',
-    ],
+    deny: [...REVIEW_DENY, ...NEVER_RUN_POST_HELPERS],
+  },
+  // R110 — the same review once the USER holds the conversation and has asked
+  // there for it to be posted. Exactly the headless table minus the helper
+  // denies: it posts through `.cgremlin/post-review` (the review) and
+  // `.cgremlin/post-comment` (a plain conversation comment), and nothing
+  // else about it changes.
+  'review:conversation': {
+    deny: [...REVIEW_DENY],
   },
 };
 

@@ -299,6 +299,47 @@ describe('phase 20 — the per-mode deny table', () => {
           'Bash(gh auth switch:*)',
           'Bash(git push:*)',
           'Bash(git commit:*)',
+          // R110 — a headless review cannot run the post helpers.
+          'Bash(.cgremlin/post-review:*)',
+          'Bash(./.cgremlin/post-review:*)',
+          'Bash(.cgremlin/post-comment:*)',
+          'Bash(./.cgremlin/post-comment:*)',
+        ],
+      },
+      // R110 — the same review, once the user holds the conversation: only
+      // the helper denies are gone.
+      'review:conversation': {
+        deny: [
+          'Bash(gh pr review:*)',
+          'Bash(gh pr comment:*)',
+          'Bash(gh issue:*)',
+          'Bash(gh pr merge:*)',
+          'Bash(gh pr close:*)',
+          'Bash(gh pr edit:*)',
+          'Bash(gh pr ready:*)',
+          'Bash(gh pr create:*)',
+          'Bash(gh api:*)',
+          'Bash(gh repo:*)',
+          'Bash(gh ruleset:*)',
+          'Bash(gh secret:*)',
+          'Bash(gh variable:*)',
+          'Bash(gh workflow:*)',
+          'Bash(gh release:*)',
+          'Bash(gh gist:*)',
+          'Bash(gh label:*)',
+          'Bash(gh cache:*)',
+          'Bash(gh alias:*)',
+          'Bash(gh extension:*)',
+          'Bash(gh codespace:*)',
+          'Bash(gh ssh-key:*)',
+          'Bash(gh gpg-key:*)',
+          'Bash(gh auth login:*)',
+          'Bash(gh auth logout:*)',
+          'Bash(gh auth refresh:*)',
+          'Bash(gh auth setup-git:*)',
+          'Bash(gh auth switch:*)',
+          'Bash(git push:*)',
+          'Bash(git commit:*)',
         ],
       },
     });
@@ -636,6 +677,12 @@ describe('every (mode, intent) pair resolves to a pinned profile', () => {
         pairs[`${mode}/${intent ?? 'none'}`] = permissionProfileFor({ mode, intent });
       }
     }
+    // R110 — a human holding the conversation changes review, and only review.
+    for (const mode of ALL_MODES) {
+      for (const intent of [undefined, 'development'] as const) {
+        pairs[`${mode}/${intent ?? 'none'}/conversation`] = permissionProfileFor({ mode, intent, conversation: true });
+      }
+    }
     expect(pairs).toEqual({
       'investigation/none': 'investigation',
       'investigation/investigate_only': 'investigation',
@@ -652,6 +699,48 @@ describe('every (mode, intent) pair resolves to a pinned profile', () => {
       'review/none': 'review',
       'review/investigate_only': 'review',
       'review/development': 'review',
+      'investigation/none/conversation': 'investigation',
+      'investigation/development/conversation': 'investigation:development',
+      'development/none/conversation': 'development',
+      'development/development/conversation': 'development',
+      'respond/none/conversation': 'respond',
+      'respond/development/conversation': 'respond',
+      'qa/none/conversation': 'qa',
+      'qa/development/conversation': 'qa',
+      'review/none/conversation': 'review:conversation',
+      'review/development/conversation': 'review:conversation',
     });
+  });
+});
+
+/**
+ * R110 — a review of someone else's PR posts only when the user asks, in the
+ * conversation. A headless review or re-review (a manual start, or the
+ * automatic re-review on new commits) is denied the helpers outright; the
+ * profile the claim renders is the same table without those four rules.
+ * respond — the user's OWN PR — keeps posting on a headless run (Phase 20).
+ */
+describe('R110 — a headless review cannot run the post helpers', () => {
+  const HELPER_DENIES = [
+    'Bash(.cgremlin/post-review:*)',
+    'Bash(./.cgremlin/post-review:*)',
+    'Bash(.cgremlin/post-comment:*)',
+    'Bash(./.cgremlin/post-comment:*)',
+  ];
+
+  it('a headless review denies both helpers, bare and ./-prefixed', () => {
+    expect(permissionProfileFor({ mode: 'review' })).toBe('review');
+    expect(DEFAULT_PERMISSIONS.review.deny ?? []).toEqual(expect.arrayContaining(HELPER_DENIES));
+  });
+
+  it('a review the user holds the conversation on denies neither, and nothing else changes', () => {
+    const claimed = DEFAULT_PERMISSIONS['review:conversation'].deny ?? [];
+    for (const rule of HELPER_DENIES) expect(claimed).not.toContain(rule);
+    expect(claimed).toEqual((DEFAULT_PERMISSIONS.review.deny ?? []).filter((r) => !HELPER_DENIES.includes(r)));
+  });
+
+  it.each([false, true])('respond (conversation: %s) is unchanged — it never denies its helpers', (conversation) => {
+    const deny = DEFAULT_PERMISSIONS[permissionProfileFor({ mode: 'respond', conversation })].deny ?? [];
+    for (const rule of HELPER_DENIES) expect(deny).not.toContain(rule);
   });
 });
