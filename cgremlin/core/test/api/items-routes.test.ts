@@ -36,6 +36,8 @@ let prStates: PrStateCache;
 let discoverCalls: string[];
 let discoverAnswer: { searched: boolean; repos: string[]; found: { repo: string; number: number }[]; reason: string | null };
 let withDiscovery: boolean;
+/** 0c — whether the engine's tickets port loads the linked ticket (the preflight's Jira half). */
+let ticketLoads: boolean;
 
 function prFixture(number: number, author: string, overrides: Record<string, unknown> = {}) {
   return {
@@ -89,7 +91,19 @@ function request(method: string, urlPath: string, body?: unknown): Promise<{ sta
 }
 
 async function start(opts: { withWorkItems?: boolean } = {}): Promise<void> {
-  ih = createInventoryHarness({ watchAuthors: ['bob'], projectKeys: ['HB'] });
+  // 0c: a loaded ticket, so the review/respond/qa starts pass the shared preflight.
+  ih = createInventoryHarness({ watchAuthors: ['bob'], projectKeys: ['HB'] }, undefined, undefined, {
+    tickets: {
+      briefState: async (key) =>
+        ticketLoads
+          ? {
+              kind: 'loaded',
+              ticket: { key, summary: 's', status: 'UAT', url: `https://jira.invalid/browse/${key}`, descriptionText: 'd', comments: [] },
+            }
+          : { kind: 'not_loaded', key, reason: 'auth' },
+      linking: 'configured',
+    },
+  });
   runStarts = [];
   agentStarts = 0;
   ih.h.events.on('run.started', (e) => runStarts.push(e.stage));
@@ -190,6 +204,7 @@ beforeEach(async () => {
   discoverCalls = [];
   discoverAnswer = { searched: true, repos: ['acme/app'], found: [], reason: null };
   withDiscovery = true;
+  ticketLoads = true;
 });
 
 afterEach(async () => {
@@ -448,6 +463,29 @@ describe('POST /items/<path>/agents (MG-8, R15)', () => {
     expect(res.body.created).toBe(true);
     expect(agentStarts).toBe(1);
     expect(runStarts).toEqual(['review']);
+  });
+
+  it('0c: a review start the preflight blocks answers 200 started:false, with no agent', async () => {
+    ticketLoads = false;
+    await start();
+    await scan([prFixture(10, 'bob')]);
+    ih.gh.queueResponse({
+      stdout: JSON.stringify({
+        number: 10, title: 'PR #10', author: { login: 'bob' }, headRefName: 'feature/HB-6210-x',
+        headRefOid: 'a'.repeat(40), baseRefName: 'main', url: 'https://github.com/acme/app/pull/10',
+        state: 'OPEN', isDraft: false, reviewDecision: '', mergedAt: null, closedAt: null,
+        latestReviews: [], statusCheckRollup: [],
+      }),
+    });
+    const res = await request('POST', '/items/pr/acme/app/10/agents', { mode: 'review' });
+    expect(res.status).toBe(200);
+    expect(res.body.created).toBe(true);
+    expect(res.body.started).toBe(false);
+    expect(agentStarts).toBe(0);
+    expect(runStarts).toEqual([]);
+    const id = res.body.session.id as string;
+    expect(await ih.h.fs.readFile(`${SESSIONS_DIR}/${id}/AGENT_STATE`)).toBe('needs-input');
+    expect(await ih.h.fs.readFile(`${SESSIONS_DIR}/${id}/AGENT_NOTE`)).toMatch(/^Jira HB-6210 could not be loaded \(auth error\)/);
   });
 
   it('mode review on MY OWN PR is a 409 with the engine own OwnPrError wording', async () => {

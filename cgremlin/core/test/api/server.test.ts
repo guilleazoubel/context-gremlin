@@ -184,6 +184,7 @@ async function createDelayedServer(socketFileName: string, opts: { inventory?: b
     events,
     config: { sessionsDir: '/sessions', worktreesDir: '/worktrees', defaultBaseRef: 'origin/main' , runnerKind: 'claude-code', humanTurnTtlMs: 600_000 },
     lock,
+    ghAuthOk: async () => ({ ok: true as const }),
   });
 
   let inventoryDeps: { gh: FakeGhRunner; scanner: InventoryScanner; scheduler: DiscoveryScheduler<ScanReport>; factory: ReviewSessionFactory; inventoryStore: InventoryStore } | undefined;
@@ -413,6 +414,7 @@ describe('API server', () => {
       events: delayedEvents,
       config: { sessionsDir: '/sessions', worktreesDir: '/worktrees', defaultBaseRef: 'origin/main' , runnerKind: 'claude-code', humanTurnTtlMs: 600_000 },
       lock: delayedLock,
+      ghAuthOk: async () => ({ ok: true as const }),
     });
     const delayedServer = createApiServer({
       sessionStore: delayedStore,
@@ -504,6 +506,51 @@ describe('API server', () => {
 
     const bogusRes = await request('POST', `/sessions/${id}/run`, { stage: 'bogus' });
     expect(bogusRes.status).toBe(400);
+  });
+
+  describe('0c — POST /sessions/:id/run and the preflight', () => {
+    async function seedReview(): Promise<string> {
+      const id = 'pr-app-12-x';
+      const review = migrateV1ToV2({
+        schemaVersion: 1 as const, id, mode: 'review' as const, createdAt: '2026-09-04T10:00:00.000Z',
+        workspace: { repoUrl: 'git@github.com:acme/app.git', worktreePath: `/worktrees/${id}`, branch: 'pr-12' },
+        // No tickets port is wired in this harness, so a linked ticket is NOT LOADED (not configured).
+        lineage: { pipelineId: id, parentSessionId: null, ticket: 'HB-627' },
+        stageStatus: 'queued' as const,
+      });
+      if (review.mode !== 'review') throw new Error('mode changed');
+      review.pr = { repo: 'acme/app', number: 12, url: 'https://github.com/acme/app/pull/12', headSha: 'aaa', reviewedSha: null, title: 'T', author: 'bob' };
+      await h.store.save(review);
+      return id;
+    }
+
+    it('a blocked run answers 200 with the unchanged session and starts no agent', async () => {
+      const id = await seedReview();
+      const res = await request('POST', `/sessions/${id}/run`, { stage: 'review' });
+      expect(res.status).toBe(200);
+      const session = (res.body as { session: Session }).session;
+      expect(session.id).toBe(id);
+      expect(session.stageStatus).toBe('queued');
+      expect(session.lastRun).toBeNull();
+      expect(await h.fs.readFile(`${SESSIONS_DIR}/${id}/AGENT_STATE`)).toBe('needs-input');
+      expect(await h.fs.readFile(`${SESSIONS_DIR}/${id}/AGENT_NOTE`)).toBe(
+        'Jira HB-627 could not be loaded (not configured) — fix access or choose Run anyway',
+      );
+    });
+
+    it('skipJiraCheck passes through: the run starts (202) and the brief says SKIPPED', async () => {
+      const id = await seedReview();
+      const res = await request('POST', `/sessions/${id}/run`, { stage: 'review', skipJiraCheck: true });
+      expect(res.status).toBe(202);
+      expect((res.body as { session: Session }).session.lastRun?.outcome).toBe('running');
+      expect(await h.fs.readFile(`${SESSIONS_DIR}/${id}/BRIEF.md`)).toContain('HB-627: SKIPPED by the user');
+    });
+
+    it('a non-boolean skipJiraCheck is a 400', async () => {
+      const id = await seedReview();
+      const res = await request('POST', `/sessions/${id}/run`, { stage: 'review', skipJiraCheck: 'yes' });
+      expect(res.status).toBe(400);
+    });
   });
 
   it('POST /sessions/:id/promote rejects with 409 PlanGateError before approve-plan, then succeeds with both sessions after', async () => {

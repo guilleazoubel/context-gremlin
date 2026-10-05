@@ -31,7 +31,8 @@ describe('awaitRunStart', () => {
     const d = deferred<void>();
     const p = awaitRunStart(events, 's1', d.promise);
     events.emit('run.started', { session: { id: 's1' } as unknown as Session, stage: 'review' });
-    await expect(p).resolves.toBeUndefined();
+    // 0c: `true` — a run started.
+    await expect(p).resolves.toBe(true);
   });
 
   it('ignores run.started for a different sessionId', async () => {
@@ -91,6 +92,7 @@ describe('awaitRunStart', () => {
     const d = deferred<void>();
     const p = awaitRunStart(events, 's1', d.promise);
     d.resolve();
-    await expect(p).resolves.toBeUndefined();
+    // 0c: `false` — no run started (the shared preflight blocked it).
+    await expect(p).resolves.toBe(false);
   });
 });

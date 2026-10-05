@@ -193,9 +193,10 @@ async function respondForExistingReviewSession(
   const isLive = deps.pipeline.runLivenessOf(existing) === 'live';
   if (!isLive) {
     if (existing.stageStatus === 'queued' || existing.stageStatus === 'failed') {
-      await awaitRunStart(deps.events, existing.id, deps.pipeline.runReview(existing.id));
+      // 0c: a run the preflight blocked is not started — say so (200, started:false).
+      const started = await awaitRunStart(deps.events, existing.id, deps.pipeline.runReview(existing.id));
       const session = await deps.sessionStore.load(existing.id);
-      sendJson(res, 202, { session, created: false, started: true });
+      sendJson(res, started ? 202 : 200, { session, created: false, started });
       return;
     }
     if (existing.stageStatus === 'reviewing') {
@@ -205,9 +206,10 @@ async function respondForExistingReviewSession(
       // than leaving it stuck forever or silently resuming as if nothing
       // happened.
       await deps.pipeline.transition(existing.id, 'failed');
-      await awaitRunStart(deps.events, existing.id, deps.pipeline.runReview(existing.id));
+      // 0c: a run the preflight blocked is not started — say so (200, started:false).
+      const started = await awaitRunStart(deps.events, existing.id, deps.pipeline.runReview(existing.id));
       const session = await deps.sessionStore.load(existing.id);
-      sendJson(res, 202, { session, created: false, started: true });
+      sendJson(res, started ? 202 : 200, { session, created: false, started });
       return;
     }
   }
@@ -264,9 +266,9 @@ async function handleReviewStart(
     title: entry.title,
   };
   const created = await inv.factory.createFromCandidate(candidate);
-  await awaitRunStart(deps.events, created.id, deps.pipeline.runReview(created.id));
+  const started = await awaitRunStart(deps.events, created.id, deps.pipeline.runReview(created.id));
   const session = await deps.sessionStore.load(created.id);
-  sendJson(res, 202, { session, created: true, started: true });
+  sendJson(res, started ? 202 : 200, { session, created: true, started });
 }
 
 
@@ -343,11 +345,11 @@ async function handleItemAgents(
           });
           return;
         }
-        await awaitRunStart(deps.events, existing.id, deps.pipeline.runRespond(existing.id));
-        sendJson(res, 202, {
+        const started = await awaitRunStart(deps.events, existing.id, deps.pipeline.runRespond(existing.id));
+        sendJson(res, started ? 202 : 200, {
           session: await deps.sessionStore.load(existing.id),
           created: false,
-          started: true,
+          started,
           item,
         });
         return;
@@ -357,11 +359,11 @@ async function handleItemAgents(
       // click on a lit waitingForReview row IS the explicit ask (Phase 7 R5),
       // and anything else hands them a session with an empty BRIEF.md and a
       // second button to press.
-      await awaitRunStart(deps.events, created.id, deps.pipeline.runRespond(created.id));
-      sendJson(res, 202, {
+      const started = await awaitRunStart(deps.events, created.id, deps.pipeline.runRespond(created.id));
+      sendJson(res, started ? 202 : 200, {
         session: await deps.sessionStore.load(created.id),
         created: true,
-        started: true,
+        started,
         item,
       });
     });
@@ -416,9 +418,9 @@ async function handleItemAgents(
         });
         return;
       }
-      await awaitRunStart(deps.events, session.id, deps.pipeline.runVerify(session.id));
-      sendJson(res, 202, {
-        session: await deps.sessionStore.load(session.id), created, started: true, item,
+      const started = await awaitRunStart(deps.events, session.id, deps.pipeline.runVerify(session.id));
+      sendJson(res, started ? 202 : 200, {
+        session: await deps.sessionStore.load(session.id), created, started, item,
       });
     });
     return;
@@ -475,9 +477,12 @@ async function respondAfterRunStarted(
 ): Promise<void> {
   // The HTTP response goes out once the run has *started*, not once the full
   // agent turn has finished; the turn keeps running in the background.
-  await awaitRunStart(deps.events, id, guard);
+  // 0c: a run the preflight blocked resolves WITHOUT ever starting — that is a
+  // completed request (the session now says needs-input), so it answers 200,
+  // not 202 "accepted, running".
+  const started = await awaitRunStart(deps.events, id, guard);
   const session = await deps.sessionStore.load(id);
-  sendJson(res, 202, { session });
+  sendJson(res, started ? 202 : 200, { session });
 }
 
 async function handlePromote(res: ServerResponse, deps: ApiServerDeps, id: string): Promise<void> {
@@ -1248,8 +1253,11 @@ async function handleRequest(
 
     if (method === 'POST' && parts.length === 3 && parts[0] === 'sessions' && parts[2] === 'run') {
       const id = parts[1];
-      const { stage } = parseRunStageRequest(await readJsonBody(req));
-      await respondAfterRunStarted(res, deps, id, deps.pipeline.runStage(id, stage));
+      const { stage, skipJiraCheck } = parseRunStageRequest(await readJsonBody(req));
+      await respondAfterRunStarted(
+        res, deps, id,
+        deps.pipeline.runStage(id, stage, skipJiraCheck === undefined ? {} : { skipJiraCheck }),
+      );
       return;
     }
 
@@ -1373,9 +1381,9 @@ async function handleRequest(
           return;
         }
         const created = await inv.factory.createFromPrUrl(ref.url, { refuseAuthor: inv.config.me });
-        await awaitRunStart(deps.events, created.id, deps.pipeline.runReview(created.id));
+        const started = await awaitRunStart(deps.events, created.id, deps.pipeline.runReview(created.id));
         const session = await deps.sessionStore.load(created.id);
-        sendJson(res, 202, { session, created: true, started: true });
+        sendJson(res, started ? 202 : 200, { session, created: true, started });
       });
       return;
     }

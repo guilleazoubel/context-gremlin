@@ -9,7 +9,7 @@ import { listenOnSocket } from '../../src/api/listen';
 import { SessionStore } from '../../src/engine/session-store';
 import { WorkspaceManager } from '../../src/workspace/workspace-manager';
 import { StageRunner } from '../../src/pipeline/stage-runner';
-import { PipelineService } from '../../src/pipeline/pipeline-service';
+import { PipelineService, type PipelineServiceDeps } from '../../src/pipeline/pipeline-service';
 import { EngineEvents } from '../../src/engine/events';
 import { NodeFileSystem } from '../../src/fs/node-file-system';
 import { NodeGitRunner } from '../../src/git/node-git-runner';
@@ -129,6 +129,8 @@ function requestOnSocket(
 export interface EngineFakes {
   runner?: FakeAgentRunner;
   gh?: FakeGhRunner;
+  /** 0c — the engine's tickets port; omitted means no Jira wiring (a linked ticket then fails the preflight). */
+  tickets?: PipelineServiceDeps['tickets'];
 }
 
 export interface Engine {
@@ -181,6 +183,8 @@ export async function startEngine(root: string, fakes: EngineFakes = {}): Promis
     events,
     config: { sessionsDir, worktreesDir, defaultBaseRef: 'origin/main' , runnerKind: 'claude-code', humanTurnTtlMs: 600_000 },
     lock,
+    ghAuthOk: async () => ({ ok: true as const }),
+    ...(fakes.tickets !== undefined ? { tickets: fakes.tickets } : {}),
   });
   const server = createApiServer({
     sessionStore: store,

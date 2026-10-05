@@ -240,7 +240,16 @@ describe.skipIf(!hasGit())('Phase 3 engine end-to-end: review / re-review / reco
   beforeAll(async () => {
     root = await mkdtemp(path.join(tmpdir(), 'cgremlin-core-e2e-review-'));
     originPath = await createOriginRepo(root);
-    engine = await startEngine(root);
+    // 0c: the PR links APP-12, so the engine must be able to load it to pass the preflight.
+    engine = await startEngine(root, {
+      tickets: {
+        briefState: async (key) => ({
+          kind: 'loaded',
+          ticket: { key, summary: 's', status: 'UAT', url: `https://jira.invalid/browse/${key}`, descriptionText: 'd', comments: [] },
+        }),
+        linking: 'configured',
+      },
+    });
     createMirrorFor(engine.mirrorsDir, REPO_URL, originPath);
     prSha = gitRun(['rev-parse', 'refs/pull/12/head'], originPath).trim();
   }, 20_000);

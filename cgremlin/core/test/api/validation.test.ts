@@ -111,6 +111,16 @@ describe('parseRunStageRequest', () => {
   it('throws ValidationError for an unknown stage', () => {
     expect(() => parseRunStageRequest({ stage: 'bogus' })).toThrow(ValidationError);
   });
+
+  it('0c: accepts an optional boolean skipJiraCheck', () => {
+    expect(parseRunStageRequest({ stage: 'review' })).toEqual({ stage: 'review' });
+    expect(parseRunStageRequest({ stage: 'review', skipJiraCheck: true })).toEqual({ stage: 'review', skipJiraCheck: true });
+    expect(parseRunStageRequest({ stage: 'review', skipJiraCheck: false })).toEqual({ stage: 'review', skipJiraCheck: false });
+  });
+
+  it('0c: a non-boolean skipJiraCheck is a ValidationError', () => {
+    expect(() => parseRunStageRequest({ stage: 'review', skipJiraCheck: 'yes' })).toThrow(ValidationError);
+  });
 });
 
 describe('parseArtifactName', () => {

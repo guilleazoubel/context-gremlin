@@ -62,6 +62,7 @@ import { TERMINAL_PHASES_BY_MODE } from '../workspace/workspace-in-use';
 import { refreshWorkspaceGuardrails } from '../workspace/workspace-manager';
 import { permissionProfileFor } from '../workspace/permission-guard';
 import { repoSlugFromUrl } from '../gh/repo-slug';
+import { preflightAccess } from './preflight';
 
 export interface PipelineConfig {
   sessionsDir: string; // absolute
@@ -128,6 +129,17 @@ export interface PipelineServiceDeps {
   ) => Promise<Omit<QaBriefContext, 'sessionDir' | 'ticket' | 'ticketContext' | 'ticketState' | 'env'>>;
   /** One line per degraded side effect (R110's release refresh). Defaults to `console.warn`, which the engine log captures. */
   log?: (line: string) => void;
+  /**
+   * 0c — is `gh` authenticated and usable right now? Half of the preflight every PR-reading
+   * headless stage passes before an agent launches (src/pipeline/preflight.ts). Never throws.
+   * Required: a wiring that forgets it would silently waive the GitHub check.
+   */
+  ghAuthOk: () => Promise<{ ok: true } | { ok: false; detail: string }>;
+}
+
+/** 0c — the user's "Run anyway": skips ONLY the Jira half of the preflight, never GitHub. */
+export interface RunStageOptions {
+  skipJiraCheck?: boolean;
 }
 
 /** What `prepareEnvironment` hands back: the brief context, whether THIS call started the app, and the teardown that undoes both. */
@@ -204,6 +216,57 @@ export class PipelineService {
     if (key === null) return { kind: 'none', linking: tickets?.linking ?? 'disabled' };
     if (tickets === undefined) return { kind: 'not_loaded', key, reason: 'not_configured' };
     return tickets.briefState(key);
+  }
+
+  /**
+   * 0c — the shared preflight (R1-R4). Either the run is `blocked` — NOT started:
+   * `AGENT_STATE` = `needs-input` and the one-line reason in `AGENT_NOTE` (attention derives
+   * `needs_input` from the file), and that session is the method's normal return value — or it
+   * goes ahead with the `ticketState` its brief must carry: the very state the check just
+   * fetched (one Jira read per run, and the brief cannot disagree with the check), or
+   * `skipped` when the user chose "Run anyway" for a linked ticket.
+   *
+   * The probes run unlocked (they reach Jira and `gh`); the write takes the session lock and
+   * refuses while a run is live, so it never overwrites that run's state. An identical block
+   * is not rewritten, so the automatic re-review that asks again every tick does not churn
+   * the file's mtime.
+   */
+  private async preflight(
+    id: string,
+    ticketKey: string | null,
+    opts: RunStageOptions,
+  ): Promise<{ blocked: Session } | { blocked: null; ticketState: TicketBriefState }> {
+    const skipJiraCheck = opts.skipJiraCheck === true;
+    let fetched: TicketBriefState | undefined;
+    const pf = await preflightAccess(
+      {
+        ticketState: async (key) => (fetched = await this.ticketState(key)),
+        ghAuthOk: () => this.deps.ghAuthOk(),
+      },
+      { ticketKey, skipJiraCheck },
+    );
+    if (pf.ok) {
+      const ticketState: TicketBriefState =
+        ticketKey !== null && skipJiraCheck ? { kind: 'skipped', key: ticketKey } : (fetched ?? (await this.ticketState(ticketKey)));
+      return { blocked: null, ticketState };
+    }
+    const blocked = await this.lock.withLock(id, async () => {
+      const fresh = await this.deps.store.load(id);
+      if (this.runLivenessOf(fresh) === 'live') throw new RunInProgressError(id);
+      const dir = this.sessionDir(id);
+      const statePath = `${dir}/AGENT_STATE`;
+      const notePath = `${dir}/AGENT_NOTE`;
+      const same =
+        (await this.deps.fs.readFile(statePath).catch(() => null)) === 'needs-input' &&
+        (await this.deps.fs.readFile(notePath).catch(() => null)) === pf.reason;
+      if (!same) {
+        await this.deps.fs.mkdir(dir, { recursive: true });
+        await this.deps.fs.writeFile(notePath, pf.reason);
+        await this.deps.fs.writeFile(statePath, 'needs-input');
+      }
+      return fresh;
+    });
+    return { blocked };
   }
 
   private sessionDir(id: string): string {
@@ -724,7 +787,7 @@ export class PipelineService {
    * only on the pre-lock load lets a run start on a session a human just
    * abandoned.
    */
-  async runRespond(id: string): Promise<Session> {
+  async runRespond(id: string, opts: RunStageOptions = {}): Promise<Session> {
     // Declared beside REVIEW_RUNNABLE_FROM / REREVIEW_RUNNABLE_FROM and
     // checked on the FRESH in-lock load, exactly as they are. `closed` and
     // `abandoned` are not runnable.
@@ -737,13 +800,16 @@ export class PipelineService {
     if (isClaimed(session, this.now())) {
       throw new HumanTurnInProgressError(id);
     }
+    // 0c — before any environment, brief or agent.
+    const pf = await this.preflight(id, session.lineage.ticket, opts);
+    if (pf.blocked !== null) return pf.blocked;
     const sessionDir = this.sessionDir(id);
     const prep = await this.prepareEnvironment(id, 'respond', session);
     const brief = renderRespondBrief({
       sessionDir,
       prRepo: session.pr?.repo ?? '',
       prNumber: session.pr?.number ?? 0,
-      ticketState: await this.ticketState(session.lineage.ticket),
+      ticketState: pf.ticketState,
       // R50's gate returns '' for a context with NOTHING in it. A real run
       // still needs the reconcile-first instruction, the COMMENTS.md shape
       // and the out-of-scope line, so the no-context case passes an empty
@@ -800,15 +866,19 @@ export class PipelineService {
     return this.deps.qaContext(session).catch(() => fallback);
   }
 
-  /** Composes the QA brief and its prompt. Pure of session state — used by both `runVerify` and `prepareQaSession`. */
-  private async composeQaBrief(session: Session): Promise<{ brief: string; prompt: string }> {
+  /**
+   * Composes the QA brief and its prompt. Pure of session state — used by both `runVerify` and
+   * `prepareQaSession`. `ticketState` is the one a run's preflight already settled; absent (the
+   * chat-only path, which launches no agent and so has no preflight) it is fetched here.
+   */
+  private async composeQaBrief(session: Session, ticketState?: TicketBriefState): Promise<{ brief: string; prompt: string }> {
     const sessionDir = this.sessionDir(session.id);
     const env =
       (await this.deps.environment?.qaBriefContext(session)) ?? { ...EMPTY_QA_ENVIRONMENT };
     const brief = renderQaBrief({
       sessionDir,
       ticket: session.lineage.ticket ?? session.id,
-      ticketState: await this.ticketState(session.lineage.ticket),
+      ticketState: ticketState ?? (await this.ticketState(session.lineage.ticket)),
       env,
       ...(await this.qaContext(session)),
     });
@@ -852,7 +922,7 @@ export class PipelineService {
    * `transitionUnlocked(id,'verifying')` in `preRun`, teardown in the outer
    * `finally`. Nothing is ever committed, and nothing is ever posted.
    */
-  async runVerify(id: string): Promise<Session> {
+  async runVerify(id: string, opts: RunStageOptions = {}): Promise<Session> {
     const session = await this.deps.store.load(id);
     if (session.mode !== 'qa') {
       throw new UnsupportedStageError(`Session '${id}' cannot run verify (mode=${session.mode})`);
@@ -864,10 +934,13 @@ export class PipelineService {
     if (!QA_RUNNABLE_FROM.includes(session.stageStatus)) {
       throw new UnsupportedStageError(`Session '${id}' cannot run verify (stage=${session.stageStatus})`);
     }
+    // 0c — before any environment, brief, archive or agent.
+    const pf = await this.preflight(id, session.lineage.ticket, opts);
+    if (pf.blocked !== null) return pf.blocked;
 
     const sessionDir = this.sessionDir(id);
     const prep = await this.prepareEnvironment(id, 'verify', session);
-    const { brief, prompt } = await this.composeQaBrief(session);
+    const { brief, prompt } = await this.composeQaBrief(session, pf.ticketState);
     // Archive BEFORE the run, unlocked, exactly as `runRereview` archives
     // REVIEW.md: a re-verification must not let the agent read (or the
     // parser see) the previous round's verdict.
@@ -923,7 +996,7 @@ export class PipelineService {
     }
   }
 
-  async runReview(id: string): Promise<Session> {
+  async runReview(id: string, opts: RunStageOptions = {}): Promise<Session> {
     // Only the mode is checked here (immutable) — the actual eligibility
     // check (stageStatus/pr/worktree) is race-sensitive and must run on a
     // FRESH load inside the lock; see the invariant comment above.
@@ -935,6 +1008,9 @@ export class PipelineService {
     if (isClaimed(session, this.now())) {
       throw new HumanTurnInProgressError(id);
     }
+    // 0c — before any environment, brief or agent.
+    const pf = await this.preflight(id, session.lineage.ticket, opts);
+    if (pf.blocked !== null) return pf.blocked;
 
     const sessionDir = this.sessionDir(id);
     const prep = await this.prepareEnvironment(id, 'review', session);
@@ -945,7 +1021,7 @@ export class PipelineService {
       prNumber: session.pr?.number ?? 0,
       env: prep.ctx,
       selfReview: session.lineage.selfReview,
-      ticketState: await this.ticketState(session.lineage.ticket),
+      ticketState: pf.ticketState,
     });
     const prompt = renderReviewPrompt({
       sessionDir,
@@ -1012,7 +1088,7 @@ export class PipelineService {
     }
   }
 
-  async runRereview(id: string): Promise<Session> {
+  async runRereview(id: string, opts: RunStageOptions = {}): Promise<Session> {
     // Only the mode is checked here (immutable) — the actual eligibility
     // check (stageStatus/pr) is race-sensitive and must run on a FRESH load
     // inside the lock; see the invariant comment above. pr/worktreePath are
@@ -1033,6 +1109,10 @@ export class PipelineService {
     if (!worktreePath) {
       throw new WorkspaceMissingError(id);
     }
+    // 0c — before the git work, the archive, the brief or the agent: the automatic re-review
+    // (ReconciliationTick) enters here too, and a blocked one must leave the worktree alone.
+    const pf = await this.preflight(id, session.lineage.ticket, opts);
+    if (pf.blocked !== null) return pf.blocked;
 
     const oldCommit = (await this.deps.git.run(['rev-parse', 'HEAD'], { cwd: worktreePath })).stdout.trim();
     await this.deps.git.run(['fetch', 'origin', `pull/${session.pr.number}/head`], { cwd: worktreePath });
@@ -1085,7 +1165,7 @@ export class PipelineService {
       prNumber: session.pr.number,
       commitCount,
       env: prep.ctx,
-      ticketState: await this.ticketState(session.lineage.ticket),
+      ticketState: pf.ticketState,
     });
     try {
       // Only mark the session 'failed' in the catch below if OUR preRun
@@ -1150,7 +1230,8 @@ export class PipelineService {
     }
   }
 
-  async runStage(id: string, stage: StageName): Promise<Session> {
+  /** `opts` reaches only the stages that pass the 0c preflight; the others have no Jira check to skip. */
+  async runStage(id: string, stage: StageName, opts: RunStageOptions = {}): Promise<Session> {
     switch (stage) {
       case 'findings':
         return this.runFindings(id);
@@ -1159,13 +1240,13 @@ export class PipelineService {
       case 'develop':
         return this.runDevelop(id);
       case 'review':
-        return this.runReview(id);
+        return this.runReview(id, opts);
       case 'rereview':
-        return this.runRereview(id);
+        return this.runRereview(id, opts);
       case 'respond':
-        return this.runRespond(id);
+        return this.runRespond(id, opts);
       case 'verify':
-        return this.runVerify(id);
+        return this.runVerify(id, opts);
     }
   }
 

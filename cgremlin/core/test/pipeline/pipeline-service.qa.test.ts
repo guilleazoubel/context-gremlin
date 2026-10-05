@@ -2,6 +2,15 @@ import { describe, expect, it } from 'vitest';
 import { createHarness, flush, SESSIONS_DIR, WORKTREES_DIR, FIXED_NOW } from '../support/pipeline-harness';
 import type { QaSession } from '../../src/schema/session';
 
+/** 0c — the linked ticket loads, so the run passes the shared preflight's Jira half. */
+const LOADED_TICKETS = {
+  briefState: async (key: string) => ({
+    kind: 'loaded' as const,
+    ticket: { key, summary: 's', status: 'UAT', url: `https://jira.invalid/browse/${key}`, descriptionText: 'd', comments: [] },
+  }),
+  linking: 'configured' as const,
+};
+
 const WORKTREE = `${WORKTREES_DIR}/qa-app-HB-627`;
 const CLEAN = { code: 0, signal: null } as const;
 
@@ -35,7 +44,7 @@ function qaSession(over: Partial<QaSession> = {}): QaSession {
 }
 
 async function seed(over: Partial<QaSession> = {}) {
-  const h = createHarness();
+  const h = createHarness({ tickets: LOADED_TICKETS });
   const session = qaSession(over);
   await h.store.save(session);
   return { h, session };

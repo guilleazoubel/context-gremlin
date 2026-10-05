@@ -1,4 +1,4 @@
-import { createHarness, SESSIONS_DIR, WORKTREES_DIR, FIXED_NOW, type PipelineHarness } from './pipeline-harness';
+import { createHarness, SESSIONS_DIR, WORKTREES_DIR, FIXED_NOW, type HarnessOptions, type PipelineHarness } from './pipeline-harness';
 import { FakeGhRunner } from './fake-gh-runner';
 import { KeyedLock } from '../../src/api/keyed-lock';
 import { ReconciliationTick } from '../../src/discovery/reconciliation';
@@ -29,8 +29,10 @@ export function createInventoryHarness(
   configOverrides: Partial<InventoryScannerDeps['config']> = {},
   wrapGh: (gh: FakeGhRunner) => GhRunner = (gh) => gh,
   lock?: KeyedLock,
+  /** 0c — e.g. a `tickets` port, so a session with a linked ticket passes the preflight. */
+  harnessOptions: HarnessOptions = {},
 ): InventoryHarness {
-  const h = createHarness();
+  const h = createHarness(harnessOptions);
   // Share h's own lock — StageRunner/PipelineService (inside h), the
   // ReconciliationTick, and the API server must all use the SAME KeyedLock
   // instance for the per-session locking invariant (pipeline-service.ts) to

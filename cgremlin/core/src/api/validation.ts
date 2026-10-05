@@ -83,9 +83,11 @@ export function parseCreateDevelopmentRequest(body: unknown): CreateDevelopmentI
 
 const RunStageRequestSchema = z.object({
   stage: StageNameSchema,
+  /** 0c — the user's "Run anyway": skips only the Jira half of the preflight, never GitHub. */
+  skipJiraCheck: z.boolean().optional(),
 });
 
-export function parseRunStageRequest(body: unknown): { stage: StageName } {
+export function parseRunStageRequest(body: unknown): { stage: StageName; skipJiraCheck?: boolean } {
   const result = RunStageRequestSchema.safeParse(body);
   if (!result.success) {
     throw new ValidationError(`Invalid run-stage request: ${result.error.message}`);

@@ -3,6 +3,15 @@ import { createHarness, flush, SESSIONS_DIR, WORKTREES_DIR, FIXED_NOW } from '..
 import type { RespondSession, Session } from '../../src/schema/session';
 import type { StageName } from '../../src/schema/stage';
 
+/** 0c — the linked ticket loads, so the run passes the shared preflight's Jira half. */
+const LOADED_TICKETS = {
+  briefState: async (key: string) => ({
+    kind: 'loaded' as const,
+    ticket: { key, summary: 's', status: 'UAT', url: `https://jira.invalid/browse/${key}`, descriptionText: 'd', comments: [] },
+  }),
+  linking: 'configured' as const,
+};
+
 const WORKTREE = `${WORKTREES_DIR}/respond-app-12`;
 
 function respondSession(over: Partial<RespondSession> = {}): RespondSession {
@@ -30,7 +39,7 @@ function respondSession(over: Partial<RespondSession> = {}): RespondSession {
 }
 
 async function seed(over: Partial<RespondSession> = {}) {
-  const h = createHarness();
+  const h = createHarness({ tickets: LOADED_TICKETS });
   const session = respondSession(over);
   await h.store.save(session);
   return { h, session };
@@ -114,6 +123,7 @@ describe('PipelineService.runRespond (R56)', () => {
 
   it('the respond context reaches the brief when the host supplies one', async () => {
     const h = createHarness({
+      tickets: LOADED_TICKETS,
       respondContext: async () => ({
         threads: [
           {

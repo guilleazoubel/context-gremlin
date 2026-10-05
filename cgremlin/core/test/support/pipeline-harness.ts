@@ -65,6 +65,8 @@ export interface HarnessOptions {
   log?: (line: string) => void;
   /** 0c — PipelineServiceDeps.tickets; omitted means no Jira wiring at all. */
   tickets?: PipelineServiceDeps['tickets'];
+  /** 0c — PipelineServiceDeps.ghAuthOk; omitted means `gh` is authenticated and usable. */
+  ghAuthOk?: PipelineServiceDeps['ghAuthOk'];
 }
 
 export function createHarness(options: HarnessOptions = {}): PipelineHarness {
@@ -106,6 +108,7 @@ export function createHarness(options: HarnessOptions = {}): PipelineHarness {
     now,
     lock,
     environment,
+    ghAuthOk: options.ghAuthOk ?? (async () => ({ ok: true as const })),
     ...(options.respondContext !== undefined ? { respondContext: options.respondContext } : {}),
     ...(options.log !== undefined ? { log: options.log } : {}),
     ...(options.tickets !== undefined ? { tickets: options.tickets } : {}),

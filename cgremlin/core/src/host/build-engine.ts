@@ -1,7 +1,8 @@
 import type http from 'node:http';
 import type { SessionFileSystem } from '../fs/session-file-system';
 import type { GitRunner } from '../git/git-runner';
-import type { GhRunner } from '../gh/gh-runner';
+import { GhCommandError, type GhRunner } from '../gh/gh-runner';
+import { summarizeGhAuthFailure } from '../pipeline/preflight';
 import type { AgentRunner } from '../agent/agent-runner';
 import type { CoreConfig } from '../config/core-config';
 import { SessionStore } from '../engine/session-store';
@@ -252,6 +253,20 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     now: adapters.now,
     lock,
     environment: environment ?? undefined,
+    /**
+     * 0c — the GitHub half of the preflight: one read-only `gh auth status` per headless
+     * PR-reading run. Never throws; a missing `gh` binary is "not usable" too. The detail is
+     * summarized here and redacted (tokens stripped, one line, ≤ 200 chars) by the preflight.
+     */
+    ghAuthOk: async () => {
+      try {
+        await adapters.gh.run(['auth', 'status']);
+        return { ok: true };
+      } catch (err) {
+        const raw = err instanceof GhCommandError ? err.stderr : err instanceof Error ? err.message : String(err);
+        return { ok: false, detail: summarizeGhAuthFailure(raw) };
+      }
+    },
     // R18: the engine fetches the ticket text; the agent never sees a
     // credential, and the `## Ticket` block is composed in exactly one place.
     /**
@@ -518,7 +533,9 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
       await prStateResolver.absorbList(repo, stdout);
     },
     createSession: (ticket, slug, number) => qaFactory.createFromMergedPr(ticket, slug, number),
-    startRun: (id) => awaitRunStart(events, id, pipeline.runVerify(id)),
+    startRun: async (id) => {
+      await awaitRunStart(events, id, pipeline.runVerify(id));
+    },
     now: adapters.now,
   });
   const scanner = new InventoryScanner({

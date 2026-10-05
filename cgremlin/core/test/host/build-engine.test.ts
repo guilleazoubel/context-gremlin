@@ -18,6 +18,8 @@ import { EnvironmentService } from '../../src/env/environment-service';
 import { AttentionService } from '../../src/attention/attention-service';
 import { PR_STATE_ENTRY_DEFAULTS } from '../support/pr-state-entry';
 import { JiraAuthError, JiraUnavailableError, type JiraIssueDetail, type JiraSource } from '../../src/jira/jira-source';
+import { GhCommandError } from '../../src/gh/gh-runner';
+import { awaitRunStart } from '../../src/pipeline/run-start';
 
 function testConfig(): CoreConfig {
   return resolveCoreConfig(
@@ -480,6 +482,56 @@ describe('0c — the engine\'s ticket brief state (tickets.briefState / tickets.
       const engine = buildEngine(config, testAdapters());
       expect(await engine.tickets.briefState('HB-1')).toEqual({ kind: 'not_loaded', key: 'HB-1', reason: 'not_configured' });
     }
+  });
+
+  async function seedReview(adapters: EngineAdapters): Promise<string> {
+    const fs = adapters.fs as InMemoryFileSystem;
+    const review = {
+      schemaVersion: 2, id: 'rev-0c', mode: 'review', createdAt: '2026-09-01T10:00:00.000Z',
+      workspace: { repoUrl: 'https://github.com/acme/app.git', worktreePath: '/worktrees/rev-0c', branch: 'pr-12' },
+      lineage: { pipelineId: 'rev-0c', parentSessionId: null, ticket: 'HB-1', selfReview: false },
+      agent: null, lastRun: null,
+      pr: { repo: 'acme/app', number: 12, url: 'https://github.com/acme/app/pull/12', headSha: 'a'.repeat(40), reviewedSha: null, title: 'T', author: 'bob' },
+      stageStatus: 'queued', reviewVersion: 0, lastRereviewSummary: null,
+    };
+    await fs.mkdir('/sessions/rev-0c', { recursive: true });
+    await fs.mkdir('/worktrees/rev-0c', { recursive: true });
+    await fs.writeFile('/sessions/rev-0c/session.json', JSON.stringify(review));
+    return review.id;
+  }
+
+  it('preflight sentinel: the Jira token never reaches AGENT_NOTE or the brief, blocked or skipped', async () => {
+    const adapters = testAdapters();
+    const fs = adapters.fs as InMemoryFileSystem;
+    const engine = buildEngine(jiraConfig(['HB']), adapters, { jiraSource: stubSource(new JiraAuthError(`401 for ${SENTINEL}`, 401)) });
+    const id = await seedReview(adapters);
+
+    await engine.pipeline.runReview(id);
+    const note = await fs.readFile(`/sessions/${id}/AGENT_NOTE`);
+    expect(note).toBe('Jira HB-1 could not be loaded (auth error) — fix access or choose Run anyway');
+    expect(await fs.readFile(`/sessions/${id}/AGENT_STATE`)).toBe('needs-input');
+
+    expect(await awaitRunStart(engine.events, id, engine.pipeline.runReview(id, { skipJiraCheck: true }))).toBe(true);
+    const brief = await fs.readFile(`/sessions/${id}/BRIEF.md`);
+    expect(brief).toContain('HB-1: SKIPPED by the user');
+    for (const text of [note, brief]) expect(text).not.toContain(SENTINEL);
+  });
+
+  it('ghAuthOk runs `gh auth status`; a failure blocks with the failing line, redacted', async () => {
+    const gh = new FakeGhRunner();
+    const adapters = testAdapters({ gh });
+    const fs = adapters.fs as InMemoryFileSystem;
+    const engine = buildEngine(jiraConfig(['HB']), adapters, { jiraSource: stubSource() });
+    const id = await seedReview(adapters);
+    gh.queueResponse(
+      new GhCommandError(['auth', 'status'], 1, `github.com\n  X Failed to log in with ghp_${'a'.repeat(36)}\n  - The token is invalid.`),
+    );
+
+    await engine.pipeline.runReview(id);
+    expect(gh.calls).toContainEqual(['auth', 'status']);
+    const note = await fs.readFile(`/sessions/${id}/AGENT_NOTE`);
+    expect(note).toBe('GitHub is not usable: Failed to log in with [redacted]');
+    expect(await fs.readFile(`/sessions/${id}/AGENT_STATE`)).toBe('needs-input');
   });
 
   it('linking is disabled iff jira.projectKeys is empty', () => {

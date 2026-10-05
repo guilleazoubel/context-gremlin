@@ -82,15 +82,18 @@ describe('0c — every run method hands its brief the ticket state (via the publ
     expect(await brief(h, dev.id)).toContain('AC1: the block renders.');
   });
 
-  it('review: asks for session.lineage.ticket, and says so when there is none', async () => {
-    const t = spy(NOT_LOADED_AUTH);
+  it('review: asks for session.lineage.ticket (once), and says so when there is none', async () => {
+    const t = spy({ kind: 'loaded', ticket: TICKET });
     const h = createHarness({ tickets: t.deps });
     const review = reviewSession('HB-627');
     await h.store.save(review);
     void h.service.runReview(review.id).catch(() => undefined);
     await flush();
+    // One read: the preflight's state is the one the brief carries.
     expect(t.keys).toEqual(['HB-627']);
-    expect(await brief(h, review.id)).toContain('## Ticket — HB-627: NOT LOADED (auth error)');
+    expect(await brief(h, review.id)).toContain('AC1: the block renders.');
+    // 0c Task 5: a NOT LOADED ticket no longer reaches a review brief — the preflight stops
+    // the run first (pipeline-service.preflight.test.ts).
 
     const none = createHarness({ tickets: spy(NOT_LOADED_AUTH, 'disabled').deps });
     const bare = reviewSession(null);
@@ -101,7 +104,7 @@ describe('0c — every run method hands its brief the ticket state (via the publ
   });
 
   it('rereview: asks for session.lineage.ticket (and only that key) and renders the block', async () => {
-    const t = spy({ kind: 'not_loaded', key: 'HB-42', reason: 'unavailable' });
+    const t = spy({ kind: 'loaded', ticket: { ...TICKET, key: 'HB-42' } });
     const h = createHarness({ tickets: t.deps });
     const review = reviewSession('HB-42');
     await h.store.save(review);
@@ -118,7 +121,8 @@ describe('0c — every run method hands its brief the ticket state (via the publ
     expect(t.keys).toEqual(['HB-42']);
     const text = await brief(h, review.id);
     expect(text).toContain('# RE-REVIEW — PR #12');
-    expect(text).toContain('## Ticket — HB-42: NOT LOADED (unavailable)');
+    expect(text).toContain('## Ticket HB-42');
+    expect(text).toContain('AC1: the block renders.');
   });
 
   it('respond: asks for the session ticket, inside the untrusted-pr-data section', async () => {
