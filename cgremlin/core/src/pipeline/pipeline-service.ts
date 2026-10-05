@@ -32,6 +32,7 @@ import {
   renderRespondBrief,
   type RespondBriefContext,
   type TicketBriefContext,
+  type TicketBriefState,
   renderPlanBrief,
   renderRereviewBrief,
   renderRereviewPrompt,
@@ -77,6 +78,16 @@ export interface PipelineConfig {
   humanTurnTtlMs: number;
 }
 
+/**
+ * 0c — the engine's ticket port. `briefState` NEVER throws: every failure comes back as a
+ * `not_loaded` state carrying its reason (and never a credential). `linking` is
+ * `'disabled'` iff `jira.projectKeys` is empty.
+ */
+export interface PipelineTickets {
+  briefState(key: string): Promise<TicketBriefState>;
+  linking: 'configured' | 'disabled';
+}
+
 export interface PipelineServiceDeps {
   store: SessionStore;
   workspace: WorkspaceManager;
@@ -97,7 +108,7 @@ export interface PipelineServiceDeps {
    * the `## Ticket` section renders '' and the briefs read exactly as they
    * did before Phase 9.
    */
-  tickets?: { forBrief(key: string): Promise<TicketBriefContext | null> };
+  tickets?: PipelineTickets;
   /**
    * R50/R52 — the review threads, review summaries, CI and diff summary the
    * respond brief carries, gathered by the host (which owns the thread cache
@@ -184,13 +195,26 @@ export class PipelineService {
   }
 
   /**
-   * R18 — the gated ticket context. A fetch failure is not a run failure:
-   * the brief simply renders without the `## Ticket` block, exactly as it
-   * does with no Jira configured.
+   * 0c — what the brief may say about the ticket, with the failure REASON intact. A fetch
+   * failure is still not a run failure (`briefState` never throws), but nothing here
+   * swallows it into a silent null any more. No `tickets` dep at all means no Jira wiring:
+   * a named ticket is then `not_configured`, and no ticket is `none` with linking disabled.
+   */
+  private async ticketState(key: string | null): Promise<TicketBriefState> {
+    const tickets = this.deps.tickets;
+    if (key === null) return { kind: 'none', linking: tickets?.linking ?? 'disabled' };
+    if (tickets === undefined) return { kind: 'not_loaded', key, reason: 'not_configured' };
+    return tickets.briefState(key);
+  }
+
+  /**
+   * The pre-0c `ticketContext` shape the renderers still take — loaded is the ticket,
+   * every other state is null, so briefs read exactly as before until Task 3 hands
+   * them the state itself.
    */
   private async ticketContext(key: string | null): Promise<TicketBriefContext | null> {
-    if (key === null || this.deps.tickets === undefined) return null;
-    return this.deps.tickets.forBrief(key).catch(() => null);
+    const state = await this.ticketState(key);
+    return state.kind === 'loaded' ? state.ticket : null;
   }
 
   private sessionDir(id: string): string {

@@ -63,6 +63,8 @@ export interface HarnessOptions {
   respondContext?: PipelineServiceDeps['respondContext'];
   /** PipelineServiceDeps.log — omitted means the service's own `console.warn` default. */
   log?: (line: string) => void;
+  /** 0c — PipelineServiceDeps.tickets; omitted means no Jira wiring at all. */
+  tickets?: PipelineServiceDeps['tickets'];
 }
 
 export function createHarness(options: HarnessOptions = {}): PipelineHarness {
@@ -106,6 +108,7 @@ export function createHarness(options: HarnessOptions = {}): PipelineHarness {
     environment,
     ...(options.respondContext !== undefined ? { respondContext: options.respondContext } : {}),
     ...(options.log !== undefined ? { log: options.log } : {}),
+    ...(options.tickets !== undefined ? { tickets: options.tickets } : {}),
   });
 
   async function finishRun(files: Record<string, string>, exit: AgentExitResult): Promise<void> {

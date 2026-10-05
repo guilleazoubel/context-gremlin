@@ -17,6 +17,7 @@ import { FakeLocalAppRunner } from '../support/fake-local-app-runner';
 import { EnvironmentService } from '../../src/env/environment-service';
 import { AttentionService } from '../../src/attention/attention-service';
 import { PR_STATE_ENTRY_DEFAULTS } from '../support/pr-state-entry';
+import { JiraAuthError, JiraUnavailableError, type JiraIssueDetail, type JiraSource } from '../../src/jira/jira-source';
 
 function testConfig(): CoreConfig {
   return resolveCoreConfig(
@@ -378,6 +379,7 @@ describe('the QA brief context (qaContext)', () => {
             comments: [{ author: 'bob', at: '2026-09-13T00:00:00.000Z', bodyText: 'ready for QA' }],
           },
           ticketError: null,
+          ticketErrorKind: null,
         }),
       },
     });
@@ -397,5 +399,92 @@ describe('the QA brief context (qaContext)', () => {
     // Never a path to a file that is not there.
     expect(brief).not.toContain('PLAN.md');
     expect(brief).not.toContain('COMMENTS.md');
+  });
+});
+
+describe('0c — the engine\'s ticket brief state (tickets.briefState / tickets.linking)', () => {
+  const SENTINEL = 'SENTINEL-TOKEN-123';
+
+  function jiraConfig(projectKeys: string[], apiToken: string | null = SENTINEL): CoreConfig {
+    return resolveCoreConfig(
+      {
+        repos: ['acme/app'],
+        me: 'me-user',
+        watchAuthors: ['bob'],
+        sessionsDir: '/sessions',
+        worktreesDir: '/worktrees',
+        mirrorsDir: '/mirrors',
+        jira: {
+          siteUrl: 'https://jira.invalid',
+          email: 'me@example.invalid',
+          ...(apiToken === null ? {} : { apiToken }),
+          projectKeys,
+        },
+      },
+      '/home/e2e',
+    );
+  }
+
+  function detail(key: string): JiraIssueDetail {
+    return {
+      key, summary: 'Web content', status: 'UAT', statusCategory: 'indeterminate',
+      assignee: null, assigneeName: null, updated: '2026-09-14T00:00:00.000Z',
+      url: `https://jira.invalid/browse/${key}`, descriptionText: 'AC1', comments: [],
+    };
+  }
+
+  function stubSource(error?: unknown): JiraSource {
+    return {
+      search: async () => [],
+      whoami: async () => ({ accountId: 'x', displayName: 'x' }),
+      issue: async (key) => {
+        if (error !== undefined) throw error;
+        return detail(key);
+      },
+    };
+  }
+
+  it('maps each failure to its not_loaded reason and never rejects; success is loaded', async () => {
+    const cases: Array<[unknown, string]> = [
+      [new JiraAuthError(`401 for ${SENTINEL}`, 401), 'auth'],
+      [new JiraUnavailableError(`timeout ${SENTINEL}`), 'unavailable'],
+      [new Error(`weird ${SENTINEL}`), 'unavailable'],
+      ['a thrown string', 'unavailable'],
+    ];
+    for (const [error, reason] of cases) {
+      const engine = buildEngine(jiraConfig(['HB']), testAdapters(), { jiraSource: stubSource(error) });
+      const state = await engine.tickets.briefState('HB-1');
+      expect(state).toEqual({ kind: 'not_loaded', key: 'HB-1', reason });
+      expect(JSON.stringify(state)).not.toContain(SENTINEL);
+    }
+    const engine = buildEngine(jiraConfig(['HB']), testAdapters(), { jiraSource: stubSource() });
+    const loaded = await engine.tickets.briefState('HB-1');
+    expect(loaded).toEqual({
+      kind: 'loaded',
+      ticket: { key: 'HB-1', summary: 'Web content', status: 'UAT', url: 'https://jira.invalid/browse/HB-1', descriptionText: 'AC1', comments: [] },
+    });
+    expect(JSON.stringify(loaded)).not.toContain(SENTINEL);
+  });
+
+  it('a ticket reader that itself rejects is unavailable, not a rejection', async () => {
+    const engine = buildEngine(jiraConfig(['HB']), testAdapters(), {
+      ticketDetail: { detail: async () => { throw new Error(SENTINEL); } },
+    });
+    const state = await engine.tickets.briefState('HB-1');
+    expect(state).toEqual({ kind: 'not_loaded', key: 'HB-1', reason: 'unavailable' });
+    expect(JSON.stringify(state)).not.toContain(SENTINEL);
+  });
+
+  it('no Jira source (no jira block, or no apiToken) is not_configured', async () => {
+    for (const config of [testConfig(), jiraConfig(['HB'], null)]) {
+      const engine = buildEngine(config, testAdapters());
+      expect(await engine.tickets.briefState('HB-1')).toEqual({ kind: 'not_loaded', key: 'HB-1', reason: 'not_configured' });
+    }
+  });
+
+  it('linking is disabled iff jira.projectKeys is empty', () => {
+    expect(buildEngine(jiraConfig([]), testAdapters(), { jiraSource: stubSource() }).tickets.linking).toBe('disabled');
+    expect(buildEngine(testConfig(), testAdapters()).tickets.linking).toBe('disabled');
+    expect(buildEngine(jiraConfig(['HB']), testAdapters(), { jiraSource: stubSource() }).tickets.linking).toBe('configured');
   });
 });

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { SessionFileSystem } from '../fs/session-file-system';
-import type { JiraIssueDetail, JiraIssueSummary, JiraSource } from './jira-source';
+import { JiraAuthError, type JiraIssueDetail, type JiraIssueSummary, type JiraSource } from './jira-source';
 
 /** R35 — four kinds, not two booleans. `kind !== 'notConfigured'` is the same answer `configured` used to give. */
 export type TicketSourceKind = 'notConfigured' | 'auth' | 'unavailable' | 'ok';
@@ -110,6 +110,12 @@ interface DetailEntry {
 export interface TicketDetailResult {
   ticket: JiraIssueDetail | null;
   ticketError: string | null;
+  /**
+   * 0c — WHY `ticket` is null, so a brief can say so instead of going silent: `auth` for a
+   * JiraAuthError, `unavailable` for a JiraUnavailableError or anything else thrown,
+   * `not_configured` when there is no source at all. Null whenever `ticket` is set.
+   */
+  ticketErrorKind: 'auth' | 'unavailable' | 'not_configured' | null;
 }
 
 export class TicketDetailCache {
@@ -128,7 +134,7 @@ export class TicketDetailCache {
   fetches = 0;
 
   async detail(key: string): Promise<TicketDetailResult> {
-    if (this.deps.source === null) return { ticket: null, ticketError: null };
+    if (this.deps.source === null) return { ticket: null, ticketError: null, ticketErrorKind: 'not_configured' };
     const nowMs = (this.deps.now ?? (() => new Date()))().getTime();
     const ttl = this.deps.ttlMs ?? TICKET_DETAIL_TTL_MS;
     const snapshot = await this.deps.snapshot().catch(() => null);
@@ -136,17 +142,22 @@ export class TicketDetailCache {
 
     const cached = this.entries.get(key);
     if (cached !== undefined && nowMs - cached.at < ttl && cached.updatedAt === updatedAt) {
-      return { ticket: cached.detail, ticketError: null };
+      return { ticket: cached.detail, ticketError: null, ticketErrorKind: null };
     }
     try {
       this.fetches += 1;
       const detail = await this.deps.source.issue(key);
       this.entries.set(key, { at: nowMs, updatedAt, detail });
-      return { ticket: detail, ticketError: null };
+      return { ticket: detail, ticketError: null, ticketErrorKind: null };
     } catch (err) {
       // The route never 5xxs because Jira is down: the tab renders the item
       // with `ticket: null` and says why.
-      return { ticket: null, ticketError: err instanceof Error ? err.message : String(err) };
+      return {
+        ticket: null,
+        ticketError: err instanceof Error ? err.message : String(err),
+        // JiraUnavailableError and any unexpected throw are both "Jira did not answer usefully".
+        ticketErrorKind: err instanceof JiraAuthError ? 'auth' : 'unavailable',
+      };
     }
   }
 }

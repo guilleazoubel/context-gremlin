@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { TicketDetailCache, type JiraScanReport } from '../../src/jira/jira-store';
-import type { JiraIssueDetail, JiraSource } from '../../src/jira/jira-source';
+import { JiraAuthError, JiraUnavailableError, type JiraIssueDetail, type JiraSource } from '../../src/jira/jira-source';
 
 function detailOf(key: string): JiraIssueDetail {
   return {
@@ -97,7 +97,7 @@ describe('TicketDetailCache (R36)', () => {
 
   it('with no source at all nothing is fetched and nothing errors', async () => {
     const cache = new TicketDetailCache({ source: null, snapshot: async () => snapshot('x') });
-    expect(await cache.detail('HB-627')).toEqual({ ticket: null, ticketError: null });
+    expect(await cache.detail('HB-627')).toEqual({ ticket: null, ticketError: null, ticketErrorKind: 'not_configured' });
   });
 
   it('a fetch failure fills ticketError and leaves ticket null — the route never 5xxs because Jira is down', async () => {
@@ -108,6 +108,16 @@ describe('TicketDetailCache (R36)', () => {
     const result = await cache.detail('HB-627');
     expect(result.ticket).toBeNull();
     expect(result.ticketError).toContain('500');
+  });
+
+  it('0c — ticketErrorKind carries the failure reason: auth, unavailable, anything else, success', async () => {
+    const kindFor = async (error?: unknown) =>
+      (await new TicketDetailCache({ source: fakeSource({ error }), snapshot: async () => snapshot('x') }).detail('HB-627'))
+        .ticketErrorKind;
+    expect(await kindFor(new JiraAuthError('x', 401))).toBe('auth');
+    expect(await kindFor(new JiraUnavailableError('x'))).toBe('unavailable');
+    expect(await kindFor(new Error('boom'))).toBe('unavailable');
+    expect(await kindFor(undefined)).toBeNull();
   });
 
   it('an item.changed triggers ZERO detail fetches — nothing here subscribes to an event', async () => {

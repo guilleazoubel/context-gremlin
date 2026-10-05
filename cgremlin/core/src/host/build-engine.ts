@@ -9,7 +9,7 @@ import { WorkspaceManager } from '../workspace/workspace-manager';
 import { EngineEvents } from '../engine/events';
 import { KeyedLock } from '../api/keyed-lock';
 import { StageRunner } from '../pipeline/stage-runner';
-import { PipelineService, isClaimed } from '../pipeline/pipeline-service';
+import { PipelineService, isClaimed, type PipelineTickets } from '../pipeline/pipeline-service';
 import { ReviewSessionFactory } from '../pipeline/review-session-factory';
 import { ReconciliationTick } from '../discovery/reconciliation';
 import { DiscoveryScheduler, type Clock, type Tickable } from '../discovery/scheduler';
@@ -68,6 +68,8 @@ export interface Engine {
   scheduler: DiscoveryScheduler<ScanReport>;
   scanner: InventoryScanner;
   pipeline: PipelineService;
+  /** 0c — the same ticket port the pipeline's briefs read; exposed so the wiring is testable end to end. */
+  tickets: PipelineTickets;
   events: EngineEvents;
   store: SessionStore;
   lock: KeyedLock;
@@ -201,6 +203,35 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
         now: adapters.now,
       })
     : null;
+  /**
+   * 0c — the ticket a brief carries, with the reason it is missing when it is. Never throws:
+   * the detail reader already turns a Jira failure into `ticketErrorKind`, and a reader that
+   * rejects anyway (a seam, a bug) is `unavailable`. Only the reason crosses — never Jira's
+   * message, which is the one place a credential could ever surface.
+   */
+  const tickets: PipelineTickets = {
+    briefState: async (key) => {
+      try {
+        const { ticket, ticketErrorKind } = await ticketDetail.detail(key);
+        if (ticket === null) return { kind: 'not_loaded', key, reason: ticketErrorKind ?? 'unavailable' };
+        return {
+          kind: 'loaded',
+          ticket: {
+            key: ticket.key,
+            summary: ticket.summary,
+            status: ticket.status,
+            url: ticket.url,
+            descriptionText: ticket.descriptionText,
+            comments: ticket.comments,
+          },
+        };
+      } catch {
+        return { kind: 'not_loaded', key, reason: 'unavailable' };
+      }
+    },
+    // R46: an empty projectKeys means ticket linking is disabled.
+    linking: (config.jira?.projectKeys ?? []).length === 0 ? 'disabled' : 'configured',
+  };
   const pipeline = new PipelineService({
     store,
     workspace,
@@ -312,20 +343,7 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
         priorArtifacts: await priorArtifactsFor(adapters.fs, store, sessionsDir, session.lineage.ticket, session.id),
       };
     },
-    tickets: {
-      forBrief: async (key) => {
-        const { ticket } = await ticketDetail.detail(key);
-        if (ticket === null) return null;
-        return {
-          key: ticket.key,
-          summary: ticket.summary,
-          status: ticket.status,
-          url: ticket.url,
-          descriptionText: ticket.descriptionText,
-          comments: ticket.comments,
-        };
-      },
-    },
+    tickets,
   });
   const respondFactory = new RespondSessionFactory({
     gh: adapters.gh,
@@ -635,5 +653,5 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     return doneCategoryWarnings(config.jira?.qaStatuses ?? [], report.issues);
   };
 
-  return { server, scheduler, scanner, pipeline, events, store, lock, config, environment, attention, workItems, eventRing, engineInfo, shutdown, qaDoneStatusWarnings };
+  return { server, scheduler, scanner, pipeline, tickets, events, store, lock, config, environment, attention, workItems, eventRing, engineInfo, shutdown, qaDoneStatusWarnings };
 }
