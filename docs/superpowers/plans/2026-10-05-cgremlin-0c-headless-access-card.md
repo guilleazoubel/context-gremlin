@@ -51,7 +51,7 @@ so they can do a good job."* Today that is not guaranteed, and a failure is sile
 - **A** — engine is the only Jira source; no agent-side MCP fallback.
 - **B** — ticket text capped + fenced as untrusted data (0b treatment), as a Done-when item.
 - **C** — D1/D2 refined (auto re-review → `needs_input` without a run; planning chat warns); preflight is one shared function reused by R94.
-- **D** — branch `step/0c`; start after step 1 is released (one rebase at a time).
+- **D** — branch `step/0c`; runs in parallel with step 1; whichever releases second rebases first.
 
 ## Review Focus for this step (most likely first)
 1. Linked ticket + Jira down → the agent must never silently proceed as if there were no ticket.
@@ -61,7 +61,7 @@ so they can do a good job."* Today that is not guaranteed, and a failure is sile
 5. Preflight must not leak the token (engine-only, never in brief, logs, or errors) and must not read `core.json` in a transcript.
 
 ## Start prompt
-`Run step 0c of the cgremlin program. Read docs/superpowers/plans/2026-10-05-cgremlin-0c-headless-access-card.md (this card), docs/superpowers/plans/2026-10-05-cgremlin-program.md (Global Constraints, Review Focus) and the spec sections it cites. Decisions D1/D2 are resolved in the card; confirm them with me in one line. Write the detailed plan with superpowers:writing-plans, show it to me, then execute with superpowers:subagent-driven-development in .claude/worktrees/0c on branch step/0c (branch from mission-control-pr-orchestrator **after step 1 is released**, amendment D), get a fresh-context review, release per RELEASES.md, and update the tracker.`
+`Run step 0c of the cgremlin program. Read docs/superpowers/plans/2026-10-05-cgremlin-0c-headless-access-card.md (this card), docs/superpowers/plans/2026-10-05-cgremlin-program.md (Global Constraints, Review Focus) and the spec sections it cites. Decisions D1/D2 are resolved in the card; confirm them with me in one line. Write the detailed plan with superpowers:writing-plans, show it to me, then execute with superpowers:subagent-driven-development in .claude/worktrees/0c on branch step/0c (branch from the current mission-control-pr-orchestrator; if step 1 releases first, rebase onto it and re-run the suites before releasing — amendment D), get a fresh-context review, release per RELEASES.md, and update the tracker.`
 
 ## Instruction for the verifying agent
 Check this card against the program plan and spec: (1) every cited file:line still exists on `mission-control-pr-orchestrator`; (2) the card contradicts no Global Constraint; (3) the Done-when items cover Review Focus #3 and #5; (4) the sequencing against P4/1b/6/10 is sound and nothing here duplicates a later step; (5) list anything in the card the program already schedules elsewhere. Report discrepancies; do not edit files or read `~/.cgremlin/config` / `core.json`.
