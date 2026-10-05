@@ -9,6 +9,21 @@ import type { TicketBriefState } from './prompts';
  *
  * Reason strings start with `Jira ` or `GitHub ` — the editor keys on those prefixes.
  */
+/**
+ * Task 6 fix — the stages the preflight gates. The one a block refused is written to
+ * `PREFLIGHT_STAGE` beside AGENT_NOTE, so the editor's "Run anyway" re-issues exactly that stage
+ * instead of guessing it from the phase (a failed re-review guessed as `review` would overwrite
+ * REVIEW.md).
+ */
+export const PREFLIGHT_STAGES = ['review', 'rereview', 'respond', 'verify'] as const;
+export type PreflightStage = (typeof PREFLIGHT_STAGES)[number];
+
+/** A read-back of `PREFLIGHT_STAGE`: a known stage, or null for anything else. */
+export function parsePreflightStage(raw: string): PreflightStage | null {
+  const value = raw.trim();
+  return (PREFLIGHT_STAGES as readonly string[]).includes(value) ? (value as PreflightStage) : null;
+}
+
 export type PreflightResult =
   | { ok: true }
   | { ok: false; kind: 'jira_not_loaded' | 'gh_unavailable'; reason: string };

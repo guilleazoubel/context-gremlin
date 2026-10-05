@@ -62,7 +62,7 @@ import { TERMINAL_PHASES_BY_MODE } from '../workspace/workspace-in-use';
 import { refreshWorkspaceGuardrails } from '../workspace/workspace-manager';
 import { permissionProfileFor } from '../workspace/permission-guard';
 import { repoSlugFromUrl } from '../gh/repo-slug';
-import { preflightAccess } from './preflight';
+import { preflightAccess, type PreflightStage } from './preflight';
 
 export interface PipelineConfig {
   sessionsDir: string; // absolute
@@ -235,6 +235,7 @@ export class PipelineService {
     id: string,
     ticketKey: string | null,
     opts: RunStageOptions,
+    stage: PreflightStage,
   ): Promise<{ blocked: Session } | { blocked: null; ticketState: TicketBriefState }> {
     const skipJiraCheck = opts.skipJiraCheck === true;
     let fetched: TicketBriefState | undefined;
@@ -246,6 +247,13 @@ export class PipelineService {
       { ticketKey, skipJiraCheck },
     );
     if (pf.ok) {
+      // A run is going ahead: an earlier block's stage is history, and must never be read back
+      // beside some later needs-input the agent writes itself (that would offer "Run anyway"
+      // for a block that no longer exists).
+      const stagePath = `${this.sessionDir(id)}/PREFLIGHT_STAGE`;
+      if (await this.deps.fs.exists(stagePath).catch(() => false)) {
+        await this.deps.fs.remove(stagePath).catch(() => undefined);
+      }
       const ticketState: TicketBriefState =
         ticketKey !== null && skipJiraCheck ? { kind: 'skipped', key: ticketKey } : (fetched ?? (await this.ticketState(ticketKey)));
       return { blocked: null, ticketState };
@@ -256,11 +264,15 @@ export class PipelineService {
       const dir = this.sessionDir(id);
       const statePath = `${dir}/AGENT_STATE`;
       const notePath = `${dir}/AGENT_NOTE`;
+      const stagePath = `${dir}/PREFLIGHT_STAGE`;
       const same =
         (await this.deps.fs.readFile(statePath).catch(() => null)) === 'needs-input' &&
-        (await this.deps.fs.readFile(notePath).catch(() => null)) === pf.reason;
+        (await this.deps.fs.readFile(notePath).catch(() => null)) === pf.reason &&
+        (await this.deps.fs.readFile(stagePath).catch(() => null)) === stage;
       if (!same) {
         await this.deps.fs.mkdir(dir, { recursive: true });
+        // The stage first and the state last: a reader that sees needs-input sees both lines.
+        await this.deps.fs.writeFile(stagePath, stage);
         await this.deps.fs.writeFile(notePath, pf.reason);
         await this.deps.fs.writeFile(statePath, 'needs-input');
       }
@@ -809,7 +821,7 @@ export class PipelineService {
       );
     }
     // 0c — before any environment, brief or agent.
-    const pf = await this.preflight(id, session.lineage.ticket, opts);
+    const pf = await this.preflight(id, session.lineage.ticket, opts, 'respond');
     if (pf.blocked !== null) return pf.blocked;
     const sessionDir = this.sessionDir(id);
     const prep = await this.prepareEnvironment(id, 'respond', session);
@@ -943,7 +955,7 @@ export class PipelineService {
       throw new UnsupportedStageError(`Session '${id}' cannot run verify (stage=${session.stageStatus})`);
     }
     // 0c — before any environment, brief, archive or agent.
-    const pf = await this.preflight(id, session.lineage.ticket, opts);
+    const pf = await this.preflight(id, session.lineage.ticket, opts, 'verify');
     if (pf.blocked !== null) return pf.blocked;
 
     const sessionDir = this.sessionDir(id);
@@ -1023,7 +1035,7 @@ export class PipelineService {
       throw new UnsupportedStageError(`Session '${id}' cannot run review (mode=${session.mode}, stage=${session.stageStatus})`);
     }
     // 0c — before any environment, brief or agent.
-    const pf = await this.preflight(id, session.lineage.ticket, opts);
+    const pf = await this.preflight(id, session.lineage.ticket, opts, 'review');
     if (pf.blocked !== null) return pf.blocked;
 
     const sessionDir = this.sessionDir(id);
@@ -1130,7 +1142,7 @@ export class PipelineService {
     }
     // 0c — before the git work, the archive, the brief or the agent: the automatic re-review
     // (ReconciliationTick) enters here too, and a blocked one must leave the worktree alone.
-    const pf = await this.preflight(id, session.lineage.ticket, opts);
+    const pf = await this.preflight(id, session.lineage.ticket, opts, 'rereview');
     if (pf.blocked !== null) return pf.blocked;
 
     const oldCommit = (await this.deps.git.run(['rev-parse', 'HEAD'], { cwd: worktreePath })).stdout.trim();

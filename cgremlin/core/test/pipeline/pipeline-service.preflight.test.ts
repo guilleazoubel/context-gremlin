@@ -98,6 +98,9 @@ describe.each(CASES)('0c preflight — $name', (c) => {
     const note = await h.fs.readFile(`${dir}/AGENT_NOTE`);
     expect(note).toContain('Jira HB-');
     expect(note).toContain('auth error');
+    // Task 6 fix — WHICH stage was refused, so "Run anyway" re-issues exactly that one.
+    const stage = { runReview: 'review', runRereview: 'rereview', runRespond: 'respond', runVerify: 'verify' } as const;
+    expect(await h.fs.readFile(`${dir}/PREFLIGHT_STAGE`)).toBe(stage[c.name]);
     // Nothing moved: the phase is what it was, and no brief was written.
     expect((await h.store.load(session.id)).stageStatus).toBe(session.stageStatus);
     expect(await h.fs.exists(`${dir}/BRIEF.md`)).toBe(false);
@@ -112,6 +115,17 @@ describe.each(CASES)('0c preflight — $name', (c) => {
     expect(brief).toContain('HB-627: SKIPPED by the user');
     expect(brief).not.toContain('HB-627: NOT LOADED');
     expect(await h.fs.readFile(`${dir}/AGENT_STATE`)).toBe('working');
+  });
+
+  it('a run that passes the preflight clears an earlier PREFLIGHT_STAGE (never a stale stage)', async () => {
+    const { h, session, run, dir } = await setup(c, 'HB-627', { tickets: tickets(NOT_LOADED_AUTH) });
+    await h.service[c.name](session.id);
+    expect(await h.fs.exists(`${dir}/PREFLIGHT_STAGE`)).toBe(true);
+    c.prime?.(h);
+    void h.service[c.name](session.id, { skipJiraCheck: true }).catch(() => undefined);
+    await flush();
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(await h.fs.exists(`${dir}/PREFLIGHT_STAGE`)).toBe(false);
   });
 
   it('(iii) gh failing blocks even with skipJiraCheck', async () => {
@@ -234,6 +248,18 @@ describe('0c preflight — details', () => {
     const writes = vi.spyOn(h.fs, 'writeFile');
     await h.service.runReview(session.id);
     expect(writes).not.toHaveBeenCalled();
+  });
+
+  it('the same note for a DIFFERENT stage is rewritten: PREFLIGHT_STAGE is part of "same"', async () => {
+    const h = createHarness({ tickets: tickets(NOT_LOADED_AUTH) });
+    const session = reviewSession('HB-627', 'ready');
+    await h.store.save(session);
+    queueRereviewGit(h);
+    await h.service.runRereview(session.id);
+    const dir = `${SESSIONS_DIR}/${session.id}`;
+    expect(await h.fs.readFile(`${dir}/PREFLIGHT_STAGE`)).toBe('rereview');
+    await h.service.runReview(session.id);
+    expect(await h.fs.readFile(`${dir}/PREFLIGHT_STAGE`)).toBe('review');
   });
 
   it('the review sentinel: a ticket the stub fails for never leaks anything but the reason', async () => {

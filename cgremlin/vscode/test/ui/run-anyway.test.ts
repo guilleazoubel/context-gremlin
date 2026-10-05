@@ -24,11 +24,16 @@ const GITHUB = 'GitHub is not usable: gh api user failed (exit 1)';
 const ITEM = 'pr:acme/web#102';
 const SESSION = 'pr-acme-web-102';
 
-function itemsWith(note: string | null): ItemsResponse {
+/** The engine's own record of the refused stage (`PREFLIGHT_STAGE`), or none. */
+type Stage = 'review' | 'rereview' | 'respond' | 'verify' | null;
+
+function itemsWith(note: string | null, blockedStage: Stage = 'rereview', phase = 'ready'): ItemsResponse {
   const body = JSON.parse(JSON.stringify(itemsFixture)) as ItemsResponse;
   const item = body.items.find((candidate) => candidate.id === ITEM) as WorkItem;
   item.attention = { ...item.attention, reasons: ['needs_input', 'review_ready'] as never };
-  item.agents = [{ ...item.agents[0], phase: 'ready', needsYou: true, agentNote: note }];
+  item.agents = [
+    { ...item.agents[0], phase, needsYou: true, agentNote: note, blockedStage: note === null ? null : blockedStage },
+  ];
   return body;
 }
 
@@ -36,8 +41,10 @@ function itemsWith(note: string | null): ItemsResponse {
 function blockedEngine(
   note: string | null,
   extra: (request: StubRequest) => StubResponse | undefined = () => undefined,
+  stage: Stage = 'rereview',
+  phase = 'ready',
 ): (request: StubRequest) => StubResponse | undefined {
-  const items = itemsWith(note);
+  const items = itemsWith(note, stage, phase);
   const item = items.items.find((candidate) => candidate.id === ITEM);
   return (request) => {
     if (request.method === 'GET' && request.path === '/items') return { status: 200, body: items };
@@ -51,8 +58,8 @@ function blockedEngine(
   };
 }
 
-function tabStateOf(note: string | null): ItemTabState {
-  const item = itemsWith(note).items.find((candidate) => candidate.id === ITEM) as WorkItem;
+function tabStateOf(note: string | null, stage: Stage = 'rereview'): ItemTabState {
+  const item = itemsWith(note, stage).items.find((candidate) => candidate.id === ITEM) as WorkItem;
   return {
     itemId: item.id,
     title: item.title,
@@ -67,7 +74,7 @@ function tabStateOf(note: string | null): ItemTabState {
     ticketError: null,
     buttons: [],
     parts: [],
-    blocked: note === null ? null : { note, runAnyway: note.startsWith('Jira ') },
+    blocked: note === null ? null : { note, runAnyway: note.startsWith('Jira ') && stage !== null },
   } as unknown as ItemTabState;
 }
 
@@ -76,6 +83,10 @@ describe('buttonsFor — Run anyway', () => {
     const button = buttonsFor(tabStateOf(JIRA)).find((b) => b.id === 'cgremlin.runAnyway');
     expect(button).toMatchObject({ label: 'Run anyway', enabled: true, hint: RUN_ANYWAY_HINT });
     expect(RUN_ANYWAY_HINT).toBe('Runs without the ticket; the brief will say so');
+  });
+
+  it('a `Jira …` note with no engine stage offers no Run anyway', () => {
+    expect(buttonsFor(tabStateOf(JIRA, null)).map((b) => b.id)).not.toContain('cgremlin.runAnyway');
   });
 
   it('a `GitHub …` block offers no Run anyway', () => {
@@ -122,6 +133,33 @@ describe('the Item tab, end to end', () => {
     await h.settle();
 
     expect(runPosts(h).map((r) => r.body)).toEqual([{ stage: 'rereview', skipJiraCheck: true }]);
+  });
+
+  it('a FAILED re-review blocked on retry re-issues rereview, never review (no REVIEW.md overwrite)', async () => {
+    const h = await panelHarness({
+      handler: blockedEngine(
+        JIRA,
+        (request) =>
+          request.method === 'POST' && request.path === `/sessions/${SESSION}/run`
+            ? { status: 202, body: { session: { id: SESSION } } }
+            : undefined,
+        'rereview',
+        'failed',
+      ),
+    });
+    await h.host.invoke('cgremlin.runAnyway', ITEM);
+    expect(runPosts(h).map((r) => r.body)).toEqual([{ stage: 'rereview', skipJiraCheck: true }]);
+  });
+
+  it('a Jira note with no engine stage: the reason shows, no button, and the command sends nothing', async () => {
+    const h = await panelHarness({ handler: blockedEngine(JIRA, undefined, null) });
+    await h.host.invoke('cgremlin.openItem', ITEM);
+    h.host.panels[0].webview.emit({ type: 'ready' });
+    const state = tabRender(h);
+    expect(state.blocked?.note).toBe(JIRA);
+    expect(state.buttons.map((b) => b.id)).not.toContain('cgremlin.runAnyway');
+    await h.host.invoke('cgremlin.runAnyway', ITEM);
+    expect(runPosts(h)).toEqual([]);
   });
 
   it('a GitHub block shows the reason and has no Run anyway; the command refuses to send', async () => {

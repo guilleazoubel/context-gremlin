@@ -74,43 +74,44 @@ describe('the needs-you strip says the preflight reason', () => {
   });
 });
 
-describe('preflightBlockOf — which stage "Run anyway" re-issues, and only for Jira', () => {
-  it('a review at ready/changes_requested was a re-review', () => {
-    expect(preflightBlockOf(blockedReview(JIRA))).toEqual({
+describe('preflightBlockOf — "Run anyway" re-issues the ENGINE\'s stage, and only for Jira', () => {
+  it('the stage is the engine\'s `blockedStage`, never a guess from the phase', () => {
+    expect(preflightBlockOf(blockedReview(JIRA, { blockedStage: 'rereview' }))).toEqual({
       sessionId: 'pr-acme-web-102',
       note: JIRA,
       stage: 'rereview',
       runAnyway: true,
     });
-    expect(preflightBlockOf(blockedReview(JIRA, { phase: 'changes_requested' }))?.stage).toBe(
-      'rereview',
-    );
+    // The wrong-stage scenario: a re-review that FAILED, retried, then blocked. Its phase is
+    // `failed`, which a guess would have read as `review` — overwriting REVIEW.md.
+    expect(
+      preflightBlockOf(blockedReview(JIRA, { phase: 'failed', blockedStage: 'rereview' }))?.stage,
+    ).toBe('rereview');
+    expect(
+      preflightBlockOf(blockedReview(JIRA, { mode: 'qa', phase: 'ready', blockedStage: 'verify' }))
+        ?.stage,
+    ).toBe('verify');
   });
 
-  it('a review at queued/failed was a review', () => {
-    expect(preflightBlockOf(blockedReview(JIRA, { phase: 'queued' }))?.stage).toBe('review');
-    expect(preflightBlockOf(blockedReview(JIRA, { phase: 'failed' }))?.stage).toBe('review');
+  it('no blockedStage (an older engine, or the agent\'s own `Jira …` line): reason, no Run anyway', () => {
+    for (const phase of ['ready', 'queued', 'failed']) {
+      const block = preflightBlockOf(blockedReview(JIRA, { phase }));
+      expect(block?.note).toBe(JIRA);
+      expect(block?.stage).toBeNull();
+      expect(block?.runAnyway).toBe(false);
+    }
   });
 
-  it('respond re-runs respond and qa re-runs verify', () => {
-    expect(preflightBlockOf(blockedReview(JIRA, { mode: 'respond', phase: 'triaging' }))?.stage).toBe(
-      'respond',
-    );
-    expect(preflightBlockOf(blockedReview(JIRA, { mode: 'qa', phase: 'queued' }))?.stage).toBe(
-      'verify',
-    );
+  it('a stage the preflight never gates is dropped', () => {
+    const block = preflightBlockOf(blockedReview(JIRA, { blockedStage: 'develop' as never }));
+    expect(block?.stage).toBeNull();
+    expect(block?.runAnyway).toBe(false);
   });
 
-  it('a GitHub block is never skippable', () => {
-    const block = preflightBlockOf(blockedReview(GITHUB));
+  it('a GitHub block is never skippable, even with a stage', () => {
+    const block = preflightBlockOf(blockedReview(GITHUB, { blockedStage: 'review' }));
     expect(block?.note).toBe(GITHUB);
     expect(block?.runAnyway).toBe(false);
-  });
-
-  it('a mode the preflight never gates offers no Run anyway', () => {
-    const block = preflightBlockOf(blockedReview(JIRA, { mode: 'investigation', phase: 'findings' }));
-    expect(block?.runAnyway).toBe(false);
-    expect(block?.stage).toBeNull();
   });
 });
 

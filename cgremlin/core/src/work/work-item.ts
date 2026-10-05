@@ -7,6 +7,7 @@ import type { Inventory, InventoryEntry, TeamActivity } from '../inventory/inven
 import type { JiraScanReport } from '../jira/jira-store';
 import type { QaVerdict, SessionMode } from '../schema/session';
 import type { RunOutcome } from '../schema/stage';
+import type { PreflightStage } from '../pipeline/preflight';
 import { sizeTierOf, type SizeTier } from './size-tier';
 import { workItemIdOf, type WorkItemId } from './work-item-id';
 
@@ -163,6 +164,11 @@ export interface WorkItemAgent {
    * `Jira …` / `GitHub …` reason. `null` otherwise. Read-only; additive on the wire.
    */
   agentNote: string | null;
+  /**
+   * Task 6 fix — the stage the preflight refused (`AttentionItem.blockedStage`), so a client's
+   * "Run anyway" re-issues exactly it and never guesses. `null` otherwise. Additive on the wire.
+   */
+  blockedStage: PreflightStage | null;
 }
 
 export interface WorkItem {
@@ -525,6 +531,7 @@ export function groupWorkItems(input: GroupWorkItemsInput): WorkItem[] {
       qaVerdict: item.qaVerdict ?? null,
       runOutcome: item.runOutcome ?? null,
       agentNote: item.agentNote ?? null,
+      blockedStage: item.blockedStage ?? null,
     });
     cand.contributors.push(item);
     cand.sessionTitle ??= item.title;

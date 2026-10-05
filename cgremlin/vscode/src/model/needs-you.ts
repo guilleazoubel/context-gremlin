@@ -57,24 +57,22 @@ export interface PreflightBlock {
   sessionId: string;
   /** The engine's own line, verbatim — it is already written for a person. */
   note: string;
-  /** The stage the blocked run was, which "Run anyway" re-issues; `null` where it cannot tell. */
+  /** The engine's record of the refused stage, which "Run anyway" re-issues; `null` if none. */
   stage: string | null;
-  /** Only a Jira block may be skipped, and only where the stage is known. GitHub never (R4). */
+  /** Only a Jira block may be skipped, and only with the engine's stage. GitHub never (R4). */
   runAnyway: boolean;
 }
 
+/** The stages the engine's preflight gates — the only ones "Run anyway" may re-issue. */
+const PREFLIGHT_STAGES: readonly string[] = ['review', 'rereview', 'respond', 'verify'];
+
 /**
- * Which stage the preflight blocked. The engine runs it before review, rereview, respond and
- * verify only; a review session sitting at a finished phase can only have been asked to re-review
- * (the start route restarts `queued`/`failed` as a review), so the phase decides between the two.
+ * The stage the ENGINE says it refused (`blockedStage`), validated; `null` when it sent none.
+ * Never inferred from the phase: a failed re-review read as `review` would overwrite REVIEW.md.
  */
-function blockedStageOf(agent: WorkItemAgent): string | null {
-  if (agent.mode === 'respond') return 'respond';
-  if (agent.mode === 'qa') return 'verify';
-  if (agent.mode !== 'review') return null;
-  if (agent.phase === 'ready' || agent.phase === 'changes_requested') return 'rereview';
-  if (agent.phase === 'queued' || agent.phase === 'failed') return 'review';
-  return null;
+function engineStageOf(agent: WorkItemAgent): string | null {
+  const stage = agent.blockedStage ?? null;
+  return stage !== null && PREFLIGHT_STAGES.includes(stage) ? stage : null;
 }
 
 /** The note an agent carries IF it is a preflight block; never for a running agent. */
@@ -97,7 +95,7 @@ export function preflightBlockOf(item: WorkItem): PreflightBlock | null {
   for (const agent of [...item.agents].reverse()) {
     const note = preflightNoteOf(agent);
     if (note === null) continue;
-    const stage = blockedStageOf(agent);
+    const stage = engineStageOf(agent);
     return {
       sessionId: agent.sessionId,
       note,

@@ -8,6 +8,7 @@ import type { QaVerdict, Session, SessionMode } from '../schema/session';
 import type { RunOutcome } from '../schema/stage';
 import { repoSlugFromUrl } from '../gh/repo-slug';
 import { isClaimed } from '../pipeline/pipeline-service';
+import { parsePreflightStage, type PreflightStage } from '../pipeline/preflight';
 import { pickPrimaryArtifact } from '../api/artifacts';
 import { parseArtifactName } from '../api/validation';
 import { TERMINAL_PHASES_BY_MODE } from '../workspace/workspace-in-use';
@@ -98,6 +99,12 @@ export interface AttentionItem extends Item {
    * says WHY an item needs input (the preflight's `Jira …` / `GitHub …`).
    */
   agentNote?: string | null;
+  /**
+   * Task 6 fix — the stage the engine's preflight refused (`PREFLIGHT_STAGE`), read under the
+   * same rule as `agentNote` (only while `AGENT_STATE` is `needs-input`) and only when it is one
+   * of the gated stages; null otherwise. "Run anyway" re-issues exactly this stage.
+   */
+  blockedStage?: PreflightStage | null;
 }
 
 /** What an adapter collects: everything but the evaluated attention state. */
@@ -119,6 +126,8 @@ export interface CollectedItem {
   runOutcome?: RunOutcome | null;
   /** See `AttentionItem.agentNote` — carried straight through by `evaluate()`. */
   agentNote?: string | null;
+  /** See `AttentionItem.blockedStage` — carried straight through by `evaluate()`. */
+  blockedStage?: PreflightStage | null;
 }
 
 /** One per ItemSource. Adding Jira/Slack = adding an adapter to the array. */
@@ -254,6 +263,7 @@ export class SessionSourceAdapter implements SourceAdapter {
       // Defect 1: the engine's OWN word for how the last run ended.
       runOutcome: session.lastRun?.outcome ?? null,
       agentNote: agentState === 'needs-input' ? await this.readAgentNote(session.id) : null,
+      blockedStage: agentState === 'needs-input' ? await this.readBlockedStage(session.id) : null,
       links: {
         ...emptyLinks(),
         sessionId: session.id,
@@ -298,6 +308,17 @@ export class SessionSourceAdapter implements SourceAdapter {
     }
     const value = raw.trim().slice(0, AGENT_NOTE_MAX);
     return value === '' ? null : value;
+  }
+
+  /** Task 6 fix — PREFLIGHT_STAGE, validated; null when absent, unreadable or unknown. */
+  private async readBlockedStage(id: string): Promise<PreflightStage | null> {
+    const path = `${this.deps.sessionsDir}/${id}/PREFLIGHT_STAGE`;
+    try {
+      if (!(await this.deps.fs.exists(path))) return null;
+      return parsePreflightStage(await this.deps.fs.readFile(path));
+    } catch {
+      return null;
+    }
   }
 
   private async agentStateMtime(id: string): Promise<string | null> {
@@ -688,6 +709,7 @@ export class AttentionService {
       qaVerdict: collected.qaVerdict ?? null,
       runOutcome: collected.runOutcome ?? null,
       agentNote: collected.agentNote ?? null,
+      blockedStage: collected.blockedStage ?? null,
     };
   }
 }

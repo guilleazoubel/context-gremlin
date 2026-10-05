@@ -189,7 +189,7 @@ describe('AttentionService.list', () => {
     expect(all.items.map((i) => i.ref).sort()).toEqual(['pr:acme/app#7', 'session:loud', 'session:quiet']);
     const item = all.items.find((i) => i.ref === 'session:loud')!;
     expect(Object.keys(item).sort()).toEqual(
-      ['agentNote', 'attention', 'claimed', 'id', 'links', 'mode', 'qaVerdict', 'ref', 'repoOrContext', 'running', 'runOutcome', 'source', 'stageStatus', 'title'].sort(),
+      ['agentNote', 'attention', 'blockedStage', 'claimed', 'id', 'links', 'mode', 'qaVerdict', 'ref', 'repoOrContext', 'running', 'runOutcome', 'source', 'stageStatus', 'title'].sort(),
     );
     expect(item.source).toBe('session');
     expect(item.mode).toBe('investigation');
@@ -400,6 +400,25 @@ describe('AttentionService.list', () => {
     // A later run set AGENT_STATE=working and left the old note behind: it is stale, never sent.
     await fx.h.fs.writeFile(`${SESSIONS_DIR}/a/AGENT_STATE`, 'working');
     expect(await note()).toBeNull();
+  });
+
+  // Task 6 fix — the stage the preflight refused, so "Run anyway" never has to guess it.
+  it('carries PREFLIGHT_STAGE as blockedStage, only a known stage, only while needs-input', async () => {
+    await fx.h.store.save(investigation('a'));
+    await fx.h.fs.writeFile(`${SESSIONS_DIR}/a/AGENT_STATE`, 'needs-input');
+    const stage = async () => (await fx.service.list({ all: true })).items[0].blockedStage;
+    expect(await stage()).toBeNull();
+    for (const known of ['review', 'rereview', 'respond', 'verify']) {
+      await fx.h.fs.writeFile(`${SESSIONS_DIR}/a/PREFLIGHT_STAGE`, ` ${known}\n`);
+      expect(await stage()).toBe(known);
+    }
+    for (const bad of ['develop', 'findings', 'rereview; rm -rf', '']) {
+      await fx.h.fs.writeFile(`${SESSIONS_DIR}/a/PREFLIGHT_STAGE`, bad);
+      expect(await stage()).toBeNull();
+    }
+    await fx.h.fs.writeFile(`${SESSIONS_DIR}/a/PREFLIGHT_STAGE`, 'rereview');
+    await fx.h.fs.writeFile(`${SESSIONS_DIR}/a/AGENT_STATE`, 'working');
+    expect(await stage()).toBeNull();
   });
 
   it('sends no AGENT_NOTE when the file is absent or empty', async () => {

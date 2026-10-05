@@ -173,6 +173,12 @@ export interface WorkItemAgent {
    */
   agentNote?: string | null;
   /**
+   * 0c — the stage the engine's preflight refused (its `PREFLIGHT_STAGE`), sent under the same
+   * rule as `agentNote`. "Run anyway" re-issues exactly this stage and never guesses one from the
+   * phase. **Optional**: absent means no Run anyway at all, only the reason.
+   */
+  blockedStage?: 'review' | 'rereview' | 'respond' | 'verify' | null;
+  /**
    * PANEL-LOCAL optimism, never on the wire: this window has just asked the
    * engine to start this stage and has not yet seen it in `/items`. It makes
    * the row say so at once — the defect it answers is a click on `Start

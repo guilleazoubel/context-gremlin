@@ -82,6 +82,7 @@ interface AgentOpts {
   qaVerdict?: 'ready' | 'not_ready' | 'blocked' | null;
   runOutcome?: 'running' | 'succeeded' | 'failed' | 'stopped' | null;
   agentNote?: string | null;
+  blockedStage?: 'review' | 'rereview' | 'respond' | 'verify' | null;
 }
 
 function agentAttention(o: AgentOpts): AttentionItem {
@@ -117,6 +118,7 @@ function agentAttention(o: AgentOpts): AttentionItem {
     qaVerdict: o.qaVerdict ?? null,
     runOutcome: o.runOutcome ?? null,
     agentNote: o.agentNote ?? null,
+    blockedStage: o.blockedStage ?? null,
   };
 }
 
@@ -216,6 +218,15 @@ describe('groupWorkItems: agentNote passthrough', () => {
       jira: jiraReport([{ key: 'HB-627' }]),
     });
     expect(items[0].agents[0].agentNote).toBe(note);
+    expect(items[0].agents[0].blockedStage).toBeNull();
+  });
+
+  it("carries the agent's blockedStage onto the wire WorkItemAgent", () => {
+    const items = group({
+      items: [agentAttention({ id: 'r-1', mode: 'review', ticket: 'HB-627', needsYou: true, blockedStage: 'rereview' })],
+      jira: jiraReport([{ key: 'HB-627' }]),
+    });
+    expect(items[0].agents[0].blockedStage).toBe('rereview');
   });
 
   it('defaults to null when the attention item carries none', () => {
