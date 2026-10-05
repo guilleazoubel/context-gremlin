@@ -578,7 +578,9 @@ export type RowMetaKind =
   /** Phase 16 — which qa build the row's change is measured against, muted. */
   | 'qaDeploy'
   /** Task 2 — merged work that NO verification has ever run against. */
-  | 'qaNone';
+  | 'qaNone'
+  /** 0c — the engine's preflight refused this agent's run; the cell is its reason (ellipsised). */
+  | 'blocked';
 
 export interface RowMetaCell {
   kind: RowMetaKind;

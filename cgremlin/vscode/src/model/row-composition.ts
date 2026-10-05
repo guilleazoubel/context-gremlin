@@ -646,10 +646,15 @@ export function rowMetaCells(
   // instead of its phase: a review left at `ready` (or a QA `passed`) read as an answer about a
   // run that never started.
   const blocked = preflightBlockOf(item);
+  const blockedCell = (agent: WorkItemAgent): RowMetaCell | null => {
+    if (blocked === null || blocked.sessionId !== agent.sessionId) return null;
+    const glyph = MODE_GLYPH[agent.mode] ?? '•';
+    return { kind: 'blocked', text: `${glyph} ${blocked.note}`, label: blocked.note, tone: 'bad' };
+  };
   const pushAgent = (agent: WorkItemAgent): void => {
-    if (blocked !== null && blocked.sessionId === agent.sessionId) {
-      const glyph = MODE_GLYPH[agent.mode] ?? '•';
-      cells.push({ kind: 'agentPhase', text: `${glyph} ${blocked.note}`, tone: 'bad' });
+    const refused = blockedCell(agent);
+    if (refused !== null) {
+      cells.push(refused);
       return;
     }
     cells.push(phaseCell(agent, agent === reasonAgent ? reason : null, item.qaDeploy ?? null, now));
@@ -682,6 +687,12 @@ export function rowMetaCells(
   if (list === 'waitingForReview') {
     const landed = landedOf(primary);
     if (landed !== '') cells.push({ kind: 'landed', text: landed });
+    // 0c — this list draws no agent cells, but my open PR is exactly where a respond (or self-
+    // review) run the preflight refused lives: the reason is said here too, never silence.
+    for (const agent of item.agents) {
+      const refused = blockedCell(agent);
+      if (refused !== null) cells.push(refused);
+    }
   } else if (list === 'myWork' || list === 'nextRelease') {
     if (item.ticket !== null) cells.push({ kind: 'ticketStatus', text: item.ticket.status });
     for (const agent of item.agents) pushAgent(agent);
