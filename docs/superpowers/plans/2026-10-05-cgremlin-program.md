@@ -54,6 +54,7 @@ and everything it depends on must be `done`.
 |---|---|---|---|---|---|
 | 0a | Review/rereview never auto-post (R110) | — | ✅ done 2026-10-05 | (done before this tracker) | `cgremlin-r110` |
 | 0b | Respond-brief truncation + rereview "skip everything else" | — | ✅ done 2026-10-05 | `2026-10-05-cgremlin-0b-respond-brief-and-rereview.md` | `cgremlin-0b` |
+| 0c | Headless runs: Jira + PR access made visible; preflight; engine-only Jira | 1 (merge order) | ready after 1 | `2026-10-05-cgremlin-0c-headless-access-card.md` | — |
 | 1 | Harden the development guard; stage-aware profiles | — | ready | — | — |
 | 1b | `cgremlin` plugin: agents + qa-verify, installed at user level | 1 | ready after 1 | — | — |
 | P1 | Personal: CLAUDE.md, global git hook, settings cleanup, headed Chrome | — | ready | — | n/a |
@@ -90,6 +91,11 @@ output — skip everything else", which could skip the REVIEW.md contract and `r
 - [ ] The rereview prompt no longer lets a skill skip the output contract, the posting rules or `rereview_summary`, with a test.
 - [ ] Released as `cgremlin-0b`.
 **Start prompt:** `Run step 0b of the cgremlin program. Read docs/superpowers/plans/2026-10-05-cgremlin-program.md (step 0b card, Global Constraints, Review Focus) and the spec sections it cites. Write the detailed plan with superpowers:writing-plans, show it to me, then execute with superpowers:subagent-driven-development in .claude/worktrees/0b, get a fresh-context review, release per RELEASES.md, and update the tracker.`
+
+### 0c — Headless runs must have Jira + PR access, and say so when they don't
+**Card:** `docs/superpowers/plans/2026-10-05-cgremlin-0c-headless-access-card.md` (evidence, Done-when, decisions D1/D2, amendments A–D, start prompt).
+**Why:** a linked Jira that fails to load is silently dropped (`pipeline-service.ts:193` → empty `## Ticket`), and the review prompt says "skip Jira and proceed" (`prompts.ts:698`). Your requirement: if a Jira is linked, the run needs it.
+**Start:** after step 1 is released; use the Start prompt in the card.
 
 ### 1 — Harden the development guard; stage-aware profiles
 **Why:** the `development` profile (`workspace/permission-guard.ts:~238-244`) denies only `NEVER_POST` and
@@ -158,6 +164,7 @@ Cards for these are written when their dependencies are done, from the spec sect
 ## Log
 | Date | Step | What happened |
 |---|---|---|
+| 2026-10-05 | 0c | Card proposed by the 0b session; accepted with amendments A–D (engine-only Jira, ticket text fenced, D1 stop + override / D2 gated stages, branch step/0c after step 1). Added to the tracker. |
 | 2026-10-05 | 0b | Push failed: the project `.claude/settings.json` denies `git push`, and the branch `cgremlin-0b` collided with tag `cgremlin-0b`. Pushed from outside with explicit refs; the naming rule was added to Global Constraints. |
 | 2026-10-05 | 0a | R110 implemented TDD in a worktree (6 commits); fresh review found no blocking issues; follow-ups fixed; merged, tagged `cgremlin-pre-r110` / `cgremlin-r110`, extension rebuilt and installed, branch + tags pushed. |
 | 2026-10-05 | — | Master plan created. Spec rev 2 + grilling rounds 1–3 + routing (§17) + review skill (§19) + improvement loop (§20) + personal track (§21) recorded. |
