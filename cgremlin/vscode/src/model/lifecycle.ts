@@ -64,6 +64,8 @@ export interface LifecycleAgent {
   pending?: boolean;
   /** 0c — `WorkItemAgent.agentNote`: sent only while the session is in needs-input. */
   agentNote?: string | null;
+  /** 0c — `WorkItemAgent.blockedStage`: the stage the preflight refused, under the same rule. */
+  blockedStage?: string | null;
 }
 
 export interface LifecycleSlot {
@@ -297,7 +299,7 @@ export function detailSignatureOf(item: {
   const agents = item.agents
     .map(
       (a) =>
-        `${a.sessionId}|${a.mode}|${a.phase}|${a.running}|${a.needsYou}|${a.runOutcome ?? ''}|${a.primaryArtifact ?? ''}|${a.worktreePath ?? ''}|${a.agentNote ?? ''}`,
+        `${a.sessionId}|${a.mode}|${a.phase}|${a.running}|${a.needsYou}|${a.runOutcome ?? ''}|${a.primaryArtifact ?? ''}|${a.worktreePath ?? ''}|${a.agentNote ?? ''}|${a.blockedStage ?? ''}`,
     )
     .join(';');
   const prs = item.prs

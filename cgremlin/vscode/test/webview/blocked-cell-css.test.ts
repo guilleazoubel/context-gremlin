@@ -10,6 +10,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import itemsFixture from '../support/fixtures/items.json';
 import { rowMetaCells } from '../../src/model/row-composition';
+import { detailSignatureOf } from '../../src/model/lifecycle';
 import type { ItemsResponse, WorkItem } from '../../src/model/work-items';
 
 const css = fs.readFileSync(path.resolve(__dirname, '../../media/panel.css'), 'utf8');
@@ -82,5 +83,26 @@ describe('a long preflight reason never breaks the layout', () => {
     expect(reason).toMatch(/white-space:\s*nowrap/);
     expect(reason).not.toMatch(/flex:\s*0 0 auto/);
     expect(rule('.attention-label')).toMatch(/flex:\s*1 1 auto/);
+  });
+});
+
+describe('fix round 2', () => {
+  it('the blocked cell keeps the red of a needs-you agent cell (R1)', () => {
+    // The selector list that colours a bad agent cell must name the blocked cell too.
+    const match = /([^{}]*\.cell-blocked\.tone-bad[^{}]*)\{([^}]*)\}/.exec(css);
+    expect(match).not.toBeNull();
+    expect(match?.[1]).toContain('.cell-agentPhase.tone-bad');
+    expect(match?.[2]).toMatch(/color:\s*var\(--vscode-charts-red\)/);
+  });
+
+  it('the detail signature changes when only blockedStage changes (R2)', () => {
+    const agent = {
+      sessionId: 's', mode: 'review', phase: 'failed', running: false, needsYou: true,
+      primaryArtifact: null, agentNote: 'Jira HB-1 could not be loaded (auth error)',
+    };
+    const sig = (blockedStage: string | null) =>
+      detailSignatureOf({ agents: [{ ...agent, blockedStage } as never], prs: [], ticket: null });
+    expect(sig('rereview')).not.toBe(sig('review'));
+    expect(sig('review')).not.toBe(sig(null));
   });
 });

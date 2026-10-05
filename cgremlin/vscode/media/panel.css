@@ -695,7 +695,9 @@ body {
  * verification that passed is good news, and good news does not need to shout. `not verified` is
  * muted for the same reason the landed marker is — it is the absence of a thing, not a failure.
  */
-.cell-agentPhase.tone-bad {
+/* 0c — the preflight's reason is the same "needs you" signal, in its own (ellipsising) cell. */
+.cell-agentPhase.tone-bad,
+.cell-blocked.tone-bad {
   color: var(--vscode-charts-red);
 }
 
