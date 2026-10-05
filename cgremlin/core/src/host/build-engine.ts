@@ -254,13 +254,15 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     lock,
     environment: environment ?? undefined,
     /**
-     * 0c — the GitHub half of the preflight: one read-only `gh auth status` per headless
+     * 0c — the GitHub half of the preflight: one read-only `gh api user` per headless
      * PR-reading run. Never throws; a missing `gh` binary is "not usable" too. The detail is
      * summarized here and redacted (tokens stripped, one line, ≤ 200 chars) by the preflight.
      */
     ghAuthOk: async () => {
       try {
-        await adapters.gh.run(['auth', 'status']);
+        // The ACTIVE account on the default host, read-only: `gh auth status` exits non-zero
+        // when ANY stored account is broken, which would block a user whose active one works.
+        await adapters.gh.run(['api', 'user', '--jq', '.login']);
         return { ok: true };
       } catch (err) {
         const raw = err instanceof GhCommandError ? err.stderr : err instanceof Error ? err.message : String(err);
@@ -533,8 +535,12 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
       await prStateResolver.absorbList(repo, stdout);
     },
     createSession: (ticket, slug, number) => qaFactory.createFromMergedPr(ticket, slug, number),
+    // 0c — a run the shared preflight refused did not start; its one-line reason is the
+    // AGENT_NOTE the preflight just wrote, and the leg reports it as skipped, not started.
     startRun: async (id) => {
-      await awaitRunStart(events, id, pipeline.runVerify(id));
+      if (await awaitRunStart(events, id, pipeline.runVerify(id))) return { started: true };
+      const note = await adapters.fs.readFile(`${sessionsDir}/${id}/AGENT_NOTE`).catch(() => '');
+      return { started: false, reason: note.trim() || 'the preflight refused to start the run' };
     },
     now: adapters.now,
   });

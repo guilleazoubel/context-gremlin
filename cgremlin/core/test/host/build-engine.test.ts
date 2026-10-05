@@ -517,21 +517,43 @@ describe('0c — the engine\'s ticket brief state (tickets.briefState / tickets.
     for (const text of [note, brief]) expect(text).not.toContain(SENTINEL);
   });
 
-  it('ghAuthOk runs `gh auth status`; a failure blocks with the failing line, redacted', async () => {
+  it('ghAuthOk asks `gh api user` (the active account only); a 401 blocks with its first line, redacted', async () => {
     const gh = new FakeGhRunner();
     const adapters = testAdapters({ gh });
     const fs = adapters.fs as InMemoryFileSystem;
     const engine = buildEngine(jiraConfig(['HB']), adapters, { jiraSource: stubSource() });
     const id = await seedReview(adapters);
     gh.queueResponse(
-      new GhCommandError(['auth', 'status'], 1, `github.com\n  X Failed to log in with ghp_${'a'.repeat(36)}\n  - The token is invalid.`),
+      new GhCommandError(['api', 'user', '--jq', '.login'], 1, `gh: Bad credentials for ghp_${'a'.repeat(36)} (HTTP 401)\n{"message":"Bad credentials"}`),
     );
 
     await engine.pipeline.runReview(id);
-    expect(gh.calls).toContainEqual(['auth', 'status']);
-    const note = await fs.readFile(`/sessions/${id}/AGENT_NOTE`);
-    expect(note).toBe('GitHub is not usable: Failed to log in with [redacted]');
+    expect(gh.calls).toContainEqual(['api', 'user', '--jq', '.login']);
+    expect(gh.calls.some((c) => c[0] === 'auth')).toBe(false);
+    expect(await fs.readFile(`/sessions/${id}/AGENT_NOTE`)).toBe('GitHub is not usable: gh: Bad credentials for [redacted] (HTTP 401)');
     expect(await fs.readFile(`/sessions/${id}/AGENT_STATE`)).toBe('needs-input');
+  });
+
+  it('ghAuthOk: not logged in, and no gh binary at all (ENOENT), both block with a reason', async () => {
+    const cases: Array<[Error, string]> = [
+      [
+        new GhCommandError(['api', 'user', '--jq', '.login'], 4, 'To get started with GitHub CLI, please run:  gh auth login\nAlternatively, populate GH_TOKEN.'),
+        'GitHub is not usable: To get started with GitHub CLI, please run:  gh auth login',
+      ],
+      // NodeGhRunner turns a spawn error into a GhCommandError carrying err.message.
+      [new GhCommandError(['api', 'user', '--jq', '.login'], null, 'spawn gh ENOENT'), 'GitHub is not usable: spawn gh ENOENT'],
+      [new GhCommandError(['api', 'user', '--jq', '.login'], 1, ''), 'GitHub is not usable: gh api user failed'],
+    ];
+    for (const [error, note] of cases) {
+      const gh = new FakeGhRunner();
+      const adapters = testAdapters({ gh });
+      const fs = adapters.fs as InMemoryFileSystem;
+      const engine = buildEngine(jiraConfig(['HB']), adapters, { jiraSource: stubSource() });
+      const id = await seedReview(adapters);
+      gh.queueResponse(error);
+      await engine.pipeline.runReview(id);
+      expect(await fs.readFile(`/sessions/${id}/AGENT_NOTE`)).toBe(note);
+    }
   });
 
   it('linking is disabled iff jira.projectKeys is empty', () => {

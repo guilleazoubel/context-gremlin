@@ -105,23 +105,17 @@ describe('redactGhDetail', () => {
 });
 
 describe('summarizeGhAuthFailure', () => {
-  it('picks the failing line out of `gh auth status` output, not the bare host name', () => {
-    const stderr = [
-      'github.com',
-      '  X Failed to log in to github.com account me (default)',
-      '  - Active account: true',
-      '  - The token in default is invalid.',
-    ].join('\n');
-    expect(summarizeGhAuthFailure(stderr)).toBe('Failed to log in to github.com account me (default)');
+  it('a 401 from `gh api user` is its first line', () => {
+    expect(summarizeGhAuthFailure('gh: Bad credentials (HTTP 401)\n{"message":"Bad credentials"}')).toBe('gh: Bad credentials (HTTP 401)');
   });
 
-  it('falls back to the first non-empty line', () => {
-    expect(summarizeGhAuthFailure('\nYou are not logged into any GitHub hosts. To log in, run: gh auth login\n')).toBe(
-      'You are not logged into any GitHub hosts. To log in, run: gh auth login',
-    );
+  it('not logged in: the first non-empty line', () => {
+    expect(
+      summarizeGhAuthFailure('\nTo get started with GitHub CLI, please run:  gh auth login\nAlternatively, populate the GH_TOKEN environment variable with a GitHub API authentication token.\n'),
+    ).toBe('To get started with GitHub CLI, please run:  gh auth login');
   });
 
   it('an empty output still says something', () => {
-    expect(summarizeGhAuthFailure('')).toBe('gh auth status failed');
+    expect(summarizeGhAuthFailure('')).toBe('gh api user failed');
   });
 });

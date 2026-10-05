@@ -140,6 +140,32 @@ describe.each(CASES)('0c preflight — $name', (c) => {
   });
 });
 
+describe('0c preflight — an ineligible session keeps its 409 and gets NO needs-input', () => {
+  const cases: Array<{ name: 'runReview' | 'runRereview' | 'runRespond'; session: () => Session; error: string }> = [
+    { name: 'runReview', session: () => ({ ...reviewSession('HB-627', 'queued'), stageStatus: 'dismissed' }) as Session, error: 'cannot run review' },
+    { name: 'runReview', session: () => ({ ...reviewSession('HB-627', 'queued'), stageStatus: 'approved' }) as Session, error: 'cannot run review' },
+    { name: 'runRereview', session: () => reviewSession('HB-627', 'queued'), error: 'cannot run rereview' },
+    { name: 'runRespond', session: () => ({ ...respondSession('HB-627'), stageStatus: 'closed' }) as Session, error: 'cannot run respond' },
+    { name: 'runRespond', session: () => ({ ...respondSession('HB-627'), stageStatus: 'abandoned' }) as Session, error: 'cannot run respond' },
+  ];
+  it.each(cases)('$name ($error) with Jira down: UnsupportedStageError, nothing written', async (c) => {
+    const keys: string[] = [];
+    const h = createHarness({
+      tickets: { briefState: async (k) => { keys.push(k); return NOT_LOADED_AUTH; }, linking: 'configured' },
+      ghAuthOk: GH_DOWN,
+    });
+    const session = c.session();
+    await h.store.save(session);
+    const run = vi.spyOn(h.stageRunner, 'run');
+    await expect(h.service[c.name](session.id)).rejects.toMatchObject({ name: 'UnsupportedStageError', message: expect.stringContaining(c.error) });
+    expect(run).not.toHaveBeenCalled();
+    expect(keys).toEqual([]);
+    const dir = `${SESSIONS_DIR}/${session.id}`;
+    expect(await h.fs.exists(`${dir}/AGENT_STATE`)).toBe(false);
+    expect(await h.fs.exists(`${dir}/AGENT_NOTE`)).toBe(false);
+  });
+});
+
 describe('0c preflight — details', () => {
   it('a blocked rereview does no git work and writes no RE-REVIEW.md', async () => {
     const h = createHarness({ tickets: tickets(NOT_LOADED_AUTH) });
@@ -184,16 +210,19 @@ describe('0c preflight — details', () => {
   });
 
   it('a block while a run is live refuses as RunInProgress and leaves that run\'s state alone', async () => {
+    // Respond, because its `addressing` phase (where a live run sits) is still runnable, so the
+    // request reaches the preflight; a live review sits in `reviewing`, which is refused earlier.
     const h = createHarness({ tickets: tickets({ kind: 'loaded', ticket: { key: 'HB-627', summary: 's', status: 'UAT', url: 'u', descriptionText: 'd', comments: [] } }) });
-    const session = reviewSession('HB-627', 'queued');
+    const session = respondSession('HB-627');
     await h.store.save(session);
-    void h.service.runReview(session.id).catch(() => undefined);
+    void h.service.runRespond(session.id).catch(() => undefined);
     await flush();
     const dir = `${SESSIONS_DIR}/${session.id}`;
+    expect((await h.store.load(session.id)).stageStatus).toBe('addressing');
     expect(await h.fs.readFile(`${dir}/AGENT_STATE`)).toBe('working');
 
     const blocked = createHarnessSharing(h, tickets(NOT_LOADED_AUTH));
-    await expect(blocked.runReview(session.id)).rejects.toMatchObject({ name: 'RunInProgressError' });
+    await expect(blocked.runRespond(session.id)).rejects.toMatchObject({ name: 'RunInProgressError' });
     expect(await h.fs.readFile(`${dir}/AGENT_STATE`)).toBe('working');
   });
 

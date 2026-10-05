@@ -39,7 +39,13 @@ export type QaAttemptOutcome =
    * same build every tick, and it is what the row reads to say
    * `awaiting qa deploy`.
    */
-  | 'awaiting-deploy';
+  | 'awaiting-deploy'
+  /**
+   * 0c — the session exists but the engine's shared preflight refused to start its run
+   * (Jira or GitHub not usable). NOT a used-up attempt either: the next tick retries once
+   * access is fixed. At most one is kept per `(key, identity, ordinal)` (`forgetBlocked`).
+   */
+  | 'blocked';
 
 /**
  * Written BEFORE the session is created (E2). A crash between the reserve and
@@ -155,8 +161,25 @@ export class QaTriggerStore {
    */
   static attemptsFor(state: QaTriggerState, key: string, identity: string, ordinal: number): number {
     return (state.tickets[key]?.attempts ?? []).filter(
-      (a) => a.identity === identity && a.ordinal === ordinal && a.outcome !== 'awaiting-deploy',
+      (a) => a.identity === identity && a.ordinal === ordinal && a.outcome !== 'awaiting-deploy' && a.outcome !== 'blocked',
     ).length;
+  }
+
+  /**
+   * 0c — drops the `blocked` records of this exact `(key, identity, ordinal)` before a retry
+   * reserves its own, so a ticket blocked for days keeps ONE such record instead of one per
+   * tick evicting its real attempts from the bounded history (E14).
+   */
+  async forgetBlocked(key: string, identity: string, ordinal: number): Promise<void> {
+    const state = await this.load();
+    const attempts = state.tickets[key]?.attempts ?? [];
+    if (!attempts.some((a) => a.outcome === 'blocked' && a.identity === identity && a.ordinal === ordinal)) return;
+    await this.update(key, (record) => ({
+      ...record,
+      attempts: record.attempts.filter(
+        (a) => !(a.outcome === 'blocked' && a.identity === identity && a.ordinal === ordinal),
+      ),
+    }));
   }
 
   /** Records the status we observed, WITHOUT treating it as an entry. The seed path (E1/R77). */

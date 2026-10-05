@@ -30,15 +30,13 @@ export function redactGhDetail(detail: string): string {
 }
 
 /**
- * The one useful line of a failed `gh auth status`. Its output leads with the bare host name
- * (`github.com`) and marks the failing account with `X `, so "the first line" alone would say
- * nothing; prefer the `X` line, else the first non-empty one. Redaction still happens later.
+ * The one useful line of a failed GitHub probe (`gh api user --jq .login`): its first non-empty
+ * line — e.g. `gh: Bad credentials (HTTP 401)`, or gh's "please run: gh auth login" when nobody is
+ * logged in. Redaction still happens later, in `redactGhDetail`.
  */
 export function summarizeGhAuthFailure(output: string): string {
-  const lines = output.split(/\r?\n/).map((line) => line.trim()).filter((line) => line.length > 0);
-  const failing = lines.find((line) => line.startsWith('X '));
-  if (failing !== undefined) return failing.slice(2).trim();
-  return lines[0] ?? 'gh auth status failed';
+  const first = output.split(/\r?\n/).map((line) => line.trim()).find((line) => line.length > 0);
+  return first ?? 'gh api user failed';
 }
 
 const TICKET_KEY_RE = /^[A-Za-z][A-Za-z0-9]*-\d+$/;

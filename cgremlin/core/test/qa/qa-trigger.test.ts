@@ -69,6 +69,7 @@ function harness(over: Omit<Partial<QaTriggerDeps>, 'items'> & { items?: WorkIte
     },
     startRun: async (id) => {
       ran.push(id);
+      return { started: true };
     },
     now: () => NOW,
     ...rest,
@@ -232,6 +233,63 @@ describe('E2 — reserve, then run', () => {
       outcome: 'started',
     });
     expect(h.leg.lastReport().started).toEqual(['qa-HB-1']);
+  });
+});
+
+describe('0c — a run the shared preflight blocks is not a start', () => {
+  const REASON = 'Jira HB-1 could not be loaded (auth error) — fix access or choose Run anyway';
+
+  /** startRun answers blocked until `fixed` is set — Jira coming back. */
+  function blockable(over: Parameters<typeof harness>[0] = {}) {
+    const access = { fixed: false };
+    const h = harness({
+      startRun: async (id) => {
+        h.ran.push(id);
+        return access.fixed ? { started: true } : { started: false, reason: REASON };
+      },
+      ...over,
+    });
+    return { h, access };
+  }
+
+  it('blocked: not in report.started, skipped with the reason, outcome blocked (not started)', async () => {
+    const { h } = blockable();
+    await h.store.observe('HB-1', 'In Progress');
+    await tick(h);
+    const report = h.leg.lastReport();
+    expect(report.started).toEqual([]);
+    expect(report.errors).toEqual([]);
+    expect(report.skipped).toContainEqual({ ticket: 'HB-1', why: `qa run blocked — ${REASON}` });
+    const attempts = (await h.store.load()).tickets['HB-1'].attempts;
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]).toMatchObject({ sessionId: 'qa-HB-1', outcome: 'blocked' });
+  });
+
+  it('does not consume the attempt: once access is fixed, the next tick starts the run for the SAME build', async () => {
+    const { h, access } = blockable();
+    await h.store.observe('HB-1', 'In Progress');
+    await tick(h);
+    access.fixed = true;
+    await tick(h);
+    expect(h.leg.lastReport().started).toEqual(['qa-HB-1']);
+    expect(h.ran).toEqual(['qa-HB-1', 'qa-HB-1']);
+    const attempts = (await h.store.load()).tickets['HB-1'].attempts;
+    // The block's record was replaced, not piled up; the start is attempt 1 of that identity.
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0]).toMatchObject({ outcome: 'started', attempt: 1 });
+    // ...and a started attempt IS consumed: a further tick starts nothing more.
+    await tick(h);
+    expect(h.leg.lastReport().started).toEqual([]);
+  });
+
+  it('blocked for many ticks keeps ONE blocked record (no eviction of the bounded history)', async () => {
+    const { h } = blockable();
+    await h.store.observe('HB-1', 'In Progress');
+    for (let i = 0; i < 10; i += 1) await tick(h);
+    const attempts = (await h.store.load()).tickets['HB-1'].attempts;
+    expect(attempts).toHaveLength(1);
+    expect(attempts[0].outcome).toBe('blocked');
+    expect(h.ran).toHaveLength(10);
   });
 });
 

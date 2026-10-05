@@ -800,6 +800,14 @@ export class PipelineService {
     if (isClaimed(session, this.now())) {
       throw new HumanTurnInProgressError(id);
     }
+    // 0c — the runnable-phase refusal comes BEFORE the preflight, so a closed or abandoned
+    // session keeps its 409 and never gets a needs-input written. Advisory: the in-lock check
+    // below stays the authoritative one.
+    if (!RESPOND_RUNNABLE_FROM.includes(session.stageStatus)) {
+      throw new UnsupportedStageError(
+        `Session '${id}' cannot run respond (mode=${session.mode}, stage=${session.stageStatus})`,
+      );
+    }
     // 0c — before any environment, brief or agent.
     const pf = await this.preflight(id, session.lineage.ticket, opts);
     if (pf.blocked !== null) return pf.blocked;
@@ -1008,6 +1016,12 @@ export class PipelineService {
     if (isClaimed(session, this.now())) {
       throw new HumanTurnInProgressError(id);
     }
+    const REVIEW_RUNNABLE_FROM: readonly ReviewPhase[] = ['queued', 'changes_requested', 'ready', 'failed'];
+    // 0c — the runnable-phase refusal comes BEFORE the preflight (see runRespond); the in-lock
+    // check below stays the authoritative one.
+    if (!REVIEW_RUNNABLE_FROM.includes(session.stageStatus)) {
+      throw new UnsupportedStageError(`Session '${id}' cannot run review (mode=${session.mode}, stage=${session.stageStatus})`);
+    }
     // 0c — before any environment, brief or agent.
     const pf = await this.preflight(id, session.lineage.ticket, opts);
     if (pf.blocked !== null) return pf.blocked;
@@ -1032,7 +1046,6 @@ export class PipelineService {
       uiCheckRendered: brief.includes(LIVE_UI_CHECK_HEADING),
     });
     try {
-      const REVIEW_RUNNABLE_FROM: readonly ReviewPhase[] = ['queued', 'changes_requested', 'ready', 'failed'];
       // Only mark the session 'failed' in the catch below if OUR preRun
       // actually committed the reviewing transition — a lost-race rejection
       // (someone else already moved this session on) must never mask itself
@@ -1109,6 +1122,12 @@ export class PipelineService {
     if (!worktreePath) {
       throw new WorkspaceMissingError(id);
     }
+    const REREVIEW_RUNNABLE_FROM: readonly ReviewPhase[] = ['ready', 'changes_requested', 'failed'];
+    // 0c — the runnable-phase refusal comes BEFORE the preflight (see runRespond); the in-lock
+    // check below stays the authoritative one.
+    if (!REREVIEW_RUNNABLE_FROM.includes(session.stageStatus)) {
+      throw new UnsupportedStageError(`Session '${id}' cannot run rereview (mode=${session.mode}, stage=${session.stageStatus})`);
+    }
     // 0c — before the git work, the archive, the brief or the agent: the automatic re-review
     // (ReconciliationTick) enters here too, and a blocked one must leave the worktree alone.
     const pf = await this.preflight(id, session.lineage.ticket, opts);
@@ -1156,7 +1175,6 @@ export class PipelineService {
     ].join('\n');
     await this.deps.fs.writeFile(`${sessionDir}/RE-REVIEW.md`, reReviewContent);
 
-    const REREVIEW_RUNNABLE_FROM: readonly ReviewPhase[] = ['ready', 'changes_requested', 'failed'];
     const prompt = renderRereviewPrompt({ sessionDir, commitCount, reviewSkillCommand: this.deps.config.reviewSkillCommand });
     // After the git work, so a fetch/reset failure never leaves a started app behind.
     const prep = await this.prepareEnvironment(id, 'rereview', session);

@@ -73,7 +73,11 @@ export interface QaTriggerDeps {
    */
   absorbPrs?: (repo: string, stdout: string) => Promise<void>;
   createSession: (ticket: string, slug: string, number: number) => Promise<{ id: string }>;
-  startRun: (sessionId: string) => Promise<void>;
+  /**
+   * Starts the verification. 0c: `started: false` means the engine's shared preflight
+   * refused (Jira or GitHub not usable) and no agent was launched; `reason` is its one line.
+   */
+  startRun: (sessionId: string) => Promise<{ started: true } | { started: false; reason: string }>;
   now?: () => Date;
 }
 
@@ -323,6 +327,8 @@ export class QaTriggerLeg {
     // R83 — health BEFORE the factory: no session, no worktree, no tokens
     // burned on an agent turn that can only write "blocked".
     const health = await this.deps.qaHealth(candidate.slug);
+    // 0c — a retry after a preflight block replaces that block's record rather than piling up.
+    await store.forgetBlocked(candidate.key, identity, ordinal);
     const attempt: QaAttempt = {
       key: candidate.key,
       identity,
@@ -350,10 +356,18 @@ export class QaTriggerLeg {
         return false;
       }
       await store.patch(candidate.key, nowIso, { sessionId, outcome: 'started' });
+      let run: Awaited<ReturnType<QaTriggerDeps['startRun']>>;
       try {
-        await this.deps.startRun(sessionId);
+        run = await this.deps.startRun(sessionId);
       } catch (err) {
         this.skip(candidate.key, `qa run could not be started — ${errorMessage(err)}`);
+        return false;
+      }
+      if (!run.started) {
+        // 0c — the preflight refused: no agent ran, so the attempt is not used up
+        // (`attemptsFor` skips `blocked`) and a later tick retries once access is fixed.
+        await store.patch(candidate.key, nowIso, { outcome: 'blocked' });
+        this.skip(candidate.key, `qa run blocked — ${run.reason}`);
         return false;
       }
       this.report.started.push(sessionId);
@@ -606,7 +620,8 @@ export class QaTriggerLeg {
         // its PRs has been touched since the last attempt — which is what a
         // NEW MERGE while it sits in QA looks like from here. The exact
         // identity check still happens in `start`, after the gh call.
-        const attempts = previous!.attempts.filter((a) => a.ordinal === previous!.ordinal);
+        // 0c — a `blocked` record (the preflight refused to start the run) never counts here.
+        const attempts = previous!.attempts.filter((a) => a.ordinal === previous!.ordinal && a.outcome !== 'blocked');
         // Phase 16 — when the deployed build is known, EVERY gate below is
         // asked of that build: a new build is a new identity with no attempts
         // of its own, so it re-verifies; the build we already waited on (or
