@@ -11,6 +11,8 @@ can always go back exactly one version.
 
 | Date | Tag | Commit | Saved build (`~/cgremlin-releases/`) | What changed | Roll back to |
 |---|---|---|---|---|---|
+| 2026-10-05 | `cgremlin-0b` | `7236712` | `cgremlin-vscode-0.0.1-0b-built-2026-10-05.vsix` | **0b:** the respond brief keeps its instructions (incl. the injection-refusal rule) however long the threads are; reviewer text is capped and fenced in `<untrusted-pr-data>`. The re-review prompt no longer lets a review skill skip the `BRIEF.md` contract, the no-post rule or `rereview_summary`. | `cgremlin-pre-0b` (same build as `cgremlin-r110`) |
+| 2026-10-05 | `cgremlin-pre-0b` | `6f84531` | `cgremlin-vscode-0.0.1-r110-built-2026-10-05.vsix` | Baseline: the build that was installed before 0b (identical to `cgremlin-r110`). | — |
 | 2026-10-05 | `cgremlin-r110` | `6f84531` | `cgremlin-vscode-0.0.1-r110-built-2026-10-05.vsix` | **R110:** review and re-review never post on their own. Headless runs write `REVIEW.md` and stop; the post helpers exist only while you hold the chat, and posting happens after you ask. Respond and QA unchanged. | `cgremlin-pre-r110` |
 | 2026-09-28 | `cgremlin-pre-r110` | `20b7c6d` | `cgremlin-vscode-0.0.1-pre-r110-built-2026-09-28.vsix` | Baseline: the build that was installed before R110. | — |
 

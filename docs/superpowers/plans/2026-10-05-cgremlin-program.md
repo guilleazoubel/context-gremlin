@@ -53,7 +53,7 @@ and everything it depends on must be `done`.
 | ID | Step | Depends on | Status | Detailed plan | Release tag |
 |---|---|---|---|---|---|
 | 0a | Review/rereview never auto-post (R110) | — | ✅ done 2026-10-05 | (done before this tracker) | `cgremlin-r110` |
-| 0b | Respond-brief truncation + rereview "skip everything else" | — | ready | — | — |
+| 0b | Respond-brief truncation + rereview "skip everything else" | — | ✅ done 2026-10-05 | `2026-10-05-cgremlin-0b-respond-brief-and-rereview.md` | `cgremlin-0b` |
 | 1 | Harden the development guard; stage-aware profiles | — | ready | — | — |
 | 1b | `cgremlin` plugin: agents + qa-verify, installed at user level | 1 | ready after 1 | — | — |
 | P1 | Personal: CLAUDE.md, global git hook, settings cleanup, headed Chrome | — | ready | — | n/a |
