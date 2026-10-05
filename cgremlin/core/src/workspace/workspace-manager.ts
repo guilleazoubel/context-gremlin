@@ -4,8 +4,9 @@ import type { SessionMode } from '../schema/session-mode';
 import type { Intent } from '../schema/session';
 import { ensureMirror, mirrorDirName } from './repo-mirror';
 import { createWorktree, removeWorktree } from './worktree';
-import { writePermissionSettings, type PermissionSubject } from './permission-guard';
+import { permissionProfileFor, writePermissionSettings, type PermissionSubject } from './permission-guard';
 import {
+  removePostHelpers,
   shouldWritePostHelpers,
   writePostHelpers,
   type PostTarget,
@@ -29,22 +30,27 @@ export interface CreateWorkspaceParams {
    * Phase 20 — the pull request this session is FOR. Its slug and number are
    * baked into `.cgremlin/post-review` and `.cgremlin/post-comment` at write
    * time, which is the whole of the scoping: the agent cannot pass a repo or
-   * a number (see ./post-helpers.ts). Only `review` and `respond` get the
-   * helpers; without a PR, nobody does.
+   * a number (see ./post-helpers.ts). Only `respond` gets the helpers here —
+   * a new worktree is for a headless run, and a headless review posts nothing
+   * (R110; the conversation claim installs them). Without a PR, nobody does.
    */
   pr?: PostTarget;
 }
 
 /**
  * The whole of what the engine installs INTO a worktree for the agent that
- * will run there: the permission guard, and — for the two posting modes, when
+ * will run there: the permission guard, and — for the posting profiles, when
  * the session has a pull request — the scoped helpers with that PR baked in.
+ * Every other profile has them REMOVED (R110): a review that gained them on
+ * the conversation claim loses them before its next headless run.
  *
  * Idempotent, and deliberately overwriting rather than skip-if-present: both
  * writes replace whatever is on disk, and `fs.writeFile` chmods, so a helper
  * the agent edited or stripped +x from comes back byte-for-byte at 0o755.
- * That matters because this runs TWICE — once at worktree creation below,
- * and again immediately before EVERY stage run (src/pipeline/stage-runner.ts).
+ * That matters because this runs more than once — at worktree creation below,
+ * and again immediately before EVERY stage run (src/pipeline/stage-runner.ts),
+ * and on the conversation claim and release (src/pipeline/pipeline-service.ts,
+ * R110 — the human's turn is the one time a review may post).
  * Written once, at creation only, a session kept whatever permission table it
  * was born with forever, and a session older than the helpers could never
  * post at all no matter what shipped afterwards.
@@ -66,8 +72,10 @@ export async function refreshWorkspaceGuardrails(
   pr?: PostTarget,
 ): Promise<void> {
   await writePermissionSettings(fs, worktreePath, subject);
-  if (pr !== undefined && shouldWritePostHelpers(subject.mode)) {
+  if (pr !== undefined && shouldWritePostHelpers(permissionProfileFor(subject))) {
     await writePostHelpers(fs, worktreePath, pr);
+  } else {
+    await removePostHelpers(fs, worktreePath);
   }
 }
 

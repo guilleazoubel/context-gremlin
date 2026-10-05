@@ -110,6 +110,10 @@ describe('WorkspaceManager', () => {
  * Phase 20 — the posting modes may not type a GitHub write verb at all, so the
  * engine installs BOTH scoped helpers for them. Every other mode posts nothing
  * and gets nothing.
+ *
+ * R110 — a review posts only when the user asks, in the conversation, so a
+ * new review worktree (created for a headless run) gets no helper either; the
+ * conversation claim installs them. respond keeps them from creation on.
  */
 const HELPERS = ['.cgremlin/post-review', '.cgremlin/post-comment'] as const;
 
@@ -130,7 +134,7 @@ describe('WorkspaceManager writes the scoped posting helpers', () => {
     return fs;
   }
 
-  it.each(['review', 'respond'] as const)('%s gets both executable helpers with its own PR baked in', async (mode) => {
+  it.each(['respond'] as const)('%s gets both executable helpers with its own PR baked in', async (mode) => {
     const fs = await create(mode);
     for (const helper of HELPERS) {
       const script = await fs.readFile(`/work/${mode}-1/${helper}`);
@@ -140,7 +144,7 @@ describe('WorkspaceManager writes the scoped posting helpers', () => {
     }
   });
 
-  it.each(['qa', 'development', 'investigation'] as const)('%s gets no helper at all', async (mode) => {
+  it.each(['review', 'qa', 'development', 'investigation'] as const)('%s gets no helper at all', async (mode) => {
     const fs = await create(mode);
     for (const helper of HELPERS) expect(await fs.exists(`/work/${mode}-1/${helper}`)).toBe(false);
   });
@@ -150,11 +154,11 @@ describe('WorkspaceManager writes the scoped posting helpers', () => {
     const manager = new WorkspaceManager(new FakeGitRunner(), fs, '/mirrors');
     await manager.createWorkspace({
       repoUrl: 'git@github.com:acme/app.git',
-      worktreePath: '/work/review-2',
+      worktreePath: '/work/respond-2',
       branchName: 'b',
       baseRef: 'origin/b',
-      mode: 'review',
+      mode: 'respond',
     });
-    for (const helper of HELPERS) expect(await fs.exists(`/work/review-2/${helper}`)).toBe(false);
+    for (const helper of HELPERS) expect(await fs.exists(`/work/respond-2/${helper}`)).toBe(false);
   });
 });

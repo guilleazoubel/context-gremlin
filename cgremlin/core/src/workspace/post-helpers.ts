@@ -1,5 +1,5 @@
 import type { SessionFileSystem } from '../fs/session-file-system';
-import type { SessionMode } from '../schema/session-mode';
+import type { PermissionProfile } from './permission-guard';
 
 /**
  * Phase 20 — no mode may type a GitHub write verb (see ./permission-guard.ts):
@@ -218,10 +218,32 @@ export function postHelperFiles(target: PostTarget): PostHelperFile[] {
   ];
 }
 
-/** Only the two modes that post. QA, development and investigation get nothing. */
-const POSTING_MODES: readonly SessionMode[] = ['review', 'respond'];
-export function shouldWritePostHelpers(mode: SessionMode): boolean {
-  return POSTING_MODES.includes(mode);
+/**
+ * Only the profiles that post. QA, development and investigation get nothing.
+ *
+ * R110 — and a review posts only with the user in the conversation, so it is
+ * `review:conversation` here, never plain `review`: a headless review or
+ * re-review of someone else's PR (a manual start, or the automatic re-review
+ * on new commits) has no helper on disk to run, and its settings deny them
+ * too (./permission-guard.ts). respond — the user's OWN PR — posts headless,
+ * as Phase 20 decided.
+ */
+const POSTING_PROFILES: readonly PermissionProfile[] = ['respond', 'review:conversation'];
+export function shouldWritePostHelpers(profile: PermissionProfile): boolean {
+  return POSTING_PROFILES.includes(profile);
+}
+
+/**
+ * R110 — takes the helpers OUT of a worktree whose session may not post now.
+ * Overwriting was enough while a profile, once posting, always posted; a
+ * review now gains the helpers on the conversation claim and must lose them
+ * again before its next headless run, so the refresh removes as well as
+ * writes. A no-op where they were never written.
+ */
+export async function removePostHelpers(fs: SessionFileSystem, worktreePath: string): Promise<void> {
+  for (const file of postHelperFiles({ repoSlug: '', prNumber: 0 })) {
+    await fs.remove(`${worktreePath}/${file.relativePath}`);
+  }
 }
 
 export async function writePostHelpers(

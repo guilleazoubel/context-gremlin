@@ -136,14 +136,16 @@ describe('a stage run refreshes the worktree guardrails', () => {
     expect(deny).toContain('Bash(gh repo:*)');
   });
 
-  it('installs both helpers, executable, in a worktree that has no .cgremlin at all', async () => {
-    const session = makeSession('review', 'rev-2', { repo: 'acme/app', number: 2113 });
+  // respond posts on the user's OWN PR on a headless run (Phase 20); review
+  // does not (R110 — see the describe below).
+  it('installs both helpers, executable, in a respond worktree that has no .cgremlin at all', async () => {
+    const session = makeSession('respond', 'res-2', { repo: 'acme/app', number: 2113 });
     const fs = await runStage(session);
     for (const helper of ['.cgremlin/post-review', '.cgremlin/post-comment']) {
-      expect(await fs.exists(`/w/rev-2/${helper}`)).toBe(true);
-      expect(await fs.statMode(`/w/rev-2/${helper}`)).toBe(0o755);
+      expect(await fs.exists(`/w/res-2/${helper}`)).toBe(true);
+      expect(await fs.statMode(`/w/res-2/${helper}`)).toBe(0o755);
     }
-    expect(await fs.readFile('/w/rev-2/.cgremlin/package.json')).toContain('"type": "module"');
+    expect(await fs.readFile('/w/res-2/.cgremlin/package.json')).toContain('"type": "module"');
   });
 
   it('restores a tampered helper byte-for-byte, and restores mode 0o755', async () => {
@@ -162,10 +164,10 @@ describe('a stage run refreshes the worktree guardrails', () => {
   });
 
   it("bakes each session's OWN pull request into its helper — no cross-contamination", async () => {
-    const one = await runStage(makeSession('review', 'rev-a', { repo: 'acme/app', number: 11 }));
-    const two = await runStage(makeSession('review', 'rev-b', { repo: 'other/svc', number: 99 }));
-    const a = await one.readFile('/w/rev-a/.cgremlin/post-review');
-    const b = await two.readFile('/w/rev-b/.cgremlin/post-review');
+    const one = await runStage(makeSession('respond', 'res-a', { repo: 'acme/app', number: 11 }));
+    const two = await runStage(makeSession('respond', 'res-b', { repo: 'other/svc', number: 99 }));
+    const a = await one.readFile('/w/res-a/.cgremlin/post-review');
+    const b = await two.readFile('/w/res-b/.cgremlin/post-review');
     expect(a).toContain('const REPO = "acme/app"');
     expect(a).toContain('const PR = 11');
     expect(a).not.toContain('other/svc');
@@ -175,7 +177,7 @@ describe('a stage run refreshes the worktree guardrails', () => {
   });
 
   it.each(['investigation', 'development', 'qa'] as const)(
-    '%s gets refreshed permissions and NO helpers',
+    '%s gets refreshed permissions and NO helpers (unchanged by R110)',
     async (mode) => {
       const session = makeSession(mode, `${mode}-1`, { repo: 'acme/app', number: 3 });
       const fs = await runStage(session, async (memfs, worktree) => {
@@ -192,12 +194,77 @@ describe('a stage run refreshes the worktree guardrails', () => {
 });
 
 /**
+ * R110 — a review of someone else's PR posts only when the user asks, in the
+ * conversation. A headless review or re-review — a manual start, or the
+ * automatic re-review on new commits, which runs through this same path —
+ * must leave the worktree with no helper to run, even one an earlier claim
+ * (or an engine older than R110) left there, and with settings that deny
+ * them. 1fd7bec let that run post by itself.
+ */
+describe('R110 — a headless review or re-review run cannot post', () => {
+  const HELPER_FILES = ['.cgremlin/post-review', '.cgremlin/post-comment', '.cgremlin/package.json'];
+  const HELPER_DENIES = [
+    'Bash(.cgremlin/post-review:*)',
+    'Bash(./.cgremlin/post-review:*)',
+    'Bash(.cgremlin/post-comment:*)',
+    'Bash(./.cgremlin/post-comment:*)',
+  ];
+
+  async function seedHelpers(memfs: InMemoryFileSystem, worktree: string): Promise<void> {
+    await memfs.mkdir(`${worktree}/.cgremlin`, { recursive: true });
+    for (const file of postHelperFiles({ repoSlug: 'acme/app', prNumber: 2113 })) {
+      await memfs.writeFile(`${worktree}/${file.relativePath}`, file.content, { mode: file.mode });
+    }
+  }
+
+  it.each(['review', 'rereview'] as const)(
+    'a headless %s run removes helpers already in the worktree and denies them',
+    async (stage) => {
+      const id = `rev-r110-${stage}`;
+      const session = makeSession('review', id, { repo: 'acme/app', number: 2113 });
+      const fs = new InMemoryFileSystem();
+      const store = new SessionStore(fs, SESSIONS_DIR);
+      await store.save(session);
+      await fs.mkdir(`/w/${id}`, { recursive: true });
+      await seedHelpers(fs, `/w/${id}`);
+      const runner = new FakeAgentRunner();
+      const sr = new StageRunner({
+        runner, store, fs, events: new EngineEvents(), sessionsDir: SESSIONS_DIR,
+        runnerKind: 'claude-code', lock: new KeyedLock(),
+      });
+      const pending = sr.run({ sessionId: id, stage, brief: null, prompt: 'go' });
+      await flush();
+      // What the agent sees is what is on disk while it runs.
+      for (const file of HELPER_FILES) expect(await fs.exists(`/w/${id}/${file}`)).toBe(false);
+      const deny = JSON.parse(await fs.readFile(`/w/${id}/.claude/settings.local.json`)).permissions
+        .deny as string[];
+      expect(deny).toEqual(expect.arrayContaining(HELPER_DENIES));
+      runner.emitExit(runner.lastHandle(), { code: 0, signal: null });
+      expect((await pending).outcome).toBe('succeeded');
+    },
+  );
+
+  it('a fresh headless review worktree gets no helper at all', async () => {
+    const fs = await runStage(makeSession('review', 'rev-r110-fresh', { repo: 'acme/app', number: 5 }));
+    for (const file of HELPER_FILES) expect(await fs.exists(`/w/rev-r110-fresh/${file}`)).toBe(false);
+  });
+
+  it('respond is unchanged: a headless respond run keeps its helpers and denies none of them', async () => {
+    const fs = await runStage(makeSession('respond', 'res-r110', { repo: 'acme/app', number: 7 }));
+    for (const file of HELPER_FILES) expect(await fs.exists(`/w/res-r110/${file}`)).toBe(true);
+    const deny = JSON.parse(await fs.readFile('/w/res-r110/.claude/settings.local.json')).permissions
+      .deny as string[];
+    for (const rule of HELPER_DENIES) expect(deny).not.toContain(rule);
+  });
+});
+
+/**
  * The structural guard. The bug this suite exists for was not a wrong write —
  * it was a write that happened in only ONE place, worktree creation. If the
  * two writers ever regain a second, scattered caller, or the stage-run path
  * loses its call, this fails.
  */
-describe('the guardrail writers are reached from exactly two places', () => {
+describe('the guardrail writers are reached only through the shared refresh', () => {
   const srcRoot = `${path.resolve(__dirname, '../../src')}/`;
 
   function tsFiles(dir: string, prefix = ''): string[] {
@@ -223,8 +290,11 @@ describe('the guardrail writers are reached from exactly two places', () => {
     expect(callerFiles('writePostHelpers')).toEqual(['workspace/workspace-manager.ts']);
   });
 
-  it('the shared refresh is called from BOTH createWorkspace and the stage-run path', () => {
+  // R110 adds the third: the conversation claim and release re-render the
+  // guardrails for the human (helpers in, helper denies out) and back.
+  it('the shared refresh is called from createWorkspace, the stage-run path and the conversation claim', () => {
     expect(callerFiles('refreshWorkspaceGuardrails')).toEqual([
+      'pipeline/pipeline-service.ts',
       'pipeline/stage-runner.ts',
       'workspace/workspace-manager.ts',
     ]);
@@ -279,7 +349,6 @@ describe('a stage run refuses a worktree whose directory is gone', () => {
 
   it('still runs normally when the worktree directory IS there', async () => {
     const fs = await runStage(makeSession('review', 'rev-ok', { repo: 'acme/app', number: 6 }));
-    expect(await fs.exists('/w/rev-ok/.cgremlin/post-review')).toBe(true);
     expect(await fs.readFile('/w/rev-ok/.claude/settings.local.json')).toBe(
       renderPermissionSettings(DEFAULT_PERMISSIONS.review),
     );

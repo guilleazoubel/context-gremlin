@@ -59,6 +59,7 @@ import { assertCanPromote } from './plan-gate';
 import { RunInProgressError, WorkspaceMissingError, type StageRunResult } from './stage-runner';
 import { CRASHED_RUN_ERROR, runLiveness, type RunLiveness } from './run-liveness';
 import { TERMINAL_PHASES_BY_MODE } from '../workspace/workspace-in-use';
+import { refreshWorkspaceGuardrails } from '../workspace/workspace-manager';
 import { repoSlugFromUrl } from '../gh/repo-slug';
 
 export interface PipelineConfig {
@@ -1199,15 +1200,53 @@ export class PipelineService {
         ? { ...fresh.agent, humanTurn }
         : { runner: this.deps.config.runnerKind, resumeId: null, humanTurn };
       const claimed: Session = { ...fresh, agent };
+      // R110 — BEFORE the save: the editor opens `claude --resume` only once
+      // this returns, and that process reads the settings at start.
+      await this.refreshConversationGuardrails(fresh, true);
       await this.deps.store.save(claimed);
       return claimed;
     });
   }
 
-  /** Releases the claim. Idempotent, and a no-op on a session that has no agent record at all. */
+  /**
+   * R110 — the conversation is the one place a review of someone else's PR
+   * may post, and only when the user asks there. A headless run is denied the
+   * post helpers and has none on disk (src/workspace/permission-guard.ts,
+   * post-helpers.ts), so the claim must install them and lift those denies,
+   * or posting would not work in the chat at all; the release puts the
+   * headless state back. That release is hygiene, not the wall: every stage
+   * run re-renders the headless state itself (src/pipeline/stage-runner.ts),
+   * so an expired or never-released claim cannot leak posting into the
+   * automatic re-review. Same refresh as everywhere else, so the
+   * conversation's settings cannot drift from the headless ones. Only modes
+   * whose profile depends on it change (review); the rest re-render as they
+   * are. A worktree that is gone is left gone — the refresh would conjure it.
+   * Only call from inside `this.lock` for `session.id`.
+   */
+  private async refreshConversationGuardrails(session: Session, conversation: boolean): Promise<void> {
+    const worktreePath = session.workspace.worktreePath;
+    if (!worktreePath || !(await this.deps.fs.exists(worktreePath))) return;
+    await refreshWorkspaceGuardrails(
+      this.deps.fs,
+      worktreePath,
+      {
+        mode: session.mode,
+        intent: session.mode === 'investigation' ? session.intent : undefined,
+        conversation,
+      },
+      session.pr === null ? undefined : { repoSlug: session.pr.repo, prNumber: session.pr.number },
+    );
+  }
+
+  /**
+   * Releases the claim. Idempotent, and a no-op on a session that has no agent
+   * record at all — except that it always puts the worktree back in its
+   * headless state (R110), which is idempotent too.
+   */
   async releaseConversation(id: string): Promise<Session> {
     return this.lock.withLock(id, async () => {
       const fresh = await this.deps.store.load(id);
+      await this.refreshConversationGuardrails(fresh, false);
       if (fresh.agent == null || fresh.agent.humanTurn == null) return fresh;
       const released: Session = { ...fresh, agent: { ...fresh.agent, humanTurn: null } };
       await this.deps.store.save(released);

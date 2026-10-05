@@ -153,13 +153,16 @@ describe('ReviewSessionFactory.createFromPrUrl', () => {
 
   // Phase 20 — the review agent cannot call `gh api`; it runs the helper the
   // engine installs, which only works if the factory names the PR it is for.
-  it('installs the post-review helper in the worktree with THIS PR baked in', async () => {
+  // R110 — but a review's worktree is born for a HEADLESS run, which posts
+  // nothing, so creation installs no helper; the conversation claim does,
+  // from the session's own PR, which the factory must therefore record.
+  it('records THIS PR on the session and installs no post helper at creation', async () => {
     const { gh, fs, factory } = harness();
     gh.queueResponse({ stdout: fixture('pr-view-open-approved.json') });
     const session = await factory.createFromPrUrl(PR_URL);
-    const script = await fs.readFile(`${session.workspace.worktreePath}/.cgremlin/post-review`);
-    expect(script).toContain('"aplaceformom/grace-frontend"');
-    expect(script).toContain('const PR = 1614');
+    expect(session.pr).toMatchObject({ repo: 'aplaceformom/grace-frontend', number: 1614 });
+    expect(await fs.exists(`${session.workspace.worktreePath}/.cgremlin/post-review`)).toBe(false);
+    expect(await fs.exists(`${session.workspace.worktreePath}/.cgremlin/post-comment`)).toBe(false);
   });
 
   it('saves nothing and transitions nothing when createWorkspace fails', async () => {
