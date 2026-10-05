@@ -30,6 +30,13 @@ export const POST_REVIEW_HELPER_PATH = '.cgremlin/post-review';
 export const POST_COMMENT_HELPER_PATH = '.cgremlin/post-comment';
 const HELPER_PACKAGE_JSON = '.cgremlin/package.json';
 
+/** Every file `postHelperFiles` writes — and so every file `removePostHelpers` takes out. */
+export const POST_HELPER_PATHS = [
+  HELPER_PACKAGE_JSON,
+  POST_REVIEW_HELPER_PATH,
+  POST_COMMENT_HELPER_PATH,
+] as const;
+
 interface HelperSpec {
   /** Basename of the helper, and the prefix of everything it says. */
   readonly name: string;
@@ -241,8 +248,8 @@ export function shouldWritePostHelpers(profile: PermissionProfile): boolean {
  * writes. A no-op where they were never written.
  */
 export async function removePostHelpers(fs: SessionFileSystem, worktreePath: string): Promise<void> {
-  for (const file of postHelperFiles({ repoSlug: '', prNumber: 0 })) {
-    await fs.remove(`${worktreePath}/${file.relativePath}`);
+  for (const relativePath of POST_HELPER_PATHS) {
+    await fs.remove(`${worktreePath}/${relativePath}`);
   }
 }
 

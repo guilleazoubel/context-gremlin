@@ -11,6 +11,7 @@ import { SessionSchema, type Session, type SessionMode } from '../../src/schema/
 import type { StageName } from '../../src/schema/stage';
 import { postHelperFiles } from '../../src/workspace/post-helpers';
 import { DEFAULT_PERMISSIONS, renderPermissionSettings } from '../../src/workspace/permission-guard';
+import { HELPER_DENIES, HELPER_FILES } from '../support/post-helper-guardrails';
 
 /**
  * The guardrails a session runs under — `.claude/settings.local.json` and the
@@ -202,14 +203,6 @@ describe('a stage run refreshes the worktree guardrails', () => {
  * them. 1fd7bec let that run post by itself.
  */
 describe('R110 — a headless review or re-review run cannot post', () => {
-  const HELPER_FILES = ['.cgremlin/post-review', '.cgremlin/post-comment', '.cgremlin/package.json'];
-  const HELPER_DENIES = [
-    'Bash(.cgremlin/post-review:*)',
-    'Bash(./.cgremlin/post-review:*)',
-    'Bash(.cgremlin/post-comment:*)',
-    'Bash(./.cgremlin/post-comment:*)',
-  ];
-
   async function seedHelpers(memfs: InMemoryFileSystem, worktree: string): Promise<void> {
     await memfs.mkdir(`${worktree}/.cgremlin`, { recursive: true });
     for (const file of postHelperFiles({ repoSlug: 'acme/app', prNumber: 2113 })) {

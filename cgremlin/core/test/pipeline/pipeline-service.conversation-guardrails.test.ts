@@ -5,6 +5,7 @@ import { RunInProgressError } from '../../src/pipeline/stage-runner';
 import type { Session } from '../../src/schema/session';
 import { postHelperFiles } from '../../src/workspace/post-helpers';
 import { refreshWorkspaceGuardrails } from '../../src/workspace/workspace-manager';
+import { HELPER_DENIES, HELPER_FILES } from '../support/post-helper-guardrails';
 
 /**
  * R110 — a review of someone else's PR posts only when the USER asks, in the
@@ -18,13 +19,6 @@ import { refreshWorkspaceGuardrails } from '../../src/workspace/workspace-manage
 
 const NOW = new Date('2026-10-05T12:00:00.000Z');
 const REPO_URL = 'git@github.com:acme/app.git';
-const HELPER_FILES = ['.cgremlin/post-review', '.cgremlin/post-comment', '.cgremlin/package.json'];
-const HELPER_DENIES = [
-  'Bash(.cgremlin/post-review:*)',
-  'Bash(./.cgremlin/post-review:*)',
-  'Bash(.cgremlin/post-comment:*)',
-  'Bash(./.cgremlin/post-comment:*)',
-];
 
 const PR = {
   repo: 'acme/app', number: 31, url: 'https://github.com/acme/app/pull/31',

@@ -7,6 +7,7 @@ import {
   type PermissionSubject,
 } from '../../src/workspace/permission-guard';
 import { InMemoryFileSystem } from '../support/in-memory-file-system';
+import { HELPER_DENIES } from '../support/post-helper-guardrails';
 
 describe('renderPermissionSettings', () => {
   it('renders an allow list', () => {
@@ -721,13 +722,6 @@ describe('every (mode, intent) pair resolves to a pinned profile', () => {
  * respond — the user's OWN PR — keeps posting on a headless run (Phase 20).
  */
 describe('R110 — a headless review cannot run the post helpers', () => {
-  const HELPER_DENIES = [
-    'Bash(.cgremlin/post-review:*)',
-    'Bash(./.cgremlin/post-review:*)',
-    'Bash(.cgremlin/post-comment:*)',
-    'Bash(./.cgremlin/post-comment:*)',
-  ];
-
   it('a headless review denies both helpers, bare and ./-prefixed', () => {
     expect(permissionProfileFor({ mode: 'review' })).toBe('review');
     expect(DEFAULT_PERMISSIONS.review.deny ?? []).toEqual(expect.arrayContaining(HELPER_DENIES));

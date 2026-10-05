@@ -1231,10 +1231,9 @@ export class PipelineService {
    * Only call from inside `this.lock` for `session.id`.
    */
   private async refreshConversationGuardrails(session: Session, conversation: boolean): Promise<void> {
+    // `session` itself is the headless subject: it never carries `conversation`.
+    if (permissionProfileFor({ ...session, conversation: true }) === permissionProfileFor(session)) return;
     const subject = { ...session, conversation };
-    if (permissionProfileFor({ ...subject, conversation: true }) === permissionProfileFor({ ...subject, conversation: false })) {
-      return;
-    }
     const worktreePath = session.workspace.worktreePath;
     if (!worktreePath || !(await this.deps.fs.exists(worktreePath))) return;
     await refreshWorkspaceGuardrails(

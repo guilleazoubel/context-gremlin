@@ -5,8 +5,10 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   POST_COMMENT_HELPER_PATH,
+  POST_HELPER_PATHS,
   POST_REVIEW_HELPER_PATH,
   postHelperFiles,
+  removePostHelpers,
   writePostHelpers,
 } from '../../src/workspace/post-helpers';
 import { InMemoryFileSystem } from '../support/in-memory-file-system';
@@ -190,6 +192,18 @@ describe('writePostHelpers', () => {
   it('writes both helpers at the paths the briefs name', () => {
     expect(POST_REVIEW_HELPER_PATH).toBe('.cgremlin/post-review');
     expect(POST_COMMENT_HELPER_PATH).toBe('.cgremlin/post-comment');
+  });
+
+  // R110 — the removal list is the write list, so neither can grow a file
+  // the other does not know about.
+  it('POST_HELPER_PATHS is exactly what postHelperFiles writes, and removePostHelpers takes it all out', async () => {
+    const written = postHelperFiles({ repoSlug: 'acme/app', prNumber: 1 }).map((f) => f.relativePath);
+    expect([...POST_HELPER_PATHS].sort()).toEqual([...written].sort());
+    const fs = new InMemoryFileSystem();
+    await fs.mkdir('/work/pr-r110', { recursive: true });
+    await writePostHelpers(fs, '/work/pr-r110', { repoSlug: 'acme/app', prNumber: 1 });
+    await removePostHelpers(fs, '/work/pr-r110');
+    for (const path of written) expect(await fs.exists(`/work/pr-r110/${path}`)).toBe(false);
   });
 });
 
