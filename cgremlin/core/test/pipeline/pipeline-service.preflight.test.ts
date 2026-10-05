@@ -170,13 +170,13 @@ function notFoundReader(): TicketDetailCache {
   const source: JiraSource = {
     search: async () => [],
     whoami: async () => ({ accountId: 'x', displayName: 'x' }),
-    issue: async (key) => { throw new JiraNotFoundError(`Jira has no issue ${key}`); },
+    issue: async (key) => { throw new JiraNotFoundError(`Jira has no issue ${key}`, 404); },
   };
   return new TicketDetailCache({ source, snapshot: async () => { throw new Error('no snapshot'); } });
 }
 
 describe.each(CASES)('final fix I1 — which branch keys are linked tickets — $name', (c) => {
-  async function runs(h: PipelineHarness, id: string, run: ReturnType<typeof vi.spyOn>, opts?: { skipJiraCheck: boolean }): Promise<void> {
+  async function runs(h: PipelineHarness, id: string, run: unknown, opts?: { skipJiraCheck: boolean }): Promise<void> {
     void h.service[c.name](id, opts).catch(() => undefined);
     await flush();
     expect(run).toHaveBeenCalledTimes(1);

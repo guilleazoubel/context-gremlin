@@ -518,13 +518,13 @@ describe('0c — the engine\'s ticket brief state (tickets.briefState / tickets.
 
   it('final fix I1: a 404 from Jira for a linked key is none/configured (no such ticket), never not_loaded', async () => {
     const engine = buildEngine(jiraConfig(['HB']), testAdapters(), {
-      jiraSource: stubSource(new JiraNotFoundError(`Jira has no issue HB-1 ${SENTINEL}`)),
+      jiraSource: stubSource(new JiraNotFoundError(`Jira has no issue HB-1 ${SENTINEL}`, 404)),
     });
     const state = await engine.tickets.briefState('HB-1');
     expect(state).toEqual({ kind: 'none', linking: 'configured' });
     // A reader that itself throws JiraNotFoundError is the same.
     const viaSeam = buildEngine(jiraConfig(['HB']), testAdapters(), {
-      ticketDetail: { detail: async () => { throw new JiraNotFoundError('gone'); } },
+      ticketDetail: { detail: async () => { throw new JiraNotFoundError('gone', 404); } },
     });
     expect(await viaSeam.tickets.briefState('HB-1')).toEqual({ kind: 'none', linking: 'configured' });
   });

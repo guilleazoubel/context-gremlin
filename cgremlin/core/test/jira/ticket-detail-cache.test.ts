@@ -132,7 +132,7 @@ describe('TicketDetailCache (R36)', () => {
 
 describe('TicketDetailCache — a ticket Jira does not have (0c final fix)', () => {
   it('JiraNotFoundError: ticket null, flagged notFound, kind stays in its union, and never cached', async () => {
-    const source = fakeSource({ error: new JiraNotFoundError('Jira has no issue UTF-8 (404)') });
+    const source = fakeSource({ error: new JiraNotFoundError('Jira has no issue UTF-8 (404)', 404) });
     const cache = new TicketDetailCache({ source, snapshot: async () => snapshot('2026-09-09T00:00:00.000Z'), now: () => new Date(0) });
     const first = await cache.detail('UTF-8');
     expect(first.ticket).toBeNull();
