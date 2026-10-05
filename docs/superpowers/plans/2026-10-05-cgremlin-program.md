@@ -54,7 +54,7 @@ and everything it depends on must be `done`.
 |---|---|---|---|---|---|
 | 0a | Review/rereview never auto-post (R110) | — | ✅ done 2026-10-05 | (done before this tracker) | `cgremlin-r110` |
 | 0b | Respond-brief truncation + rereview "skip everything else" | — | ✅ done 2026-10-05 | `2026-10-05-cgremlin-0b-respond-brief-and-rereview.md` | `cgremlin-0b` |
-| 0c | Headless runs: Jira + PR access made visible; preflight; engine-only Jira | — | in progress (2026-10-05, step/0c) | `2026-10-05-cgremlin-0c-headless-access-card.md` | — |
+| 0c | Headless runs: Jira + PR access made visible; preflight; engine-only Jira | — | ✅ done 2026-10-05 | `2026-10-05-cgremlin-0c-headless-access.md` | `cgremlin-0c` |
 | 1 | Harden the development guard; stage-aware profiles | 0c (merge order) | ready after 0c | — | — |
 | 1b | `cgremlin` plugin: agents + qa-verify, installed at user level | 1 | ready after 1 | — | — |
 | P1 | Personal: CLAUDE.md, global git hook, settings cleanup, headed Chrome | — | ready | — | n/a |
