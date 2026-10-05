@@ -116,6 +116,25 @@ describe('prompt templates', () => {
     expect(t).toContain('✅ resolved / ⚠️ partial (keep open) / ❌ still open / 🔁 regressed');
   });
 
+  it('0b: the re-review prompt never lets the skill skip the contract, the no-post rule or rereview_summary', () => {
+    const t = renderRereviewPrompt({ sessionDir, commitCount: 3 });
+    expect(t).not.toMatch(/skip everything else/i);
+    // the contract and summary apply on the skill path too
+    const skillPath = t.slice(t.indexOf('STEP 1'), t.indexOf('STEP 2'));
+    expect(skillPath).toContain(`${sessionDir}/BRIEF.md`);
+    expect(skillPath).toContain(`${sessionDir}/rereview_summary`);
+    expect(skillPath).toMatch(/Do NOT post anything to GitHub/);
+    // the no-post rule is still first
+    expect(t.indexOf('Do NOT post anything to GitHub')).toBeLessThan(t.indexOf('STEP 1'));
+  });
+
+  it('0b: re-review with a custom skill command carries the same guarantees', () => {
+    const t = renderRereviewPrompt({ sessionDir, commitCount: 1, reviewSkillCommand: '/x:y' });
+    expect(t).toContain('/x:y');
+    expect(t).not.toMatch(/skip everything else/i);
+    expect(t).toContain(`${sessionDir}/rereview_summary`);
+  });
+
   it('stage entry prompt points at BRIEF.md', () => {
     expect(STAGE_ENTRY_PROMPT(sessionDir)).toBe(`Read ${sessionDir}/BRIEF.md and follow it exactly. BEGIN NOW.`);
   });
