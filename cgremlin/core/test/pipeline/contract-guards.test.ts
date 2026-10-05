@@ -189,7 +189,24 @@ describe('phase 20 — posting goes through the scoped helper, and nowhere else'
   it('the review brief posts to its own PR, once, and to no other', () => {
     expect(review).toContain('PR #7');
     expect(review).toMatch(/any other pull request/i);
-    expect(review).toMatch(/exactly once per run/i);
+    expect(review).toMatch(/exactly once per request/i);
+  });
+
+  /**
+   * R110 — the section stays in the brief, so the agent the user is chatting
+   * with knows HOW to post. But it is the user's call, made in that
+   * conversation: a headless run never posts (1fd7bec had it post by itself).
+   */
+  it.each([
+    ['review', () => review],
+    ['re-review', () => renderRereviewBrief({ sessionDir: '/s', prNumber: 7, commitCount: 2 })],
+  ] as const)('R110: the %s brief gates posting on the user asking, in this conversation', (_name, brief) => {
+    const text = brief();
+    expect(text).toContain('## Posting — only when the user asks you to, in this conversation');
+    expect(text).not.toContain('you post this review to GitHub yourself');
+    expect(text).not.toMatch(/exactly once per run/i);
+    expect(text).toMatch(/never as part of an automatic run/i);
+    expect(text).toMatch(/only when the user explicitly asks you[^.]*in this conversation/i);
   });
 
   it('the review brief puts every finding with a Where at its path:line', () => {
@@ -224,10 +241,12 @@ describe('phase 20 — posting goes through the scoped helper, and nowhere else'
     expect(renderRereviewBrief({ sessionDir: '/s', prNumber: 7, commitCount: 2 })).toContain('## Posting');
   });
 
-  it('the review prompt no longer tells the agent to stay off GitHub', () => {
+  // R110 reverses this half of 1fd7bec: the headless prompt hands the agent no
+  // posting authority at all — the brief's section is for the conversation.
+  it('the review prompt tells a headless run to post nothing, and never points it at ## Posting', () => {
     const prompt = renderReviewPrompt({ sessionDir: '/s' });
-    expect(prompt).not.toContain('Do NOT post to GitHub');
-    expect(prompt).toMatch(/## Posting/);
+    expect(prompt).toContain('Do NOT post anything to GitHub');
+    expect(prompt).not.toMatch(/## Posting/);
   });
 
   it('the respond brief answers on its own PR only, and never force-pushes or lands it', () => {

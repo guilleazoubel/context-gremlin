@@ -598,9 +598,20 @@ ${step5}${uiCheckBlock}
  * posts as a COMMENT that says so. `.cgremlin/post-review` refuses the
  * approving event whatever this text says — the prompt is the rule, the
  * helper is the wall.
+ *
+ * R110 — and it posts only when the USER asks, in the conversation. 1fd7bec
+ * headed this section "you post this review to GitHub yourself" and had the
+ * headless prompt post on its own, so a review of someone else's PR — and
+ * the automatic re-review on new commits — went up with nobody having read
+ * it. The section stays in the brief, because the agent the user chats with
+ * resumes this conversation and needs to know HOW to post; the headless
+ * prompts say to post nothing, and the engine leaves the helpers out of a
+ * headless run's worktree altogether (src/workspace/post-helpers.ts).
  */
 export function renderPostingProtocol(prNumber: number): string {
-  return `## Posting — you post this review to GitHub yourself
+  return `## Posting — only when the user asks you to, in this conversation
+
+**Only on the user's explicit request.** Post only when the user explicitly asks you to, in this conversation — never as part of an automatic run. A review or re-review the engine starts writes \`REVIEW.md\` and stops: the user reads it, discusses it with you here, and decides whether and when it goes to GitHub. During such a run the helpers below are not installed and the guard denies them; they are put in place when the user opens this conversation. If you were not asked, post nothing.
 
 **Where.** Exactly one pull request: **PR #${prNumber}**, the one this worktree is checked out on. You do not choose it and you cannot change it — the helpers below have this repository and this number compiled into them, and take no repo, number or URL. Never post to any other pull request, and never to an issue.
 
@@ -616,7 +627,7 @@ export function renderPostingProtocol(prNumber: number): string {
 
 **If a helper exits non-zero, nothing was posted.** Read what it printed, fix the file and run it once more. If it still fails, report the review as NOT delivered — say plainly that \`REVIEW.md\` is written but GitHub has nothing on it, and quote the error. Never call a review posted on the strength of having run the command.
 
-**When.** Exactly once per run, after \`REVIEW.md\` is written and final. \`REVIEW.md\` is the source and GitHub is the copy: post what the file says, not a fresh opinion.
+**When.** Exactly once per request, after the user has asked and \`REVIEW.md\` is final. \`REVIEW.md\` is the source and GitHub is the copy: post what the file says, not a fresh opinion.
 
 **How.** Write a findings file (JSON, in this session directory), then run \`.cgremlin/post-review <that file>\`:
 
@@ -684,12 +695,23 @@ export function renderReviewPrompt(p: ReviewPromptParams): string {
     (p.includeLiveUiCheck ?? true) && uiCheckRendered
       ? ` Then ALWAYS run the '## LIVE UI CHECK' section in ${p.sessionDir}/BRIEF.md (PM + Designer subagents) and merge its 📋/🎨 findings into REVIEW.md — this is required even when ${bareSkillName(skill)} handled the code review.`
       : '';
-  return `Run ${skill}. Whatever shape it proposes, REVIEW.md must match the output contract in ${p.sessionDir}/BRIEF.md EXACTLY — that contract is what the engine and the editor read, and it overrides the skill's own output format wherever the two differ.${ui} Proceed autonomously; do NOT ask for confirmation or a verdict. Read the PR with git (the branch is checked out) or gh pr view/diff as needed. If Jira/Atlassian MCP is unavailable, skip Jira context and proceed with the diff alone. Write the output to ${p.sessionDir}/REVIEW.md, then post it to the PR exactly as the '## Posting' section of ${p.sessionDir}/BRIEF.md says — that section is the whole of your posting authority.`;
+  return `Run ${skill}. Whatever shape it proposes, REVIEW.md must match the output contract in ${p.sessionDir}/BRIEF.md EXACTLY — that contract is what the engine and the editor read, and it overrides the skill's own output format wherever the two differ.${ui} Proceed autonomously; do NOT ask for confirmation or a verdict. Read the PR with git (the branch is checked out) or gh pr view/diff as needed. If Jira/Atlassian MCP is unavailable, skip Jira context and proceed with the diff alone. Write the output to ${p.sessionDir}/REVIEW.md. ${HEADLESS_REVIEW_POSTS_NOTHING}`;
 }
+
+/**
+ * R110 — what a headless review or re-review says about GitHub. It writes
+ * REVIEW.md and stops; posting a review of someone else's PR is the user's
+ * call, made in the conversation (the brief's `## Posting` section is for
+ * then). 1fd7bec replaced "Do NOT post to GitHub" with an instruction to post,
+ * and the automatic re-review on new commits, which nobody watches, posted.
+ */
+const HEADLESS_REVIEW_POSTS_NOTHING =
+  'Do NOT post anything to GitHub — no review, no comment, no helper, whatever a skill proposes. When REVIEW.md is complete, stop: the user reviews it and will ask in the conversation if and when to post.';
 
 export function renderRereviewPrompt(p: RereviewPromptParams): string {
   const skill = p.reviewSkillCommand ?? DEFAULT_REVIEW_SKILL;
-  return `STEP 1: Check if ${skill} skill is available. If yes, run it for re-review and follow its output — skip everything else. STEP 2 (only if skill unavailable): RE-REVIEW MODE — PR updated with ${p.commitCount} new commit(s). Read ${p.sessionDir}/RE-REVIEW.md and follow it. Update ${p.sessionDir}/REVIEW.md in-place. FIRST verify each prior finding was properly addressed: re-check whether the problem it describes still happens in the new code and classify ✅ resolved / ⚠️ partial (keep open) / ❌ still open / 🔁 regressed, with evidence — 🔇 dismissed stay untouched. THEN add NEW findings only if they pass the evidence bar in ${p.sessionDir}/BRIEF.md, written in the file's plain format (What's wrong / Why it matters / Suggested fix), and re-check the PR still satisfies its Jira ticket. Severity is 🔴 Critical / 🟠 High / 🟡 Perf / 🔧 Maintainability. Scope: ONLY files in the PR diff. Add a new row to Review History. Self-check: verify every finding references a changed file. As the very last action, write a single line to the file ${p.sessionDir}/rereview_summary. Format: '✅ N/N resolved' if all prior findings are resolved, or '⚠️ K/N resolved, M new' otherwise. Write only that line — no other content.`;
+  // R110 — first, so "skip everything else" in STEP 1 cannot skip it.
+  return `${HEADLESS_REVIEW_POSTS_NOTHING} STEP 1: Check if ${skill} skill is available. If yes, run it for re-review and follow its output — skip everything else. STEP 2 (only if skill unavailable): RE-REVIEW MODE — PR updated with ${p.commitCount} new commit(s). Read ${p.sessionDir}/RE-REVIEW.md and follow it. Update ${p.sessionDir}/REVIEW.md in-place. FIRST verify each prior finding was properly addressed: re-check whether the problem it describes still happens in the new code and classify ✅ resolved / ⚠️ partial (keep open) / ❌ still open / 🔁 regressed, with evidence — 🔇 dismissed stay untouched. THEN add NEW findings only if they pass the evidence bar in ${p.sessionDir}/BRIEF.md, written in the file's plain format (What's wrong / Why it matters / Suggested fix), and re-check the PR still satisfies its Jira ticket. Severity is 🔴 Critical / 🟠 High / 🟡 Perf / 🔧 Maintainability. Scope: ONLY files in the PR diff. Add a new row to Review History. Self-check: verify every finding references a changed file. As the very last action, write a single line to the file ${p.sessionDir}/rereview_summary. Format: '✅ N/N resolved' if all prior findings are resolved, or '⚠️ K/N resolved, M new' otherwise. Write only that line — no other content.`;
 }
 
 // ---------------------------------------------------------------------------

@@ -70,10 +70,23 @@ describe('prompt templates', () => {
     // §4f — the external skill is not edited; the brief's contract wins.
     expect(t).toContain(`REVIEW.md must match the output contract in ${sessionDir}/BRIEF.md EXACTLY`);
     expect(t).toContain("run the '## LIVE UI CHECK' section");
-    // Phase 20: the prompt now hands posting authority to the brief's section.
-    expect(t).not.toContain('Do NOT post to GitHub');
-    expect(t).toContain("'## Posting' section");
     expect(t).toContain(`Write the output to ${sessionDir}/REVIEW.md`);
+  });
+
+  // R110 — a headless review writes REVIEW.md and STOPS. Posting a review of
+  // someone else's PR is the user's call, made in the conversation; 1fd7bec
+  // had the headless prompt post on its own.
+  it.each([
+    ['review', () => renderReviewPrompt({ sessionDir, uiCheckRendered: true })],
+    ['re-review', () => renderRereviewPrompt({ sessionDir, commitCount: 2 })],
+  ] as const)('R110: the %s prompt never instructs posting, and says to stop for the user', (_name, prompt) => {
+    const t = prompt();
+    expect(t).not.toMatch(/then post/i);
+    expect(t).not.toMatch(/post it to the PR/i);
+    expect(t).not.toContain("'## Posting' section");
+    expect(t).toContain('Do NOT post anything to GitHub');
+    expect(t).toMatch(/when REVIEW\.md is complete, stop/i);
+    expect(t).toMatch(/the user reviews it and will ask in the conversation if and when to post/i);
   });
 
   it('develop brief without a plan requires the plan gate and DEVELOPMENT.md', () => {
