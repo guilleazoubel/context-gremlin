@@ -1037,7 +1037,7 @@ export const EMPTY_QA_ENVIRONMENT: QaEnvironmentBriefContext = {
 
 /**
  * The rules of engagement, carried VERBATIM by the brief and by
- * `skills/qa-verify/SKILL.md`. A UI smoke test cannot be read-only against a
+ * `plugin/skills/qa-verify/SKILL.md`. A UI smoke test cannot be read-only against a
  * running app, and this must not pretend otherwise: the agent USES the app.
  * What it must never do is the list below — and only part of it is
  * enforceable by the `qa` permission guard, which covers `Bash(...)` only.
@@ -1112,7 +1112,7 @@ ${notes(sessionDir)}`;
 
 /**
  * MG-17k — the twin of `REVIEW_CONTRACT_EXAMPLE`: this is the string
- * `parseQaVerdict` is proved against AND the string `skills/qa-verify/SKILL.md`
+ * `parseQaVerdict` is proved against AND the string `plugin/skills/qa-verify/SKILL.md`
  * carries between its `<!-- QA_CONTRACT_EXAMPLE -->` fences, so the skill, the
  * brief and the parser move together or not at all.
  *

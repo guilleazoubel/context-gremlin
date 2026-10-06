@@ -181,9 +181,10 @@ into a local app too, it just isn't on by default.
 A `qa` session's brief carries its own protocol (`## How to verify`) so it works even in a target
 repo that has never heard of cgremlin — but if `qaSkillCommand` (default `/cgremlin:qa-verify`)
 resolves to an installed skill, the agent runs that first. The skill's source ships with the
-engine at `skills/qa-verify/SKILL.md`; install it by copying (or symlinking) that file to
-`~/.claude/skills/qa-verify/SKILL.md` (or your Claude Code skills directory of choice) so it is
-available as `/cgremlin:qa-verify` in every target repo's worktree. If it is absent, nothing
+repo at `plugin/skills/qa-verify/SKILL.md`, as part of the `cgremlin` Claude Code plugin; install
+the plugin (`claude plugin marketplace add <repo path>` then
+`claude plugin install cgremlin@cgremlin-local`) so it is available as `/cgremlin:qa-verify` in
+every target repo's worktree. If it is absent, nothing
 breaks: the agent falls back to `BRIEF.md`'s `## How to verify` section, which is the same
 protocol, inlined.
 

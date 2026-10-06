@@ -1,0 +1,6 @@
+{
+  "name": "cgremlin",
+  "version": "0.1.0",
+  "description": "Context Gremlin agents (reader, reviewer, verifier, executor, planner, UI evaluators, …) and the qa-verify skill, for stage sessions in any repo.",
+  "author": { "name": "guilleazoubel" }
+}

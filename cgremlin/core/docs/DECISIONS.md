@@ -742,7 +742,8 @@ extension does not know.
   `reviewSkillCommand`/`renderUiCheckProtocol`. The agent runs in the *target* repo's worktree,
   where a file that ships with cgremlin's own repo does not exist — so the skill's source ships at
   `skills/qa-verify/SKILL.md` here, to be installed by the user into their own Claude Code skills
-  directory, and the brief carries the same protocol inlined so a missing install never leaves the
+  directory (moved to `plugin/skills/qa-verify/SKILL.md` and installed via the plugin in step 1b,
+  no longer copied by hand), and the brief carries the same protocol inlined so a missing install never leaves the
   agent with nothing to do.
 - **R77, amended: a cold record seeds, it does not fire.** The original ruling would have had a
   freshly-installed leg fire one verification per tick against an entire pre-existing QA backlog
@@ -753,7 +754,7 @@ extension does not know.
   opt-in for someone who wants the fleet anyway, still capped by `maxAutoStartsPerTick`.
 - **R82: one list, three places, checked by a guard test.** The permitted/forbidden list for a QA
   agent is carried verbatim by the spec, `renderQaBrief`'s `QA_CONDUCT_RULE`, and
-  `skills/qa-verify/SKILL.md` — a guard test (`test/skills/qa-verify-skill.test.ts`) asserts the
+  `skills/qa-verify/SKILL.md` (moved to `plugin/skills/qa-verify/SKILL.md` in step 1b) — a guard test (`test/skills/qa-verify-skill.test.ts`) asserts the
   skill's copy is byte-identical to the exported constant, so the three cannot drift apart
   silently. The spec, the brief and the skill also all say the same true thing about enforcement:
   the runner launches with `--permission-mode bypassPermissions`, and the `qa` deny list matches
@@ -796,3 +797,37 @@ extension does not know.
 - **Still a guardrail.** Same limits as the guard header: quoting and `git -C` defeat matching,
   MCP is not covered; non-draft `gh pr create` is still allowed to development (the engine checks
   `isDraft`, the brief says draft only).
+
+## 2026-10-06 — Step 1b (cgremlin Claude Code plugin: agents and qa-verify)
+
+- **Plugin layout.** `plugin/` holds `plugin.json`, `agents/` and `skills/qa-verify`. The repo's
+  `.claude-plugin/marketplace.json` names the marketplace `cgremlin-local`; the install id is
+  `cgremlin@cgremlin-local`, version `0.1.0`.
+- **One source for the agents.** `.claude/agents/*.md` are symlinks into `plugin/agents/`. Bare
+  names stay for this repo's CLAUDE.md routing table; everywhere else the agents resolve as
+  `cgremlin:`-prefixed names.
+- **Model/effort/tools as implemented.**
+
+  | agent | model | effort | tools |
+  |---|---|---|---|
+  | reader | haiku | low | Read, Grep, Glob, Bash |
+  | chore | haiku | low | Bash, Read |
+  | matcher | sonnet | medium | Read, Grep, Glob |
+  | executor | sonnet | high | Read, Write, Edit, Bash, Grep, Glob |
+  | executor-heavy | opus | high | Read, Write, Edit, Bash, Grep, Glob |
+  | planner | opus | high | Read, Grep, Glob, Bash, WebSearch, WebFetch |
+  | reviewer | opus | high | Read, Grep, Glob, Bash |
+  | verifier | opus | high | Read, Grep, Glob, Bash |
+  | ui-driver | sonnet | medium | Read, Write, Bash, Grep, Glob, chrome-devtools MCPs, playwright MCP |
+  | ui-eng-evaluator | opus | medium | Read, Grep, Glob |
+  | ui-design-evaluator | opus | medium | Read, Grep, Glob |
+  | ui-pm-evaluator | opus | medium | Read, Grep, Glob, Bash, chrome-devtools MCPs, playwright MCP |
+
+- **Verifier verdict** is CONFIRMED, REFUTED or UNVERIFIABLE (code that cannot decide it either
+  way). Nothing in core, vscode or bin consumes the verdict; it is for the human/main session.
+- **Executor tiers unchanged.** `executor` stays sonnet-high and `executor-heavy` opus-high until
+  the step-12 A/B settles it.
+- **qa-verify moved as a 100% rename** (`skills/qa-verify` to `plugin/skills/qa-verify`), content
+  byte-identical, so no evals were required.
+- **Verified from a grace-frontend session:** `cgremlin:qa-verify` and the 12 agents resolve, and
+  the repo was left untouched.
