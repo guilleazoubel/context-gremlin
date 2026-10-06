@@ -188,6 +188,21 @@ describe('phase 20 — the per-mode deny table', () => {
           'Bash(gh issue:*)',
           'Bash(gh pr merge:*)',
           'Bash(gh pr close:*)',
+          'Bash(gh pr edit:*)',
+          'Bash(gh pr ready:*)',
+          'Bash(gh api:*)',
+          'Bash(git push --force:*)',
+          'Bash(git push -f:*)',
+          'Bash(git push --force-with-lease:*)',
+          'Bash(git push --force-with-lease=*)',
+          'Bash(git push * --force)',
+          'Bash(git push * --force *)',
+          'Bash(git push * -f)',
+          'Bash(git push * -f *)',
+          'Bash(git push * --force-with-lease)',
+          'Bash(git push * --force-with-lease *)',
+          'Bash(git push * --force-with-lease=*)',
+          'Bash(git push * +*)',
         ],
       },
       respond: {
@@ -532,7 +547,7 @@ describe('the administrative `gh` surface outside pr/issue/api', () => {
     expect(isDenied(mode, 'gh auth token')).toBe(false);
   });
 
-  it('development is untouched by this phase and keeps the whole surface', () => {
+  it('development keeps the non-pr/issue/api gh surface (step 1 hardens only pr/api/force-push)', () => {
     for (const command of ADMINISTRATIVE_GH) {
       expect([command, isDenied('development', command)]).toEqual([command, false]);
     }
@@ -736,5 +751,43 @@ describe('R110 — a headless review cannot run the post helpers', () => {
   it.each([false, true])('respond (conversation: %s) is unchanged — it never denies its helpers', (conversation) => {
     const deny = DEFAULT_PERMISSIONS[permissionProfileFor({ mode: 'respond', conversation })].deny ?? [];
     for (const rule of HELPER_DENIES) expect(deny).not.toContain(rule);
+  });
+});
+
+const isProfileDenied = (profile: keyof typeof DEFAULT_PERMISSIONS, command: string): boolean =>
+  (DEFAULT_PERMISSIONS[profile].deny ?? []).some((rule) => matchesRule(rule, command));
+
+describe('step 1 — development no longer lands, rewrites or calls the API', () => {
+  it.each([
+    'gh pr ready 12',
+    'gh pr ready --undo',
+    'gh pr edit 12 --title x',
+    'gh pr merge 12 --squash',
+    'gh pr close 12',
+    'gh api repos/acme/app/pulls/12',
+    'gh api -X POST repos/acme/app/issues',
+    'gh api graphql -f query=x',
+    'git push --force',
+    'git push -f origin my-branch',
+    'git push origin my-branch --force',
+    'git push origin my-branch -f',
+    'git push --force-with-lease origin my-branch',
+    'git push origin my-branch --force-with-lease=refs/heads/my-branch:0ff1ce',
+    'git push origin +my-branch',
+    'git push origin +HEAD:my-branch',
+  ])('denies `%s`', (command) => {
+    expect(isProfileDenied('development', command)).toBe(true);
+  });
+
+  it.each([
+    'git commit -m x',
+    'git push',
+    'git push -u origin HEAD',
+    'git push origin my-branch',
+    'gh pr create --draft --title x',
+    'gh pr view 12',
+    'gh run list',
+  ])('still allows `%s`', (command) => {
+    expect(isProfileDenied('development', command)).toBe(false);
   });
 });

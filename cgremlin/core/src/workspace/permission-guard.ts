@@ -280,11 +280,19 @@ export const DEFAULT_PERMISSIONS: Record<PermissionProfile, PermissionConfig> = 
       ...NEVER_FORCE_PUSH,
     ],
   },
+  // Step 1 — the human's own development session. It commits, pushes its own
+  // branch and opens a DRAFT pull request (`gh pr create --draft`; the engine
+  // re-checks isDraft). It does not mark a PR ready, edit it, merge or close
+  // it, call `gh api`, or rewrite history: those are protected actions (R112)
+  // and force-pushing is denied in every spelling, `--force-with-lease`
+  // included until a later step needs it. Deliberately NOT denied: the rest of
+  // the `gh` surface (NEVER_ADMINISTER) — this profile is the one that keeps it.
   development: {
     deny: [
       ...NEVER_POST,
-      'Bash(gh pr merge:*)',
-      'Bash(gh pr close:*)',
+      ...NEVER_LAND,
+      GH_API_DENY,
+      ...NEVER_FORCE_PUSH,
     ],
   },
   // Phase 20 — the deferred-posting decision was reversed by the user: the
