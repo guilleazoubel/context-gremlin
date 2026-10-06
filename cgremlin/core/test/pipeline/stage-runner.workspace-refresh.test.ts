@@ -92,6 +92,7 @@ function flush(): Promise<void> {
 async function runStage(
   session: Session,
   seed?: (fs: InMemoryFileSystem, worktreePath: string) => Promise<void>,
+  stage: StageName = STAGE_FOR[session.mode],
 ): Promise<InMemoryFileSystem> {
   const fs = new InMemoryFileSystem();
   const store = new SessionStore(fs, SESSIONS_DIR);
@@ -111,7 +112,7 @@ async function runStage(
   });
   const pending = sr.run({
     sessionId: session.id,
-    stage: STAGE_FOR[session.mode],
+    stage,
     brief: null,
     prompt: 'go',
   });
@@ -403,5 +404,38 @@ describe('the refresh preserves an intent-derived permission set', () => {
     const again = await runStage(developmentBoundInvestigation('inv-dev-2'));
     expect(await again.readFile('/w/inv-dev-2/.claude/settings.local.json')).toBe(first);
     expect(first).toBe(renderPermissionSettings(DEFAULT_PERMISSIONS['investigation:development']));
+  });
+});
+
+/**
+ * The refresh is computed from (session, STAGE): a review or live-check run in
+ * a development worktree is read-only (R92), while the develop stage keeps
+ * commit and push.
+ */
+describe('the refresh passes the stage — inspect stages in a dev worktree cannot commit or push', () => {
+  const stale = async (memfs: InMemoryFileSystem, worktree: string): Promise<void> => {
+    await memfs.mkdir(`${worktree}/.claude`, { recursive: true });
+    await memfs.writeFile(`${worktree}/.claude/settings.local.json`, STALE_REVIEW_SETTINGS);
+  };
+  const denyOf = async (fs: InMemoryFileSystem, id: string): Promise<string[]> =>
+    JSON.parse(await fs.readFile(`/w/${id}/.claude/settings.local.json`)).permissions.deny as string[];
+
+  it('a review stage on a development session denies commit, push, pr ready and gh api', async () => {
+    const session = makeSession('development', 'dev-insp-1', null);
+    const fs = await runStage(session, stale, 'review');
+    const deny = await denyOf(fs, 'dev-insp-1');
+    for (const rule of ['Bash(git commit:*)', 'Bash(git push:*)', 'Bash(gh pr ready:*)', 'Bash(gh api:*)']) {
+      expect(deny).toContain(rule);
+    }
+  });
+
+  it('the develop stage on the same session still denies pr ready and gh api but not commit or push', async () => {
+    const session = makeSession('development', 'dev-insp-2', null);
+    const fs = await runStage(session, stale, 'develop');
+    const deny = await denyOf(fs, 'dev-insp-2');
+    expect(deny).toContain('Bash(gh pr ready:*)');
+    expect(deny).toContain('Bash(gh api:*)');
+    expect(deny).not.toContain('Bash(git commit:*)');
+    expect(deny).not.toContain('Bash(git push:*)');
   });
 });
