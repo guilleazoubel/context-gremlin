@@ -1,0 +1,13 @@
+{
+  "name": "cgremlin-local",
+  "owner": { "name": "guilleazoubel" },
+  "metadata": { "description": "Local Context Gremlin plugin marketplace." },
+  "plugins": [
+    {
+      "name": "cgremlin",
+      "source": "./plugin",
+      "version": "0.1.0",
+      "description": "Context Gremlin agents and the qa-verify skill."
+    }
+  ]
+}
