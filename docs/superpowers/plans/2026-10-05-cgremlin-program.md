@@ -56,10 +56,10 @@ and everything it depends on must be `done`.
 | 0b | Respond-brief truncation + rereview "skip everything else" | — | ✅ done 2026-10-05 | `2026-10-05-cgremlin-0b-respond-brief-and-rereview.md` | `cgremlin-0b` |
 | 0c | Headless runs: Jira + PR access made visible; preflight; engine-only Jira | — | ✅ done 2026-10-05 | `2026-10-05-cgremlin-0c-headless-access.md` | `cgremlin-0c` |
 | 1 | Harden the development guard; stage-aware profiles | 0c (merged) | ✅ done 2026-10-06 | `2026-10-06-cgremlin-step-1-guard.md` | `cgremlin-1` |
-| 1b | `cgremlin` plugin: agents + qa-verify, installed at user level | 1 | ready | — | — |
+| 1b | `cgremlin` plugin: agents + qa-verify, installed at user level | 1 | ✅ done 2026-10-06 | `2026-10-06-cgremlin-step-1b-plugin.md` | `cgremlin-1b` |
 | P1 | Personal: CLAUDE.md, global git hook, settings cleanup, headed Chrome | — | ready | — | n/a |
 | P2 | Personal: trim plugins; install mattpocock-skills + prompt-master | P1 | ready after P1 | — | n/a |
-| P3 | Personal + cgremlin: local dev that just works | 1b | blocked on 1b | — | — |
+| P3 | Personal + cgremlin: local dev that just works | 1b | ready | — | — |
 | P4 | Personal: rotate the Jira token; secrets to Keychain | — | **my action** | — | n/a |
 | 2 | Foundations: fresh runs, PR detection, per-stage routing, feedback.jsonl | 1 | ready | — | — |
 | 3 | Mode `workplan` + lineage grouping in the Work list | 2 | blocked | — | — |
@@ -114,10 +114,10 @@ per session, not per stage.
 never installed, so stage sessions in other repos can't use them (A3).
 **Spec:** §18 A3, §17 (models), the earlier agent audit (no `tools` lists on executor/ui-driver/ui-pm-evaluator; reviewer on Sonnet; binary verifier verdict).
 **Done when:**
-- [ ] `context-gremlin/plugin/.claude-plugin/plugin.json`, `agents/` (the 12, each with a third-person description, a `tools` list, an output format, and model/effort per §17; reviewer on Opus; verifier verdict CONFIRMED/REFUTED/UNVERIFIABLE), and `skills/qa-verify/` (single source; the engine reads its contract from there; the fence-sync test is kept).
-- [ ] A local marketplace entry; installed at user level; `/cgremlin:qa-verify` resolves in a grace-frontend session (verified); `claude plugin validate` passes.
-- [ ] `qaSkillCommand` points to it; the project `.claude/agents` keep working for cgremlin development, or are replaced by the plugin (decided in the step plan).
-- [ ] Released as `cgremlin-1b`; RELEASES.md notes the plugin version.
+- [x] `context-gremlin/plugin/.claude-plugin/plugin.json`, `agents/` (the 12, each with a third-person description, a `tools` list, an output format, and model/effort per §17; reviewer on Opus; verifier verdict CONFIRMED/REFUTED/UNVERIFIABLE), and `skills/qa-verify/` (single source; the engine reads its contract from there; the fence-sync test is kept).
+- [x] A local marketplace entry; installed at user level; `/cgremlin:qa-verify` resolves in a grace-frontend session (verified); `claude plugin validate` passes.
+- [x] `qaSkillCommand` points to it; the project `.claude/agents` keep working for cgremlin development, or are replaced by the plugin (decided in the step plan).
+- [x] Released as `cgremlin-1b`; RELEASES.md notes the plugin version.
 
 ### P1 — Personal setup, part 1 (no cgremlin code)
 **Spec:** §21 B8, B10, B11, B12.
@@ -164,6 +164,7 @@ Cards for these are written when their dependencies are done, from the spec sect
 ## Log
 | Date | Step | What happened |
 |---|---|---|
+| 2026-10-06 | 1b | Done: plugin `cgremlin` 0.1.0 built TDD in worktree `step/1b` (5 commits + merge); per-task reviews and a fresh whole-branch review (no blocking findings; MCP server-name tools verified live). Merged `bd22e09`, tagged `cgremlin-pre-1b` (`b1a096b`) / `cgremlin-1b`; `.vsix` saved, not installed (no extension/engine runtime change). Plugin installed at user level from the local marketplace `cgremlin-local` and verified from a grace-frontend session; marketplace re-pointed from the worktree to the main checkout. **Open item for you:** `CLAUDE.md:38` says the main session reports only CONFIRMED findings, which drops UNVERIFIABLE verdicts. Recommended one-line change: "list UNVERIFIABLE separately as unresolved" (not applied: instruction file). |
 | 2026-10-06 | — | Cleanup is now part of every release (RELEASES.md step 8). Leftover 0c worktree and `step/0c` branch removed. |
 | 2026-10-06 | 1 | Done: `development` denies `gh pr ready/edit`, `gh api` and all force-push spellings; `PermissionSubject.stage` + `development:inspect` / `investigation:development:inspect` profiles (review, rereview, phase_review, live_check can't commit/push); stage runner passes the stage. 4 tasks, each reviewed; fresh whole-branch review merge-ready. Merged `b1a096b`, tagged `cgremlin-pre-1` (`8374d87`) / `cgremlin-1`, `.vsix` saved and installed. Note for a later step: a dev session that ran an inspect stage keeps the inspect settings until its next stage run (conversation claim doesn't refresh dev sessions). Branch + tags not yet pushed. |
 | 2026-10-05 | 0c / 1 | Order set: 0c runs now; step 1 starts after 0c is released (it was not started yet). |
