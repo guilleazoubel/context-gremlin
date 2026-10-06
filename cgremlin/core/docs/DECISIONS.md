@@ -778,3 +778,21 @@ extension does not know.
   headless state, so an expired or unreleased claim cannot leak into a headless run.
 - **`respond` is unchanged** — it replies on the user's own PR, headless, as Phase 20 decided. QA
   is unchanged.
+
+## 2026-10-06 — Step 1 (development guard; stage-aware profiles, R92/R112)
+
+- **`development` is hardened.** It used to deny only posting plus `gh pr merge`/`close`; a dev
+  session could run `gh pr ready`, `gh pr edit`, `gh api` and force-push. It now denies
+  `gh pr ready/edit/merge/close`, `gh api:*` and every force-push spelling (`--force`, `-f`,
+  `+refspec`, and `--force-with-lease` until a later step needs it). Commit, push of its own
+  branch and `gh pr create --draft` stay (the engine re-checks `isDraft`). The rest of the `gh`
+  surface is unchanged on purpose.
+- **Authority now depends on the stage too.** `PermissionSubject` gains `stage`;
+  `development:inspect` and `investigation:development:inspect` are the two dev-landing profiles
+  plus `git commit`/`git push` denies, selected for `review`, `rereview`, `phase_review` and
+  `live_check`, so a stage that only looks at a dev worktree cannot change its branch. The stage
+  runner passes it on its pre-run guard refresh; respond, QA, review and `review:conversation`
+  resolve exactly as before.
+- **Still a guardrail.** Same limits as the guard header: quoting and `git -C` defeat matching,
+  MCP is not covered; non-draft `gh pr create` is still allowed to development (the engine checks
+  `isDraft`, the brief says draft only).

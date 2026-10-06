@@ -35,6 +35,12 @@ export const INSPECT_STAGES: readonly GuardStage[] = ['review', 'rereview', 'pha
  * own pull request is out of bounds even where nothing stops it — and the
  * permissions of the token itself. Do not add a rule here and call a class of
  * behaviour prevented; say in the brief what the rule does and does not do.
+ *
+ * Profiles are keyed on (mode, intent, conversation, stage). Stage only narrows
+ * the two dev-landing profiles: for the inspect stages (review, rereview,
+ * phase_review, live_check) `git commit` and `git push` are denied as well, so a
+ * stage that only looks at a dev worktree cannot change its branch. That is as
+ * much a guardrail as everything else here.
  */
 export interface PermissionConfig {
   allow?: string[];
