@@ -18,6 +18,6 @@ dev-*/
 
 # IDE / tool
 .playwright-mcp/
-.claude/
+.claude/*
 !.claude/agents/
 !.claude/settings.json
