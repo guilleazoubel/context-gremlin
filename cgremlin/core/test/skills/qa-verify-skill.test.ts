@@ -6,14 +6,14 @@ import { QA_CONDUCT_RULE, QA_CONTRACT_EXAMPLE } from '../../src/pipeline/prompts
 /**
  * MG-33 (E12/R82) — the permitted/forbidden list must be byte-identical
  * between what the engine renders into a brief (`QA_CONDUCT_RULE`) and what
- * ships in `skills/qa-verify/SKILL.md`, so the two cannot silently drift.
+ * ships in `plugin/skills/qa-verify/SKILL.md`, so the two cannot silently drift.
  * The skill file also carries the `## QA Verdict` marker shape the parser
  * in `pipeline/artifacts.ts` (`parseQaVerdict`) expects, so a human editing
  * the skill by hand cannot accidentally desync it from what the engine
  * actually parses.
  */
 
-const SKILL_PATH = join(__dirname, '../../skills/qa-verify/SKILL.md');
+const SKILL_PATH = join(__dirname, '../../../../plugin/skills/qa-verify/SKILL.md');
 
 function readSkill(): string {
   return readFileSync(SKILL_PATH, 'utf8');
