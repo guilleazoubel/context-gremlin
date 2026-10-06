@@ -55,13 +55,13 @@ and everything it depends on must be `done`.
 | 0a | Review/rereview never auto-post (R110) | — | ✅ done 2026-10-05 | (done before this tracker) | `cgremlin-r110` |
 | 0b | Respond-brief truncation + rereview "skip everything else" | — | ✅ done 2026-10-05 | `2026-10-05-cgremlin-0b-respond-brief-and-rereview.md` | `cgremlin-0b` |
 | 0c | Headless runs: Jira + PR access made visible; preflight; engine-only Jira | — | ✅ done 2026-10-05 | `2026-10-05-cgremlin-0c-headless-access.md` | `cgremlin-0c` |
-| 1 | Harden the development guard; stage-aware profiles | 0c (merged) | ready | — | — |
-| 1b | `cgremlin` plugin: agents + qa-verify, installed at user level | 1 | ready after 1 | — | — |
+| 1 | Harden the development guard; stage-aware profiles | 0c (merged) | ✅ done 2026-10-06 | `2026-10-06-cgremlin-step-1-guard.md` | `cgremlin-1` |
+| 1b | `cgremlin` plugin: agents + qa-verify, installed at user level | 1 | ready | — | — |
 | P1 | Personal: CLAUDE.md, global git hook, settings cleanup, headed Chrome | — | ready | — | n/a |
 | P2 | Personal: trim plugins; install mattpocock-skills + prompt-master | P1 | ready after P1 | — | n/a |
 | P3 | Personal + cgremlin: local dev that just works | 1b | blocked on 1b | — | — |
 | P4 | Personal: rotate the Jira token; secrets to Keychain | — | **my action** | — | n/a |
-| 2 | Foundations: fresh runs, PR detection, per-stage routing, feedback.jsonl | 1 | ready after 1 | — | — |
+| 2 | Foundations: fresh runs, PR detection, per-stage routing, feedback.jsonl | 1 | ready | — | — |
 | 3 | Mode `workplan` + lineage grouping in the Work list | 2 | blocked | — | — |
 | 4 | Planning chat (grilling → to-spec → to-tickets) + plan gate | 3, P2 | blocked | — | — |
 | 5 | **Milestone:** one phase end to end from ▶ | 4 | blocked | — | — |
@@ -164,6 +164,7 @@ Cards for these are written when their dependencies are done, from the spec sect
 ## Log
 | Date | Step | What happened |
 |---|---|---|
+| 2026-10-06 | 1 | Done: `development` denies `gh pr ready/edit`, `gh api` and all force-push spellings; `PermissionSubject.stage` + `development:inspect` / `investigation:development:inspect` profiles (review, rereview, phase_review, live_check can't commit/push); stage runner passes the stage. 4 tasks, each reviewed; fresh whole-branch review merge-ready. Merged `b1a096b`, tagged `cgremlin-pre-1` (`8374d87`) / `cgremlin-1`, `.vsix` saved and installed. Note for a later step: a dev session that ran an inspect stage keeps the inspect settings until its next stage run (conversation claim doesn't refresh dev sessions). Branch + tags not yet pushed. |
 | 2026-10-05 | 0c / 1 | Order set: 0c runs now; step 1 starts after 0c is released (it was not started yet). |
 | 2026-10-05 | 0c | Unblocked: runs in parallel with step 1 (no code dependency); second to release rebases. |
 | 2026-10-05 | 0c | Card proposed by the 0b session; accepted with amendments A–D (engine-only Jira, ticket text fenced, D1 stop + override / D2 gated stages, branch step/0c after step 1). Added to the tracker. |
