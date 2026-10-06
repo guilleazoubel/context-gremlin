@@ -235,8 +235,10 @@ export class StageRunner {
           // The whole session, not `session.mode`: what a session may do is
           // answered by permissionProfileFor (src/workspace/permission-guard.ts)
           // and recomputed here on every run, so authority an `intent` confers
-          // survives the refresh instead of being reverted by it.
-          session,
+          // survives the refresh instead of being reverted by it. And the STAGE,
+          // so a review or live-check run in a dev worktree is denied commit
+          // and push (R92).
+          { ...session, stage },
           session.pr === null
             ? undefined
             : { repoSlug: session.pr.repo, prNumber: session.pr.number },

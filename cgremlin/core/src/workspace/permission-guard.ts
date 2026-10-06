@@ -1,6 +1,17 @@
 import type { SessionFileSystem } from '../fs/session-file-system';
 import type { SessionMode } from '../schema/session-mode';
 import type { Intent } from '../schema/session';
+import type { StageName } from '../schema/stage';
+
+/**
+ * The stage a run is in. `phase_review` and `live_check` are named here ahead
+ * of the stage list (`StageName`) so the guard is already right the day those
+ * stages exist (R92); until then they are simply never passed.
+ */
+export type GuardStage = StageName | 'phase_review' | 'live_check';
+
+/** Stages that LOOK at a dev worktree and must never change it (R92). */
+export const INSPECT_STAGES: readonly GuardStage[] = ['review', 'rereview', 'phase_review', 'live_check'];
 
 /**
  * THIS TABLE IS A GUARDRAIL, NOT A SECURITY BOUNDARY. It binds a COOPERATIVE
@@ -24,6 +35,12 @@ import type { Intent } from '../schema/session';
  * own pull request is out of bounds even where nothing stops it — and the
  * permissions of the token itself. Do not add a rule here and call a class of
  * behaviour prevented; say in the brief what the rule does and does not do.
+ *
+ * Profiles are keyed on (mode, intent, conversation, stage). Stage only narrows
+ * the two dev-landing profiles: for the inspect stages (review, rereview,
+ * phase_review, live_check) `git commit` and `git push` are denied as well, so a
+ * stage that only looks at a dev worktree cannot change its branch. That is as
+ * much a guardrail as everything else here.
  */
 export interface PermissionConfig {
   allow?: string[];
@@ -151,6 +168,9 @@ const NEVER_FORCE_PUSH = [
   'Bash(git push * +*)',
 ] as const;
 
+/** R92 — an inspect stage in a dev worktree changes nothing on its branch. */
+const NEVER_COMMIT = ['Bash(git commit:*)', 'Bash(git push:*)'] as const;
+
 /**
  * R110 — the two helpers themselves, for the one profile that has them in
  * neither hand: a review of someone else's PR running HEADLESS. Posting that
@@ -211,6 +231,13 @@ export interface PermissionSubject {
    * carries this, so a run the engine starts can never inherit it.
    */
   conversation?: boolean;
+  /**
+   * R92 — the stage this run is in. Absent is "no stage known" and resolves as
+   * before. Only the two dev-landing profiles read it: a review or live-check
+   * stage running in a dev worktree inherits that worktree's branch, and must
+   * not commit or push to it.
+   */
+  stage?: GuardStage;
 }
 
 /**
@@ -222,12 +249,16 @@ export interface PermissionSubject {
 export type PermissionProfile =
   | SessionMode
   | 'investigation:development'
-  | 'review:conversation';
+  | 'review:conversation'
+  | 'development:inspect'
+  | 'investigation:development:inspect';
 
 export function permissionProfileFor(subject: PermissionSubject): PermissionProfile {
+  const inspecting = subject.stage !== undefined && INSPECT_STAGES.includes(subject.stage);
   if (subject.mode === 'investigation' && subject.intent === 'development') {
-    return 'investigation:development';
+    return inspecting ? 'investigation:development:inspect' : 'investigation:development';
   }
+  if (subject.mode === 'development' && inspecting) return 'development:inspect';
   // R110 — a review posts only with the user in the conversation. No other
   // mode's authority depends on who is driving: respond posts on the user's
   // OWN PR either way (Phase 20), and the rest post nothing either way.
@@ -246,6 +277,21 @@ const REVIEW_DENY = [
   ...NEVER_ADMINISTER,
   'Bash(git push:*)',
   'Bash(git commit:*)',
+] as const;
+
+const INVESTIGATION_DEVELOPMENT_DENY = [
+  ...NEVER_POST,
+  ...NEVER_LAND,
+  GH_API_DENY,
+  ...NEVER_ADMINISTER,
+  ...NEVER_FORCE_PUSH,
+] as const;
+
+const DEVELOPMENT_DENY = [
+  ...NEVER_POST,
+  ...NEVER_LAND,
+  GH_API_DENY,
+  ...NEVER_FORCE_PUSH,
 ] as const;
 
 export const DEFAULT_PERMISSIONS: Record<PermissionProfile, PermissionConfig> = {
@@ -272,20 +318,23 @@ export const DEFAULT_PERMISSIONS: Record<PermissionProfile, PermissionConfig> = 
   // `gh pr edit|ready|merge|close` are not — marking a PR ready and landing it
   // are the human's calls.
   'investigation:development': {
-    deny: [
-      ...NEVER_POST,
-      ...NEVER_LAND,
-      GH_API_DENY,
-      ...NEVER_ADMINISTER,
-      ...NEVER_FORCE_PUSH,
-    ],
+    deny: [...INVESTIGATION_DEVELOPMENT_DENY],
   },
+  // Step 1 — the human's own development session. It commits, pushes its own
+  // branch and opens a DRAFT pull request (`gh pr create --draft`; the engine
+  // re-checks isDraft). It does not mark a PR ready, edit it, merge or close
+  // it, call `gh api`, or rewrite history: those are protected actions (R112)
+  // and force-pushing is denied in every spelling, `--force-with-lease`
+  // included until a later step needs it. Deliberately NOT denied: the rest of
+  // the `gh` surface (NEVER_ADMINISTER) — this profile is the one that keeps it.
   development: {
-    deny: [
-      ...NEVER_POST,
-      'Bash(gh pr merge:*)',
-      'Bash(gh pr close:*)',
-    ],
+    deny: [...DEVELOPMENT_DENY],
+  },
+  // R92 — a review / live-check stage running in a dev worktree: everything the
+  // profile it came from denies, plus commit and push.
+  'development:inspect': { deny: [...DEVELOPMENT_DENY, ...NEVER_COMMIT] },
+  'investigation:development:inspect': {
+    deny: [...INVESTIGATION_DEVELOPMENT_DENY, ...NEVER_COMMIT],
   },
   // Phase 20 — the deferred-posting decision was reversed by the user: the
   // respond agent replies on its OWN pull request itself. It replies through
