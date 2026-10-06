@@ -32,7 +32,7 @@ and everything it depends on must be `done`.
 - **Scope:** change only cgremlin (`~/context-gremlin`) and my personal `~/.claude`. **Never** change team repos (grace, grace-frontend, web-fastcar).
 - **Protected actions** need my explicit approval: opening a PR for review, merging, approving, and posting review findings on others' PRs (R112). Commit, push to own branches and draft PRs are fine.
 - **TDD** for behaviour; `pnpm test`, `pnpm typecheck` and `pnpm lint` pass in `cgremlin/core` and `cgremlin/vscode` before any release.
-- **Isolation:** each step works in a worktree under `.claude/worktrees/<step-id>` on a branch named **`step/<step-id>`**, never `cgremlin-<id>`, which is reserved for release tags (a same-named branch and tag make `git push` fail with "matches more than one"). Branch from `mission-control-pr-orchestrator` (`main` is stale, 631 commits behind). **Commit frequently.** Push with explicit refs: `git push origin mission-control-pr-orchestrator refs/tags/cgremlin-pre-<id> refs/tags/cgremlin-<id>`.
+- **Isolation:** each step works in a worktree under `.claude/worktrees/<step-id>` on a branch named **`step/<step-id>`**, never `cgremlin-<id>`, which is reserved for release tags (a same-named branch and tag make `git push` fail with "matches more than one"). Branch from `mission-control-pr-orchestrator` (`main` is stale, 631 commits behind). **Commit frequently.** Push with explicit refs: `git push origin mission-control-pr-orchestrator refs/tags/cgremlin-pre-<id> refs/tags/cgremlin-<id>`. **The release ends with cleanup**: remove the worktree, delete the merged `step/<id>` branch, update the tracker, then `/exit`. Every step starts in a new session; no `/clear` needed.
 - **Release:** the `RELEASES.md` checklist: tag `cgremlin-pre-<id>` + `cgremlin-<id>`, save the `.vsix` to `~/cgremlin-releases/`, add a table row, push branch + tags.
 - **Delegate** substantive work to subagents pinned per §17; trivial edits inline (R118). Optimize for **rate limits** (subscription).
 - `bin/cgremlin` (legacy) is **frozen** (A5).
@@ -164,6 +164,7 @@ Cards for these are written when their dependencies are done, from the spec sect
 ## Log
 | Date | Step | What happened |
 |---|---|---|
+| 2026-10-06 | — | Cleanup is now part of every release (RELEASES.md step 8). Leftover 0c worktree and `step/0c` branch removed. |
 | 2026-10-06 | 1 | Done: `development` denies `gh pr ready/edit`, `gh api` and all force-push spellings; `PermissionSubject.stage` + `development:inspect` / `investigation:development:inspect` profiles (review, rereview, phase_review, live_check can't commit/push); stage runner passes the stage. 4 tasks, each reviewed; fresh whole-branch review merge-ready. Merged `b1a096b`, tagged `cgremlin-pre-1` (`8374d87`) / `cgremlin-1`, `.vsix` saved and installed. Note for a later step: a dev session that ran an inspect stage keeps the inspect settings until its next stage run (conversation claim doesn't refresh dev sessions). Branch + tags not yet pushed. |
 | 2026-10-05 | 0c / 1 | Order set: 0c runs now; step 1 starts after 0c is released (it was not started yet). |
 | 2026-10-05 | 0c | Unblocked: runs in parallel with step 1 (no code dependency); second to release rebases. |

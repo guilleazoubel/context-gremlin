@@ -49,4 +49,5 @@ reinstall the newer `.vsix`.
 4. `cd cgremlin/vscode && pnpm build && pnpm package`, then `code --install-extension cgremlin-vscode-0.0.1.vsix --force`.
 5. Copy the `.vsix` to `~/cgremlin-releases/cgremlin-vscode-<version>-<name>-built-<date>.vsix`.
 6. Add a row to the table above (and refresh `~/cgremlin-releases/README.md`).
-7. `git push origin <branch> --tags`.
+7. Push with explicit refs: `git push origin mission-control-pr-orchestrator refs/tags/cgremlin-pre-<id> refs/tags/cgremlin-<id>` (git push asks for approval).
+8. **Clean up:** remove the step's worktree and delete its merged branch (`git worktree remove .claude/worktrees/<id> && git branch -d step/<id>`), then end the session (`/exit`). The next step starts in a new session.
