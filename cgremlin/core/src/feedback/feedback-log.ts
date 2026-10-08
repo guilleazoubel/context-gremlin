@@ -41,12 +41,17 @@ export type FeedbackRecord = z.infer<typeof FeedbackRecordSchema>;
 const IdOnly = z.object({ id: z.string() }).passthrough();
 
 /**
- * The engine's single writer of feedback.jsonl. Appends are serialized in-process (its own
- * lock, not the session lock) and each one rewrites the file tmp-then-rename (src/fs/jsonl.ts),
- * so concurrent signals never lose or tear a record. It reads and writes ONLY `path`.
+ * Module-level and keyed by file path, so two FeedbackLog instances on the same file still
+ * serialize their read-check-append (a per-instance lock would let them lose records).
+ */
+const APPEND_LOCK = new KeyedLock();
+
+/**
+ * The engine's single writer of feedback.jsonl. Appends are serialized in-process (a lock keyed
+ * by the file's path, not the session lock) and each one rewrites the file tmp-then-rename
+ * (src/fs/jsonl.ts), so concurrent signals never lose or tear a record. It reads and writes ONLY `path`.
  */
 export class FeedbackLog {
-  private readonly lock = new KeyedLock();
 
   constructor(
     private readonly fs: SessionFileSystem,
@@ -56,7 +61,7 @@ export class FeedbackLog {
   /** Appends unless a record with this id is already there. Returns whether it wrote. */
   async appendOnce(record: FeedbackRecord): Promise<boolean> {
     const valid = FeedbackRecordSchema.parse(record);
-    return this.lock.withLock('append', async () => {
+    return APPEND_LOCK.withLock(this.path, async () => {
       const existing = await readJsonLines(this.fs, this.path, IdOnly);
       if (existing.some((r) => r.id === valid.id)) return false;
       await appendJsonLine(this.fs, this.path, valid);

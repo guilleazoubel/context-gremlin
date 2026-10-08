@@ -75,6 +75,35 @@ describe('feedback capture rules (§20)', () => {
     expect(String(record.detail.title)).not.toContain('abcdefghijklmnop');
   });
 
+  it('detail.severity and detail.where are redacted, one line and capped too', () => {
+    const secret = 'Authorization: Bearer abcdefghijklmnop';
+    const nasty = DISMISS_F2(
+      REVIEW_CONTRACT_EXAMPLE.replace('- **Severity:** 🔧 Maintainability', `- **Severity:** ${secret} ${'s'.repeat(400)}`).replace(
+        '- **Where:** `ui/list.tsx:40`',
+        `- **Where:** ${secret}\t${'w'.repeat(400)}`,
+      ),
+    );
+    const [record] = dismissalRecords(ctx(review), nasty);
+    for (const value of [record.detail.severity, record.detail.where]) {
+      const text = String(value);
+      expect(text).not.toContain('abcdefghijklmnop');
+      expect(text).toContain('<redacted>');
+      expect(text).not.toMatch(/[\t\n\r]/);
+      expect(text.length).toBeLessThanOrEqual(301);
+    }
+  });
+
+  it('an unresolved finding still counts as open; a resolved one does not', () => {
+    const withF1 = (status: string): string =>
+      REVIEW_CONTRACT_EXAMPLE.replace(/(<a id="f1"><\/a>[\s\S]*?- \*\*Status:\*\*) open/, `$1 ${status}`);
+    const openOf = (text: string): unknown =>
+      humanTransitionRecords(ctx(review), 'ready', 'approved', { review: text, plan: null })[0].detail.openFindings;
+    expect(openOf(withF1('unresolved'))).toBe(4);
+    expect(openOf(withF1('open (not resolved)'))).toBe(4);
+    expect(openOf(withF1('✅ resolved'))).toBe(3);
+    expect(openOf(withF1('resolved'))).toBe(3);
+  });
+
   it('approving a PR the review asked changes on is a rejected verdict; approving an approved one is not', () => {
     const rejected = humanTransitionRecords(ctx(review), 'ready', 'approved', { review: REVIEW_CONTRACT_EXAMPLE, plan: null });
     expect(rejected.map((r) => [r.kind, r.id, r.detail])).toEqual([

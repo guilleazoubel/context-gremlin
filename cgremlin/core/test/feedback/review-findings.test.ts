@@ -23,6 +23,30 @@ describe('REVIEW.md findings (the contract the agents are shown)', () => {
     expect(findings[1].status).toBe('🔇 dismissed');
   });
 
+  it('a hostile detail line (40,000 spaces then a carriage return) parses quickly instead of stalling the event loop', () => {
+    const pad = ' '.repeat(40_000);
+    const hostile = REVIEW_CONTRACT_EXAMPLE.replace('- **Where:** `ui/list.tsx:40`', `- **Where:**${pad}x\ry`).replace(
+      '### 2. <plain-English title>',
+      `### 2.${pad}x\ry`,
+    );
+    const started = performance.now();
+    const findings = parseReviewFindings(hostile);
+    expect(performance.now() - started).toBeLessThan(100);
+    expect(findings[1].where).toBe('x\ry');
+    expect(findings[1].title).toBe('x\ry');
+  });
+
+  it('a Status that only mentions dismissal is not dismissed; one that says it is, in any form, is', () => {
+    const withStatus = (status: string): string =>
+      REVIEW_CONTRACT_EXAMPLE.replace(/(<a id="f2"><\/a>[\s\S]*?- \*\*Status:\*\*) open/, `$1 ${status}`);
+    for (const status of ['open (not dismissed)', 'reopened (was dismissed)', 'un-dismissed', 'undismissed']) {
+      expect(parseReviewFindings(withStatus(status))[1].dismissed, status).toBe(false);
+    }
+    for (const status of ['🔇 dismissed', 'dismissed', 'Dismissed — duplicate of 1', '**dismissed**']) {
+      expect(parseReviewFindings(withStatus(status))[1].dismissed, status).toBe(true);
+    }
+  });
+
   it('a clean review has no findings; a file with no verdict line has no verdict', () => {
     const clean = '# PR Review: #1 — t\n**Verdict:** ✅ Approve — fine\n\n## Summary\nNothing worth flagging — looks good to me.\n\n## Details\n';
     expect(parseReviewFindings(clean)).toEqual([]);

@@ -21,10 +21,13 @@ export type ReviewVerdict = 'approve' | 'request_changes' | 'comment';
 
 const TABLE_ROW = /^\|\s*\[(\d+)\]\(#(f\d+)\)\s*\|([^|]*)\|([^|]*)\|([^|]*)\|([^|]*)\|\s*$/;
 const ANCHOR = /^<a id="(f\d+)"><\/a>$/;
-const DETAIL_HEADING = /^###\s+\d+\.\s+(.+)$/;
-const FIELD = /^-\s+\*\*(Severity|Where|Route|Status):\*\*\s*(.*)$/;
+// dotAll (`s`): with `.` unable to match a stray `\r` (or U+2028/9), the `\s+`/`.+` overlap
+// backtracks quadratically — 40k spaces then `\r` took >1 s, synchronously (6a review).
+const DETAIL_HEADING = /^###\s+\d+\.\s+(.+)$/s;
+const FIELD = /^-\s+\*\*(Severity|Where|Route|Status):\*\*\s*(.*)$/s;
 const SECTION = /^#{1,2}\s/;
-const DISMISSED = /dismissed/i;
+/** The Status SAYS dismissed (`🔇 dismissed`, `dismissed`) — not merely mentions it (`open (not dismissed)`, `un-dismissed`). */
+const DISMISSED = /^\W*dismissed\b/iu;
 const VERDICT = /^\*\*Verdict:\*\*\s*(✅|🔄|💬)/mu;
 
 interface Draft {

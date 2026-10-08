@@ -30,6 +30,20 @@ describe('FeedbackLog (§20)', () => {
     expect((await log.list()).map((r) => r.id).sort()).toEqual([...ids].sort());
   });
 
+  it('two FeedbackLog instances on the same path appending concurrently lose no records', async () => {
+    const fs = new InMemoryFileSystem();
+    const a = new FeedbackLog(fs, PATH);
+    const b = new FeedbackLog(fs, PATH);
+    const ids = Array.from({ length: 20 }, (_, i) => `id-${i}`);
+    const wrote = await Promise.all([
+      ...ids.map((id, i) => (i % 2 === 0 ? a : b).appendOnce(rec(id))),
+      a.appendOnce(rec('both')),
+      b.appendOnce(rec('both')),
+    ]);
+    expect(wrote.filter(Boolean)).toHaveLength(21);
+    expect((await a.list()).map((r) => r.id).sort()).toEqual([...ids, 'both'].sort());
+  });
+
   it('10 concurrent appends of the same id write it once', async () => {
     const log = new FeedbackLog(new InMemoryFileSystem(), PATH);
     const wrote = await Promise.all(Array.from({ length: 10 }, () => log.appendOnce(rec('same'))));

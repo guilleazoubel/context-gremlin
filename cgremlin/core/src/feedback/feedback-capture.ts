@@ -23,6 +23,9 @@ const VERDICT_LABEL: Record<ReviewVerdict, string> = {
   comment: '💬 Comment',
 };
 
+/** The Status SAYS resolved (`✅ resolved`) — `unresolved` / `open (not resolved)` are still open. */
+const RESOLVED = /^\W*resolved\b/iu;
+
 function clean(text: string): string {
   const oneLine = redactSecrets(text.replace(/\s+/g, ' ').trim());
   return oneLine.length > FEEDBACK_TEXT_CAP ? `${oneLine.slice(0, FEEDBACK_TEXT_CAP)}…` : oneLine;
@@ -100,7 +103,7 @@ export function humanTransitionRecords(
   const out: FeedbackRecord[] = [];
   if (s.mode === 'review' && texts.review !== null) {
     const verdict = parseReviewVerdict(texts.review);
-    const open = parseReviewFindings(texts.review).filter((f) => !f.dismissed && !/resolved/i.test(f.status ?? '')).length;
+    const open = parseReviewFindings(texts.review).filter((f) => !f.dismissed && !RESOLVED.test(f.status ?? '')).length;
     const findingsText = `${open} open finding${open === 1 ? '' : 's'}`;
     const artifact = `${ctx.sessionDir}/REVIEW.md`;
     if (to === 'approved' && verdict === 'request_changes') {
