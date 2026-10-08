@@ -7,9 +7,10 @@
  * forever. So the sweep is generalised, and the contradiction is also healed
  * lazily — under the session's own lock — the first time a read path sees it.
  */
-import { describe, expect, it } from 'vitest';
-import { createHarness, createInvestigation, flush } from '../support/pipeline-harness';
+import { describe, expect, it, vi } from 'vitest';
+import { SESSIONS_DIR, createHarness, createInvestigation, flush } from '../support/pipeline-harness';
 import { CRASHED_RUN_ERROR } from '../../src/pipeline/run-liveness';
+import { readRunRecords } from '../../src/pipeline/run-records';
 import type { LastRun } from '../../src/schema/stage';
 import type { QaSession, Session } from '../../src/schema/session';
 
@@ -141,5 +142,34 @@ describe('a read path heals what it sees, rather than waiting for a restart', ()
 
     expect((await h.store.load(id)).lastRun?.outcome).toBe('failed');
     expect(transitions()).toBe(1);
+  });
+});
+
+describe('I2 — a run the engine lost still gets its record', () => {
+  it('a run the engine lost gets an interrupted record when healed, and only one', async () => {
+    const h = createHarness();
+    const inv = await createInvestigation(h.service);
+    const run = h.service.runFindings(inv.id);
+    await flush();
+    const handle = h.runner.lastHandle();
+    h.runner.setPid(handle, 4242);
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => {
+      const err = new Error('ESRCH') as NodeJS.ErrnoException;
+      err.code = 'ESRCH';
+      throw err;
+    });
+    expect((await h.service.failStaleRuns()).sessionIds).toEqual([inv.id]);
+    kill.mockRestore();
+    const dir = `${SESSIONS_DIR}/${inv.id}`;
+    expect(await readRunRecords(h.fs, dir)).toEqual([
+      expect.objectContaining({
+        stage: 'findings', runner: 'claude-code', outcome: 'failed', error: CRASHED_RUN_ERROR, interrupted: true,
+        tokens: null, tokensSource: null, costUsd: null, modelUsage: null,
+      }),
+    ]);
+    // The lost child reports its exit after all: the record was already written, so no second one.
+    h.runner.emitExit(handle, { code: null, signal: 'SIGKILL' });
+    await run;
+    expect(await readRunRecords(h.fs, dir)).toHaveLength(1);
   });
 });

@@ -1,4 +1,4 @@
-import type { AgentExitResult, AgentHandle, AgentRunner } from '../agent/agent-runner';
+import type { AgentExitResult, AgentHandle, AgentRunner, LimitEvent, RunStats } from '../agent/agent-runner';
 import type { SessionFileSystem } from '../fs/session-file-system';
 import type { SessionStore } from '../engine/session-store';
 import type { EngineEvents } from '../engine/events';
@@ -9,6 +9,7 @@ import { refreshWorkspaceGuardrails } from '../workspace/workspace-manager';
 import { redactSecrets } from '../config/core-config';
 import { archiveRound } from './round-archive';
 import type { ResolvedRoute, RunnerKind } from '../config/routing';
+import { appendRunRecord, takeRunFacts, writeRunFacts, type PendingRun, type RunRecord } from './run-records';
 
 export class RunInProgressError extends Error {
   constructor(sessionId: string) {
@@ -71,6 +72,8 @@ export interface StageRunnerDeps {
   now?: () => Date;
   /** Shared with PipelineService (and the API server) — see the locking invariant documented atop pipeline-service.ts. Required (not optional): a wiring that forgets to share it is a bug, not a degraded-but-working mode. */
   lock: KeyedLock;
+  /** One line per degraded side effect (run facts or a run record that could not be written). Defaults to `console.warn`, which the engine log captures. */
+  log?: (line: string) => void;
 }
 export interface StageRunInput {
   sessionId: string;
@@ -151,6 +154,58 @@ function pidLiveness(pid: number): PidLiveness {
   }
 }
 
+function statsOf(runner: AgentRunner, handle: AgentHandle | null): RunStats | null {
+  if (handle === null) return null;
+  try {
+    return runner.getRunStats?.(handle) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function pendingRunOf(input: StageRunInput, route: ResolvedRoute, startedAt: string, seedResumeId: string | null): PendingRun {
+  return {
+    v: 1, sessionId: input.sessionId, stage: input.stage, runner: route.runner, model: route.model, effort: route.effort,
+    routeSource: route.source, fresh: input.fresh === true, resumed: seedResumeId !== null, startedAt,
+  };
+}
+
+/**
+ * The CLI emits a limit event per 1% move, so a long run near its quota would carry dozens of
+ * near-identical lines. A record keeps only the latest event per (kind, limitType), in the order
+ * those latest events arrived.
+ */
+function collapseLimitEvents(events: readonly LimitEvent[]): LimitEvent[] {
+  const keyOf = (e: LimitEvent) => JSON.stringify([e.kind, e.limitType]);
+  const lastIndex = new Map<string, number>();
+  events.forEach((e, i) => lastIndex.set(keyOf(e), i));
+  return events.filter((e, i) => lastIndex.get(keyOf(e)) === i);
+}
+
+/** S2-35 — a `rejected` limit means the run was stopped by the limit, whatever the exit code said. */
+function runRecordOf(
+  pending: PendingRun,
+  stats: RunStats | null,
+  end: { finishedAt: string; outcome: RunRecord['outcome']; error: string | null },
+): RunRecord {
+  const limited = (stats?.limitEvents ?? []).some((e) => e.kind === 'rejected');
+  const outcome: RunRecord['outcome'] = limited ? 'stopped' : end.outcome;
+  return {
+    ...pending,
+    model: pending.model ?? stats?.observedModel ?? null,
+    finishedAt: end.finishedAt,
+    tokens: stats?.tokens ?? null,
+    tokensSource: stats?.tokensSource ?? null,
+    costUsd: stats?.costUsd ?? null,
+    modelUsage: stats?.modelUsage ? { ...stats.modelUsage } : null,
+    limitEvents: collapseLimitEvents(stats?.limitEvents ?? []),
+    outcome,
+    stopReason: limited ? 'limit' : outcome === 'stopped' ? 'user' : null,
+    error: end.error,
+    interrupted: false,
+  };
+}
+
 export class StageRunner {
   private readonly active = new Map<string, ActiveRun>();
   private readonly now: () => Date;
@@ -219,6 +274,42 @@ export class StageRunner {
     return true;
   }
 
+  private log(line: string): void {
+    (this.deps.log ?? ((l: string) => console.warn(l)))(line);
+  }
+
+  /** S2-25 — the record's known prefix, so a run the engine dies under can still be recorded on heal. Never throws. */
+  private async writeFacts(sessionDir: string, pending: PendingRun): Promise<boolean> {
+    try {
+      await writeRunFacts(this.deps.fs, sessionDir, pending);
+      return true;
+    } catch (err) {
+      this.log(`run facts for ${pending.sessionId} not written: ${err instanceof Error ? err.message : String(err)}`);
+      return false;
+    }
+  }
+
+  /**
+   * R116/R118f — appends the run's record. If facts were written and are gone, the crash heal
+   * already recorded this run (S2-25): write nothing. Never throws: a failure is a log line and
+   * the run's outcome and lastRun stay exactly what they were.
+   *
+   * Called under the session lock, right after the run's final lastRun save: so taking the facts
+   * is serialized with the heal's (which takes them under the same lock, and only while lastRun
+   * still says `running`), and nothing waiting on the lock (a claim, a transition) slips in
+   * between the final lastRun and this run's `active` entry going away. If that lastRun save
+   * fails, this is never reached and the facts stay: lastRun still says `running`, so the heal
+   * records the run as interrupted.
+   */
+  private async recordRun(sessionDir: string, factsWritten: boolean, record: RunRecord): Promise<void> {
+    try {
+      if (factsWritten && (await takeRunFacts(this.deps.fs, sessionDir)) === null) return;
+      await appendRunRecord(this.deps.fs, sessionDir, record);
+    } catch (err) {
+      this.log(`run record for ${record.sessionId} not written: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   /** R116 — the route for `stage`; without `routeFor`, today's single engine-wide runner. */
   private routeOf(stage: StageName): ResolvedRoute {
     return this.deps.routeFor?.(stage) ?? { stage, runner: this.deps.runnerKind, model: null, effort: null, source: 'legacy' };
@@ -247,6 +338,8 @@ export class StageRunner {
     // (KeyedLock is not re-entrant); after it, nothing else holds the lock
     // for this session, so every write below must acquire it itself.
     let runStarted = false;
+    let pending: PendingRun | null = null;
+    let factsWritten = false;
     try {
       let session = await this.deps.store.load(sessionId);
       const worktreePath = session.workspace.worktreePath;
@@ -328,6 +421,8 @@ export class StageRunner {
           agent: { runner: route.runner, resumeId: carriedResumeId, humanTurn: priorAgent?.humanTurn ?? null },
         };
         await this.deps.store.save(session);
+        pending = pendingRunOf(input, route, startedAt, seedResumeId);
+        factsWritten = await this.writeFacts(sessionDir, pending);
         this.deps.events.emit('run.started', { session, stage });
         runStarted = true;
 
@@ -392,6 +487,11 @@ export class StageRunner {
           outcome,
           error,
         };
+        const record = runRecordOf(pending, statsOf(runner, active.handle), {
+          finishedAt: finishedLastRun.finishedAt ?? this.now().toISOString(),
+          outcome,
+          error,
+        });
         // Locked: something else (a human transition, another chained stage)
         // may have written this session while the agent was running — only
         // `run.started` released the lock the caller held, so this is the
@@ -407,6 +507,8 @@ export class StageRunner {
             agent: { runner: route.runner, resumeId, humanTurn: fresh.agent?.humanTurn ?? null },
           };
           await this.deps.store.save(merged);
+          // Inside the lock, after lastRun: see recordRun for why.
+          await this.recordRun(sessionDir, factsWritten, record);
           return merged;
         });
         this.deps.events.emit('run.finished', { session, stage, outcome });
@@ -426,6 +528,18 @@ export class StageRunner {
           const current = await this.deps.store.load(sessionId);
           finishedSession = { ...current, lastRun: failed };
           await this.deps.store.save(finishedSession);
+          // Only for a run that reached `run.started`; after lastRun, under the same lock (see recordRun).
+          if (pending !== null) {
+            await this.recordRun(
+              sessionDir,
+              factsWritten,
+              runRecordOf(pending, statsOf(active.runner, active.handle), {
+                finishedAt: failed.finishedAt ?? this.now().toISOString(),
+                outcome: 'failed',
+                error: failed.error,
+              }),
+            );
+          }
         };
         try {
           // If run.started never fired, the caller still holds the lock for

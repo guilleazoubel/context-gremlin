@@ -58,6 +58,7 @@ import {
 import { assertCanPromote } from './plan-gate';
 import { RunInProgressError, WorkspaceMissingError, type StageRunResult } from './stage-runner';
 import { CRASHED_RUN_ERROR, runLiveness, type RunLiveness } from './run-liveness';
+import { appendRunRecord, takeRunFacts } from './run-records';
 import { TERMINAL_PHASES_BY_MODE } from '../workspace/workspace-in-use';
 import { refreshWorkspaceGuardrails } from '../workspace/workspace-manager';
 import { permissionProfileFor } from '../workspace/permission-guard';
@@ -294,6 +295,11 @@ export class PipelineService {
 
   private sessionDir(id: string): string {
     return `${this.deps.config.sessionsDir}/${id}`;
+  }
+
+  /** One line per degraded side effect. Defaults to `console.warn`, which the engine log captures. */
+  private log(line: string): void {
+    (this.deps.log ?? ((l: string) => console.warn(l)))(line);
   }
 
   /** The unlocked, single-operation core of `transition` — only call this from inside a callback already running under `this.lock` for `id`. */
@@ -1406,7 +1412,7 @@ export class PipelineService {
       try {
         await this.refreshConversationGuardrails(result, false);
       } catch (err) {
-        (this.deps.log ?? ((line: string) => console.warn(line)))(
+        this.log(
           `release ${id}: could not restore the headless guardrails (the next stage run will): ${
             err instanceof Error ? err.message : String(err)
           }`,
@@ -1477,6 +1483,7 @@ export class PipelineService {
     return this.lock.withLock(id, async () => {
       const fresh = await this.deps.store.load(id);
       if (!this.isStale(fresh)) return false;
+      if (fresh.lastRun?.outcome === 'running') await this.recordInterruptedRun(id);
       const lastRun = fresh.lastRun;
       let next: Session =
         lastRun !== null && lastRun.outcome === 'running'
@@ -1494,6 +1501,34 @@ export class PipelineService {
       });
       return true;
     });
+  }
+
+  /**
+   * I2 / S2-25 — a run the engine died under still gets its record, from the facts the stage
+   * runner left at `run.started`. Taking the facts claims the record, so the run's own late exit
+   * (if the child ever reports one) writes nothing. Never throws.
+   */
+  private async recordInterruptedRun(id: string): Promise<void> {
+    const sessionDir = this.sessionDir(id);
+    try {
+      const pending = await takeRunFacts(this.deps.fs, sessionDir);
+      if (pending === null) return;
+      await appendRunRecord(this.deps.fs, sessionDir, {
+        ...pending,
+        finishedAt: this.now().toISOString(),
+        tokens: null,
+        tokensSource: null,
+        costUsd: null,
+        modelUsage: null,
+        limitEvents: [],
+        outcome: 'failed',
+        stopReason: null,
+        error: CRASHED_RUN_ERROR,
+        interrupted: true,
+      });
+    } catch (err) {
+      this.log(`interrupted run record for ${id} not written: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   /**
