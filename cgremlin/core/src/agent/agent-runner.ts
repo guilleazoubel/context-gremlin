@@ -27,6 +27,50 @@ export interface AgentExitResult {
   readonly signal: string | null;
 }
 
+/** Raw per-vendor token counts for one run (R118f). Claude's `input` excludes cache; Codex's includes it. */
+export interface TokenUsage {
+  readonly input: number;
+  readonly output: number;
+  readonly cacheRead: number;
+  readonly cacheWrite: number;
+}
+
+/** D2 — one model's share of a run, as Claude's `result.modelUsage` reports it (`costUSD` → `costUsd`). */
+export interface ModelUsage {
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly cacheReadInputTokens: number;
+  readonly cacheCreationInputTokens: number;
+  readonly webSearchRequests: number;
+  readonly costUsd: number | null;
+}
+
+/** A quota or rate-limit signal seen during a run (R118f). */
+export interface LimitEvent {
+  /** When the runner saw it (ISO). */
+  readonly at: string;
+  readonly kind: 'warning' | 'rejected';
+  /** e.g. `five_hour`, `seven_day` (Claude); null when the CLI does not say. */
+  readonly limitType: string | null;
+  /** When the limit resets (ISO), when the CLI says. */
+  readonly resetsAt: string | null;
+  /** The CLI's own sentence for a text-detected limit (first line, capped, redacted). */
+  readonly message: string | null;
+}
+
+export interface RunStats {
+  readonly tokens: TokenUsage | null;
+  /** 'result' = the CLI's final usage; 'assistant' = the per-message sum of a run that never reached its result (S2-26). */
+  readonly tokensSource: 'result' | 'assistant' | null;
+  /** D2 — Claude's `total_cost_usd` (an estimate on a subscription); null when not reported. */
+  readonly costUsd: number | null;
+  /** D2 — Claude's `modelUsage`, normalized; null when not reported or empty. */
+  readonly modelUsage: Readonly<Record<string, ModelUsage>> | null;
+  readonly limitEvents: readonly LimitEvent[];
+  /** The model the CLI reported it ran (Claude's `system/init`); null when it did not say. */
+  readonly observedModel: string | null;
+}
+
 export interface AgentRunner {
   start(ctx: SessionContext): Promise<AgentHandle>;
   sendPrompt(handle: AgentHandle, prompt: string): Promise<void>;
@@ -43,4 +87,6 @@ export interface AgentRunner {
    * Callers MUST NOT read `undefined` as "dead": it proves nothing either way.
    */
   getPid?(handle: AgentHandle): number | undefined;
+  /** R118f — what this handle's run used and hit, so far. Undefined: the adapter has nothing to report. */
+  getRunStats?(handle: AgentHandle): RunStats | undefined;
 }

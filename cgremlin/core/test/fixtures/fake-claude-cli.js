@@ -95,6 +95,37 @@ if (prompt === 'HANG_FOREVER') {
 } else if (prompt === 'FAIL_LOUDLY') {
   process.stderr.write('simulated failure on stderr\n');
   process.exitCode = 1;
+} else if (prompt === 'USAGE_AND_LIMIT') {
+  // R118f/D2 — the real CLI's shapes (2.1.294): init carries the model, rate_limit_event the
+  // quota state, and the result its usage, cost and per-model usage. `allowed` is no event.
+  const line = (o) => process.stdout.write(JSON.stringify(o) + '\n');
+  line({ type: 'system', subtype: 'init', model: 'claude-opus-5-5', session_id: sessionId });
+  line({ type: 'rate_limit_event', rate_limit_info: { status: 'allowed', rateLimitType: 'five_hour' }, uuid: 'u0', session_id: sessionId });
+  line({ type: 'rate_limit_event', rate_limit_info: { status: 'allowed_warning', resetsAt: 1791460800, rateLimitType: 'five_hour', utilization: 0.91 }, uuid: 'u1', session_id: sessionId });
+  line({
+    type: 'result', subtype: 'success', is_error: false, session_id: sessionId,
+    usage: { input_tokens: 1200, output_tokens: 340, cache_read_input_tokens: 5000, cache_creation_input_tokens: 800 },
+    total_cost_usd: 0.42,
+    modelUsage: {
+      'claude-opus-5-5': {
+        inputTokens: 1200, outputTokens: 340, cacheReadInputTokens: 5000, cacheCreationInputTokens: 800,
+        webSearchRequests: 0, costUSD: 0.42, contextWindow: 200000, maxOutputTokens: 64000,
+      },
+    },
+  });
+} else if (prompt === 'LIMIT_REJECTED') {
+  const line = (o) => process.stdout.write(JSON.stringify(o) + '\n');
+  line({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: 1791460800, rateLimitType: 'five_hour' }, uuid: 'u2', session_id: sessionId });
+  line({ type: 'result', subtype: 'error_during_execution', is_error: true, result: 'Claude AI usage limit reached|1791460800', session_id: sessionId, total_cost_usd: 0, modelUsage: {} });
+  process.exitCode = 1;
+} else if (prompt === 'ASSISTANT_ONLY') {
+  // I2 — a run killed before its result: only per-message usage is left. A message streams as
+  // several records with the same id; the last one carries its final usage.
+  const line = (o) => process.stdout.write(JSON.stringify(o) + '\n');
+  line({ type: 'assistant', message: { id: 'msg_1', role: 'assistant', content: [{ type: 'text', text: 'a' }], usage: { input_tokens: 10, output_tokens: 1, cache_read_input_tokens: 100, cache_creation_input_tokens: 0 } } });
+  line({ type: 'assistant', message: { id: 'msg_1', role: 'assistant', content: [{ type: 'text', text: 'b' }], usage: { input_tokens: 10, output_tokens: 30, cache_read_input_tokens: 100, cache_creation_input_tokens: 0 } } });
+  line({ type: 'assistant', message: { id: 'msg_2', role: 'assistant', content: [{ type: 'text', text: 'c' }], usage: { input_tokens: 5, output_tokens: 7, cache_read_input_tokens: 0, cache_creation_input_tokens: 20 } } });
+  process.exitCode = 1;
 } else {
   process.stdout.write(
     JSON.stringify({

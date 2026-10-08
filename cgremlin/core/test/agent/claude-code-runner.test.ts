@@ -297,6 +297,57 @@ describe('ClaudeCodeRunner', () => {
     expect(claudeEnv(base)).toEqual({ PATH: '/bin', HOME: '/h' });
     expect(base.CLAUDE_CODE_EFFORT_LEVEL).toBe('high');
   });
+
+  it('R118f/D2 — getRunStats reports result usage, cost, per-model usage, non-allowed limit events and the reported model', async () => {
+    const runner = new ClaudeCodeRunner({ claudeBinary: FIXTURE, now: () => new Date('2026-10-08T11:00:00.000Z') });
+    const handle = await runner.start({ sessionId: 'inv-1', workingDirectory: process.cwd() });
+    await runner.sendPrompt(handle, 'USAGE_AND_LIMIT');
+    expect(runner.getRunStats(handle)).toEqual({
+      tokens: { input: 1200, output: 340, cacheRead: 5000, cacheWrite: 800 },
+      tokensSource: 'result',
+      costUsd: 0.42,
+      modelUsage: {
+        'claude-opus-5-5': { inputTokens: 1200, outputTokens: 340, cacheReadInputTokens: 5000, cacheCreationInputTokens: 800, webSearchRequests: 0, costUsd: 0.42 },
+      },
+      limitEvents: [
+        { at: '2026-10-08T11:00:00.000Z', kind: 'warning', limitType: 'five_hour', resetsAt: '2026-10-08T12:00:00.000Z', message: null },
+      ],
+      observedModel: 'claude-opus-5-5',
+    });
+  });
+
+  it('R118f — a rejected limit is recorded once, not again from the error result text', async () => {
+    const runner = new ClaudeCodeRunner({ claudeBinary: FIXTURE, now: () => new Date('2026-10-08T11:00:00.000Z') });
+    const handle = await runner.start({ sessionId: 'inv-1', workingDirectory: process.cwd() });
+    await runner.sendPrompt(handle, 'LIMIT_REJECTED');
+    const stats = runner.getRunStats(handle);
+    expect(stats.limitEvents).toEqual([
+      { at: '2026-10-08T11:00:00.000Z', kind: 'rejected', limitType: 'five_hour', resetsAt: '2026-10-08T12:00:00.000Z', message: null },
+    ]);
+    expect(stats.modelUsage).toBeNull();
+    expect(stats.costUsd).toBe(0);
+  });
+
+  it('I2 — a run killed before its result reports the per-message usage, each message counted once', async () => {
+    const runner = new ClaudeCodeRunner({ claudeBinary: FIXTURE });
+    const handle = await runner.start({ sessionId: 'inv-1', workingDirectory: process.cwd() });
+    await runner.sendPrompt(handle, 'ASSISTANT_ONLY');
+    expect(runner.getRunStats(handle)).toMatchObject({
+      tokens: { input: 15, output: 37, cacheRead: 100, cacheWrite: 20 },
+      tokensSource: 'assistant',
+      costUsd: null,
+      modelUsage: null,
+    });
+  });
+
+  it('R118f — a run with no usage reports nothing', async () => {
+    const runner = new ClaudeCodeRunner({ claudeBinary: FIXTURE });
+    const handle = await runner.start({ sessionId: 'inv-1', workingDirectory: process.cwd() });
+    await runner.sendPrompt(handle, 'hello');
+    expect(runner.getRunStats(handle)).toEqual({
+      tokens: null, tokensSource: null, costUsd: null, modelUsage: null, limitEvents: [], observedModel: null,
+    });
+  });
 });
 
 describeAgentRunnerContract('ClaudeCodeRunner', {

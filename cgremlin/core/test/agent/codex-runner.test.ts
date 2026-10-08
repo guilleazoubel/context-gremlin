@@ -239,6 +239,32 @@ describe('CodexRunner', () => {
       ]);
     });
   });
+
+  it('R118f — getRunStats reports turn.completed usage; Codex reports no cost or per-model usage', async () => {
+    const runner = new CodexRunner({ codexBinary: FIXTURE });
+    const handle = await runner.start({ sessionId: 'inv-1', workingDirectory: process.cwd() });
+    await runner.sendPrompt(handle, 'hello');
+    expect(runner.getRunStats(handle)).toEqual({
+      tokens: { input: 12886, output: 19, cacheRead: 4480, cacheWrite: 0 }, tokensSource: 'result',
+      costUsd: null, modelUsage: null, limitEvents: [], observedModel: null,
+    });
+  });
+
+  it('R118f — a usage-limit failure is one rejected event (error and turn.failed repeat the text)', async () => {
+    const runner = new CodexRunner({ codexBinary: FIXTURE, now: () => new Date('2026-10-08T11:00:00.000Z') });
+    const handle = await runner.start({ sessionId: 'inv-1', workingDirectory: process.cwd() });
+    await runner.sendPrompt(handle, 'LIMIT_HIT');
+    expect(runner.getRunStats(handle).limitEvents).toEqual([
+      { at: '2026-10-08T11:00:00.000Z', kind: 'rejected', limitType: null, resetsAt: null, message: "You've hit your usage limit. Upgrade to Pro or try again in 2 hours." },
+    ]);
+  });
+
+  it('R118f — an ordinary failure is not a limit event', async () => {
+    const runner = new CodexRunner({ codexBinary: FIXTURE });
+    const handle = await runner.start({ sessionId: 'inv-1', workingDirectory: process.cwd() });
+    await runner.sendPrompt(handle, 'FAIL_LOUDLY');
+    expect(runner.getRunStats(handle).limitEvents).toEqual([]);
+  });
 });
 
 describeAgentRunnerContract('CodexRunner', {
