@@ -1011,6 +1011,23 @@ extension does not know.
    message) and `limitEvents`, about 5-50 KB per run kept for the engine's lifetime. **Fix:** drop a
    handle after `getRunStats` is read at run end. **Cost:** tens of MB after about 1,000 runs.
 
+**Added at release (2026-10-08):**
+
+- **F5. Interrupted runs are recorded `failed`, not `stopped`.** A run the engine died under is
+  closed by heal with `outcome: 'failed'`, `stopReason: null`, `interrupted: true`
+  (`pipeline-service.ts:1699-1702`), and a limit-hit run's `lastRun` stays `failed` while its
+  record says `stopped` / `limit` (`stage-runner.ts:193`). Program Review Focus 3 says an
+  interrupted run is `stopped`. Ruling S2-35 defers this to step 7 (boot-resume decides how an
+  interrupted or limit-stopped run resumes). **Cost:** until step 7, `runs.jsonl` and the panel
+  call an interrupted run `failed`; nothing resumes from it.
+- **N1. `appendRunRecord` has no lock and no concurrency pin.** `appendRunRecord`
+  (`src/pipeline/run-records.ts:117`) appends one JSON line with no lock of its own, and no test
+  pins two concurrent appends to one `runs.jsonl`. Safe today because a session has one active
+  run (`StageRunner.active`, `stage-runner.ts:211`, refused with `RunInProgressError` at `:329`)
+  and heal runs before the socket listens (`src/host/serve.ts:335`, `listenOnSocket` at `:339`).
+  **Cost if wrong:** a future second writer (another run per session, or heal while serving)
+  could interleave or drop a line; add a lock or a concurrency pin before allowing either.
+
 (The S2-5 behavioural pin is done: Task 7, `real-adapters.test.ts`, the two "engine-wide runner
 …" tests, which fail when `runnerOptions.model` is passed to both runners.)
 

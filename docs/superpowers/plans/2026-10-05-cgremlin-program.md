@@ -61,8 +61,8 @@ and everything it depends on must be `done`.
 | P2 | Personal: trim plugins; install mattpocock-skills + prompt-master | P1 | ready after P1 | — | n/a |
 | P3 | Personal + cgremlin: local dev that just works | 1b | ready | — | — |
 | P4 | Personal: rotate the Jira token; secrets to Keychain | — | **my action** | — | n/a |
-| 2 | Foundations: fresh runs, PR detection, per-stage routing, feedback.jsonl | 1 | ready | — | — |
-| 3 | Mode `workplan` + lineage grouping in the Work list | 2 | blocked | — | — |
+| 2 | Foundations: fresh runs, PR detection, per-stage routing, feedback.jsonl | 1 | ✅ done 2026-10-08 | `2026-10-08-cgremlin-step-2-foundations.md` | `cgremlin-2` |
+| 3 | Mode `workplan` + lineage grouping in the Work list | 2 | ready | — | — |
 | 4 | Planning chat (grilling → to-spec → to-tickets) + plan gate | 3, P2 | blocked | — | — |
 | 5 | **Milestone:** one phase end to end from ▶ | 4 | blocked | — | — |
 | 6 | Local live check + engine sign-off + `cgremlin:ui-check` | 5, 1b | blocked | — | — |
@@ -149,11 +149,11 @@ never installed, so stage sessions in other repos can't use them (A3).
 ### 2 — Foundations
 **Spec:** R90, R91, R116, §17, §18 A6.
 **Done when:**
-- [ ] `StageRunInput.fresh` (no `--resume`); per-round archive of BRIEF/FEEDBACK.
-- [ ] PR detection for development sessions → `session.pr` / `pr_opened`, plus merged/closed reconciliation.
-- [ ] `routing.<stage>` config (runner, model, effort, escalate, secondOpinion); the Claude runner passes `--effort` and unsets `CLAUDE_CODE_EFFORT_LEVEL`; the Codex runner passes `-c model_reasoning_effort`.
-- [ ] Per-run records `{stage, runner, model, effort, tokens, limitEvents, outcome}`.
-- [ ] `~/.cgremlin-core/feedback.jsonl` capture of dismissals and rejected verdicts (no UI yet).
+- [x] `StageRunInput.fresh` (no `--resume`); per-round archive of BRIEF/FEEDBACK.
+- [x] PR detection for development sessions → `session.pr` / `pr_opened`, plus merged/closed reconciliation.
+- [x] `routing.<stage>` config (runner, model, effort, escalate, secondOpinion); the Claude runner passes `--effort` and unsets `CLAUDE_CODE_EFFORT_LEVEL`; the Codex runner passes `-c model_reasoning_effort`.
+- [x] Per-run records `{stage, runner, model, effort, tokens, limitEvents, outcome}`.
+- [x] `~/.cgremlin-core/feedback.jsonl` capture of dismissals and rejected verdicts (no UI yet).
 
 ### 3 – 12
 Cards for these are written when their dependencies are done, from the spec sections in the tracker
@@ -164,6 +164,7 @@ Cards for these are written when their dependencies are done, from the spec sect
 ## Log
 | Date | Step | What happened |
 |---|---|---|
+| 2026-10-08 | 2 | Done: R90 fresh runs + per-round archive, R91 PR detection for development sessions (`pr_opened`, merged/closed reconciliation), R116 `routing.<stage>` model/effort (Claude `--effort`, Codex `-c model_reasoning_effort`), per-run records (`runs.jsonl`), `feedback.jsonl` (written only). Merged `117110a` (merge of `step/2`; parents `99ba949`, `7feac64`), tagged `cgremlin-pre-2` (`b1a096b`, identical to `cgremlin-1`) / `cgremlin-2`. Gates on the merged tree: core 2588, vscode 1340 passed (+1 skipped). `.vsix` built and saved (`cgremlin-vscode-0.0.1-2-built-2026-10-08.vsix`), **NOT installed, NOT pushed**; the RELEASES.md docs commit follows the `cgremlin-2` tag. Follow-ups F5 and N1 and the deferred items are in `cgremlin/core/docs/DECISIONS.md` (Step 2 follow-ups). Step 3 is now ready (its only dependency, 2, is done). |
 | 2026-10-06 | 1b | Done: plugin `cgremlin` 0.1.0 built TDD in worktree `step/1b` (5 commits + merge); per-task reviews and a fresh whole-branch review (no blocking findings; MCP server-name tools verified live). Merged `bd22e09`, tagged `cgremlin-pre-1b` (`b1a096b`) / `cgremlin-1b`; `.vsix` saved, not installed (no extension/engine runtime change). Plugin installed at user level from the local marketplace `cgremlin-local` and verified from a grace-frontend session; marketplace re-pointed from the worktree to the main checkout. **Open item for you:** `CLAUDE.md:38` says the main session reports only CONFIRMED findings, which drops UNVERIFIABLE verdicts. Recommended one-line change: "list UNVERIFIABLE separately as unresolved" (not applied: instruction file). Branch + tags pushed 2026-10-06. |
 | 2026-10-06 | — | Cleanup is now part of every release (RELEASES.md step 8). Leftover 0c worktree and `step/0c` branch removed. |
 | 2026-10-06 | 1 | Done: `development` denies `gh pr ready/edit`, `gh api` and all force-push spellings; `PermissionSubject.stage` + `development:inspect` / `investigation:development:inspect` profiles (review, rereview, phase_review, live_check can't commit/push); stage runner passes the stage. 4 tasks, each reviewed; fresh whole-branch review merge-ready. Merged `b1a096b`, tagged `cgremlin-pre-1` (`8374d87`) / `cgremlin-1`, `.vsix` saved and installed. Note for a later step: a dev session that ran an inspect stage keeps the inspect settings until its next stage run (conversation claim doesn't refresh dev sessions). Branch + tags pushed (2026-10-06, with the 1b push). |
