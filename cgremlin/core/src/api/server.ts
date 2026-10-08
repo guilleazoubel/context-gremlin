@@ -1246,7 +1246,7 @@ async function handleRequest(
     if (method === 'POST' && parts.length === 3 && parts[0] === 'sessions' && parts[2] === 'transition') {
       const id = parts[1];
       const body = (await readJsonBody(req)) as { to: string };
-      const updated = await deps.pipeline.transition(id, body.to);
+      const updated = await deps.pipeline.transition(id, body.to, { by: 'human' });
       sendJson(res, 200, { session: updated });
       return;
     }
@@ -1286,7 +1286,7 @@ async function handleRequest(
         throw new UnsupportedStageError(resolved.message);
       }
       await deps.prApprover.approve(resolved.target);
-      const updated = await deps.pipeline.transition(id, 'approved');
+      const updated = await deps.pipeline.transition(id, 'approved', { by: 'human' });
       sendJson(res, 200, { session: updated });
       return;
     }

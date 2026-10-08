@@ -214,6 +214,57 @@ describe('CodexRunner', () => {
       expect(childPgid).not.toBe(ownPgid);
     });
   });
+
+  it('R116 — per-run model and effort on a first turn: -m from the context, then -c model_reasoning_effort', async () => {
+    await withArgvLog('effort-first', async (argvLogPath) => {
+      const runner = new CodexRunner({ codexBinary: FIXTURE, sandbox: 'read-only', model: 'gpt-6-luna' });
+      const handle = await runner.start({
+        sessionId: 'inv-1', workingDirectory: process.cwd(), additionalDirs: ['/s/one'], model: 'gpt-6.1-sol', effort: 'high',
+      });
+      await runner.sendPrompt(handle, 'hello');
+      expect(JSON.parse(await readFile(argvLogPath, 'utf8'))).toEqual([
+        'exec', '--json', '-s', 'read-only', '-m', 'gpt-6.1-sol', '-c', 'model_reasoning_effort="high"',
+        '--add-dir', '/s/one', 'hello',
+      ]);
+    });
+  });
+
+  it('R116 — and on a resumed turn', async () => {
+    await withArgvLog('effort-resume', async (argvLogPath) => {
+      const runner = new CodexRunner({ codexBinary: FIXTURE });
+      const handle = await runner.start({ sessionId: 'inv-1', workingDirectory: process.cwd(), resumeId: 'thread-9', effort: 'xhigh' });
+      await runner.sendPrompt(handle, 'hello');
+      expect(JSON.parse(await readFile(argvLogPath, 'utf8'))).toEqual([
+        'exec', 'resume', 'thread-9', '--json', '-c', 'sandbox_mode="workspace-write"', '-c', 'model_reasoning_effort="xhigh"', 'hello',
+      ]);
+    });
+  });
+
+  it('R118f — getRunStats reports turn.completed usage; Codex reports no cost or per-model usage', async () => {
+    const runner = new CodexRunner({ codexBinary: FIXTURE });
+    const handle = await runner.start({ sessionId: 'inv-1', workingDirectory: process.cwd() });
+    await runner.sendPrompt(handle, 'hello');
+    expect(runner.getRunStats(handle)).toEqual({
+      tokens: { input: 12886, output: 19, cacheRead: 4480, cacheWrite: 0 }, tokensSource: 'result',
+      costUsd: null, modelUsage: null, limitEvents: [], observedModel: null,
+    });
+  });
+
+  it('R118f — a usage-limit failure is one rejected event (error and turn.failed repeat the text)', async () => {
+    const runner = new CodexRunner({ codexBinary: FIXTURE, now: () => new Date('2026-10-08T11:00:00.000Z') });
+    const handle = await runner.start({ sessionId: 'inv-1', workingDirectory: process.cwd() });
+    await runner.sendPrompt(handle, 'LIMIT_HIT');
+    expect(runner.getRunStats(handle).limitEvents).toEqual([
+      { at: '2026-10-08T11:00:00.000Z', kind: 'rejected', limitType: null, resetsAt: null, message: "You've hit your usage limit. Upgrade to Pro or try again in 2 hours." },
+    ]);
+  });
+
+  it('R118f — an ordinary failure is not a limit event', async () => {
+    const runner = new CodexRunner({ codexBinary: FIXTURE });
+    const handle = await runner.start({ sessionId: 'inv-1', workingDirectory: process.cwd() });
+    await runner.sendPrompt(handle, 'FAIL_LOUDLY');
+    expect(runner.getRunStats(handle).limitEvents).toEqual([]);
+  });
 });
 
 describeAgentRunnerContract('CodexRunner', {

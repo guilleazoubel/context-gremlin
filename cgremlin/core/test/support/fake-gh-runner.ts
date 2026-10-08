@@ -16,6 +16,11 @@ export class GhMutationAttemptedError extends Error {
 
 export class FakeGhRunner implements GhRunner {
   readonly calls: string[][] = [];
+  /**
+   * Every invocation, INCLUDING the mutating ones refused below (which never reach `calls`). A
+   * caller that swallows gh errors would otherwise hide a refused mutation from a read-only pin.
+   */
+  readonly attempts: string[][] = [];
   private responses: Array<{ stdout: string; stderr?: string } | Error> = [];
 
   queueResponse(r: { stdout: string; stderr?: string } | Error): void {
@@ -23,6 +28,7 @@ export class FakeGhRunner implements GhRunner {
   }
 
   async run(args: string[]): Promise<{ stdout: string; stderr: string }> {
+    this.attempts.push(args);
     if (args.some((arg) => MUTATING_TOKEN_SET.has(arg))) {
       throw new GhMutationAttemptedError(args);
     }

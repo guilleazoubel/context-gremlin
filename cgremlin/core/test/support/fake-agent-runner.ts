@@ -3,6 +3,7 @@ import type {
   AgentHandle,
   AgentOutput,
   AgentRunner,
+  RunStats,
   SessionContext,
 } from '../../src/agent/agent-runner';
 
@@ -14,6 +15,7 @@ interface FakeAgentState {
   stopped: boolean;
   resumeId?: string;
   pid?: number;
+  runStats?: RunStats;
 }
 
 export class UnknownAgentHandleError extends Error {
@@ -104,6 +106,15 @@ export class FakeAgentRunner implements AgentRunner {
 
   setPid(handle: AgentHandle, pid: number | undefined): void {
     this.requireState(handle).pid = pid;
+  }
+
+  /** Undefined until set — a runner that has nothing to report. */
+  getRunStats(handle: AgentHandle): RunStats | undefined {
+    return this.requireState(handle).runStats;
+  }
+
+  setRunStats(handle: AgentHandle, stats: RunStats): void {
+    this.requireState(handle).runStats = stats;
   }
 
   private requireState(handle: AgentHandle): FakeAgentState {

@@ -3,7 +3,7 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createHarness, flush, SESSIONS_DIR, WORKTREES_DIR } from '../support/pipeline-harness';
 import { FakeGhRunner } from '../support/fake-gh-runner';
-import { mapPrView } from '../../src/gh/pr-view';
+import { mapPrView, PR_VIEW_FIELDS } from '../../src/gh/pr-view';
 import {
   planPrSessionReconciliation,
   planReconciliation,
@@ -12,6 +12,7 @@ import {
 import { SessionStore } from '../../src/engine/session-store';
 import {
   migrateV1ToV2,
+  type DevelopmentSession,
   type InvestigationSession,
   type RespondSession,
   type ReviewSession,
@@ -818,5 +819,58 @@ describe('a session STARTED AFTER the PR landed is never ended by that landing',
     expect(h.runner.isStopped(handle)).toBe(false);
     expect((await h.store.load(review.id)).stageStatus).toBe('reviewing');
     void runPromise;
+  });
+});
+
+describe('R91 — development sessions follow their own PR', () => {
+  it('planPrSessionReconciliation: MERGED -> merged, CLOSED -> abandoned, OPEN -> nothing', () => {
+    const dev = developmentSession('dev-1', 'pr_opened') as DevelopmentSession;
+    expect(planPrSessionReconciliation({ session: dev, view: view({ state: 'MERGED' }) }).actions).toEqual([
+      { type: 'transition', sessionId: 'dev-1', to: 'merged', reason: 'PR merged' },
+    ]);
+    expect(planPrSessionReconciliation({ session: dev, view: view({ state: 'CLOSED' }) }).actions).toEqual([
+      { type: 'transition', sessionId: 'dev-1', to: 'abandoned', reason: 'PR closed without merging' },
+    ]);
+    expect(planPrSessionReconciliation({ session: dev, view: view() })).toEqual({ actions: [], skipped: [] });
+  });
+
+  it('the tick merges a development session whose own PR merged', async () => {
+    const { h, gh, lock } = tickHarness();
+    await h.store.save(developmentSession('dev-1', 'pr_opened'));
+    gh.queueResponse({ stdout: viewJson({ state: 'MERGED', mergedAt: '2026-09-05T00:00:00Z' }) });
+    const report = await new ReconciliationTick({ gh, store: h.store, pipeline: h.service, events: h.events, lock, now: () => NOW }).run();
+    expect(report.errors).toEqual([]);
+    expect(gh.calls).toEqual([['pr', 'view', '5', '--repo', 'acme/app', '--json', PR_VIEW_FIELDS]]);
+    expect((await h.store.load('dev-1')).stageStatus).toBe('merged');
+  });
+
+  it('the tick abandons a development session whose own PR was closed', async () => {
+    const { h, gh, lock } = tickHarness();
+    await h.store.save(developmentSession('dev-1', 'pr_opened'));
+    gh.queueResponse({ stdout: viewJson({ state: 'CLOSED', closedAt: '2026-09-05T00:00:00Z' }) });
+    await new ReconciliationTick({ gh, store: h.store, pipeline: h.service, events: h.events, lock, now: () => NOW }).run();
+    expect((await h.store.load('dev-1')).stageStatus).toBe('abandoned');
+  });
+
+  it('a terminal development session, or one with no PR and no gh wired in the pipeline, costs no gh call', async () => {
+    const { h, gh, lock } = tickHarness();
+    await h.store.save({ ...developmentSession('dev-2', 'active'), pr: null });
+    await h.store.save(developmentSession('dev-3', 'merged'));
+    const report = await new ReconciliationTick({ gh, store: h.store, pipeline: h.service, events: h.events, lock, now: () => NOW }).run();
+    expect(gh.calls).toEqual([]);
+    expect(report.reconciled).toBe(0);
+  });
+
+  it('a review that already merged its lineage source in the same tick leaves the development leg nothing to do', async () => {
+    const { h, gh, lock } = tickHarness();
+    await h.store.save(developmentSession('dev-1', 'pr_opened', 'acme/app', 42));
+    await h.store.save(reviewSession({ id: 'pr-app-42-x', stageStatus: 'ready', repo: 'acme/app', number: 42, parentSessionId: 'dev-1' }));
+    gh.queueResponse({
+      stdout: viewJson({ number: 42, url: 'https://github.com/acme/app/pull/42', state: 'MERGED', mergedAt: '2026-09-05T01:00:00Z' }),
+    });
+    const report = await new ReconciliationTick({ gh, store: h.store, pipeline: h.service, events: h.events, lock, now: () => NOW }).run();
+    expect(report.errors).toEqual([]);
+    expect(gh.calls).toHaveLength(1);
+    expect((await h.store.load('dev-1')).stageStatus).toBe('merged');
   });
 });

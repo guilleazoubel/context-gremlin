@@ -20,7 +20,7 @@ import type { SessionFileSystem } from '../fs/session-file-system';
 import type { GitRunner } from '../git/git-runner';
 import type { EngineEvents } from '../engine/events';
 import type { DevelopmentSession, InvestigationSession, Session } from '../schema/session';
-import type { RespondPhase, ReviewPhase } from '../schema/pipeline';
+import type { DevelopmentPhase, RespondPhase, ReviewPhase } from '../schema/pipeline';
 import { canTransition, QA_RUNNABLE_FROM } from '../schema/pipeline';
 import type { LastRun, StageName } from '../schema/stage';
 import { KeyedLock } from '../api/keyed-lock';
@@ -58,11 +58,16 @@ import {
 import { assertCanPromote } from './plan-gate';
 import { RunInProgressError, WorkspaceMissingError, type StageRunResult } from './stage-runner';
 import { CRASHED_RUN_ERROR, runLiveness, type RunLiveness } from './run-liveness';
+import { appendRunRecord, readRunRecords, recordPrefixOf, takeRunFacts } from './run-records';
 import { TERMINAL_PHASES_BY_MODE } from '../workspace/workspace-in-use';
 import { refreshWorkspaceGuardrails } from '../workspace/workspace-manager';
 import { permissionProfileFor } from '../workspace/permission-guard';
 import { repoSlugFromUrl } from '../gh/repo-slug';
 import { preflightAccess, type PreflightStage } from './preflight';
+import type { GhRunner } from '../gh/gh-runner';
+import { detectDevelopmentPr } from './pr-detection';
+import type { FeedbackLog } from '../feedback/feedback-log';
+import { dismissalRecords, humanTransitionRecords, producedByFrom, type CaptureContext } from '../feedback/feedback-capture';
 
 export interface PipelineConfig {
   sessionsDir: string; // absolute
@@ -76,6 +81,8 @@ export interface PipelineConfig {
   runnerKind: 'claude-code' | 'codex';
   /** How long a human-turn claim stays live: `expiresAt = claimedAt + this` (R20). */
   humanTurnTtlMs: number;
+  /** S2-31 — CoreConfig.me: only a PR by this login is adopted. Absent: no PR detection. */
+  me?: string;
 }
 
 /**
@@ -135,6 +142,17 @@ export interface PipelineServiceDeps {
    * Required: a wiring that forgets it would silently waive the GitHub check.
    */
   ghAuthOk: () => Promise<{ ok: true } | { ok: false; detail: string }>;
+  /**
+   * R91 — read-only PR detection after a develop run and on every tick (`gh pr view` /
+   * `gh pr list` only; never opens or posts). Absent: no detection, and a development session
+   * stays `active` (pre-step-2).
+   */
+  gh?: GhRunner;
+  /**
+   * §20 — where dismissed findings and rejected verdicts are recorded. Absent: nothing is
+   * captured. Capture never throws and never blocks the action it observes.
+   */
+  feedback?: FeedbackLog;
 }
 
 /** 0c — the user's "Run anyway": skips ONLY the Jira half of the preflight, never GitHub. */
@@ -162,6 +180,13 @@ export interface CreateDevelopmentInput {
   ticket: string | null;
   baseRef?: string;
 }
+
+/**
+ * §20 — how much of a REVIEW.md feedback capture parses (1 MiB of text, cut at a line end). The
+ * file is agent-written; parsing is synchronous, so a pathological file must not hold the
+ * event loop. A real review is a few KB.
+ */
+const FEEDBACK_REVIEW_PARSE_CAP = 1024 * 1024;
 
 /** The heading `renderUiCheckProtocol` emits — the R14 gate reads it back out of the rendered brief. */
 const LIVE_UI_CHECK_HEADING = '## LIVE UI CHECK';
@@ -198,6 +223,8 @@ export class PipelineService {
   private readonly now: () => Date;
   private readonly newId: (prefix: string, repoSlug: string, key: string) => string;
   private readonly lock: KeyedLock;
+  /** I3 — the last PR-detection miss logged per session, so a tick logs a miss only when its reason changes. */
+  private readonly lastPrMiss = new Map<string, string>();
 
   constructor(private readonly deps: PipelineServiceDeps) {
     this.now = deps.now ?? (() => new Date());
@@ -296,6 +323,11 @@ export class PipelineService {
     return `${this.deps.config.sessionsDir}/${id}`;
   }
 
+  /** One line per degraded side effect. Defaults to `console.warn`, which the engine log captures. */
+  private log(line: string): void {
+    (this.deps.log ?? ((l: string) => console.warn(l)))(line);
+  }
+
   /** The unlocked, single-operation core of `transition` — only call this from inside a callback already running under `this.lock` for `id`. */
   private async transitionUnlocked(id: string, to: string): Promise<Session> {
     const before = await this.deps.store.load(id);
@@ -333,8 +365,74 @@ export class PipelineService {
     return reaped;
   }
 
-  async transition(id: string, to: string): Promise<Session> {
-    return this.lock.withLock(id, () => this.transitionUnlocked(id, to));
+  /**
+   * `by: 'human'` marks a transition a person asked for through the API (`/transition`,
+   * `/approve-pr`) — the only kind that can reject an engine verdict (§20). The reconciliation
+   * tick never passes it, so a merged PR dismissing its review is never recorded as feedback.
+   */
+  async transition(id: string, to: string, opts: { by?: 'human' } = {}): Promise<Session> {
+    if (opts.by !== 'human' || this.deps.feedback === undefined) {
+      return this.lock.withLock(id, () => this.transitionUnlocked(id, to));
+    }
+    const { before, after } = await this.lock.withLock(id, async () => {
+      const before = await this.deps.store.load(id);
+      const after = await this.transitionUnlocked(id, to);
+      return { before, after };
+    });
+    await this.captureHumanTransition(before, to);
+    return after;
+  }
+
+  private async feedbackContext(session: Session, stages: readonly StageName[]): Promise<CaptureContext> {
+    const sessionDir = this.sessionDir(session.id);
+    const runs = await readRunRecords(this.deps.fs, sessionDir).catch(() => []);
+    return { session, sessionDir, at: this.now().toISOString(), producedBy: producedByFrom(runs, stages) };
+  }
+
+  /** §20 — at most FEEDBACK_REVIEW_PARSE_CAP of a REVIEW.md reaches the parser; a longer one is cut at a line end and logged. */
+  private capReviewForFeedback(id: string, text: string | null): string | null {
+    if (text === null || text.length <= FEEDBACK_REVIEW_PARSE_CAP) return text;
+    this.log(`feedback capture for ${id}: REVIEW.md is larger than 1 MB (${text.length} characters); only the first 1 MB is read`);
+    const lineEnd = text.lastIndexOf('\n', FEEDBACK_REVIEW_PARSE_CAP);
+    return text.slice(0, lineEnd > 0 ? lineEnd : FEEDBACK_REVIEW_PARSE_CAP);
+  }
+
+  /**
+   * §20 / S2-17 — every finding this review's REVIEW.md marks dismissed, recorded once (S2-27).
+   * Called where REVIEW.md changes hands: a conversation release, just before a review run
+   * rewrites it, just before a re-review archives it, and on a person's transition. Unlocked:
+   * it reads session-dir files and writes only feedback.jsonl. Never throws.
+   */
+  private async captureDismissals(session: Session, reviewText?: string | null): Promise<void> {
+    const feedback = this.deps.feedback;
+    if (feedback === undefined || session.mode !== 'review') return;
+    try {
+      const raw = reviewText !== undefined ? reviewText : await readNonEmpty(this.deps.fs, `${this.sessionDir(session.id)}/REVIEW.md`);
+      const text = this.capReviewForFeedback(session.id, raw);
+      if (text === null) return;
+      const ctx = await this.feedbackContext(session, ['review', 'rereview']);
+      for (const record of dismissalRecords(ctx, text)) await feedback.appendOnce(record);
+    } catch (err) {
+      this.log(`feedback capture for ${session.id} failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  /** §20 / S2-18 — a person's transition against an engine verdict. Never throws. */
+  private async captureHumanTransition(before: Session, to: string): Promise<void> {
+    const feedback = this.deps.feedback;
+    if (feedback === undefined) return;
+    try {
+      const dir = this.sessionDir(before.id);
+      const review = before.mode === 'review' ? this.capReviewForFeedback(before.id, await readNonEmpty(this.deps.fs, `${dir}/REVIEW.md`)) : null;
+      const plan = before.mode === 'investigation' ? await readNonEmpty(this.deps.fs, `${dir}/PLAN.md`) : null;
+      if (review !== null) await this.captureDismissals(before, review);
+      const ctx = await this.feedbackContext(before, before.mode === 'investigation' ? ['plan'] : ['review', 'rereview']);
+      for (const record of humanTransitionRecords(ctx, before.stageStatus, to, { review, plan })) {
+        await feedback.appendOnce(record);
+      }
+    } catch (err) {
+      this.log(`feedback capture for ${before.id} failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   private async patchLastRun(id: string, patch: Partial<LastRun>): Promise<Session> {
@@ -759,6 +857,7 @@ export class PipelineService {
   }
 
   async runDevelop(id: string): Promise<Session> {
+    const DEVELOP_RUNNABLE_FROM: readonly DevelopmentPhase[] = ['active', 'pr_opened'];
     const session = await this.deps.store.load(id);
     if (session.mode !== 'development') {
       throw new UnsupportedStageError(`Session '${id}' cannot run develop (mode=${session.mode})`);
@@ -785,22 +884,92 @@ export class PipelineService {
     });
     const prompt = STAGE_ENTRY_PROMPT(sessionDir);
     try {
-      // No transition on success: PR detection (which drives active -> pr_opened) is Phase 3b.
+      // R91 — the PR the run opened is detected after it, whatever its outcome (adoptDevelopmentPr). Runnable from pr_opened too: a fix round on the open draft.
       // The stageStatus check is race-sensitive and must run on a FRESH load
       // inside the lock — starting on a session a human just abandoned is
       // exactly the hole this closes.
-      const result = await this.runStageLocked(id, 'develop', brief, prompt, async () => {
+      await this.runStageLocked(id, 'develop', brief, prompt, async () => {
         const fresh = await this.deps.store.load(id);
         // Authoritative (R9/R19) — see runFindings.
         await this.assertNoHumanTurn(fresh);
-        if (fresh.mode !== 'development' || fresh.stageStatus !== 'active') {
+        if (fresh.mode !== 'development' || !DEVELOP_RUNNABLE_FROM.includes(fresh.stageStatus)) {
           throw new UnsupportedStageError(`Session '${id}' cannot run develop (mode=${fresh.mode}, stage=${fresh.stageStatus})`);
         }
       });
-      return result.session;
+      return await this.adoptDevelopmentPr(id, { afterRun: true });
     } finally {
       await prep.teardown();
     }
+  }
+
+  /**
+   * R91 — find this development session's open PR and record it: `session.pr` + `active →
+   * pr_opened` in ONE locked save and one `session.transitioned`. Called after every develop run
+   * (`afterRun`: any outcome — a PR the agent opened before it died is still a PR) and by the
+   * reconciliation tick (I1: a run the engine died under, a PR opened in a Take over chat).
+   * Read-only gh (src/pipeline/pr-detection.ts). A session that already has a PR, is not
+   * `active`, has no branch, or has a live run (checked again inside the lock) is left alone; so
+   * is every session when `gh` or `me` is not wired.
+   *
+   * Never throws for a detection miss: that is one log line and the session as it was. After a
+   * run the line is always written; on the tick (I3) only when that session's reason changed.
+   *
+   * A PR opened for review rather than as a draft (R112, S2-14) is still recorded, flagged in
+   * the SAME save: `pr.openedForReview = true` (it outlives every later run), plus the note
+   * appended to `lastRun.error` only after a run — the tick never writes onto a run it cannot
+   * tie to the PR, and never invents one when there is none. One log line says it either way.
+   */
+  async adoptDevelopmentPr(id: string, opts: { afterRun?: boolean } = {}): Promise<Session> {
+    const afterRun = opts.afterRun === true;
+    const current = await this.deps.store.load(id);
+    const gh = this.deps.gh;
+    const me = this.deps.config.me;
+    if (gh === undefined || me === undefined) return current;
+    if (current.mode !== 'development' || current.pr !== null || current.stageStatus !== 'active') {
+      this.lastPrMiss.delete(id);
+      return current;
+    }
+    if (this.runLivenessOf(current) === 'live') return current;
+    const branch = current.workspace.branch;
+    if (!branch) return current;
+    const detection = await detectDevelopmentPr({
+      gh,
+      fs: this.deps.fs,
+      sessionDir: this.sessionDir(id),
+      repoSlug: repoSlugFromUrl(current.workspace.repoUrl),
+      branch,
+      me,
+    });
+    if (!detection.found) {
+      const repeated = this.lastPrMiss.get(id) === detection.why;
+      this.lastPrMiss.set(id, detection.why);
+      if (afterRun || !repeated) this.log(`PR detection for ${id}: none adopted (${detection.why})`);
+      return current;
+    }
+    const note = `PR #${detection.pr.number} is open for review, not a draft — opening a PR for review needs your approval (R112)`;
+    const adopted = await this.lock.withLock(id, async () => {
+      const before = await this.deps.store.load(id);
+      if (before.mode !== 'development' || before.pr !== null || before.stageStatus !== 'active') return null;
+      // M1 — a run may have started while detection was out (it ran unlocked).
+      if (this.runLivenessOf(before) === 'live') return null;
+      const flagged = !detection.isDraft;
+      const lastRun =
+        flagged && afterRun && before.lastRun !== null
+          ? { ...before.lastRun, error: before.lastRun.error === null ? note : `${before.lastRun.error}; ${note}` }
+          : before.lastRun;
+      const next: Session = {
+        ...applyTransition(before, 'pr_opened'),
+        pr: flagged ? { ...detection.pr, openedForReview: true } : detection.pr,
+        lastRun,
+      };
+      await this.deps.store.save(next);
+      this.deps.events.emit('session.transitioned', { session: next, from: before.stageStatus, to: 'pr_opened' });
+      return next;
+    });
+    if (adopted === null) return this.deps.store.load(id);
+    this.lastPrMiss.delete(id);
+    if (!detection.isDraft) this.log(`PR detection for ${id}: adopted, but ${note}`);
+    return adopted;
   }
 
   /**
@@ -1048,6 +1217,7 @@ export class PipelineService {
     // 0c — before any environment, brief or agent.
     const pf = await this.preflight(id, session.lineage.ticket, opts, 'review');
     if (pf.blocked !== null) return pf.blocked;
+    await this.captureDismissals(session); // §20 — before the agent rewrites REVIEW.md
 
     const sessionDir = this.sessionDir(id);
     const prep = await this.prepareEnvironment(id, 'review', session);
@@ -1170,6 +1340,7 @@ export class PipelineService {
 
     const sessionDir = this.sessionDir(id);
     const existingReview = await readNonEmpty(this.deps.fs, `${sessionDir}/REVIEW.md`);
+    await this.captureDismissals(session, existingReview); // §20 — before it is archived
     // reviewVersion counts archived files, so only bump it (and only claim a
     // previous-review filename) when an archive was actually written — a
     // rereview off a failed run that never produced a REVIEW.md has nothing
@@ -1392,7 +1563,7 @@ export class PipelineService {
    * headless state (R110), which is idempotent too.
    */
   async releaseConversation(id: string): Promise<Session> {
-    return this.lock.withLock(id, async () => {
+    const released = await this.lock.withLock(id, async () => {
       const fresh = await this.deps.store.load(id);
       let result = fresh;
       if (fresh.agent != null && fresh.agent.humanTurn != null) {
@@ -1406,7 +1577,7 @@ export class PipelineService {
       try {
         await this.refreshConversationGuardrails(result, false);
       } catch (err) {
-        (this.deps.log ?? ((line: string) => console.warn(line)))(
+        this.log(
           `release ${id}: could not restore the headless guardrails (the next stage run will): ${
             err instanceof Error ? err.message : String(err)
           }`,
@@ -1414,6 +1585,8 @@ export class PipelineService {
       }
       return result;
     });
+    await this.captureDismissals(released);
+    return released;
   }
 
   /** The resume contract: what a human needs to pick this conversation up by hand, and whether one already has it. */
@@ -1477,6 +1650,7 @@ export class PipelineService {
     return this.lock.withLock(id, async () => {
       const fresh = await this.deps.store.load(id);
       if (!this.isStale(fresh)) return false;
+      if (fresh.lastRun?.outcome === 'running') await this.recordInterruptedRun(id, fresh.lastRun);
       const lastRun = fresh.lastRun;
       let next: Session =
         lastRun !== null && lastRun.outcome === 'running'
@@ -1494,6 +1668,42 @@ export class PipelineService {
       });
       return true;
     });
+  }
+
+  /**
+   * I2 / S2-25 — a run the engine died under still gets its record, from the facts the stage
+   * runner left at `run.started`. Taking the facts claims the record, so the run's own late exit
+   * (if the child ever reports one) writes nothing. Only facts naming the run `lastRun` says is
+   * running (same stage and startedAt) are taken: an earlier run's stale facts are not this run's.
+   * The facts are agent-writable (S2-34): the session id is the real one, never theirs, and the
+   * schema bounds the rest. Never throws.
+   */
+  private async recordInterruptedRun(id: string, running: LastRun): Promise<void> {
+    const sessionDir = this.sessionDir(id);
+    try {
+      const pending = await takeRunFacts(
+        this.deps.fs,
+        sessionDir,
+        (facts) => facts.stage === running.stage && facts.startedAt === running.startedAt,
+      );
+      if (pending === null) return;
+      await appendRunRecord(this.deps.fs, sessionDir, {
+        ...recordPrefixOf(pending),
+        sessionId: id,
+        finishedAt: this.now().toISOString(),
+        tokens: null,
+        tokensSource: null,
+        costUsd: null,
+        modelUsage: null,
+        limitEvents: [],
+        outcome: 'failed',
+        stopReason: null,
+        error: CRASHED_RUN_ERROR,
+        interrupted: true,
+      });
+    } catch (err) {
+      this.log(`interrupted run record for ${id} not written: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   /**

@@ -77,6 +77,18 @@ describe('resolveCoreConfig', () => {
     expect(cfg.socketPath).toBe(`${HOME}/custom.sock`);
     expect(cfg.inventoryPath).toBe(`${HOME}/custom-inventory.json`);
   });
+
+  it('derives feedbackPath under stateDir (§20)', () => {
+    const cfg = resolveCoreConfig({ repos: ['acme/app'], me: 'me' }, HOME);
+    expect(cfg.feedbackPath).toBe(`${HOME}/.cgremlin-core/feedback.jsonl`);
+  });
+
+  it('writeCoreConfig omits feedbackPath when it is the derived default (the DERIVED_PATH_SUFFIXES half)', async () => {
+    const fs = new InMemoryFileSystem();
+    await writeCoreConfig(fs, '/state/core.json', resolveCoreConfig({ repos: ['acme/app'], me: 'me' }, HOME), { force: false });
+    const persisted = JSON.parse(await fs.readFile('/state/core.json')) as Record<string, unknown>;
+    expect(persisted).not.toHaveProperty('feedbackPath');
+  });
 });
 
 describe('importLegacyConfig', () => {

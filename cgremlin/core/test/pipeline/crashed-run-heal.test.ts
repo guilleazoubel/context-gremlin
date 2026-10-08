@@ -7,9 +7,10 @@
  * forever. So the sweep is generalised, and the contradiction is also healed
  * lazily — under the session's own lock — the first time a read path sees it.
  */
-import { describe, expect, it } from 'vitest';
-import { createHarness, createInvestigation, flush } from '../support/pipeline-harness';
+import { describe, expect, it, vi } from 'vitest';
+import { SESSIONS_DIR, createHarness, createInvestigation, flush } from '../support/pipeline-harness';
 import { CRASHED_RUN_ERROR } from '../../src/pipeline/run-liveness';
+import { RUN_FACTS_FILE, readRunRecords } from '../../src/pipeline/run-records';
 import type { LastRun } from '../../src/schema/stage';
 import type { QaSession, Session } from '../../src/schema/session';
 
@@ -141,5 +142,161 @@ describe('a read path heals what it sees, rather than waiting for a restart', ()
 
     expect((await h.store.load(id)).lastRun?.outcome).toBe('failed');
     expect(transitions()).toBe(1);
+  });
+});
+
+describe('I2 — a run the engine lost still gets its record', () => {
+  it('a run the engine lost gets an interrupted record when healed, and only one', async () => {
+    const h = createHarness();
+    const inv = await createInvestigation(h.service);
+    const run = h.service.runFindings(inv.id);
+    await flush();
+    const handle = h.runner.lastHandle();
+    h.runner.setPid(handle, 4242);
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => {
+      const err = new Error('ESRCH') as NodeJS.ErrnoException;
+      err.code = 'ESRCH';
+      throw err;
+    });
+    expect((await h.service.failStaleRuns()).sessionIds).toEqual([inv.id]);
+    kill.mockRestore();
+    const dir = `${SESSIONS_DIR}/${inv.id}`;
+    expect(await readRunRecords(h.fs, dir)).toEqual([
+      expect.objectContaining({
+        stage: 'findings', runner: 'claude-code', outcome: 'failed', error: CRASHED_RUN_ERROR, interrupted: true,
+        tokens: null, tokensSource: null, costUsd: null, modelUsage: null,
+      }),
+    ]);
+    // The lost child reports its exit after all: the record was already written, so no second one.
+    h.runner.emitExit(handle, { code: null, signal: 'SIGKILL' });
+    await run;
+    expect(await readRunRecords(h.fs, dir)).toHaveLength(1);
+  });
+
+  function engineDies(): () => void {
+    const kill = vi.spyOn(process, 'kill').mockImplementation(() => {
+      const err = new Error('ESRCH') as NodeJS.ErrnoException;
+      err.code = 'ESRCH';
+      throw err;
+    });
+    return () => kill.mockRestore();
+  }
+
+  it("a lost run's late exit never takes the next run's facts: the next run is recorded once, at its own end", async () => {
+    const h = createHarness();
+    const inv = await createInvestigation(h.service);
+    const dir = `${SESSIONS_DIR}/${inv.id}`;
+    const runA = h.service.runFindings(inv.id);
+    await flush();
+    const handleA = h.runner.lastHandle();
+    h.runner.setPid(handleA, 4242);
+    const restore = engineDies();
+    expect((await h.service.failStaleRuns()).sessionIds).toEqual([inv.id]);
+    restore();
+    expect(await readRunRecords(h.fs, dir)).toEqual([expect.objectContaining({ interrupted: true })]);
+
+    // Run B starts on the healed session and leaves its own facts.
+    const runB = h.stageRunner.run({ sessionId: inv.id, stage: 'findings', brief: null, prompt: 'go' });
+    await flush();
+    const handleB = h.runner.lastHandle();
+    expect(handleB).not.toEqual(handleA);
+    const factsB = await h.fs.readFile(`${dir}/${RUN_FACTS_FILE}`);
+
+    // A's child finally reports its exit (its stdio was held open): A is already recorded.
+    h.runner.emitExit(handleA, { code: null, signal: 'SIGKILL' });
+    await runA.catch(() => undefined);
+    expect(await readRunRecords(h.fs, dir)).toHaveLength(1);
+    expect(await h.fs.readFile(`${dir}/${RUN_FACTS_FILE}`)).toBe(factsB);
+
+    h.runner.emitExit(handleB, { code: 0, signal: null });
+    await runB;
+    expect((await readRunRecords(h.fs, dir)).map((r) => [r.outcome, r.interrupted])).toEqual([
+      ['failed', true],
+      ['succeeded', false],
+    ]);
+    expect(await h.fs.exists(`${dir}/${RUN_FACTS_FILE}`)).toBe(false);
+  });
+
+  it('stale facts from an earlier run never become the record of a run whose own facts write failed', async () => {
+    const logs: string[] = [];
+    const h = createHarness({ log: (line) => logs.push(line) });
+    const inv = await createInvestigation(h.service);
+    const dir = `${SESSIONS_DIR}/${inv.id}`;
+    await h.fs.mkdir(dir, { recursive: true });
+    const stale = JSON.stringify({
+      v: 1, runId: 'earlier', sessionId: inv.id, stage: 'plan', runner: 'claude-code', model: 'stale-model', effort: null,
+      routeSource: 'legacy', fresh: false, resumed: false, startedAt: '2026-01-01T00:00:00.000Z',
+    });
+    await h.fs.writeFile(`${dir}/${RUN_FACTS_FILE}`, stale);
+    const realWrite = h.fs.writeFile.bind(h.fs);
+    h.fs.writeFile = async (path: string, content: string, options?: { mode?: number }) => {
+      if (path.endsWith(`/${RUN_FACTS_FILE}`)) throw new Error('EACCES');
+      return realWrite(path, content, options);
+    };
+
+    const runC = h.service.runFindings(inv.id);
+    await flush();
+    const handleC = h.runner.lastHandle();
+    h.runner.setPid(handleC, 4242);
+    const restore = engineDies();
+    expect((await h.service.failStaleRuns()).sessionIds).toEqual([inv.id]);
+    restore();
+    expect(await readRunRecords(h.fs, dir)).toEqual([]);
+    expect(await h.fs.readFile(`${dir}/${RUN_FACTS_FILE}`)).toBe(stale);
+    expect((await h.store.load(inv.id)).lastRun?.error).toBe(CRASHED_RUN_ERROR);
+
+    // C's own exit, if it ever comes, records C — never the stale run.
+    h.runner.emitExit(handleC, { code: 0, signal: null });
+    await runC.catch(() => undefined);
+    const records = await readRunRecords(h.fs, dir);
+    expect(records.map((r) => [r.stage, r.model, r.interrupted])).toEqual([['findings', null, false]]);
+  });
+
+  async function crashedWithFacts(facts: Record<string, unknown> | string, options: { log?: (line: string) => void } = {}) {
+    const h = createHarness(options);
+    const inv = await createInvestigation(h.service);
+    await h.store.save({ ...inv, lastRun: CRASHED } as Session);
+    const dir = `${SESSIONS_DIR}/${inv.id}`;
+    await h.fs.mkdir(dir, { recursive: true });
+    const base = {
+      v: 1, runId: 'r-1', sessionId: inv.id, stage: CRASHED.stage, runner: 'claude-code', model: 'opus', effort: 'high',
+      routeSource: 'routing', fresh: false, resumed: true, startedAt: CRASHED.startedAt,
+    };
+    await h.fs.writeFile(`${dir}/${RUN_FACTS_FILE}`, typeof facts === 'string' ? facts : JSON.stringify({ ...base, ...facts }));
+    return { h, id: inv.id, dir };
+  }
+
+  it('the interrupted record names the real session, whatever the agent-writable facts claim', async () => {
+    const { h, id, dir } = await crashedWithFacts({ sessionId: 'someone-else' });
+    expect(await h.service.reconcileCrashedRun(id)).toBe(true);
+    expect(await readRunRecords(h.fs, dir)).toEqual([
+      expect.objectContaining({ sessionId: id, stage: 'findings', model: 'opus', effort: 'high', startedAt: CRASHED.startedAt, interrupted: true }),
+    ]);
+  });
+
+  it.each([
+    ['an oversized model', { model: 'm'.repeat(100_000) }],
+    ['garbage', 'not json{'],
+    ['another run (a different startedAt)', { startedAt: '2026-01-01T00:00:00.000Z' }],
+    ['another stage', { stage: 'plan' }],
+  ])('facts that are %s give no interrupted record, and the heal still saves', async (_label, facts) => {
+    const { h, id, dir } = await crashedWithFacts(facts);
+    expect(await h.service.reconcileCrashedRun(id)).toBe(true);
+    expect(await readRunRecords(h.fs, dir)).toEqual([]);
+    expect((await h.store.load(id)).lastRun).toMatchObject({ outcome: 'failed', error: CRASHED_RUN_ERROR });
+  });
+
+  it('an interrupted record that cannot be written is a log line, and the heal still saves', async () => {
+    const logs: string[] = [];
+    const { h, id, dir } = await crashedWithFacts({}, { log: (line) => logs.push(line) });
+    const realRename = h.fs.rename.bind(h.fs);
+    h.fs.rename = async (from: string, to: string) => {
+      if (to.endsWith('/runs.jsonl')) throw new Error('disk full');
+      return realRename(from, to);
+    };
+    expect(await h.service.reconcileCrashedRun(id)).toBe(true);
+    expect(await readRunRecords(h.fs, dir)).toEqual([]);
+    expect((await h.store.load(id)).lastRun).toMatchObject({ outcome: 'failed', error: CRASHED_RUN_ERROR });
+    expect(logs).toEqual([expect.stringContaining(`interrupted run record for ${id} not written: disk full`)]);
   });
 });

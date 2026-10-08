@@ -6,7 +6,6 @@ import { NodeGitRunner } from '../git/node-git-runner';
 import { NodeGhRunner } from '../gh/node-gh-runner';
 import { ClaudeCodeRunner } from '../agent/claude-code-runner';
 import { CodexRunner } from '../agent/codex-runner';
-import type { AgentRunner } from '../agent/agent-runner';
 import type { CoreConfig } from '../config/core-config';
 import { redactSecrets } from '../config/core-config';
 import { NodeLocalAppRunner } from '../env/node-local-app-runner';
@@ -469,9 +468,17 @@ export function realAdapters(config: CoreConfig): EngineAdapters {
   const fs = new NodeFileSystem();
   const git = new NodeGitRunner();
   const gh = new NodeGhRunner();
-  const runner: AgentRunner =
-    config.runner === 'codex'
-      ? new CodexRunner({ model: config.runnerOptions.model, sandbox: config.runnerOptions.sandbox })
-      : new ClaudeCodeRunner({ model: config.runnerOptions.model, permissionMode: config.runnerOptions.permissionMode });
-  return { fs, git, gh, runner, runnerKind: config.runner, localApp: new NodeLocalAppRunner() };
+  // R116 — one runner per kind. The engine-wide `runnerOptions.model` belongs to the engine-wide
+  // runner's family only; routed runs pass their own model per run.
+  const runners = {
+    'claude-code': new ClaudeCodeRunner({
+      model: config.runner === 'claude-code' ? config.runnerOptions.model : undefined,
+      permissionMode: config.runnerOptions.permissionMode,
+    }),
+    codex: new CodexRunner({
+      model: config.runner === 'codex' ? config.runnerOptions.model : undefined,
+      sandbox: config.runnerOptions.sandbox,
+    }),
+  };
+  return { fs, git, gh, runner: runners[config.runner], runners, runnerKind: config.runner, localApp: new NodeLocalAppRunner() };
 }

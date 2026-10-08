@@ -56,6 +56,11 @@ if (prompt === 'HANG_FOREVER') {
   emit({ type: 'error', message: inner });
   emit({ type: 'turn.failed', error: { message: inner } });
   process.exitCode = 1;
+} else if (prompt === 'LIMIT_HIT') {
+  emit({ type: 'turn.started' });
+  emit({ type: 'error', message: "You've hit your usage limit. Upgrade to Pro or try again in 2 hours." });
+  emit({ type: 'turn.failed', error: { message: "You've hit your usage limit. Upgrade to Pro or try again in 2 hours." } });
+  process.exitCode = 1;
 } else {
   emit({ type: 'turn.started' });
   emit({ type: 'item.completed', item: { id: 'item_0', type: 'agent_message', text: `echo: ${prompt}` } });

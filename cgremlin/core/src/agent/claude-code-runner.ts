@@ -5,15 +5,38 @@ import type {
   AgentHandle,
   AgentOutput,
   AgentRunner,
+  LimitEvent,
+  ModelUsage,
+  RunStats,
   SessionContext,
+  TokenUsage,
 } from './agent-runner';
 import { UnknownAgentHandleError } from './agent-runner-errors';
+import {
+  addTokens,
+  costFromClaude,
+  limitEventFromClaude,
+  limitEventFromMessage,
+  modelUsageFromClaude,
+  tokensFromClaudeUsage,
+} from './run-stats';
 import { ToolActivityLog } from './tool-activity';
 
 // Re-exported so existing `import { UnknownAgentHandleError } from
 // './claude-code-runner'` call sites keep working after the move to
 // ./agent-runner-errors.ts (shared with CodexRunner).
 export { UnknownAgentHandleError };
+
+/**
+ * R116 — the stage's route decides the effort, so a `CLAUDE_CODE_EFFORT_LEVEL` inherited from
+ * whatever launched the engine (VS Code started from a shell that exported it) must not
+ * override it. Removed on every spawn, routed or not; the engine's own env is never touched.
+ */
+export function claudeEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env = { ...base };
+  delete env.CLAUDE_CODE_EFFORT_LEVEL;
+  return env;
+}
 
 interface ClaudeAgentState {
   ctx: SessionContext;
@@ -23,12 +46,22 @@ interface ClaudeAgentState {
   currentProcess?: ChildProcessByStdio<null, Readable, Readable>;
   /** Defect 5 — turns this handle's tool calls into the work log a watcher reads. */
   activity: ToolActivityLog;
+  /** The `result` usage (summed if a handle ever sends more than one prompt). */
+  tokens: TokenUsage | null;
+  /** S2-26 — each assistant message's latest usage, by message id: the fallback when no result arrives. */
+  assistantUsage: Map<string, TokenUsage>;
+  /** D2 — the latest result's values (the CLI says: read the latest result, do not sum). */
+  costUsd: number | null;
+  modelUsage: Record<string, ModelUsage> | null;
+  limitEvents: LimitEvent[];
+  observedModel: string | null;
 }
 
 export interface ClaudeCodeRunnerOptions {
   readonly claudeBinary?: string;
   readonly permissionMode?: string;
   readonly model?: string;
+  readonly now?: () => Date;
 }
 
 export class ClaudeCodeRunner implements AgentRunner {
@@ -37,11 +70,13 @@ export class ClaudeCodeRunner implements AgentRunner {
   private readonly claudeBinary: string;
   private readonly permissionMode: string;
   private readonly model: string | undefined;
+  private readonly now: () => Date;
 
   constructor(options: ClaudeCodeRunnerOptions = {}) {
     this.claudeBinary = options.claudeBinary ?? 'claude';
     this.permissionMode = options.permissionMode ?? 'bypassPermissions';
     this.model = options.model;
+    this.now = options.now ?? (() => new Date());
   }
 
   async start(ctx: SessionContext): Promise<AgentHandle> {
@@ -52,6 +87,12 @@ export class ClaudeCodeRunner implements AgentRunner {
       exitCallbacks: [],
       claudeSessionId: ctx.resumeId,
       activity: new ToolActivityLog(),
+      tokens: null,
+      assistantUsage: new Map(),
+      costUsd: null,
+      modelUsage: null,
+      limitEvents: [],
+      observedModel: null,
     });
     return { id };
   }
@@ -75,8 +116,12 @@ export class ClaudeCodeRunner implements AgentRunner {
     for (const dir of state.ctx.additionalDirs ?? []) {
       args.push('--add-dir', dir);
     }
-    if (this.model) {
-      args.push('--model', this.model);
+    const model = state.ctx.model ?? this.model;
+    if (model) {
+      args.push('--model', model);
+    }
+    if (state.ctx.effort) {
+      args.push('--effort', state.ctx.effort);
     }
     if (state.claudeSessionId) {
       args.push('--resume', state.claudeSessionId);
@@ -87,6 +132,7 @@ export class ClaudeCodeRunner implements AgentRunner {
         cwd: state.ctx.workingDirectory,
         stdio: ['ignore', 'pipe', 'pipe'] as const,
         detached: true,
+        env: claudeEnv(process.env),
       });
       state.currentProcess = child;
 
@@ -152,6 +198,18 @@ export class ClaudeCodeRunner implements AgentRunner {
     }
     if (!event || typeof event !== 'object') return;
     const record = event as Record<string, unknown>;
+    if (record.type === 'system' && record.subtype === 'init' && typeof record.model === 'string') {
+      state.observedModel = record.model;
+    }
+    if (record.type === 'rate_limit_event') {
+      const limit = limitEventFromClaude(record.rate_limit_info, this.now());
+      if (limit !== null) state.limitEvents.push(limit);
+    }
+    if (record.type === 'assistant' && record.message && typeof record.message === 'object') {
+      const message = record.message as Record<string, unknown>;
+      const usage = tokensFromClaudeUsage(message.usage);
+      if (typeof message.id === 'string' && usage !== null) state.assistantUsage.set(message.id, usage);
+    }
 
     // Defect 5 — an agent's time is spent in TOOL calls, not in prose. Forwarding only
     // `type: 'text'` left a watcher with a near-empty pane (one frame in 45 seconds, measured
@@ -198,6 +256,19 @@ export class ClaudeCodeRunner implements AgentRunner {
           callback({ stream: 'stderr', data: record.result });
         }
       }
+      state.tokens = addTokens(state.tokens, tokensFromClaudeUsage(record.usage));
+      const cost = costFromClaude(record.total_cost_usd);
+      if (cost !== null) state.costUsd = cost;
+      state.modelUsage = modelUsageFromClaude(record.modelUsage) ?? state.modelUsage;
+      // Fallback only: a structured `rejected` rate_limit_event already said it.
+      if (
+        record.is_error === true &&
+        typeof record.result === 'string' &&
+        !state.limitEvents.some((e) => e.kind === 'rejected')
+      ) {
+        const limit = limitEventFromMessage(record.result, this.now());
+        if (limit !== null) state.limitEvents.push(limit);
+      }
     }
   }
 
@@ -224,6 +295,20 @@ export class ClaudeCodeRunner implements AgentRunner {
   /** `undefined` between `start()` and the child actually spawning, or once it has exited (currentProcess is cleared on 'close'/'error'). Never a claim that the handle is dead. */
   getPid(handle: AgentHandle): number | undefined {
     return this.requireState(handle).currentProcess?.pid;
+  }
+
+  getRunStats(handle: AgentHandle): RunStats {
+    const state = this.requireState(handle);
+    const fromMessages = [...state.assistantUsage.values()].reduce<TokenUsage | null>((sum, usage) => addTokens(sum, usage), null);
+    const tokens = state.tokens ?? fromMessages;
+    return {
+      tokens,
+      tokensSource: state.tokens !== null ? 'result' : fromMessages !== null ? 'assistant' : null,
+      costUsd: state.costUsd,
+      modelUsage: state.modelUsage,
+      limitEvents: [...state.limitEvents],
+      observedModel: state.observedModel,
+    };
   }
 
   private requireState(handle: AgentHandle): ClaudeAgentState {

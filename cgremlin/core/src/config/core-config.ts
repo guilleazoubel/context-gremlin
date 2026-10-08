@@ -143,6 +143,12 @@ export const CoreConfigSchema = z.object({
       sandbox: z.enum(['read-only', 'workspace-write', 'danger-full-access']).optional(),
     })
     .default({}),
+  /**
+   * R116 — per-stage routes, kept RAW here and parsed by `parseRouting` (src/config/routing.ts)
+   * when the engine is built: a bad entry is logged and that stage falls back to `runner`/
+   * `runnerOptions` (D3, Ruling S2-23), instead of failing the whole load like every other key.
+   */
+  routing: z.unknown().default({}),
   pollIntervalMs: z.number().int().positive().default(60_000),
   prListLimit: z.number().int().positive().max(100).default(50),
   stateDir: z.string().min(1).default('~/.cgremlin-core'),
@@ -179,6 +185,8 @@ export const CoreConfigSchema = z.object({
   attentionAcksPath: z.string().optional(),
   /** Derived: <stateDir>/dismissals.json — per-item "not interesting now", shared by every window. */
   dismissalsPath: z.string().optional(),
+  /** §20, derived: <stateDir>/feedback.jsonl — dismissed findings and rejected verdicts. */
+  feedbackPath: z.string().optional(),
   // R13: the engine's identity/lock file and its log, derived like every
   // other per-state-dir path so the extension asks the core where they are
   // instead of joining paths itself.
@@ -244,6 +252,7 @@ export function resolveCoreConfig(raw: unknown, home: string): CoreConfig {
     localAppStatePath: expandOrDerive(parsed.localAppStatePath, 'local-app.json'),
     attentionAcksPath: expandOrDerive(parsed.attentionAcksPath, 'attention-acks.json'),
     dismissalsPath: expandOrDerive(parsed.dismissalsPath, 'dismissals.json'),
+    feedbackPath: expandOrDerive(parsed.feedbackPath, 'feedback.jsonl'),
     enginePidPath: expandOrDerive(parsed.enginePidPath, 'engine.json'),
     engineLogPath: expandOrDerive(parsed.engineLogPath, 'engine.log'),
     // R52: two derived paths, and each one needs the matching entry in
@@ -460,6 +469,7 @@ const DERIVED_PATH_SUFFIXES: Record<string, string> = {
   localAppStatePath: 'local-app.json',
   attentionAcksPath: 'attention-acks.json',
   dismissalsPath: 'dismissals.json',
+  feedbackPath: 'feedback.jsonl',
   enginePidPath: 'engine.json',
   engineLogPath: 'engine.log',
   jiraCachePath: 'jira.json',
