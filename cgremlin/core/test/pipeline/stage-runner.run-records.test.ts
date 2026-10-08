@@ -5,7 +5,7 @@ import { SessionStore } from '../../src/engine/session-store';
 import { EngineEvents } from '../../src/engine/events';
 import { KeyedLock } from '../../src/api/keyed-lock';
 import { StageRunner } from '../../src/pipeline/stage-runner';
-import { RUN_FACTS_FILE, readRunRecords } from '../../src/pipeline/run-records';
+import { RUN_FACTS_FILE, RUN_RECORD_TEXT_MAX, readRunRecords } from '../../src/pipeline/run-records';
 import type { RunStats } from '../../src/agent/agent-runner';
 import type { ResolvedRoute } from '../../src/config/routing';
 import type { StageName } from '../../src/schema/stage';
@@ -220,6 +220,44 @@ describe('R116/R118f — one record per run in <session>/runs.jsonl', () => {
     expect(result.outcome).toBe('succeeded');
     expect((await readRunRecords(fs, '/sessions/inv-1')).map((r) => r.outcome)).toEqual(['succeeded']);
     expect(logs).toEqual([expect.stringContaining('run facts for inv-1 not written: read-only')]);
+  });
+
+  it.each([
+    ['garbage', async (fs: InMemoryFileSystem, path: string) => fs.writeFile(path, 'not json{')],
+    ['deleted', async (fs: InMemoryFileSystem, path: string) => fs.remove(path)],
+    [
+      "another run's",
+      async (fs: InMemoryFileSystem, path: string) => {
+        const facts = JSON.parse(await fs.readFile(path)) as Record<string, unknown>;
+        await fs.writeFile(path, JSON.stringify({ ...facts, runId: 'someone-else' }));
+      },
+    ],
+  ])('%s run facts at the end of the run: no record, no crash, the run still succeeds', async (_label, tamper) => {
+    const { fs, runner, sr, logs } = await setup();
+    const p = sr.run({ sessionId: 'inv-1', stage: 'findings', brief: null, prompt: 'go' });
+    await flush();
+    await tamper(fs, `/sessions/inv-1/${RUN_FACTS_FILE}`);
+    runner.emitExit(runner.lastHandle(), { code: 0, signal: null });
+    const result = await p;
+    expect(result.outcome).toBe('succeeded');
+    expect(result.session.lastRun).toMatchObject({ outcome: 'succeeded', error: null });
+    expect(await readRunRecords(fs, '/sessions/inv-1')).toEqual([]);
+    expect(logs).toEqual([]);
+  });
+
+  it('every free-text field of a record is capped: a huge start error and a huge model name', async () => {
+    const { fs, runner, sr, logs } = await setup({
+      routeFor: (stage) => ({ stage, runner: 'claude-code', model: 'm'.repeat(5000), effort: null, source: 'routing' }),
+    });
+    runner.start = async () => {
+      throw new Error(`spawn failed: ${'x'.repeat(5000)}`);
+    };
+    await expect(sr.run({ sessionId: 'inv-1', stage: 'findings', brief: null, prompt: 'go' })).rejects.toThrow('spawn failed');
+    const [record] = await readRunRecords(fs, '/sessions/inv-1');
+    expect(record?.error?.startsWith('spawn failed: xxx')).toBe(true);
+    expect(record?.error?.length).toBeLessThanOrEqual(RUN_RECORD_TEXT_MAX);
+    expect(record?.model?.length).toBeLessThanOrEqual(RUN_RECORD_TEXT_MAX);
+    expect(logs).toEqual([]);
   });
 
   it('a record that cannot be written is a log line, never a failed run', async () => {

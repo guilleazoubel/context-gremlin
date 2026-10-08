@@ -26,7 +26,13 @@ export async function appendJsonLine(fs: SessionFileSystem, path: string, value:
   const separator = existing === '' || existing.endsWith('\n') ? '' : '\n';
   const tmpPath = `${path}.${randomSuffix()}.tmp`;
   await fs.writeFile(tmpPath, `${existing}${separator}${line}\n`, { mode: JSONL_FILE_MODE });
-  await fs.rename(tmpPath, path);
+  try {
+    await fs.rename(tmpPath, path);
+  } catch (err) {
+    // Best effort: a failed rename must not leave a stray copy of the whole file beside it.
+    await fs.remove(tmpPath).catch(() => undefined);
+    throw err;
+  }
 }
 
 /** Every line that parses and matches `schema`. Blank, torn and foreign lines are skipped, never thrown; a missing or unreadable file is []. */

@@ -58,7 +58,7 @@ import {
 import { assertCanPromote } from './plan-gate';
 import { RunInProgressError, WorkspaceMissingError, type StageRunResult } from './stage-runner';
 import { CRASHED_RUN_ERROR, runLiveness, type RunLiveness } from './run-liveness';
-import { appendRunRecord, takeRunFacts } from './run-records';
+import { appendRunRecord, recordPrefixOf, takeRunFacts } from './run-records';
 import { TERMINAL_PHASES_BY_MODE } from '../workspace/workspace-in-use';
 import { refreshWorkspaceGuardrails } from '../workspace/workspace-manager';
 import { permissionProfileFor } from '../workspace/permission-guard';
@@ -1483,7 +1483,7 @@ export class PipelineService {
     return this.lock.withLock(id, async () => {
       const fresh = await this.deps.store.load(id);
       if (!this.isStale(fresh)) return false;
-      if (fresh.lastRun?.outcome === 'running') await this.recordInterruptedRun(id);
+      if (fresh.lastRun?.outcome === 'running') await this.recordInterruptedRun(id, fresh.lastRun);
       const lastRun = fresh.lastRun;
       let next: Session =
         lastRun !== null && lastRun.outcome === 'running'
@@ -1506,15 +1506,23 @@ export class PipelineService {
   /**
    * I2 / S2-25 — a run the engine died under still gets its record, from the facts the stage
    * runner left at `run.started`. Taking the facts claims the record, so the run's own late exit
-   * (if the child ever reports one) writes nothing. Never throws.
+   * (if the child ever reports one) writes nothing. Only facts naming the run `lastRun` says is
+   * running (same stage and startedAt) are taken: an earlier run's stale facts are not this run's.
+   * The facts are agent-writable (S2-34): the session id is the real one, never theirs, and the
+   * schema bounds the rest. Never throws.
    */
-  private async recordInterruptedRun(id: string): Promise<void> {
+  private async recordInterruptedRun(id: string, running: LastRun): Promise<void> {
     const sessionDir = this.sessionDir(id);
     try {
-      const pending = await takeRunFacts(this.deps.fs, sessionDir);
+      const pending = await takeRunFacts(
+        this.deps.fs,
+        sessionDir,
+        (facts) => facts.stage === running.stage && facts.startedAt === running.startedAt,
+      );
       if (pending === null) return;
       await appendRunRecord(this.deps.fs, sessionDir, {
-        ...pending,
+        ...recordPrefixOf(pending),
+        sessionId: id,
         finishedAt: this.now().toISOString(),
         tokens: null,
         tokensSource: null,

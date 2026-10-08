@@ -28,6 +28,17 @@ describe('jsonl', () => {
     expect(await readJsonLines(new InMemoryFileSystem(), '/nope/x.jsonl', Rec)).toEqual([]);
   });
 
+  it('a rename that fails reports the error and leaves no temporary file behind', async () => {
+    const fs = new InMemoryFileSystem();
+    await appendJsonLine(fs, '/state/x.jsonl', { n: 1 });
+    fs.rename = async () => {
+      throw new Error('disk full');
+    };
+    await expect(appendJsonLine(fs, '/state/x.jsonl', { n: 2 })).rejects.toThrow('disk full');
+    expect(await fs.readdir('/state')).toEqual(['x.jsonl']);
+    expect(await readJsonLines(fs, '/state/x.jsonl', Rec)).toEqual([{ n: 1 }]);
+  });
+
   it('leaves no temporary file behind', async () => {
     const fs = new InMemoryFileSystem();
     await appendJsonLine(fs, '/state/x.jsonl', { n: 1 });

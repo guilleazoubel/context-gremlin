@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { AgentExitResult, AgentHandle, AgentRunner, LimitEvent, RunStats } from '../agent/agent-runner';
 import type { SessionFileSystem } from '../fs/session-file-system';
 import type { SessionStore } from '../engine/session-store';
@@ -9,7 +10,7 @@ import { refreshWorkspaceGuardrails } from '../workspace/workspace-manager';
 import { redactSecrets } from '../config/core-config';
 import { archiveRound } from './round-archive';
 import type { ResolvedRoute, RunnerKind } from '../config/routing';
-import { appendRunRecord, takeRunFacts, writeRunFacts, type PendingRun, type RunRecord } from './run-records';
+import { appendRunRecord, recordPrefixOf, takeRunFacts, writeRunFacts, type PendingRun, type RunRecord } from './run-records';
 
 export class RunInProgressError extends Error {
   constructor(sessionId: string) {
@@ -165,7 +166,7 @@ function statsOf(runner: AgentRunner, handle: AgentHandle | null): RunStats | nu
 
 function pendingRunOf(input: StageRunInput, route: ResolvedRoute, startedAt: string, seedResumeId: string | null): PendingRun {
   return {
-    v: 1, sessionId: input.sessionId, stage: input.stage, runner: route.runner, model: route.model, effort: route.effort,
+    v: 1, runId: randomUUID(), sessionId: input.sessionId, stage: input.stage, runner: route.runner, model: route.model, effort: route.effort,
     routeSource: route.source, fresh: input.fresh === true, resumed: seedResumeId !== null, startedAt,
   };
 }
@@ -191,7 +192,7 @@ function runRecordOf(
   const limited = (stats?.limitEvents ?? []).some((e) => e.kind === 'rejected');
   const outcome: RunRecord['outcome'] = limited ? 'stopped' : end.outcome;
   return {
-    ...pending,
+    ...recordPrefixOf(pending),
     model: pending.model ?? stats?.observedModel ?? null,
     finishedAt: end.finishedAt,
     tokens: stats?.tokens ?? null,
@@ -290,9 +291,11 @@ export class StageRunner {
   }
 
   /**
-   * R116/R118f — appends the run's record. If facts were written and are gone, the crash heal
-   * already recorded this run (S2-25): write nothing. Never throws: a failure is a log line and
-   * the run's outcome and lastRun stay exactly what they were.
+   * R116/R118f — appends the run's record. If facts were written and this run's are no longer
+   * there, the crash heal already recorded this run (S2-25): write nothing. Only facts carrying
+   * this run's `runId` are taken; anyone else's (the next run's, after this lost run's late exit)
+   * are left for their own run. Never throws: a failure is a log line and the run's outcome and
+   * lastRun stay exactly what they were.
    *
    * Called under the session lock, right after the run's final lastRun save: so taking the facts
    * is serialized with the heal's (which takes them under the same lock, and only while lastRun
@@ -301,9 +304,9 @@ export class StageRunner {
    * fails, this is never reached and the facts stay: lastRun still says `running`, so the heal
    * records the run as interrupted.
    */
-  private async recordRun(sessionDir: string, factsWritten: boolean, record: RunRecord): Promise<void> {
+  private async recordRun(sessionDir: string, factsWritten: boolean, runId: string, record: RunRecord): Promise<void> {
     try {
-      if (factsWritten && (await takeRunFacts(this.deps.fs, sessionDir)) === null) return;
+      if (factsWritten && (await takeRunFacts(this.deps.fs, sessionDir, (facts) => facts.runId === runId)) === null) return;
       await appendRunRecord(this.deps.fs, sessionDir, record);
     } catch (err) {
       this.log(`run record for ${record.sessionId} not written: ${err instanceof Error ? err.message : String(err)}`);
@@ -487,6 +490,7 @@ export class StageRunner {
           outcome,
           error,
         };
+        const runId = pending.runId;
         const record = runRecordOf(pending, statsOf(runner, active.handle), {
           finishedAt: finishedLastRun.finishedAt ?? this.now().toISOString(),
           outcome,
@@ -508,7 +512,7 @@ export class StageRunner {
           };
           await this.deps.store.save(merged);
           // Inside the lock, after lastRun: see recordRun for why.
-          await this.recordRun(sessionDir, factsWritten, record);
+          await this.recordRun(sessionDir, factsWritten, runId, record);
           return merged;
         });
         this.deps.events.emit('run.finished', { session, stage, outcome });
@@ -533,6 +537,7 @@ export class StageRunner {
             await this.recordRun(
               sessionDir,
               factsWritten,
+              pending.runId,
               runRecordOf(pending, statsOf(active.runner, active.handle), {
                 finishedAt: failed.finishedAt ?? this.now().toISOString(),
                 outcome: 'failed',
