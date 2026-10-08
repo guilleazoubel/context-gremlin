@@ -32,6 +32,11 @@ function messageOf(err: unknown): string {
     err instanceof GhCommandError
       ? `gh ${err.args.slice(0, 2).join(' ')} exited with code ${err.exitCode}: ${firstLine(err.stderr)}`
       : firstLine(err instanceof Error ? err.message : String(err));
+  return clip(text);
+}
+
+/** Agent-written text that reaches a reason (and so the engine log): redacted, then ≤ 200 chars. */
+function clip(text: string): string {
   return redactSecrets(text).slice(0, 200);
 }
 
@@ -66,7 +71,7 @@ export async function detectDevelopmentPr(input: DetectPrInput): Promise<PrDetec
     try {
       const ref = parsePrUrl(hint);
       if (ref.slug.toLowerCase() !== input.repoSlug.toLowerCase()) {
-        notes.push(`PR_URL names ${ref.slug}, not ${input.repoSlug}`);
+        notes.push(`PR_URL names ${clip(ref.slug)}, not ${input.repoSlug}`);
       } else {
         const { stdout } = await input.gh.run([
           'pr', 'view', String(ref.number), '--repo', input.repoSlug, '--json', PR_VIEW_FIELDS,

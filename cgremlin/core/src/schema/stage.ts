@@ -65,5 +65,12 @@ export const PrSchema = z.object({
   reviewedSha: z.string().min(1).nullable(),
   title: z.string().nullable(),
   author: z.string().nullable(),
+  /**
+   * R112/S2-14 — `true` only when a development session adopted this PR while it was open for
+   * review rather than a draft: opening a PR for review is a protected action, and this keeps
+   * that fact on the session past any later run (lastRun is replaced by every run). Additive and
+   * optional: absent on every other PR and on every document written before it existed.
+   */
+  openedForReview: z.boolean().optional(),
 });
 export type PrInfo = z.infer<typeof PrSchema>;

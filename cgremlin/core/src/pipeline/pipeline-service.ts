@@ -209,6 +209,8 @@ export class PipelineService {
   private readonly now: () => Date;
   private readonly newId: (prefix: string, repoSlug: string, key: string) => string;
   private readonly lock: KeyedLock;
+  /** I3 — the last PR-detection miss logged per session, so a tick logs a miss only when its reason changes. */
+  private readonly lastPrMiss = new Map<string, string>();
 
   constructor(private readonly deps: PipelineServiceDeps) {
     this.now = deps.now ?? (() => new Date());
@@ -814,7 +816,7 @@ export class PipelineService {
           throw new UnsupportedStageError(`Session '${id}' cannot run develop (mode=${fresh.mode}, stage=${fresh.stageStatus})`);
         }
       });
-      return await this.adoptDevelopmentPr(id);
+      return await this.adoptDevelopmentPr(id, { afterRun: true });
     } finally {
       await prep.teardown();
     }
@@ -823,20 +825,30 @@ export class PipelineService {
   /**
    * R91 — find this development session's open PR and record it: `session.pr` + `active →
    * pr_opened` in ONE locked save and one `session.transitioned`. Called after every develop run
-   * (any outcome: a PR the agent opened before it died is still a PR) and by the reconciliation
-   * tick (I1: a run the engine died under, a PR opened in a Take over chat). Read-only gh
-   * (src/pipeline/pr-detection.ts). A session that already has a PR, is not `active`, has no
-   * branch, or has a live run is left alone; so is every session when `gh` or `me` is not wired.
-   * Never throws for a detection miss: that is one log line and the session as it was. A PR
-   * opened for review rather than as a draft is still recorded, and lastRun says it needed
-   * approval (R112).
+   * (`afterRun`: any outcome — a PR the agent opened before it died is still a PR) and by the
+   * reconciliation tick (I1: a run the engine died under, a PR opened in a Take over chat).
+   * Read-only gh (src/pipeline/pr-detection.ts). A session that already has a PR, is not
+   * `active`, has no branch, or has a live run (checked again inside the lock) is left alone; so
+   * is every session when `gh` or `me` is not wired.
+   *
+   * Never throws for a detection miss: that is one log line and the session as it was. After a
+   * run the line is always written; on the tick (I3) only when that session's reason changed.
+   *
+   * A PR opened for review rather than as a draft (R112, S2-14) is still recorded, flagged in
+   * the SAME save: `pr.openedForReview = true` (it outlives every later run), plus the note
+   * appended to `lastRun.error` only after a run — the tick never writes onto a run it cannot
+   * tie to the PR, and never invents one when there is none. One log line says it either way.
    */
-  async adoptDevelopmentPr(id: string): Promise<Session> {
+  async adoptDevelopmentPr(id: string, opts: { afterRun?: boolean } = {}): Promise<Session> {
+    const afterRun = opts.afterRun === true;
     const current = await this.deps.store.load(id);
     const gh = this.deps.gh;
     const me = this.deps.config.me;
     if (gh === undefined || me === undefined) return current;
-    if (current.mode !== 'development' || current.pr !== null || current.stageStatus !== 'active') return current;
+    if (current.mode !== 'development' || current.pr !== null || current.stageStatus !== 'active') {
+      this.lastPrMiss.delete(id);
+      return current;
+    }
     if (this.runLivenessOf(current) === 'live') return current;
     const branch = current.workspace.branch;
     if (!branch) return current;
@@ -849,22 +861,35 @@ export class PipelineService {
       me,
     });
     if (!detection.found) {
-      this.log(`PR detection for ${id}: none adopted (${detection.why})`);
+      const repeated = this.lastPrMiss.get(id) === detection.why;
+      this.lastPrMiss.set(id, detection.why);
+      if (afterRun || !repeated) this.log(`PR detection for ${id}: none adopted (${detection.why})`);
       return current;
     }
+    const note = `PR #${detection.pr.number} is open for review, not a draft — opening a PR for review needs your approval (R112)`;
     const adopted = await this.lock.withLock(id, async () => {
       const before = await this.deps.store.load(id);
       if (before.mode !== 'development' || before.pr !== null || before.stageStatus !== 'active') return null;
-      const next: Session = { ...applyTransition(before, 'pr_opened'), pr: detection.pr };
+      // M1 — a run may have started while detection was out (it ran unlocked).
+      if (this.runLivenessOf(before) === 'live') return null;
+      const flagged = !detection.isDraft;
+      const lastRun =
+        flagged && afterRun && before.lastRun !== null
+          ? { ...before.lastRun, error: before.lastRun.error === null ? note : `${before.lastRun.error}; ${note}` }
+          : before.lastRun;
+      const next: Session = {
+        ...applyTransition(before, 'pr_opened'),
+        pr: flagged ? { ...detection.pr, openedForReview: true } : detection.pr,
+        lastRun,
+      };
       await this.deps.store.save(next);
       this.deps.events.emit('session.transitioned', { session: next, from: before.stageStatus, to: 'pr_opened' });
       return next;
     });
     if (adopted === null) return this.deps.store.load(id);
-    if (detection.isDraft) return adopted;
-    const note = `PR #${detection.pr.number} is open for review, not a draft — opening a PR for review needs your approval (R112)`;
-    const prior = adopted.lastRun?.error ?? null;
-    return this.patchLastRun(id, { error: prior === null ? note : `${prior}; ${note}` });
+    this.lastPrMiss.delete(id);
+    if (!detection.isDraft) this.log(`PR detection for ${id}: adopted, but ${note}`);
+    return adopted;
   }
 
   /**

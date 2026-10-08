@@ -144,8 +144,25 @@ describe('detectDevelopmentPr (R91)', () => {
     for (const s of scenarios) {
       const { gh, detect } = await setup(s.prUrl);
       for (const stdout of s.responses) gh.queueResponse({ stdout });
-      await detect();
-      for (const call of gh.calls) expect([['pr', 'view'], ['pr', 'list']]).toContainEqual(call.slice(0, 2));
+      const result = await detect();
+      // `attempts`, not `calls`: a refused mutation never reaches `calls`, and detection turns
+      // every gh error into a note, so only the attempt log can see one.
+      expect(gh.attempts.length).toBeGreaterThan(0);
+      for (const attempt of gh.attempts) expect([['pr', 'view'], ['pr', 'list']]).toContainEqual(attempt.slice(0, 2));
+      if (!result.found) expect(result.why).not.toContain('Refusing mutating');
+    }
+  });
+
+  it('a 1 MB owner segment in PR_URL is capped in the reason, never echoed whole', async () => {
+    const { gh, detect } = await setup(`https://github.com/${'a'.repeat(1_000_000)}/r/pull/7`);
+    gh.queueResponse({ stdout: '[]' });
+    const result = await detect();
+    expect(gh.attempts).toEqual([LIST_CALL]);
+    expect(result.found).toBe(false);
+    if (!result.found) {
+      expect(result.why).toContain('PR_URL names aaaa');
+      expect(result.why).toContain(`no open PR by me has head ${BRANCH}`);
+      expect(result.why.length).toBeLessThan(400);
     }
   });
 });
