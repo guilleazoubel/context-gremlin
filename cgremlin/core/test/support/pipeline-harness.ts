@@ -16,6 +16,7 @@ import { KeyedLock } from '../../src/api/keyed-lock';
 import type { AgentExitResult } from '../../src/agent/agent-runner';
 import type { InvestigationSession } from '../../src/schema/session';
 import type { EnvironmentService } from '../../src/env/environment-service';
+import type { GhRunner } from '../../src/gh/gh-runner';
 
 export const SESSIONS_DIR = '/sessions';
 export const WORKTREES_DIR = '/worktrees';
@@ -67,6 +68,8 @@ export interface HarnessOptions {
   tickets?: PipelineServiceDeps['tickets'];
   /** 0c — PipelineServiceDeps.ghAuthOk; omitted means `gh` is authenticated and usable. */
   ghAuthOk?: PipelineServiceDeps['ghAuthOk'];
+  /** R91 — PipelineServiceDeps.gh; omitted means no PR detection (today's behaviour). */
+  gh?: GhRunner;
 }
 
 export function createHarness(options: HarnessOptions = {}): PipelineHarness {
@@ -95,6 +98,7 @@ export function createHarness(options: HarnessOptions = {}): PipelineHarness {
     worktreesDir: WORKTREES_DIR,
     defaultBaseRef: 'origin/main',
     runnerKind,
+    me: 'me',
     humanTurnTtlMs: 600_000,
   };
   const service = new PipelineService({
@@ -112,6 +116,7 @@ export function createHarness(options: HarnessOptions = {}): PipelineHarness {
     ...(options.respondContext !== undefined ? { respondContext: options.respondContext } : {}),
     ...(options.log !== undefined ? { log: options.log } : {}),
     ...(options.tickets !== undefined ? { tickets: options.tickets } : {}),
+    ...(options.gh !== undefined ? { gh: options.gh } : {}),
   });
 
   async function finishRun(files: Record<string, string>, exit: AgentExitResult): Promise<void> {

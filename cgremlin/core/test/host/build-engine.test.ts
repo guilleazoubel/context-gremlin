@@ -664,3 +664,22 @@ describe('0c — the engine\'s ticket brief state (tickets.briefState / tickets.
     expect(buildEngine(jiraConfig(['HB']), testAdapters(), { jiraSource: stubSource() }).tickets.linking).toBe('configured');
   });
 });
+
+describe('R91 — the built engine wires PR detection (S2-33: pinned by behaviour)', () => {
+  it('a development session on the engine adopts the open PR by CoreConfig.me through the engine gh', async () => {
+    const fs = new InMemoryFileSystem();
+    const gh = new FakeGhRunner();
+    const engine = buildEngine(testConfig(), testAdapters({ fs, git: new FakeGitRunner(fs), gh }));
+    const dev = await engine.pipeline.createDevelopmentSession({ repoUrl: 'https://github.com/acme/app.git', ticket: 'APP-1' });
+    gh.queueResponse({
+      stdout: JSON.stringify([{
+        number: 12, url: 'https://github.com/acme/app/pull/12', author: { login: 'me-user' }, isDraft: true, reviewDecision: '',
+        headRefOid: 'c'.repeat(40), headRefName: 'feature/APP-1', baseRefName: 'main', title: 'APP-1', updatedAt: '2026-09-04T12:00:00Z',
+      }]),
+    });
+    const after = await engine.pipeline.adoptDevelopmentPr(dev.id);
+    expect(gh.calls.map((call) => call.slice(0, 2))).toEqual([['pr', 'list']]);
+    expect(after.stageStatus).toBe('pr_opened');
+    expect(after.pr).toMatchObject({ repo: 'acme/app', number: 12, author: 'me-user' });
+  });
+});

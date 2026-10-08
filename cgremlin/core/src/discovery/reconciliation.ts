@@ -3,7 +3,7 @@ import { PR_VIEW_FIELDS, mapPrView, parsePrView } from '../gh/pr-view';
 import type { SessionStore } from '../engine/session-store';
 import type { EngineEvents } from '../engine/events';
 import type { PipelineService } from '../pipeline/pipeline-service';
-import type { InvestigationSession, RespondSession, ReviewSession, Session } from '../schema/session';
+import type { DevelopmentSession, InvestigationSession, RespondSession, ReviewSession, Session } from '../schema/session';
 import type { SessionMode } from '../schema/session-mode';
 import {
   canTransition,
@@ -46,9 +46,7 @@ export interface PlanReconciliationResult {
 
 const APPROVE_ELIGIBLE_REVIEW_PHASES: readonly ReviewPhase[] = ['queued', 'ready', 'changes_requested', 'failed'];
 const REREVIEW_ELIGIBLE_REVIEW_PHASES: readonly ReviewPhase[] = ['ready', 'changes_requested'];
-// Phase 3a never records pr_opened (no code path sets it yet), so a
-// development source can still be sitting at 'active' when its PR merges —
-// 'active' must be merge-eligible too, or that session is stranded forever.
+// A development session's own PR is reconciled by runPrBearingSessions and adopted by adoptDevelopmentPrs (R91); this list covers the review-lineage path, and 'active' stays eligible for a session that never recorded its PR.
 const MERGE_ELIGIBLE_DEVELOPMENT_PHASES: readonly DevelopmentPhase[] = ['active', 'pr_opened', 'superseded'];
 /** One string for both claim-skip sites (planning and the apply loop), so the two cannot drift. */
 const CLAIMED_SKIP_REASON = 'conversation claimed by a human turn';
@@ -193,8 +191,8 @@ export function planReconciliation(input: PlanReconciliationInput): PlanReconcil
   return { actions, skipped };
 }
 
-/** A session that owns a PR without being a review of it: `respond` and `investigation` (R51). */
-export type PrBearingSession = RespondSession | InvestigationSession;
+/** A session that owns a PR without being a review of it: respond, investigation (R51) and development (R91). */
+export type PrBearingSession = RespondSession | InvestigationSession | DevelopmentSession;
 
 export interface PlanPrSessionReconciliationInput {
   session: PrBearingSession;
@@ -233,6 +231,14 @@ export function planPrSessionReconciliation(
       to: 'none',
       why: `${reason}, but an investigation is not ended by its PR — left at '${session.stageStatus}'`,
     });
+    return { actions, skipped };
+  }
+  if (session.mode === 'development') {
+    // R91 — a development session's own PR ending ends it: merged → merged, closed → abandoned,
+    // the rule planReconciliation already applies to a review's development source. No
+    // deliberate-start exception: a development session only ever adopts an OPEN PR.
+    const to = view.state === 'MERGED' ? 'merged' : 'abandoned';
+    proposeTransition(actions, skipped, 'development', session.id, session.stageStatus, to, reason);
     return { actions, skipped };
   }
   // R51's own terminals: a merge CLOSES the respond session (every comment it
@@ -374,11 +380,12 @@ export class ReconciliationTick {
     }
 
     await this.runPrBearingSessions(sessions, report);
+    await this.adoptDevelopmentPrs(sessions, report);
     return report;
   }
 
   /**
-   * The `respond`/`investigation` leg, on the review loop's discipline
+   * The `respond`/`investigation`/`development` leg, on the review loop's discipline
    * exactly: one `gh pr view` per non-terminal PR-bearing session, planned
    * under the per-session lock against freshly loaded state, applied
    * unlocked through `PipelineService` (which takes the same lock itself —
@@ -387,7 +394,7 @@ export class ReconciliationTick {
   private async runPrBearingSessions(sessions: readonly Session[], report: TickReport): Promise<void> {
     const candidates = sessions.filter(
       (s): s is PrBearingSession =>
-        (s.mode === 'respond' || s.mode === 'investigation') &&
+        (s.mode === 'respond' || s.mode === 'investigation' || s.mode === 'development') &&
         !TERMINAL_PHASES_BY_MODE[s.mode].has(s.stageStatus) &&
         s.pr !== null,
     );
@@ -397,7 +404,7 @@ export class ReconciliationTick {
         const planned = await this.deps.lock.withLock(candidate.id, async () => {
           const fresh = await this.deps.store.load(candidate.id);
           if (
-            (fresh.mode !== 'respond' && fresh.mode !== 'investigation') ||
+            (fresh.mode !== 'respond' && fresh.mode !== 'investigation' && fresh.mode !== 'development') ||
             TERMINAL_PHASES_BY_MODE[fresh.mode].has(fresh.stageStatus) ||
             fresh.pr === null
           ) {
@@ -423,6 +430,29 @@ export class ReconciliationTick {
             await this.deps.pipeline.stop(action.sessionId);
           }
           await this.deps.pipeline.transition(action.sessionId, action.to);
+        }
+      } catch (err) {
+        report.errors.push({ where: candidate.id, error: errorMessage(err) });
+      }
+    }
+  }
+
+  /**
+   * R91 / I1 — every development session that is `active`, has no PR yet and has a branch: look
+   * for its PR. Catches a PR opened by a run the engine died under (healed at boot by
+   * failStaleRuns) and one opened in a Take over chat. Detection, the liveness skip and the
+   * single locked save are PipelineService.adoptDevelopmentPr's; a miss is not an error.
+   */
+  private async adoptDevelopmentPrs(sessions: readonly Session[], report: TickReport): Promise<void> {
+    const candidates = sessions.filter(
+      (s) => s.mode === 'development' && s.stageStatus === 'active' && s.pr === null && Boolean(s.workspace.branch),
+    );
+    for (const candidate of candidates) {
+      try {
+        const after = await this.deps.pipeline.adoptDevelopmentPr(candidate.id);
+        if (after.stageStatus === 'pr_opened') {
+          report.actions.push({ type: 'transition', sessionId: candidate.id, to: 'pr_opened', reason: 'PR detected' });
+          report.reconciled += 1;
         }
       } catch (err) {
         report.errors.push({ where: candidate.id, error: errorMessage(err) });

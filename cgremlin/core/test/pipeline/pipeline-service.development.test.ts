@@ -1,6 +1,12 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createHarness, createInvestigation, flush, SESSIONS_DIR, WORKTREES_DIR } from '../support/pipeline-harness';
+import { FakeGhRunner } from '../support/fake-gh-runner';
 import { InvalidSessionIdError } from '../../src/engine/session-store';
+import { GhCommandError } from '../../src/gh/gh-runner';
+import { UnsupportedStageError } from '../../src/pipeline/pipeline-service';
+import { ReconciliationTick } from '../../src/discovery/reconciliation';
 import type { CreateWorkspaceParams } from '../../src/workspace/workspace-manager';
 import type { Session } from '../../src/schema/session';
 
@@ -157,5 +163,139 @@ describe('PipelineService — createDevelopmentSession (R16)', () => {
     const { development } = await promotePromise;
     expect(development.id).toBe(devId);
     expect(development.lastRun?.stage).toBe('develop');
+  });
+});
+
+describe('R91 — a develop run records its draft PR', () => {
+  const baseView = JSON.parse(readFileSync(path.join(__dirname, '../fixtures/gh/pr-view-open-approved.json'), 'utf8'));
+  const prView = (overrides: Record<string, unknown> = {}): string =>
+    JSON.stringify({
+      ...baseView, number: 7, url: 'https://github.com/o/r/pull/7', headRefName: 'feature/ABC-1', author: { login: 'me', is_bot: false },
+      state: 'OPEN', isDraft: true, mergedAt: null, closedAt: null, ...overrides,
+    });
+
+  async function runDevelopWith(h: ReturnType<typeof createHarness>, id: string, files: Record<string, string>, code = 0) {
+    const p = h.service.runDevelop(id);
+    await h.finishRun(files, { code, signal: null });
+    return p;
+  }
+
+  it('records the draft PR and moves active -> pr_opened in one save', async () => {
+    const gh = new FakeGhRunner();
+    const h = createHarness({ gh });
+    const dev = await h.service.createDevelopmentSession(DEV_INPUT);
+    const transitions: string[] = [];
+    h.events.on('session.transitioned', (e) => transitions.push(`${e.from}->${e.to}`));
+    gh.queueResponse({ stdout: prView() });
+    const after = await runDevelopWith(h, dev.id, { PR_URL: 'https://github.com/o/r/pull/7\n' });
+    expect(after.stageStatus).toBe('pr_opened');
+    expect(after.pr).toMatchObject({ repo: 'o/r', number: 7, url: 'https://github.com/o/r/pull/7', reviewedSha: null, author: 'me' });
+    expect(transitions).toEqual(['active->pr_opened']);
+    expect(await h.store.load(dev.id)).toEqual(after);
+  });
+
+  it('a failed develop run that already opened its PR still records it', async () => {
+    const gh = new FakeGhRunner();
+    const h = createHarness({ gh });
+    const dev = await h.service.createDevelopmentSession(DEV_INPUT);
+    gh.queueResponse({ stdout: prView() });
+    const after = await runDevelopWith(h, dev.id, { PR_URL: 'https://github.com/o/r/pull/7' }, 1);
+    expect(after.lastRun?.outcome).toBe('failed');
+    expect(after.stageStatus).toBe('pr_opened');
+    expect(after.pr?.number).toBe(7);
+  });
+
+  it('regression pin: without gh wired the session stays active with no PR (today)', async () => {
+    const h = createHarness();
+    const dev = await h.service.createDevelopmentSession(DEV_INPUT);
+    const after = await runDevelopWith(h, dev.id, { PR_URL: 'https://github.com/o/r/pull/7' });
+    expect(after.stageStatus).toBe('active');
+    expect(after.pr).toBeNull();
+  });
+
+  it('gh missing: stays active with no PR, the run is not failed, and one log line says why', async () => {
+    const gh = new FakeGhRunner();
+    const logs: string[] = [];
+    const h = createHarness({ gh, log: (line) => logs.push(line) });
+    const dev = await h.service.createDevelopmentSession(DEV_INPUT);
+    gh.queueResponse(new GhCommandError(['pr', 'list'], null, 'spawn gh ENOENT'));
+    const after = await runDevelopWith(h, dev.id, {});
+    expect(after.stageStatus).toBe('active');
+    expect(after.pr).toBeNull();
+    expect(after.lastRun).toMatchObject({ outcome: 'succeeded', error: null });
+    expect(logs).toEqual([expect.stringContaining(`PR detection for ${dev.id}: none adopted`)]);
+  });
+
+  it('a stale PR_URL pointing at a closed PR leaves the session active', async () => {
+    const gh = new FakeGhRunner();
+    const h = createHarness({ gh, log: () => undefined });
+    const dev = await h.service.createDevelopmentSession(DEV_INPUT);
+    gh.queueResponse({ stdout: prView({ state: 'CLOSED', closedAt: '2026-10-07T00:00:00Z' }) });
+    gh.queueResponse({ stdout: '[]' });
+    const after = await runDevelopWith(h, dev.id, { PR_URL: 'https://github.com/o/r/pull/7' });
+    expect(after.stageStatus).toBe('active');
+    expect(after.pr).toBeNull();
+  });
+
+  it('a PR opened for review (not a draft) is recorded, and lastRun says it needed approval', async () => {
+    const gh = new FakeGhRunner();
+    const h = createHarness({ gh });
+    const dev = await h.service.createDevelopmentSession(DEV_INPUT);
+    gh.queueResponse({ stdout: prView({ isDraft: false }) });
+    const after = await runDevelopWith(h, dev.id, { PR_URL: 'https://github.com/o/r/pull/7' });
+    expect(after.stageStatus).toBe('pr_opened');
+    expect(after.lastRun?.error).toBe('PR #7 is open for review, not a draft — opening a PR for review needs your approval (R112)');
+  });
+
+  it('runDevelop runs again from pr_opened (a fix round) and does not look the PR up again', async () => {
+    const gh = new FakeGhRunner();
+    const h = createHarness({ gh });
+    const dev = await h.service.createDevelopmentSession(DEV_INPUT);
+    gh.queueResponse({ stdout: prView() });
+    await runDevelopWith(h, dev.id, { PR_URL: 'https://github.com/o/r/pull/7' });
+    expect(gh.calls).toHaveLength(1);
+    const again = await runDevelopWith(h, dev.id, {});
+    expect(again.stageStatus).toBe('pr_opened');
+    expect(again.lastRun?.outcome).toBe('succeeded');
+    expect(gh.calls).toHaveLength(1);
+  });
+
+  it('regression pin: runDevelop is refused once the session is merged', async () => {
+    const h = createHarness();
+    const dev = await h.service.createDevelopmentSession(DEV_INPUT);
+    await h.service.transition(dev.id, 'merged');
+    await expect(h.service.runDevelop(dev.id)).rejects.toBeInstanceOf(UnsupportedStageError);
+  });
+
+  it('I1 — a PR opened before an engine restart is adopted on the next tick', async () => {
+    const gh = new FakeGhRunner();
+    const h = createHarness({ gh });
+    const dev = await h.service.createDevelopmentSession(DEV_INPUT);
+    // The engine died mid-run: the file still says `running`, nothing holds the run, and the
+    // agent had already written PR_URL.
+    await h.store.save({
+      ...(await h.store.load(dev.id)),
+      lastRun: { stage: 'develop', startedAt: '2026-09-04T11:00:00.000Z', finishedAt: null, exitCode: null, signal: null, outcome: 'running', error: null },
+    });
+    await h.fs.writeFile(`${SESSIONS_DIR}/${dev.id}/PR_URL`, 'https://github.com/o/r/pull/7\n');
+    expect((await h.service.failStaleRuns()).sessionIds).toEqual([dev.id]);
+    gh.queueResponse({ stdout: prView() });
+    const report = await new ReconciliationTick({ gh, store: h.store, pipeline: h.service, events: h.events, lock: h.lock }).run();
+    expect(report.errors).toEqual([]);
+    expect(report.actions).toContainEqual({ type: 'transition', sessionId: dev.id, to: 'pr_opened', reason: 'PR detected' });
+    expect((await h.store.load(dev.id)).stageStatus).toBe('pr_opened');
+  });
+
+  it('I1 — the tick leaves a session with a live run alone', async () => {
+    const gh = new FakeGhRunner();
+    const h = createHarness({ gh, log: () => undefined });
+    const dev = await h.service.createDevelopmentSession(DEV_INPUT);
+    const run = h.service.runDevelop(dev.id);
+    await flush();
+    await new ReconciliationTick({ gh, store: h.store, pipeline: h.service, events: h.events, lock: h.lock }).run();
+    expect(gh.calls).toEqual([]);
+    gh.queueResponse({ stdout: '[]' });
+    h.runner.emitExit(h.runner.lastHandle(), { code: 0, signal: null });
+    expect((await run).stageStatus).toBe('active');
   });
 });

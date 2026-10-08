@@ -20,7 +20,7 @@ import type { SessionFileSystem } from '../fs/session-file-system';
 import type { GitRunner } from '../git/git-runner';
 import type { EngineEvents } from '../engine/events';
 import type { DevelopmentSession, InvestigationSession, Session } from '../schema/session';
-import type { RespondPhase, ReviewPhase } from '../schema/pipeline';
+import type { DevelopmentPhase, RespondPhase, ReviewPhase } from '../schema/pipeline';
 import { canTransition, QA_RUNNABLE_FROM } from '../schema/pipeline';
 import type { LastRun, StageName } from '../schema/stage';
 import { KeyedLock } from '../api/keyed-lock';
@@ -64,6 +64,8 @@ import { refreshWorkspaceGuardrails } from '../workspace/workspace-manager';
 import { permissionProfileFor } from '../workspace/permission-guard';
 import { repoSlugFromUrl } from '../gh/repo-slug';
 import { preflightAccess, type PreflightStage } from './preflight';
+import type { GhRunner } from '../gh/gh-runner';
+import { detectDevelopmentPr } from './pr-detection';
 
 export interface PipelineConfig {
   sessionsDir: string; // absolute
@@ -77,6 +79,8 @@ export interface PipelineConfig {
   runnerKind: 'claude-code' | 'codex';
   /** How long a human-turn claim stays live: `expiresAt = claimedAt + this` (R20). */
   humanTurnTtlMs: number;
+  /** S2-31 — CoreConfig.me: only a PR by this login is adopted. Absent: no PR detection. */
+  me?: string;
 }
 
 /**
@@ -136,6 +140,12 @@ export interface PipelineServiceDeps {
    * Required: a wiring that forgets it would silently waive the GitHub check.
    */
   ghAuthOk: () => Promise<{ ok: true } | { ok: false; detail: string }>;
+  /**
+   * R91 — read-only PR detection after a develop run and on every tick (`gh pr view` /
+   * `gh pr list` only; never opens or posts). Absent: no detection, and a development session
+   * stays `active` (pre-step-2).
+   */
+  gh?: GhRunner;
 }
 
 /** 0c — the user's "Run anyway": skips ONLY the Jira half of the preflight, never GitHub. */
@@ -765,6 +775,7 @@ export class PipelineService {
   }
 
   async runDevelop(id: string): Promise<Session> {
+    const DEVELOP_RUNNABLE_FROM: readonly DevelopmentPhase[] = ['active', 'pr_opened'];
     const session = await this.deps.store.load(id);
     if (session.mode !== 'development') {
       throw new UnsupportedStageError(`Session '${id}' cannot run develop (mode=${session.mode})`);
@@ -791,22 +802,69 @@ export class PipelineService {
     });
     const prompt = STAGE_ENTRY_PROMPT(sessionDir);
     try {
-      // No transition on success: PR detection (which drives active -> pr_opened) is Phase 3b.
+      // R91 — the PR the run opened is detected after it, whatever its outcome (adoptDevelopmentPr). Runnable from pr_opened too: a fix round on the open draft.
       // The stageStatus check is race-sensitive and must run on a FRESH load
       // inside the lock — starting on a session a human just abandoned is
       // exactly the hole this closes.
-      const result = await this.runStageLocked(id, 'develop', brief, prompt, async () => {
+      await this.runStageLocked(id, 'develop', brief, prompt, async () => {
         const fresh = await this.deps.store.load(id);
         // Authoritative (R9/R19) — see runFindings.
         await this.assertNoHumanTurn(fresh);
-        if (fresh.mode !== 'development' || fresh.stageStatus !== 'active') {
+        if (fresh.mode !== 'development' || !DEVELOP_RUNNABLE_FROM.includes(fresh.stageStatus)) {
           throw new UnsupportedStageError(`Session '${id}' cannot run develop (mode=${fresh.mode}, stage=${fresh.stageStatus})`);
         }
       });
-      return result.session;
+      return await this.adoptDevelopmentPr(id);
     } finally {
       await prep.teardown();
     }
+  }
+
+  /**
+   * R91 — find this development session's open PR and record it: `session.pr` + `active →
+   * pr_opened` in ONE locked save and one `session.transitioned`. Called after every develop run
+   * (any outcome: a PR the agent opened before it died is still a PR) and by the reconciliation
+   * tick (I1: a run the engine died under, a PR opened in a Take over chat). Read-only gh
+   * (src/pipeline/pr-detection.ts). A session that already has a PR, is not `active`, has no
+   * branch, or has a live run is left alone; so is every session when `gh` or `me` is not wired.
+   * Never throws for a detection miss: that is one log line and the session as it was. A PR
+   * opened for review rather than as a draft is still recorded, and lastRun says it needed
+   * approval (R112).
+   */
+  async adoptDevelopmentPr(id: string): Promise<Session> {
+    const current = await this.deps.store.load(id);
+    const gh = this.deps.gh;
+    const me = this.deps.config.me;
+    if (gh === undefined || me === undefined) return current;
+    if (current.mode !== 'development' || current.pr !== null || current.stageStatus !== 'active') return current;
+    if (this.runLivenessOf(current) === 'live') return current;
+    const branch = current.workspace.branch;
+    if (!branch) return current;
+    const detection = await detectDevelopmentPr({
+      gh,
+      fs: this.deps.fs,
+      sessionDir: this.sessionDir(id),
+      repoSlug: repoSlugFromUrl(current.workspace.repoUrl),
+      branch,
+      me,
+    });
+    if (!detection.found) {
+      this.log(`PR detection for ${id}: none adopted (${detection.why})`);
+      return current;
+    }
+    const adopted = await this.lock.withLock(id, async () => {
+      const before = await this.deps.store.load(id);
+      if (before.mode !== 'development' || before.pr !== null || before.stageStatus !== 'active') return null;
+      const next: Session = { ...applyTransition(before, 'pr_opened'), pr: detection.pr };
+      await this.deps.store.save(next);
+      this.deps.events.emit('session.transitioned', { session: next, from: before.stageStatus, to: 'pr_opened' });
+      return next;
+    });
+    if (adopted === null) return this.deps.store.load(id);
+    if (detection.isDraft) return adopted;
+    const note = `PR #${detection.pr.number} is open for review, not a draft — opening a PR for review needs your approval (R112)`;
+    const prior = adopted.lastRun?.error ?? null;
+    return this.patchLastRun(id, { error: prior === null ? note : `${prior}; ${note}` });
   }
 
   /**

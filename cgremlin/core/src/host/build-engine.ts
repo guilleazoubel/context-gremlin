@@ -305,6 +305,7 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
       includeLiveUiCheck: config.includeLiveUiCheck,
       runnerKind: adapters.runnerKind,
       humanTurnTtlMs: config.humanTurnTtlMs,
+      me: config.me,
     },
     now: adapters.now,
     lock,
@@ -325,6 +326,8 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
         return { ok: false, detail: summarizeGhAuthFailure(raw) };
       }
     },
+    /** R91 — read-only PR detection for development sessions (`gh pr view` / `gh pr list`). */
+    gh: adapters.gh,
     // R18: the engine fetches the ticket text; the agent never sees a
     // credential, and the `## Ticket` block is composed in exactly one place.
     /**
