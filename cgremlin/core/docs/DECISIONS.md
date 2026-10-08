@@ -990,6 +990,26 @@ extension does not know.
    captured late, at the next hand-over. **Follow-up:** `captureDismissals` on machine terminal
    transitions too, if steps 9/11 need complete dismissals. **Cost:** a few missed feedback
    records (a noisy proxy anyway).
+7. **Supersede write without a session lock (Minor).** `review-session-factory.ts:118-122` calls
+   `store.transition(source.id, 'superseded')` (`session-store.ts:122-127`, documented NOT safe
+   against concurrent writes) while only the `pr:<repo>#<n>` lock is held (`server.ts:301`). The
+   stage runner and heal lock the bare session id (`stage-runner.ts:504`,
+   `pipeline-service.ts:1650`). Narrow race: a self-review of a dev PR created at the instant a
+   develop fix round exits can write back `lastRun.outcome='running'`, after which the heal marks
+   the succeeded run failed (a `succeeded` run record then sits next to `lastRun` `failed`; the
+   record is still written). Made live by R91 adoption. **Fix:** take the session lock around the
+   supersede, checking lock order first. **Cost:** rare wrong `lastRun` on one session.
+8. **Supersede depends on order (Minor).** Supersede is decided only when the review is created
+   (`link-pr-to-source.ts:55`); adoption (`pipeline-service.ts:~952-967`) moves
+   `active` → `pr_opened` without looking for a linked review, so self-review first then adoption
+   leaves a live linked review on a session that still allows `runDevelop`, while the reverse order
+   gives `superseded` and S2-15 refuses `runDevelop`. **Cost:** consistency, not safety (S2-15
+   ruling).
+9. **Runner handles never released (Minor, partly pre-existing).** The `handles` map is written
+   (`claude-code-runner.ts:84`), read (`:315`) and never deleted (`codex-runner.ts` has the same
+   pattern, `:60` / `:285`). Step 2 adds per-handle `assistantUsage` (one entry per assistant
+   message) and `limitEvents`, about 5-50 KB per run kept for the engine's lifetime. **Fix:** drop a
+   handle after `getRunStats` is read at run end. **Cost:** tens of MB after about 1,000 runs.
 
 (The S2-5 behavioural pin is done: Task 7, `real-adapters.test.ts`, the two "engine-wide runner
 …" tests, which fail when `runnerOptions.model` is passed to both runners.)
