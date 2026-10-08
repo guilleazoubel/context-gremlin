@@ -847,7 +847,8 @@ extension does not know.
   (`core.json`), else `gh pr list --head <branch> --state open` decides on a single match by `me`.
   Adoption is one locked save: `session.pr` + `active → pr_opened`. A non-draft PR is adopted
   and flagged (R112, S2-14). Development sessions follow their own PR: merged → `merged`,
-  closed → `abandoned`. `runDevelop` runs from `active` and `pr_opened`.
+  closed → `abandoned`. `runDevelop` runs from `active` and `pr_opened`. **Cost (S2-16):**
+  closing a draft PR to recreate it abandons the session.
   - **The one addition to the sessions JSON (S2-38, amends S2-14 and S2-20).** The "opened for
     review, needed approval" flag is the new optional `pr.openedForReview?: boolean`
     (`schema/stage.ts:74`), set only on a non-draft adoption, in the same locked save as the
@@ -889,6 +890,9 @@ extension does not know.
   wrote at `run.started` (it carries a random run id; heal matches stage + `startedAt`, so a lost
   run's late exit cannot take the next run's facts). A record that cannot be written is a log
   line, never a failed run. Free text in a record is capped at 512 characters.
+  - **Costs of the record rules.** S2-22: `total_cost_usd` is an estimate on subscriptions (recorded,
+    not trusted for billing). S2-25: a run started by a pre-step-2 engine, or a run whose
+    `.run-facts.json` write failed, gets no `interrupted` record.
   - **Rate limits (S2-36, amends S2-11).** A run that hit a `rejected` rate limit is recorded
     `stopped` / `stopReason: 'limit'` (its `lastRun` still says `failed` until step 7). But a
     Claude `rate_limit_event` with status `rejected` that is **covered by extra usage**
@@ -911,8 +915,11 @@ extension does not know.
     can write (`--add-dir`, `stage-runner.ts:439`). Nothing may gate on them unverified.
 - **Feedback capture (§20).** `<stateDir>/feedback.jsonl` (`feedbackPath`, 0600) records
   `finding_dismissed` (a REVIEW.md finding whose Status says dismissed; id = session + anchor +
-  a hash of title and location, so a fresh review restarting at `f1` cannot hide a different
-  finding), `verdict_rejected` (approving a PR whose review said 🔄 Request changes; abandoning
+  a hash of title and location, so a fresh review restarting at `f1` does not hide a different
+  finding in general; **one exception, deferred:** a finding with both title and location null
+  (a table row with empty columns and no detail heading, `review-findings.ts:57,70-71`) hashes
+  to a constant (`findingKey`, `feedback-capture.ts:38-40`), so two such dismissals in one
+  session share an id and the second record is dropped), `verdict_rejected` (approving a PR whose review said 🔄 Request changes; abandoning
   an investigation at `plan_ready`) and `review_dismissed` (dismissing a review that has a
   REVIEW.md). Only the `/transition` and `/approve-pr` routes mark transitions `by: 'human'`;
   reconciliation never does. Text is one line, redacted, ≤ 300 chars. One `FeedbackLog` per
@@ -923,11 +930,17 @@ extension does not know.
     holds for `verdict_rejected` and `review_dismissed` only. Step 11 must treat dismissal
     records as a noisy signal. **Cost if wrong:** a noisy training signal.
   - **What fires today:** the extension calls `/approve-pr` and `/conversation/release`; dismissals
-    are also captured before a review run rewrites REVIEW.md and before a re-review archives it.
+    are also captured before a review run rewrites REVIEW.md, before a re-review archives it, and
+    on a person's transition of a review (only `/transition` and `/approve-pr` pass `by: 'human'`,
+    S2-18). A hand edit with no later event is captured late, at the next hand-over; dismissals
+    are not "never lost" (see follow-up 6).
     `review_dismissed` and the plan-abandon `verdict_rejected` fire only from raw API calls:
     the extension never calls `/transition` (kept by ruling, documented).
   - REVIEW.md is parsed up to 1 MiB, cut at a line end, after a whole-file read
-    (`pipeline-service.ts:185`; `SessionFileSystem` has no size API).
+    (`pipeline-service.ts:185,393`; `SessionFileSystem` has no size API). The cap bounds the
+  parse, not the read: `capReviewForFeedback` runs after the whole file is read and cuts at a
+  line end. Accepted: the file is agent-written in the session dir and there is no ranged-read
+  port. Minor.
 - **JSONL files** are rewritten tmp-then-rename with the engine as the only writer; readers skip
   torn and foreign lines. A future writer outside the engine (step 11's UI) must go through the
   engine API.
@@ -960,18 +973,26 @@ extension does not know.
    `runReview` instead of `reconcileCrashedRun`, so the new run's facts overwrite the crashed
    run's `.run-facts.json` and no `interrupted` record is written for that path. **Cost:** one
    missing `interrupted` line in `runs.jsonl` per such restart.
-4. `gh` has no timeout: `GhRunner.run(args)` has no option and `NodeGhRunner` spawns without one
-   (`gh/node-gh-runner.ts`); fixing it changes the shared interface, so it was deferred. **Cost:**
-   a hung `gh` holds up a develop run's teardown and `promote()` until it is killed.
-5. Terminal machine transitions of a review (for example PR merged → tick → dismissed) can lose
-   dismissals marked in a take-over chat if `/conversation/release` is never called afterwards
-   (S2-17 says "captured late, never lost"). Fix: `captureDismissals` on terminal non-human review
-   transitions. **Cost:** a missing `finding_dismissed` record.
-6. The VS Code Take over terminal (`vscode/src/model/chat-command.ts:33`) runs `claude --resume`
+4. The VS Code Take over terminal (`vscode/src/model/chat-command.ts:33`) runs `claude --resume`
    with the inherited environment, so `CLAUDE_CODE_EFFORT_LEVEL` still reaches interactive chats;
    S2-8 covers engine runs only. **Cost:** an interactive chat may run at the user's shell effort.
-7. **S2-5 behavioural pin: done in Task 7** (`real-adapters.test.ts`, the two "engine-wide runner
-   …" tests, which fail when `runnerOptions.model` is passed to both runners).
+
+**Gaps in step 2's own paths:**
+
+5. `gh` has no timeout: `GhRunner.run(args)` has no option and `NodeGhRunner` spawns without one
+   (`gh/node-gh-runner.ts`); fixing it changes the shared interface, so it was deferred. **Cost:**
+   a hung `gh` holds up a develop run's teardown and `promote()` until it is killed.
+6. **Take-over dismissals (supervisor ruling, task 6b).** Dismissals marked in a take-over chat
+   that is never released are not captured when a MACHINE transition ends the review (for example
+   PR merged → tick → dismissed). By design: S2-17 captures at release, before `runReview`,
+   before `runRereview`, and on a person's transition (only `/transition` and `/approve-pr` pass
+   `by: 'human'`, S2-18). Dismissals are **not** "never lost"; a hand edit with no later event is
+   captured late, at the next hand-over. **Follow-up:** `captureDismissals` on machine terminal
+   transitions too, if steps 9/11 need complete dismissals. **Cost:** a few missed feedback
+   records (a noisy proxy anyway).
+
+(The S2-5 behavioural pin is done: Task 7, `real-adapters.test.ts`, the two "engine-wide runner
+…" tests, which fail when `runnerOptions.model` is passed to both runners.)
 
 **Minor, cheap to fix when next in the file:**
 
@@ -992,9 +1013,18 @@ extension does not know.
   `active` (bounded by session count); a tick can report an adoption another path made;
   `redactSecrets` misses bare `ghp_` tokens (pre-existing).
 - Feedback: `appendOnce` reads `feedback.jsonl` twice per record (`feedback-log.ts:62`; cost grows
-  with findings × file size, and the file is never trimmed); the start-anchored Status match no
-  longer recognises free-form hand edits such as `~~open~~ 🔇 dismissed`.
-- `build-engine.ts:289-293`: the FeedbackLog comment sits above the wrong `const`.
+  with findings × file size, and the file is never trimmed; minor, deferred); the start-anchored
+  Status match does not recognise free-form hand edits such as `~~open~~ dismissed` (undercounts,
+  cannot create a false positive; minor, deferred).
+- Review parser, not fixed in `9db8755` (Task 6a): a detail block without an anchor merges into
+  the previous finding; the degenerate key above (title and location both null); anchor digits
+  are unbounded (`f\d+`); the verdict fallback scans the whole file; the `detail.severity` /
+  `where` cleaning has no test; the "reads and writes only its own file" test overclaims.
+- Task 2: `codex-runner` itself would pass effort `max` through; only the stage-runner guard
+  refuses it. Task 4a: a run with several results can mix rate-limit rules. Task 4b: the
+  stale-facts test does not assert its logs.
+- `build-engine.ts:289`: the `ticketDetail` comment sits above the §20 FeedbackLog block instead
+  of above `const tickets` (`:294`); the FeedbackLog comment (`:290-292`) is placed correctly.
 - Tests: the routing test for a missing runner kind does not assert guardrails/BRIEF are
   unwritten; the `superseded` refusal pin fails only through the 5 s timeout; the "reconciliation
   dismissal records nothing" test passes before the change (an unlabelled regression pin).
