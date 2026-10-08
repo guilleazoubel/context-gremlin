@@ -68,6 +68,25 @@ describe('run stats parsers', () => {
     expect(limitEventFromClaude(null, AT)).toBeNull();
   });
 
+  it('I-1 — a rejected limit covered by extra usage (overage allowed) is a warning; overage rejected or absent stays rejected', () => {
+    const base = { status: 'rejected', resetsAt: 1791460800, rateLimitType: 'five_hour' };
+    const warning = { at: '2026-10-08T12:00:00.000Z', kind: 'warning', limitType: 'five_hour', resetsAt: '2026-10-08T12:00:00.000Z', message: null };
+    const rejected = { ...warning, kind: 'rejected' };
+    expect(limitEventFromClaude({ ...base, overageStatus: 'allowed' }, AT)).toEqual(warning);
+    expect(limitEventFromClaude({ ...base, overageStatus: 'allowed_warning' }, AT)).toEqual(warning);
+    expect(limitEventFromClaude({ ...base, isUsingOverage: true }, AT)).toEqual(warning);
+    expect(limitEventFromClaude({ ...base, overageStatus: 'rejected' }, AT)).toEqual(rejected);
+    expect(limitEventFromClaude({ ...base, overageStatus: 'rejected', isUsingOverage: false }, AT)).toEqual(rejected);
+    expect(limitEventFromClaude(base, AT)).toEqual(rejected);
+  });
+
+  it('M-5 — an out-of-range resetsAt never throws; it is reported as unknown', () => {
+    expect(() => limitEventFromClaude({ status: 'rejected', resetsAt: 1e15 }, AT)).not.toThrow();
+    expect(limitEventFromClaude({ status: 'rejected', resetsAt: 1e15 }, AT)).toEqual({
+      at: '2026-10-08T12:00:00.000Z', kind: 'rejected', limitType: null, resetsAt: null, message: null,
+    });
+  });
+
   it('a limit message is a rejected event with its first line, capped; anything else is not', () => {
     expect(limitEventFromMessage("You've hit your usage limit. Try again in 2 hours.\nmore", AT)).toEqual({
       at: '2026-10-08T12:00:00.000Z', kind: 'rejected', limitType: null, resetsAt: null,

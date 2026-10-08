@@ -68,18 +68,39 @@ export function costFromClaude(value: unknown): number | null {
   return num(value);
 }
 
-/** Claude `rate_limit_event.rate_limit_info`: `allowed` is no event; `allowed_warning` and `rejected` are. */
+/** Epoch seconds → ISO; null when out of `Date`'s range (stats must never throw). */
+function isoFromEpochSeconds(value: unknown): string | null {
+  const seconds = num(value);
+  if (seconds === null) return null;
+  const date = new Date(seconds * 1000);
+  return Number.isNaN(date.getTime()) ? null : date.toISOString();
+}
+
+/**
+ * Claude `rate_limit_event.rate_limit_info`: `allowed` is no event; `allowed_warning` and
+ * `rejected` are. I-1 — a `rejected` plan limit that extra usage covers (CLI 2.1.294:
+ * `isUsingOverage = rejected && overageStatus ∈ {allowed, allowed_warning}`) does not stop the
+ * run, so it is a `warning`, not a `rejected`.
+ */
 export function limitEventFromClaude(info: unknown, at: Date): LimitEvent | null {
   if (!info || typeof info !== 'object') return null;
   const i = info as Record<string, unknown>;
-  const kind = i.status === 'allowed_warning' ? 'warning' : i.status === 'rejected' ? 'rejected' : null;
+  const coveredByOverage =
+    i.isUsingOverage === true || i.overageStatus === 'allowed' || i.overageStatus === 'allowed_warning';
+  const kind =
+    i.status === 'allowed_warning'
+      ? 'warning'
+      : i.status === 'rejected'
+        ? coveredByOverage
+          ? 'warning'
+          : 'rejected'
+        : null;
   if (kind === null) return null;
-  const resetsAt = num(i.resetsAt);
   return {
     at: at.toISOString(),
     kind,
     limitType: typeof i.rateLimitType === 'string' ? i.rateLimitType : null,
-    resetsAt: resetsAt === null ? null : new Date(resetsAt * 1000).toISOString(),
+    resetsAt: isoFromEpochSeconds(i.resetsAt),
     message: null,
   };
 }

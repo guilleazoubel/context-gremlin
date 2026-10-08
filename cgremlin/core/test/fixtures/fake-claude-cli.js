@@ -118,6 +118,20 @@ if (prompt === 'HANG_FOREVER') {
   line({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: 1791460800, rateLimitType: 'five_hour' }, uuid: 'u2', session_id: sessionId });
   line({ type: 'result', subtype: 'error_during_execution', is_error: true, result: 'Claude AI usage limit reached|1791460800', session_id: sessionId, total_cost_usd: 0, modelUsage: {} });
   process.exitCode = 1;
+} else if (prompt === 'OVERAGE_ALLOWED') {
+  // I-1 — a subscriber with extra usage: the plan limit says `rejected`, but overage covers it
+  // (CLI 2.1.294: isUsingOverage = rejected && overageStatus allowed/allowed_warning) and the run
+  // carries on to a successful result and exit 0.
+  const line = (o) => process.stdout.write(JSON.stringify(o) + '\n');
+  line({ type: 'rate_limit_event', rate_limit_info: { status: 'rejected', resetsAt: 1791460800, rateLimitType: 'five_hour', overageStatus: 'allowed', isUsingOverage: true }, uuid: 'u3', session_id: sessionId });
+  line({ type: 'assistant', message: { content: [{ type: 'text', text: 'still working' }] } });
+  line({ type: 'result', subtype: 'success', is_error: false, session_id: sessionId });
+} else if (prompt === 'LIMIT_TEXT_ONLY') {
+  // M-4 — no structured rate_limit_event at all: only the error result's text says it.
+  process.stdout.write(
+    JSON.stringify({ type: 'result', subtype: 'error_during_execution', is_error: true, result: 'Claude AI usage limit reached|1791460800', session_id: sessionId }) + '\n',
+  );
+  process.exitCode = 1;
 } else if (prompt === 'ASSISTANT_ONLY') {
   // I2 — a run killed before its result: only per-message usage is left. A message streams as
   // several records with the same id; the last one carries its final usage.

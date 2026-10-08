@@ -328,6 +328,29 @@ describe('ClaudeCodeRunner', () => {
     expect(stats.costUsd).toBe(0);
   });
 
+  it('I-1 — a rejected plan limit covered by extra usage is a warning, never a rejected event', async () => {
+    const runner = new ClaudeCodeRunner({ claudeBinary: FIXTURE, now: () => new Date('2026-10-08T11:00:00.000Z') });
+    const handle = await runner.start({ sessionId: 'inv-1', workingDirectory: process.cwd() });
+    const exits: Array<number | null> = [];
+    runner.onExit(handle, (result) => exits.push(result.code));
+    await runner.sendPrompt(handle, 'OVERAGE_ALLOWED');
+    expect(exits).toEqual([0]);
+    const events = runner.getRunStats(handle).limitEvents;
+    expect(events.some((e) => e.kind === 'rejected')).toBe(false);
+    expect(events).toEqual([
+      { at: '2026-10-08T11:00:00.000Z', kind: 'warning', limitType: 'five_hour', resetsAt: '2026-10-08T12:00:00.000Z', message: null },
+    ]);
+  });
+
+  it('M-4 — with no rate_limit_event, an error result saying the limit was hit is one rejected event with its message', async () => {
+    const runner = new ClaudeCodeRunner({ claudeBinary: FIXTURE, now: () => new Date('2026-10-08T11:00:00.000Z') });
+    const handle = await runner.start({ sessionId: 'inv-1', workingDirectory: process.cwd() });
+    await runner.sendPrompt(handle, 'LIMIT_TEXT_ONLY');
+    expect(runner.getRunStats(handle).limitEvents).toEqual([
+      { at: '2026-10-08T11:00:00.000Z', kind: 'rejected', limitType: null, resetsAt: null, message: 'Claude AI usage limit reached|1791460800' },
+    ]);
+  });
+
   it('I2 — a run killed before its result reports the per-message usage, each message counted once', async () => {
     const runner = new ClaudeCodeRunner({ claudeBinary: FIXTURE });
     const handle = await runner.start({ sessionId: 'inv-1', workingDirectory: process.cwd() });

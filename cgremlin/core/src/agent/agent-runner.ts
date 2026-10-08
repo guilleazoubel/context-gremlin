@@ -87,6 +87,11 @@ export interface AgentRunner {
    * Callers MUST NOT read `undefined` as "dead": it proves nothing either way.
    */
   getPid?(handle: AgentHandle): number | undefined;
-  /** R118f — what this handle's run used and hit, so far. Undefined: the adapter has nothing to report. */
+  /**
+   * R118f — what this handle's run used and hit, so far. Undefined: the adapter has nothing to report.
+   * Stats are per handle and assume one prompt per handle (as the stage runner does): a second
+   * prompt on the same handle sums result tokens while cost/model usage keep the latest result,
+   * and the per-message fallback applies only while no result has arrived on the handle (M-1/M-2).
+   */
   getRunStats?(handle: AgentHandle): RunStats | undefined;
 }
