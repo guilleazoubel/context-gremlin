@@ -1,3 +1,5 @@
+import type { Effort } from '../config/routing';
+
 export interface AgentHandle {
   readonly id: string;
 }
@@ -9,6 +11,10 @@ export interface SessionContext {
   readonly additionalDirs?: readonly string[];
   /** Adapter-specific conversation id to continue from (Claude: `--resume`). */
   readonly resumeId?: string;
+  /** R116 — the model for THIS run (`--model` / `-m`); overrides the runner's constructor default. */
+  readonly model?: string;
+  /** R116 — the effort for THIS run (Claude `--effort`, Codex `-c model_reasoning_effort`). Absent: the CLI's own default. */
+  readonly effort?: Effort;
 }
 
 export interface AgentOutput {

@@ -143,6 +143,12 @@ export const CoreConfigSchema = z.object({
       sandbox: z.enum(['read-only', 'workspace-write', 'danger-full-access']).optional(),
     })
     .default({}),
+  /**
+   * R116 — per-stage routes, kept RAW here and parsed by `parseRouting` (src/config/routing.ts)
+   * when the engine is built: a bad entry is logged and that stage falls back to `runner`/
+   * `runnerOptions` (D3, Ruling S2-23), instead of failing the whole load like every other key.
+   */
+  routing: z.unknown().default({}),
   pollIntervalMs: z.number().int().positive().default(60_000),
   prListLimit: z.number().int().positive().max(100).default(50),
   stateDir: z.string().min(1).default('~/.cgremlin-core'),

@@ -63,6 +63,7 @@ one-line error. Paths may start with `~`.
 | `runnerOptions.model` | — | passed to the runner |
 | `runnerOptions.permissionMode` | — | Claude Code only |
 | `runnerOptions.sandbox` | — | Codex only: `read-only` \| `workspace-write` \| `danger-full-access` |
+| `routing.<stage>` | — | R116 per-stage route for `findings`, `plan`, `develop`, `review`, `rereview`, `respond`, `verify`: `{ "runner": "claude-code", "model"?: string, "effort"?: "low" \| "medium" \| "high" \| "xhigh" \| "max", "escalate"?: [route + "advisor"?…], "secondOpinion"?: route }`. A stage with no entry uses `runner`/`runnerOptions` exactly as before; a route with no `model` inherits `runnerOptions.model` only from the same runner. Codex may not be a primary stage runner in this version (it is accepted, unused, inside `escalate`/`secondOpinion`, and has no `max`). A bad entry never stops the engine: it is logged at start-up as `routing.<stage>: …` and that stage uses the legacy runner. `escalate`/`secondOpinion` are validated now and used by later steps. Claude runs never inherit `CLAUDE_CODE_EFFORT_LEVEL`. |
 | `pollIntervalMs` | `60000` | inventory-scan cadence |
 | `prListLimit` | `50` (max `100`) | `gh pr list --limit` per repo |
 | `stateDir` | `~/.cgremlin-core` | base dir; every path below derives from it unless overridden |

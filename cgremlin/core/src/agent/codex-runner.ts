@@ -131,8 +131,13 @@ export class CodexRunner implements AgentRunner {
     } else {
       args.push('--json', '-s', this.sandbox);
     }
-    if (this.model) {
-      args.push('-m', this.model);
+    const model = state.ctx.model ?? this.model;
+    if (model) {
+      args.push('-m', model);
+    }
+    if (state.ctx.effort) {
+      // R116 — TOML-quoted like sandbox_mode above; accepted on `exec` and `exec resume`.
+      args.push('-c', `model_reasoning_effort="${state.ctx.effort}"`);
     }
     if (this.skipGitRepoCheck) {
       args.push('--skip-git-repo-check');

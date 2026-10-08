@@ -29,6 +29,17 @@ if (process.env.FAKE_CLI_ARGV_LOG) {
   }
 }
 
+if (process.env.FAKE_CLI_ENV_LOG) {
+  // R116 — proves what the runner put in the child's environment, not the test's own.
+  fs.writeFileSync(
+    process.env.FAKE_CLI_ENV_LOG,
+    JSON.stringify({
+      CLAUDE_CODE_EFFORT_LEVEL: process.env.CLAUDE_CODE_EFFORT_LEVEL ?? null,
+      PATH_SET: typeof process.env.PATH === 'string',
+    }),
+  );
+}
+
 const prompt = args[args.indexOf('-p') + 1] ?? '';
 const resumeId = argValue('--resume');
 const sessionId = resumeId ? `resumed:${resumeId}` : 'fresh-session-1';

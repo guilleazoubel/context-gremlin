@@ -15,6 +15,17 @@ import { ToolActivityLog } from './tool-activity';
 // ./agent-runner-errors.ts (shared with CodexRunner).
 export { UnknownAgentHandleError };
 
+/**
+ * R116 — the stage's route decides the effort, so a `CLAUDE_CODE_EFFORT_LEVEL` inherited from
+ * whatever launched the engine (VS Code started from a shell that exported it) must not
+ * override it. Removed on every spawn, routed or not; the engine's own env is never touched.
+ */
+export function claudeEnv(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const env = { ...base };
+  delete env.CLAUDE_CODE_EFFORT_LEVEL;
+  return env;
+}
+
 interface ClaudeAgentState {
   ctx: SessionContext;
   outputCallbacks: Array<(chunk: AgentOutput) => void>;
@@ -75,8 +86,12 @@ export class ClaudeCodeRunner implements AgentRunner {
     for (const dir of state.ctx.additionalDirs ?? []) {
       args.push('--add-dir', dir);
     }
-    if (this.model) {
-      args.push('--model', this.model);
+    const model = state.ctx.model ?? this.model;
+    if (model) {
+      args.push('--model', model);
+    }
+    if (state.ctx.effort) {
+      args.push('--effort', state.ctx.effort);
     }
     if (state.claudeSessionId) {
       args.push('--resume', state.claudeSessionId);
@@ -87,6 +102,7 @@ export class ClaudeCodeRunner implements AgentRunner {
         cwd: state.ctx.workingDirectory,
         stdio: ['ignore', 'pipe', 'pipe'] as const,
         detached: true,
+        env: claudeEnv(process.env),
       });
       state.currentProcess = child;
 

@@ -214,6 +214,31 @@ describe('CodexRunner', () => {
       expect(childPgid).not.toBe(ownPgid);
     });
   });
+
+  it('R116 — per-run model and effort on a first turn: -m from the context, then -c model_reasoning_effort', async () => {
+    await withArgvLog('effort-first', async (argvLogPath) => {
+      const runner = new CodexRunner({ codexBinary: FIXTURE, sandbox: 'read-only', model: 'gpt-6-luna' });
+      const handle = await runner.start({
+        sessionId: 'inv-1', workingDirectory: process.cwd(), additionalDirs: ['/s/one'], model: 'gpt-6.1-sol', effort: 'high',
+      });
+      await runner.sendPrompt(handle, 'hello');
+      expect(JSON.parse(await readFile(argvLogPath, 'utf8'))).toEqual([
+        'exec', '--json', '-s', 'read-only', '-m', 'gpt-6.1-sol', '-c', 'model_reasoning_effort="high"',
+        '--add-dir', '/s/one', 'hello',
+      ]);
+    });
+  });
+
+  it('R116 — and on a resumed turn', async () => {
+    await withArgvLog('effort-resume', async (argvLogPath) => {
+      const runner = new CodexRunner({ codexBinary: FIXTURE });
+      const handle = await runner.start({ sessionId: 'inv-1', workingDirectory: process.cwd(), resumeId: 'thread-9', effort: 'xhigh' });
+      await runner.sendPrompt(handle, 'hello');
+      expect(JSON.parse(await readFile(argvLogPath, 'utf8'))).toEqual([
+        'exec', 'resume', 'thread-9', '--json', '-c', 'sandbox_mode="workspace-write"', '-c', 'model_reasoning_effort="xhigh"', 'hello',
+      ]);
+    });
+  });
 });
 
 describeAgentRunnerContract('CodexRunner', {

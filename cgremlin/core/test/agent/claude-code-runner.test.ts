@@ -4,7 +4,7 @@ import { readFile, rm } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { describe, expect, it } from 'vitest';
-import { ClaudeCodeRunner, UnknownAgentHandleError } from '../../src/agent/claude-code-runner';
+import { ClaudeCodeRunner, UnknownAgentHandleError, claudeEnv } from '../../src/agent/claude-code-runner';
 import { describeAgentRunnerContract } from '../support/agent-runner-contract';
 
 const FIXTURE = path.join(__dirname, '../fixtures/fake-claude-cli.js');
@@ -235,6 +235,67 @@ describe('ClaudeCodeRunner', () => {
       delete process.env.FAKE_CLI_ARGV_LOG;
       await rm(argvLogPath, { force: true });
     }
+  });
+
+  it('R116 — per-run model and effort from the context override the constructor model, in a pinned argv order', async () => {
+    const argvLogPath = path.join(tmpdir(), `claude-code-runner-argv-effort-${Date.now()}.json`);
+    process.env.FAKE_CLI_ARGV_LOG = argvLogPath;
+    try {
+      const runner = new ClaudeCodeRunner({ claudeBinary: FIXTURE, model: 'sonnet' });
+      const handle = await runner.start({ sessionId: 's1', workingDirectory: tmpdir(), resumeId: 'seed-1', model: 'opus', effort: 'high' });
+      await runner.sendPrompt(handle, 'hello');
+      expect(JSON.parse(await readFile(argvLogPath, 'utf8'))).toEqual([
+        '-p', 'hello',
+        '--output-format', 'stream-json',
+        '--verbose',
+        '--permission-mode', 'bypassPermissions',
+        '--model', 'opus',
+        '--effort', 'high',
+        '--resume', 'seed-1',
+      ]);
+    } finally {
+      delete process.env.FAKE_CLI_ARGV_LOG;
+      await rm(argvLogPath, { force: true });
+    }
+  });
+
+  it('R116 — passes no --effort when the context names none', async () => {
+    const argvLogPath = path.join(tmpdir(), `claude-code-runner-argv-noeffort-${Date.now()}.json`);
+    process.env.FAKE_CLI_ARGV_LOG = argvLogPath;
+    try {
+      const runner = new ClaudeCodeRunner({ claudeBinary: FIXTURE });
+      const handle = await runner.start({ sessionId: 's1', workingDirectory: tmpdir() });
+      await runner.sendPrompt(handle, 'hello');
+      expect(JSON.parse(await readFile(argvLogPath, 'utf8'))).not.toContain('--effort');
+    } finally {
+      delete process.env.FAKE_CLI_ARGV_LOG;
+      await rm(argvLogPath, { force: true });
+    }
+  });
+
+  it('R116 — an inherited CLAUDE_CODE_EFFORT_LEVEL never reaches the CLI, and the engine’s own env is left as it was', async () => {
+    const envLogPath = path.join(tmpdir(), `claude-code-runner-env-${Date.now()}.json`);
+    const before = process.env.CLAUDE_CODE_EFFORT_LEVEL;
+    process.env.CLAUDE_CODE_EFFORT_LEVEL = 'max';
+    process.env.FAKE_CLI_ENV_LOG = envLogPath;
+    try {
+      const runner = new ClaudeCodeRunner({ claudeBinary: FIXTURE });
+      const handle = await runner.start({ sessionId: 's1', workingDirectory: tmpdir(), effort: 'medium' });
+      await runner.sendPrompt(handle, 'hello');
+      expect(JSON.parse(await readFile(envLogPath, 'utf8'))).toEqual({ CLAUDE_CODE_EFFORT_LEVEL: null, PATH_SET: true });
+      expect(process.env.CLAUDE_CODE_EFFORT_LEVEL).toBe('max');
+    } finally {
+      delete process.env.FAKE_CLI_ENV_LOG;
+      if (before === undefined) delete process.env.CLAUDE_CODE_EFFORT_LEVEL;
+      else process.env.CLAUDE_CODE_EFFORT_LEVEL = before;
+      await rm(envLogPath, { force: true });
+    }
+  });
+
+  it('claudeEnv drops only CLAUDE_CODE_EFFORT_LEVEL and never mutates its input', () => {
+    const base = { PATH: '/bin', CLAUDE_CODE_EFFORT_LEVEL: 'high', HOME: '/h' };
+    expect(claudeEnv(base)).toEqual({ PATH: '/bin', HOME: '/h' });
+    expect(base.CLAUDE_CODE_EFFORT_LEVEL).toBe('high');
   });
 });
 
