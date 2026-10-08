@@ -17,6 +17,7 @@ import type { AgentExitResult } from '../../src/agent/agent-runner';
 import type { InvestigationSession } from '../../src/schema/session';
 import type { EnvironmentService } from '../../src/env/environment-service';
 import type { GhRunner } from '../../src/gh/gh-runner';
+import type { FeedbackLog } from '../../src/feedback/feedback-log';
 
 export const SESSIONS_DIR = '/sessions';
 export const WORKTREES_DIR = '/worktrees';
@@ -35,6 +36,7 @@ export interface PipelineHarness {
   service: PipelineService;
   lock: KeyedLock;
   environment: EnvironmentService | undefined;
+  feedback: FeedbackLog | undefined;
   finishRun: (files: Record<string, string>, exit: AgentExitResult) => Promise<void>;
 }
 
@@ -70,6 +72,8 @@ export interface HarnessOptions {
   ghAuthOk?: PipelineServiceDeps['ghAuthOk'];
   /** R91 — PipelineServiceDeps.gh; omitted means no PR detection (today's behaviour). */
   gh?: GhRunner;
+  /** §20 — PipelineServiceDeps.feedback, built on the harness's own fs; omitted means no capture. */
+  feedback?: (fs: InMemoryFileSystem) => FeedbackLog;
 }
 
 export function createHarness(options: HarnessOptions = {}): PipelineHarness {
@@ -83,6 +87,7 @@ export function createHarness(options: HarnessOptions = {}): PipelineHarness {
   const now = options.now ?? FIXED_NOW;
   const runnerKind = options.runnerKind ?? 'claude-code';
   const environment = options.environment?.({ fs, git, lock });
+  const feedback = options.feedback?.(fs);
   const stageRunner = new StageRunner({
     runner,
     store,
@@ -117,6 +122,7 @@ export function createHarness(options: HarnessOptions = {}): PipelineHarness {
     ...(options.log !== undefined ? { log: options.log } : {}),
     ...(options.tickets !== undefined ? { tickets: options.tickets } : {}),
     ...(options.gh !== undefined ? { gh: options.gh } : {}),
+    ...(feedback !== undefined ? { feedback } : {}),
   });
 
   async function finishRun(files: Record<string, string>, exit: AgentExitResult): Promise<void> {
@@ -130,7 +136,7 @@ export function createHarness(options: HarnessOptions = {}): PipelineHarness {
     runner.emitExit(handle, exit);
   }
 
-  return { fs, git, store, workspace, runner, events, stageRunner, service, lock, environment, finishRun };
+  return { fs, git, store, workspace, runner, events, stageRunner, service, lock, environment, feedback, finishRun };
 }
 
 export async function createInvestigation(

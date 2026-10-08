@@ -58,7 +58,7 @@ import {
 import { assertCanPromote } from './plan-gate';
 import { RunInProgressError, WorkspaceMissingError, type StageRunResult } from './stage-runner';
 import { CRASHED_RUN_ERROR, runLiveness, type RunLiveness } from './run-liveness';
-import { appendRunRecord, recordPrefixOf, takeRunFacts } from './run-records';
+import { appendRunRecord, readRunRecords, recordPrefixOf, takeRunFacts } from './run-records';
 import { TERMINAL_PHASES_BY_MODE } from '../workspace/workspace-in-use';
 import { refreshWorkspaceGuardrails } from '../workspace/workspace-manager';
 import { permissionProfileFor } from '../workspace/permission-guard';
@@ -66,6 +66,8 @@ import { repoSlugFromUrl } from '../gh/repo-slug';
 import { preflightAccess, type PreflightStage } from './preflight';
 import type { GhRunner } from '../gh/gh-runner';
 import { detectDevelopmentPr } from './pr-detection';
+import type { FeedbackLog } from '../feedback/feedback-log';
+import { dismissalRecords, humanTransitionRecords, producedByFrom, type CaptureContext } from '../feedback/feedback-capture';
 
 export interface PipelineConfig {
   sessionsDir: string; // absolute
@@ -146,6 +148,11 @@ export interface PipelineServiceDeps {
    * stays `active` (pre-step-2).
    */
   gh?: GhRunner;
+  /**
+   * §20 — where dismissed findings and rejected verdicts are recorded. Absent: nothing is
+   * captured. Capture never throws and never blocks the action it observes.
+   */
+  feedback?: FeedbackLog;
 }
 
 /** 0c — the user's "Run anyway": skips ONLY the Jira half of the preflight, never GitHub. */
@@ -173,6 +180,13 @@ export interface CreateDevelopmentInput {
   ticket: string | null;
   baseRef?: string;
 }
+
+/**
+ * §20 — how much of a REVIEW.md feedback capture parses (1 MiB of text, cut at a line end). The
+ * file is agent-written; parsing is synchronous, so a pathological file must not hold the
+ * event loop. A real review is a few KB.
+ */
+const FEEDBACK_REVIEW_PARSE_CAP = 1024 * 1024;
 
 /** The heading `renderUiCheckProtocol` emits — the R14 gate reads it back out of the rendered brief. */
 const LIVE_UI_CHECK_HEADING = '## LIVE UI CHECK';
@@ -351,8 +365,74 @@ export class PipelineService {
     return reaped;
   }
 
-  async transition(id: string, to: string): Promise<Session> {
-    return this.lock.withLock(id, () => this.transitionUnlocked(id, to));
+  /**
+   * `by: 'human'` marks a transition a person asked for through the API (`/transition`,
+   * `/approve-pr`) — the only kind that can reject an engine verdict (§20). The reconciliation
+   * tick never passes it, so a merged PR dismissing its review is never recorded as feedback.
+   */
+  async transition(id: string, to: string, opts: { by?: 'human' } = {}): Promise<Session> {
+    if (opts.by !== 'human' || this.deps.feedback === undefined) {
+      return this.lock.withLock(id, () => this.transitionUnlocked(id, to));
+    }
+    const { before, after } = await this.lock.withLock(id, async () => {
+      const before = await this.deps.store.load(id);
+      const after = await this.transitionUnlocked(id, to);
+      return { before, after };
+    });
+    await this.captureHumanTransition(before, to);
+    return after;
+  }
+
+  private async feedbackContext(session: Session, stages: readonly StageName[]): Promise<CaptureContext> {
+    const sessionDir = this.sessionDir(session.id);
+    const runs = await readRunRecords(this.deps.fs, sessionDir).catch(() => []);
+    return { session, sessionDir, at: this.now().toISOString(), producedBy: producedByFrom(runs, stages) };
+  }
+
+  /** §20 — at most FEEDBACK_REVIEW_PARSE_CAP of a REVIEW.md reaches the parser; a longer one is cut at a line end and logged. */
+  private capReviewForFeedback(id: string, text: string | null): string | null {
+    if (text === null || text.length <= FEEDBACK_REVIEW_PARSE_CAP) return text;
+    this.log(`feedback capture for ${id}: REVIEW.md is larger than 1 MB (${text.length} characters); only the first 1 MB is read`);
+    const lineEnd = text.lastIndexOf('\n', FEEDBACK_REVIEW_PARSE_CAP);
+    return text.slice(0, lineEnd > 0 ? lineEnd : FEEDBACK_REVIEW_PARSE_CAP);
+  }
+
+  /**
+   * §20 / S2-17 — every finding this review's REVIEW.md marks dismissed, recorded once (S2-27).
+   * Called where REVIEW.md changes hands: a conversation release, just before a review run
+   * rewrites it, just before a re-review archives it, and on a person's transition. Unlocked:
+   * it reads session-dir files and writes only feedback.jsonl. Never throws.
+   */
+  private async captureDismissals(session: Session, reviewText?: string | null): Promise<void> {
+    const feedback = this.deps.feedback;
+    if (feedback === undefined || session.mode !== 'review') return;
+    try {
+      const raw = reviewText !== undefined ? reviewText : await readNonEmpty(this.deps.fs, `${this.sessionDir(session.id)}/REVIEW.md`);
+      const text = this.capReviewForFeedback(session.id, raw);
+      if (text === null) return;
+      const ctx = await this.feedbackContext(session, ['review', 'rereview']);
+      for (const record of dismissalRecords(ctx, text)) await feedback.appendOnce(record);
+    } catch (err) {
+      this.log(`feedback capture for ${session.id} failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  /** §20 / S2-18 — a person's transition against an engine verdict. Never throws. */
+  private async captureHumanTransition(before: Session, to: string): Promise<void> {
+    const feedback = this.deps.feedback;
+    if (feedback === undefined) return;
+    try {
+      const dir = this.sessionDir(before.id);
+      const review = before.mode === 'review' ? this.capReviewForFeedback(before.id, await readNonEmpty(this.deps.fs, `${dir}/REVIEW.md`)) : null;
+      const plan = before.mode === 'investigation' ? await readNonEmpty(this.deps.fs, `${dir}/PLAN.md`) : null;
+      if (review !== null) await this.captureDismissals(before, review);
+      const ctx = await this.feedbackContext(before, before.mode === 'investigation' ? ['plan'] : ['review', 'rereview']);
+      for (const record of humanTransitionRecords(ctx, before.stageStatus, to, { review, plan })) {
+        await feedback.appendOnce(record);
+      }
+    } catch (err) {
+      this.log(`feedback capture for ${before.id} failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   private async patchLastRun(id: string, patch: Partial<LastRun>): Promise<Session> {
@@ -1137,6 +1217,7 @@ export class PipelineService {
     // 0c — before any environment, brief or agent.
     const pf = await this.preflight(id, session.lineage.ticket, opts, 'review');
     if (pf.blocked !== null) return pf.blocked;
+    await this.captureDismissals(session); // §20 — before the agent rewrites REVIEW.md
 
     const sessionDir = this.sessionDir(id);
     const prep = await this.prepareEnvironment(id, 'review', session);
@@ -1259,6 +1340,7 @@ export class PipelineService {
 
     const sessionDir = this.sessionDir(id);
     const existingReview = await readNonEmpty(this.deps.fs, `${sessionDir}/REVIEW.md`);
+    await this.captureDismissals(session, existingReview); // §20 — before it is archived
     // reviewVersion counts archived files, so only bump it (and only claim a
     // previous-review filename) when an archive was actually written — a
     // rereview off a failed run that never produced a REVIEW.md has nothing
@@ -1481,7 +1563,7 @@ export class PipelineService {
    * headless state (R110), which is idempotent too.
    */
   async releaseConversation(id: string): Promise<Session> {
-    return this.lock.withLock(id, async () => {
+    const released = await this.lock.withLock(id, async () => {
       const fresh = await this.deps.store.load(id);
       let result = fresh;
       if (fresh.agent != null && fresh.agent.humanTurn != null) {
@@ -1503,6 +1585,8 @@ export class PipelineService {
       }
       return result;
     });
+    await this.captureDismissals(released);
+    return released;
   }
 
   /** The resume contract: what a human needs to pick this conversation up by hand, and whether one already has it. */

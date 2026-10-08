@@ -48,6 +48,7 @@ import {
 } from '../attention/attention-service';
 import type { LocalAppRunner } from '../env/local-app-runner';
 import { ENGINE_BUILD_ID, ENGINE_BUILD_TIME, ENGINE_NAME, ENGINE_VERSION } from '../version';
+import { FeedbackLog } from '../feedback/feedback-log';
 
 export interface EngineAdapters {
   fs: SessionFileSystem;
@@ -286,6 +287,10 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
       })
     : null;
   // `ticketDetail` is built further down (it needs the Jira scanner); the arrow defers the read.
+  // §20 — ONE FeedbackLog per engine, shared by everything that captures. Guarded: a hand-built
+  // test config may carry no derived feedbackPath, and a FeedbackLog on an undefined path would
+  // write a file literally named "undefined".
+  const feedback = config.feedbackPath !== undefined ? new FeedbackLog(adapters.fs, config.feedbackPath) : undefined;
   const tickets: PipelineTickets = buildTicketPort(config.jira?.projectKeys ?? [], {
     detail: (key) => ticketDetail.detail(key),
   });
@@ -328,6 +333,7 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     },
     /** R91 — read-only PR detection for development sessions (`gh pr view` / `gh pr list`). */
     gh: adapters.gh,
+    ...(feedback !== undefined ? { feedback } : {}),
     // R18: the engine fetches the ticket text; the agent never sees a
     // credential, and the `## Ticket` block is composed in exactly one place.
     /**
