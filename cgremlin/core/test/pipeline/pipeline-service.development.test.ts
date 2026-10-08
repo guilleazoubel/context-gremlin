@@ -224,6 +224,24 @@ describe('R91 — a develop run records its draft PR', () => {
     expect(after.pr?.number).toBe(7);
   });
 
+  it('R91 — a develop run stopped by the user after opening its PR still adopts the PR', async () => {
+    const gh = new FakeGhRunner();
+    const h = createHarness({ gh });
+    const dev = await h.service.createDevelopmentSession(DEV_INPUT);
+    gh.queueResponse({ stdout: prView() });
+    const p = h.service.runDevelop(dev.id);
+    await flush();
+    await h.fs.writeFile(`${SESSIONS_DIR}/${dev.id}/PR_URL`, 'https://github.com/o/r/pull/7');
+    const handle = h.runner.lastHandle();
+    expect(await h.service.stop(dev.id)).toBe(true);
+    h.runner.emitExit(handle, { code: null, signal: 'SIGTERM' });
+    const after = await p;
+    expect(after.lastRun?.outcome).toBe('stopped');
+    expect(after.stageStatus).toBe('pr_opened');
+    expect(after.pr).toMatchObject({ repo: 'o/r', number: 7, url: 'https://github.com/o/r/pull/7' });
+    expect(await h.store.load(dev.id)).toEqual(after);
+  });
+
   it('regression pin: without gh wired the session stays active with no PR (today)', async () => {
     const h = createHarness();
     const dev = await h.service.createDevelopmentSession(DEV_INPUT);

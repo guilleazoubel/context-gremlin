@@ -70,9 +70,23 @@ describe('feedback capture rules (§20)', () => {
     const [record] = dismissalRecords(ctx(review), nasty);
     expect(record.text).not.toContain('abcdefghijklmnop');
     expect(record.text).toContain('<redacted>');
-    expect(record.text).not.toContain('\n');
+    expect(record.text).not.toMatch(/[\r\t\u2028\n]/);
     expect(record.text.length).toBeLessThanOrEqual(301);
     expect(String(record.detail.title)).not.toContain('abcdefghijklmnop');
+  });
+
+  it('feedback text has no CR, tab, U+2028 or newline mid-line, and is single-spaced', () => {
+    const nasty = DISMISS_F2(
+      REVIEW_CONTRACT_EXAMPLE.replace('### 2. <plain-English title>', '### 2. first\rsecond\tthird\u2028fourth  fifth').replace(
+        '- **Where:** `ui/list.tsx:40`',
+        '- **Where:** ui/list.tsx:40\rline\tcol\u2028end',
+      ),
+    );
+    const [record] = dismissalRecords(ctx(review), nasty);
+    expect(record.text).toContain('first second third fourth fifth');
+    expect(record.text).toContain('ui/list.tsx:40 line col end');
+    expect(record.text).not.toMatch(/[\r\t\u2028\n]/);
+    expect(record.text).not.toMatch(/ {2}/);
   });
 
   it('detail.severity and detail.where are redacted, one line and capped too', () => {
