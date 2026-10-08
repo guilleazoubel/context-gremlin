@@ -284,7 +284,9 @@ export class StageRunner {
         session = {
           ...session,
           lastRun: running,
-          agent: { runner: this.deps.runnerKind, resumeId: seedResumeId, humanTurn: priorAgent?.humanTurn ?? null },
+          // Persists the CARRIED id, not the seed: a fresh run hands the runner no id, but a
+          // startup failure or a crash mid-run must not erase the last conversation (S2-3).
+          agent: { runner: this.deps.runnerKind, resumeId: carriedResumeId, humanTurn: priorAgent?.humanTurn ?? null },
         };
         await this.deps.store.save(session);
         this.deps.events.emit('run.started', { session, stage });

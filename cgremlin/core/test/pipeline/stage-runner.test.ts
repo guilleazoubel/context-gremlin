@@ -490,8 +490,44 @@ describe('R90 — fresh runs and the per-round archive', () => {
     await flush();
     expect(runner.getContext(runner.lastHandle()).resumeId).toBe('prev');
     expect(await fs.exists('/sessions/inv-1/BRIEF-v1.md')).toBe(false);
+    expect(await fs.exists('/sessions/inv-1/FEEDBACK-v1.md')).toBe(false);
     expect(await fs.readFile('/sessions/inv-1/BRIEF.md')).toBe('new brief');
     expect(await fs.readFile('/sessions/inv-1/FEEDBACK.md')).toBe('old feedback');
+    runner.emitExit(runner.lastHandle(), { code: 0, signal: null });
+    await p;
+  });
+
+  it('a fresh run whose runner.start throws still leaves the previous conversation id on the session', async () => {
+    const { store, runner, sr } = await setup(inv({ resumeId: 'prev' }));
+    runner.start = async () => { throw new Error('spawn ENOENT'); };
+    await expect(
+      sr.run({ sessionId: 'inv-1', stage: 'plan', brief: 'b', prompt: 'go', fresh: true }),
+    ).rejects.toThrow('spawn ENOENT');
+    const s = await store.load('inv-1');
+    expect(s.lastRun).toMatchObject({ outcome: 'failed' });
+    expect(s.agent?.resumeId).toBe('prev');
+  });
+
+  it('a fresh run whose sendPrompt throws still leaves the previous conversation id on the session', async () => {
+    const { store, runner, sr } = await setup(inv({ resumeId: 'prev' }));
+    runner.sendPrompt = async () => { throw new Error('pipe closed'); };
+    await expect(
+      sr.run({ sessionId: 'inv-1', stage: 'plan', brief: 'b', prompt: 'go', fresh: true }),
+    ).rejects.toThrow('pipe closed');
+    expect((await store.load('inv-1')).agent?.resumeId).toBe('prev');
+  });
+
+  it('a fresh run in flight (what a crash would leave) persists the carried id while the runner gets none', async () => {
+    const { store, runner, sr, events } = await setup(inv({ resumeId: 'prev' }));
+    let announced: string | null | undefined;
+    events.on('run.started', (e) => { announced = e.session.agent?.resumeId; });
+    const p = sr.run({ sessionId: 'inv-1', stage: 'plan', brief: 'b', prompt: 'go', fresh: true });
+    await flush();
+    expect(runner.getContext(runner.lastHandle()).resumeId).toBeUndefined();
+    expect(announced).toBe('prev');
+    const mid = await store.load('inv-1');
+    expect(mid.lastRun).toMatchObject({ outcome: 'running' });
+    expect(mid.agent?.resumeId).toBe('prev');
     runner.emitExit(runner.lastHandle(), { code: 0, signal: null });
     await p;
   });
