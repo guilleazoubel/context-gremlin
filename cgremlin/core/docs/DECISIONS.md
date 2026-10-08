@@ -831,3 +831,170 @@ extension does not know.
   byte-identical, so no evals were required.
 - **Verified from a grace-frontend session:** `cgremlin:qa-verify` and the 12 agents resolve, and
   the repo was left untouched.
+
+## 2026-10-08 — Step 2 (Foundations: fresh runs, PR tracking, per-stage routing, run records, feedback.jsonl; R90/R91/R116/R118f/§20)
+
+- **Fresh runs (R90).** `StageRunInput.fresh` starts a run with no `--resume`, whatever the
+  session's agent record holds; a fresh run that reports no conversation id keeps the previous
+  one so Take over still works (a fresh run that fails to start or crashes does not erase the
+  carried id either, S2-3). Before a fresh round, `BRIEF.md` is copied and `FEEDBACK.md`
+  moved to `<STEM>-v<N>.md` under one round number; `StageRunInput.feedback` writes the round's
+  `FEEDBACK.md`. No existing stage passes `fresh` yet: phase rounds (step 5) are the first caller.
+- **PR tracking (R91).** After every develop run that reached the agent (any outcome), and on
+  every reconciliation tick for an `active` development session with no PR and no live run, the
+  engine looks for the session's OPEN PR with read-only `gh pr view` / `gh pr list`. The agent's
+  `PR_URL` is a hint that must name this repo and this branch, be OPEN and be authored by `me`
+  (`core.json`), else `gh pr list --head <branch> --state open` decides on a single match by `me`.
+  Adoption is one locked save: `session.pr` + `active → pr_opened`. A non-draft PR is adopted
+  and flagged (R112, S2-14). Development sessions follow their own PR: merged → `merged`,
+  closed → `abandoned`. `runDevelop` runs from `active` and `pr_opened`.
+  - **The one addition to the sessions JSON (S2-38, amends S2-14 and S2-20).** The "opened for
+    review, needed approval" flag is the new optional `pr.openedForReview?: boolean`
+    (`schema/stage.ts:74`), set only on a non-draft adoption, in the same locked save as the
+    adoption (`pipeline-service.ts:962`); the `lastRun.error` note is still appended when a
+    `lastRun` exists after a run. It appears in the sessions API JSON, which stretches S2-20
+    ("nothing new over the API"); the alternative was an agent-writable file outside the save.
+    No UI reads it in step 2. **Rollback:** remove the field; the flag falls back to a log line.
+  - A fix round from `pr_opened` reuses today's develop brief, which still says
+    `gh pr create --draft` (`prompts.ts:643`), until step 5 adds a fix-round brief.
+  - A self-review of a dev PR now really moves the dev session to `superseded`
+    (`linkPrToSource`), which `runDevelop` does not run from (kept by ruling; open question for
+    the user).
+  - The tick costs one `gh pr list` per active dev session without a PR, per poll. A miss is
+    logged only when its reason changes (`lastPrMiss`, `pipeline-service.ts:227`), and the
+    memory resets on restart.
+- **Routing (R116).** `routing.<stage> = { runner, model?, effort?, escalate?, secondOpinion? }`,
+  keyed by StageName; `escalate` targets may name an `advisor`. `core.json` keeps it raw and the
+  engine parses it at build time: an unknown stage, an invalid entry, or **codex as a primary
+  runner (refused for every stage in step 2)** is logged once per boot as
+  `config: routing.<stage>: …` (a `routing` that is not an object: `config: routing: …`) and that
+  stage uses the legacy `runner`/`runnerOptions`; the engine still boots. Codex is accepted
+  (inert) inside `escalate`/`secondOpinion`; the legacy `runner: 'codex'` is unchanged. A route's
+  missing model inherits `runnerOptions.model` only from the same family
+  (`serve.ts:467-482`, pinned behaviourally by `real-adapters.test.ts`, "engine-wide runner
+  claude-code: Claude gets --model, Codex gets no -m" and its codex twin). One runner instance per
+  kind; model and effort travel per run. Claude gets `--effort`, Codex
+  `-c model_reasoning_effort="…"`, and every Claude spawn drops `CLAUDE_CODE_EFFORT_LEVEL`
+  (engine runs only, S2-8).
+  - **codex + effort `max` is refused in the stage runner** with a plain `Error` (recorded in
+    `lastRun`; no agent starts), beyond the brief: the schema already refuses it for a route,
+    and this keeps a later escalation route from sending Codex an effort it rejects.
+    **Cost if wrong:** one extra guard to delete.
+- **Run records (R116/R118f).** `<session>/runs.jsonl`, one line per run that reached
+  `run.started`: stage, runner, model, effort, route source, fresh/resumed, times, raw tokens
+  (`tokensSource` `result`, or `assistant` per-message usage when the run never reached its
+  result), `costUsd` and per-model `modelUsage` from Claude's result (latest result wins; null
+  for Codex), limit events, outcome, `stopReason`, error and `interrupted`. A run the engine died
+  under is recorded `interrupted` when it is healed, from the `.run-facts.json` the stage runner
+  wrote at `run.started` (it carries a random run id; heal matches stage + `startedAt`, so a lost
+  run's late exit cannot take the next run's facts). A record that cannot be written is a log
+  line, never a failed run. Free text in a record is capped at 512 characters.
+  - **Rate limits (S2-36, amends S2-11).** A run that hit a `rejected` rate limit is recorded
+    `stopped` / `stopReason: 'limit'` (its `lastRun` still says `failed` until step 7). But a
+    Claude `rate_limit_event` with status `rejected` that is **covered by extra usage**
+    (`overageStatus` `allowed`/`allowed_warning`, or `isUsingOverage`) is recorded as a
+    `warning`, so a run that finished is never recorded `stopped`/`limit` (step 7's boot-resume
+    would act on that). **Source:** the installed CLI 2.1.294 binary (`isUsingOverage` is
+    `status === 'rejected'` with `overageStatus` in allowed/allowed_warning; `retry-after` only when
+    rejected with no overage; the schema text says "nothing will be cut off"). **No real captured
+    event exists: the `OVERAGE_ALLOWED` test fixture is synthetic.** Code comments cite it as
+    "I-1". **Cost if wrong:** a covered limit shows as a warning only (type and reset time kept).
+  - **`limitEvents` collapse.** The CLI emits one event per 1% move, so the record keeps one
+    event per (kind, limitType), the latest. **Cost if wrong:** the record loses repeated
+    warning history.
+  - **Written inside the lock (S2-37).** The record is written INSIDE the session lock, right
+    after the final `lastRun` save, not "after the lock release" as the brief said. The brief's
+    placement left a gap in which a queued claim got `RunInProgressError` (two items-routes
+    claim tests and the e2e event-order pin failed); no test expectation was changed.
+    **Cost if wrong:** a record write stalls the lock for as long as the existing save does.
+  - **These files are telemetry, not evidence:** they live in the session dir, which the agent
+    can write (`--add-dir`, `stage-runner.ts:439`). Nothing may gate on them unverified.
+- **Feedback capture (§20).** `<stateDir>/feedback.jsonl` (`feedbackPath`, 0600) records
+  `finding_dismissed` (a REVIEW.md finding whose Status says dismissed; id = session + anchor +
+  a hash of title and location, so a fresh review restarting at `f1` cannot hide a different
+  finding), `verdict_rejected` (approving a PR whose review said 🔄 Request changes; abandoning
+  an investigation at `plan_ready`) and `review_dismissed` (dismissing a review that has a
+  REVIEW.md). Only the `/transition` and `/approve-pr` routes mark transitions `by: 'human'`;
+  reconciliation never does. Text is one line, redacted, ≤ 300 chars. One `FeedbackLog` per
+  engine; every capture is wrapped so a failure is a log line (S2-19).
+  - **`finding_dismissed` is a noisy proxy for the user's decision.** Record source `auto`
+    means "captured automatically" (spec §20), not "written by the agent". A `dismissed` Status
+    an agent sets on its own finding is recorded too. So S2-18 ("only routes pass `by: 'human'`")
+    holds for `verdict_rejected` and `review_dismissed` only. Step 11 must treat dismissal
+    records as a noisy signal. **Cost if wrong:** a noisy training signal.
+  - **What fires today:** the extension calls `/approve-pr` and `/conversation/release`; dismissals
+    are also captured before a review run rewrites REVIEW.md and before a re-review archives it.
+    `review_dismissed` and the plan-abandon `verdict_rejected` fire only from raw API calls:
+    the extension never calls `/transition` (kept by ruling, documented).
+  - REVIEW.md is parsed up to 1 MiB, cut at a line end, after a whole-file read
+    (`pipeline-service.ts:185`; `SessionFileSystem` has no size API).
+- **JSONL files** are rewritten tmp-then-rename with the engine as the only writer; readers skip
+  torn and foreign lines. A future writer outside the engine (step 11's UI) must go through the
+  engine API.
+- **Not in this step:** no UI or API exposure of runs, feedback or round archives (the one
+  exception is `pr.openedForReview`, above); no executed escalation, advisor or second opinion;
+  QA verdicts and sign-offs are not captured. Decisions D1-D3 (codex not primary, cost recorded,
+  bad routing falls back) were relayed for the user's confirmation on 2026-10-08.
+
+### Step 2 follow-ups (deferred; none blocks the release)
+
+**Must be resolved before any step allows a non-Claude primary runner (D1 makes these unreachable today):**
+
+1. **Latent `runnerKind` mismatch.** The build-engine routes resolve from `config.runner`
+   (`build-engine.ts:255`), while the stage runner falls back on `adapters.runnerKind`
+   (`stage-runner.ts:318,322`; `build-engine.ts:267,311`) and nothing asserts they agree.
+   `PipelineConfig.runnerKind` (`pipeline-service.ts:81,1517`) is also the engine-wide kind for a
+   human claim on a never-run session, which would record the wrong runner once another primary
+   kind is allowed. In the same group: `RunnerUnavailableError` (`stage-runner.ts:51`) and the
+   codex+max plain `Error` are not in `mapErrorToHttp` (`api/http-errors.ts`), so they map to 500,
+   not 409. **Cost if ignored:** wrong `claude --resume`/`codex resume` command or a 500 the day a
+   Codex primary is allowed.
+
+**Pre-existing paths (out of step 2's diff):**
+
+2. A lost run's late exit overwrites a newer run's `running` `lastRun` (`stage-runner.ts:508`, no
+   `startedAt` guard) and its `finally` deletes the newer run's active entry (`:569`; ledger numbers
+   :504/:564 before later commits), so the newer run looks not live. **Cost:** a live run
+   reported as crashed/idle after an overlapping lost run.
+3. `api/server.ts:201-210` restarts a crashed `reviewing` session with `transition(failed)` +
+   `runReview` instead of `reconcileCrashedRun`, so the new run's facts overwrite the crashed
+   run's `.run-facts.json` and no `interrupted` record is written for that path. **Cost:** one
+   missing `interrupted` line in `runs.jsonl` per such restart.
+4. `gh` has no timeout: `GhRunner.run(args)` has no option and `NodeGhRunner` spawns without one
+   (`gh/node-gh-runner.ts`); fixing it changes the shared interface, so it was deferred. **Cost:**
+   a hung `gh` holds up a develop run's teardown and `promote()` until it is killed.
+5. Terminal machine transitions of a review (for example PR merged → tick → dismissed) can lose
+   dismissals marked in a take-over chat if `/conversation/release` is never called afterwards
+   (S2-17 says "captured late, never lost"). Fix: `captureDismissals` on terminal non-human review
+   transitions. **Cost:** a missing `finding_dismissed` record.
+6. The VS Code Take over terminal (`vscode/src/model/chat-command.ts:33`) runs `claude --resume`
+   with the inherited environment, so `CLAUDE_CODE_EFFORT_LEVEL` still reaches interactive chats;
+   S2-8 covers engine runs only. **Cost:** an interactive chat may run at the user's shell effort.
+7. **S2-5 behavioural pin: done in Task 7** (`real-adapters.test.ts`, the two "engine-wide runner
+   …" tests, which fail when `runnerOptions.model` is passed to both runners).
+
+**Minor, cheap to fix when next in the file:**
+
+- `round-archive.ts:15-30`: the archive is not atomic (a crash between write and the `FEEDBACK.md`
+  removal leaves duplicate archive files; inert, no reader yet). A runner switch plus a startup
+  failure loses the old runner's resume id (S2-3 covers the same runner only), and a crash after a
+  fresh run's agent got its own id leaves the previous round's id for Take over (the id is read only
+  at exit). Pre-start failures record the previous run's `startedAt` (same as `WorktreeGoneError`).
+- Limit events are not distinguishable between a covered-limit warning and a plain
+  `allowed_warning`; with more than one prompt per handle, tokens are summed while cost and
+  `modelUsage` are latest-wins; Codex resume usage (cumulative vs per-turn) is unverified; the
+  `\b429\b` / first-line regexes can false-positive (accepted, S2-11). No test covers limit-event
+  field caps, forged oversized `runs.jsonl` lines, or a size cap on reading `runs.jsonl` /
+  `.run-facts.json` under the lock. **Cost:** a forged or huge file in the agent-writable session
+  dir can slow a locked save.
+- PR tracking: a stale `PR_URL` costs two `gh` calls per tick; a same-branch fork PR by `me` is
+  adopted (S2-31 excludes forks only by author); `lastPrMiss` is not pruned when a session leaves
+  `active` (bounded by session count); a tick can report an adoption another path made;
+  `redactSecrets` misses bare `ghp_` tokens (pre-existing).
+- Feedback: `appendOnce` reads `feedback.jsonl` twice per record (`feedback-log.ts:62`; cost grows
+  with findings × file size, and the file is never trimmed); the start-anchored Status match no
+  longer recognises free-form hand edits such as `~~open~~ 🔇 dismissed`.
+- `build-engine.ts:289-293`: the FeedbackLog comment sits above the wrong `const`.
+- Tests: the routing test for a missing runner kind does not assert guardrails/BRIEF are
+  unwritten; the `superseded` refusal pin fails only through the 5 s timeout; the "reconciliation
+  dismissal records nothing" test passes before the change (an unlabelled regression pin).

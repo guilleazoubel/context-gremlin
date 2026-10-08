@@ -50,7 +50,12 @@ export type StageRoute = z.infer<typeof StageRouteSchema>;
 
 export interface ParsedRouting {
   routes: Partial<Record<StageName, StageRoute>>;
-  /** One line per ignored entry, naming it: `routing.<key>: <why>; using the legacy runner`. */
+  /**
+   * One line per ignored entry, naming it: `routing.<key>: <why>; using the legacy runner` for an
+   * invalid entry or a codex primary, `routing.<key>: unknown stage (…); ignored` for an unknown
+   * stage, and a single `routing: expected an object …` line when the whole key is not an object.
+   * The engine logs each as `config: <line>` once per boot.
+   */
   problems: string[];
 }
 
