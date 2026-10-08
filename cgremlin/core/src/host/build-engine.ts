@@ -5,6 +5,7 @@ import { GhCommandError, type GhRunner } from '../gh/gh-runner';
 import { summarizeGhAuthFailure } from '../pipeline/preflight';
 import type { AgentRunner } from '../agent/agent-runner';
 import type { CoreConfig } from '../config/core-config';
+import { parseRouting, resolveStageRoute, type RunnerKind } from '../config/routing';
 import { SessionStore } from '../engine/session-store';
 import { WorkspaceManager } from '../workspace/workspace-manager';
 import { EngineEvents } from '../engine/events';
@@ -53,7 +54,9 @@ export interface EngineAdapters {
   git: GitRunner;
   gh: GhRunner;
   runner: AgentRunner;
-  runnerKind: 'claude-code' | 'codex';
+  /** R116 — one runner per kind for routed stages; absent means every stage uses `runner`. */
+  runners?: Partial<Record<RunnerKind, AgentRunner>>;
+  runnerKind: RunnerKind;
   /** Absent for a wiring with no local app: `Engine.environment` is then null and every stage behaves exactly as it did pre-Phase-5. */
   localApp?: LocalAppRunner;
   clock?: Clock;
@@ -127,6 +130,8 @@ export interface BuildEngineOptions {
    * depends on the ticket text can be asserted without standing up a Jira.
    */
   ticketDetail?: { detail(key: string): Promise<TicketDetailResult> };
+  /** One line per degraded start-up condition (a `routing` entry that was ignored, D3). Defaults to `console.warn`, which the engine log captures. */
+  warn?: (line: string) => void;
 }
 
 /** The artifacts an earlier session on this ticket may have left behind, in the order a reader wants them. */
@@ -242,6 +247,12 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
   const inventoryPath = config.inventoryPath!;
   const attentionAcksPath = config.attentionAcksPath!;
 
+  // D3 / S2-23 — `routing` is parsed here, once per boot: a bad entry is logged by name and
+  // that stage keeps the legacy runner; it never stops the engine.
+  const routing = parseRouting(config.routing);
+  for (const problem of routing.problems) (opts.warn ?? ((line: string) => console.warn(line)))(`config: ${problem}`);
+  const routingView = { runner: config.runner, runnerOptions: config.runnerOptions, routing: routing.routes };
+
   const store = new SessionStore(adapters.fs, sessionsDir);
   const workspace = new WorkspaceManager(adapters.git, adapters.fs, mirrorsDir);
   const events = new EngineEvents();
@@ -253,6 +264,8 @@ export function buildEngine(config: CoreConfig, adapters: EngineAdapters, opts: 
     events,
     sessionsDir,
     runnerKind: adapters.runnerKind,
+    runners: adapters.runners,
+    routeFor: (stage) => resolveStageRoute(routingView, stage),
     now: adapters.now,
     lock,
   });

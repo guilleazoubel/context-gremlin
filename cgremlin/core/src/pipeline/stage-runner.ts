@@ -8,6 +8,7 @@ import { KeyedLock } from '../api/keyed-lock';
 import { refreshWorkspaceGuardrails } from '../workspace/workspace-manager';
 import { redactSecrets } from '../config/core-config';
 import { archiveRound } from './round-archive';
+import type { ResolvedRoute, RunnerKind } from '../config/routing';
 
 export class RunInProgressError extends Error {
   constructor(sessionId: string) {
@@ -44,14 +45,29 @@ export class WorktreeGoneError extends Error {
     this.name = 'WorktreeGoneError';
   }
 }
+/** R116 — a stage routed to a runner kind this engine was not given. Fails the stage before any agent starts. */
+export class RunnerUnavailableError extends Error {
+  constructor(stage: StageName, kind: RunnerKind) {
+    super(`Stage '${stage}' is routed to runner '${kind}', but no ${kind} runner is wired in this engine`);
+    this.name = 'RunnerUnavailableError';
+  }
+}
 
 export interface StageRunnerDeps {
   runner: AgentRunner;
+  /**
+   * R116 — one runner per kind, for stages routed away from `runnerKind`. `runner` is used for
+   * `runnerKind` when this has no entry for it. A route naming a kind found in neither fails
+   * that stage with RunnerUnavailableError.
+   */
+  runners?: Partial<Record<RunnerKind, AgentRunner>>;
+  /** R116 — the route for a stage. Absent: every stage is `{ runner: runnerKind, model: null, effort: null }` (today). */
+  routeFor?: (stage: StageName) => ResolvedRoute;
   store: SessionStore;
   fs: SessionFileSystem;
   events: EngineEvents;
   sessionsDir: string;
-  runnerKind: 'claude-code' | 'codex';
+  runnerKind: RunnerKind;
   now?: () => Date;
   /** Shared with PipelineService (and the API server) — see the locking invariant documented atop pipeline-service.ts. Required (not optional): a wiring that forgets to share it is a bug, not a degraded-but-working mode. */
   lock: KeyedLock;
@@ -102,7 +118,8 @@ function failureReasonFrom(tail: string): string | null {
 
 export interface StageRunResult { exit: AgentExitResult; outcome: 'succeeded' | 'failed' | 'stopped'; session: Session }
 
-interface ActiveRun { handle: AgentHandle | null; stopRequested: boolean }
+/** `runner` is the runner THIS run was routed to: stop() and the pid probe must ask it, not the default. */
+interface ActiveRun { handle: AgentHandle | null; stopRequested: boolean; runner: AgentRunner }
 
 type PidLiveness = 'alive' | 'gone' | 'foreign';
 
@@ -189,7 +206,7 @@ export class StageRunner {
    */
   private isEntryAlive(run: ActiveRun): boolean {
     if (run.handle === null) return true;
-    const pid = this.deps.runner.getPid?.(run.handle);
+    const pid = run.runner.getPid?.(run.handle);
     if (pid === undefined) return true;
     return pidLiveness(pid) !== 'gone';
   }
@@ -198,8 +215,19 @@ export class StageRunner {
     const run = this.active.get(sessionId);
     if (!run) return false;
     run.stopRequested = true;
-    if (run.handle) await this.deps.runner.stop(run.handle);
+    if (run.handle) await run.runner.stop(run.handle);
     return true;
+  }
+
+  /** R116 — the route for `stage`; without `routeFor`, today's single engine-wide runner. */
+  private routeOf(stage: StageName): ResolvedRoute {
+    return this.deps.routeFor?.(stage) ?? { stage, runner: this.deps.runnerKind, model: null, effort: null, source: 'legacy' };
+  }
+
+  private runnerOf(stage: StageName, kind: RunnerKind): AgentRunner {
+    const runner = this.deps.runners?.[kind] ?? (kind === this.deps.runnerKind ? this.deps.runner : undefined);
+    if (runner === undefined) throw new RunnerUnavailableError(stage, kind);
+    return runner;
   }
 
   async run(input: StageRunInput): Promise<StageRunResult> {
@@ -209,7 +237,7 @@ export class StageRunner {
     // immediately after run() — even before the session has been loaded —
     // is observed once the run actually reaches the point of starting the
     // agent (see the stopRequested check below).
-    const active: ActiveRun = { handle: null, stopRequested: false };
+    const active: ActiveRun = { handle: null, stopRequested: false, runner: this.deps.runner };
     this.active.set(sessionId, active);
     // Set the moment `run.started` fires — the caller (an API handler, or
     // PipelineService's runStageLocked) holds the per-session lock up to
@@ -226,6 +254,17 @@ export class StageRunner {
 
       const sessionDir = `${this.deps.sessionsDir}/${sessionId}`;
       try {
+        // R116 — the stage's route picks the runner, model and effort. Resolved first, inside this
+        // try, so a route naming a runner this engine lacks fails the stage (recorded in lastRun)
+        // before the worktree is touched or any agent starts.
+        const route = this.routeOf(stage);
+        const runner = this.runnerOf(stage, route.runner);
+        // S2-6 — config already refuses this pairing; an injected or future (escalation) route
+        // must not hand codex an effort it does not have either.
+        if (route.runner === 'codex' && route.effort === 'max') {
+          throw new Error(`Stage '${stage}' is routed to codex with effort 'max', but codex has no 'max' reasoning effort`);
+        }
+        active.runner = runner;
         // Every stage run in the engine funnels through here — a first
         // stage, a chained one, a re-run, a stage on a session resumed days
         // later — and this is the last point before the agent is spawned at
@@ -272,7 +311,7 @@ export class StageRunner {
         // versa) is meaningless to the new runner, so never seed it; start a
         // fresh conversation instead and note the switch once the run
         // succeeds (a failed/stopped run keeps its own error text).
-        const runnerMismatch = priorAgent !== null && priorAgent.runner !== this.deps.runnerKind;
+        const runnerMismatch = priorAgent !== null && priorAgent.runner !== route.runner;
         // The conversation this session would continue: what a non-fresh run resumes, and what a
         // fresh run still records if its own agent reported no id (R90 — Take over must still
         // find the last conversation).
@@ -286,7 +325,7 @@ export class StageRunner {
           lastRun: running,
           // Persists the CARRIED id, not the seed: a fresh run hands the runner no id, but a
           // startup failure or a crash mid-run must not erase the last conversation (S2-3).
-          agent: { runner: this.deps.runnerKind, resumeId: carriedResumeId, humanTurn: priorAgent?.humanTurn ?? null },
+          agent: { runner: route.runner, resumeId: carriedResumeId, humanTurn: priorAgent?.humanTurn ?? null },
         };
         await this.deps.store.save(session);
         this.deps.events.emit('run.started', { session, stage });
@@ -296,28 +335,31 @@ export class StageRunner {
         let outputTail = '';
         const exitPromise = new Promise<AgentExitResult>((resolve) => {
           void (async () => {
-            const handle = await this.deps.runner.start({
+            const handle = await runner.start({
               sessionId,
               workingDirectory: worktreePath,
               additionalDirs: [sessionDir],
               resumeId: seedResumeId ?? undefined,
+              // R116 — only what the route names; absent keeps the runner's own default.
+              ...(route.model !== null ? { model: route.model } : {}),
+              ...(route.effort !== null ? { effort: route.effort } : {}),
             });
             active.handle = handle;
-            this.deps.runner.onOutput(handle, (chunk) => {
+            runner.onOutput(handle, (chunk) => {
               outputTail = (outputTail + chunk.data).slice(-OUTPUT_TAIL_CAP);
               this.deps.events.emit('run.output', { sessionId, stage, chunk });
             });
-            this.deps.runner.onExit(handle, resolve);
+            runner.onExit(handle, resolve);
             if (active.stopRequested) {
               // A stop() arrived before the agent actually started (e.g.
               // during runner.start()'s own await). Never call sendPrompt in
               // that case: for ClaudeCodeRunner that would spawn a real,
               // orphaned process nothing would ever track or reap.
-              await this.deps.runner.stop(handle);
+              await runner.stop(handle);
               resolve({ code: null, signal: null });
               return;
             }
-            await this.deps.runner.sendPrompt(handle, input.prompt);
+            await runner.sendPrompt(handle, input.prompt);
           })().catch((err) => { startupError = err; resolve({ code: null, signal: null }); });
         });
         const exit = await exitPromise;
@@ -339,9 +381,9 @@ export class StageRunner {
           : outcome === 'failed' ? (said === null ? howItDied : `${howItDied}: ${said}`)
           : null;
         if (outcome === 'succeeded' && runnerMismatch) {
-          error = `runner changed from ${priorAgent!.runner} to ${this.deps.runnerKind}; started a fresh conversation`;
+          error = `runner changed from ${priorAgent!.runner} to ${route.runner}; started a fresh conversation`;
         }
-        const resumeId = (active.handle && this.deps.runner.getResumeId?.(active.handle)) ?? carriedResumeId;
+        const resumeId = (active.handle && runner.getResumeId?.(active.handle)) ?? carriedResumeId;
         const finishedLastRun: LastRun = {
           ...running,
           finishedAt: this.now().toISOString(),
@@ -362,7 +404,7 @@ export class StageRunner {
             lastRun: finishedLastRun,
             // From `fresh`, not from the pre-run snapshot: a human may have
             // claimed (or released) the conversation while the agent ran.
-            agent: { runner: this.deps.runnerKind, resumeId, humanTurn: fresh.agent?.humanTurn ?? null },
+            agent: { runner: route.runner, resumeId, humanTurn: fresh.agent?.humanTurn ?? null },
           };
           await this.deps.store.save(merged);
           return merged;
