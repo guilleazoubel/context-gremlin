@@ -7,6 +7,7 @@ import type { LastRun, StageName } from '../schema/stage';
 import { KeyedLock } from '../api/keyed-lock';
 import { refreshWorkspaceGuardrails } from '../workspace/workspace-manager';
 import { redactSecrets } from '../config/core-config';
+import { archiveRound } from './round-archive';
 
 export class RunInProgressError extends Error {
   constructor(sessionId: string) {
@@ -55,7 +56,20 @@ export interface StageRunnerDeps {
   /** Shared with PipelineService (and the API server) — see the locking invariant documented atop pipeline-service.ts. Required (not optional): a wiring that forgets to share it is a bug, not a degraded-but-working mode. */
   lock: KeyedLock;
 }
-export interface StageRunInput { sessionId: string; stage: StageName; brief: string | null; prompt: string }
+export interface StageRunInput {
+  sessionId: string;
+  stage: StageName;
+  brief: string | null;
+  prompt: string;
+  /**
+   * R90 — fresh means fresh: no `--resume`, whatever the session's agent record holds, and the
+   * previous round's BRIEF.md/FEEDBACK.md are archived first (src/pipeline/round-archive.ts).
+   * Absent/false is today's behaviour: the session's own conversation is resumed.
+   */
+  fresh?: boolean;
+  /** R90 — this round's FEEDBACK.md, written beside BRIEF.md. Null/absent writes none. */
+  feedback?: string | null;
+}
 /**
  * Defect 2 — the engine captured the reason a run died and threw it away.
  *
@@ -244,7 +258,10 @@ export class StageRunner {
             : { repoSlug: session.pr.repo, prNumber: session.pr.number },
         );
         await this.deps.fs.mkdir(sessionDir, { recursive: true });
+        // R90 — a fresh round first moves the previous round's hand-off aside.
+        if (input.fresh === true) await archiveRound(this.deps.fs, sessionDir);
         if (input.brief !== null) await this.deps.fs.writeFile(`${sessionDir}/BRIEF.md`, input.brief);
+        if (input.feedback != null) await this.deps.fs.writeFile(`${sessionDir}/FEEDBACK.md`, input.feedback);
         await this.deps.fs.writeFile(`${sessionDir}/AGENT_STATE`, 'working');
 
         const startedAt = this.now().toISOString();
@@ -256,7 +273,11 @@ export class StageRunner {
         // fresh conversation instead and note the switch once the run
         // succeeds (a failed/stopped run keeps its own error text).
         const runnerMismatch = priorAgent !== null && priorAgent.runner !== this.deps.runnerKind;
-        const seedResumeId = runnerMismatch ? null : (priorAgent?.resumeId ?? null);
+        // The conversation this session would continue: what a non-fresh run resumes, and what a
+        // fresh run still records if its own agent reported no id (R90 — Take over must still
+        // find the last conversation).
+        const carriedResumeId = runnerMismatch ? null : (priorAgent?.resumeId ?? null);
+        const seedResumeId = input.fresh === true ? null : carriedResumeId;
         // `humanTurn` is carried forward, never re-derived: this rebuild
         // would otherwise silently drop a human's claim on the conversation
         // (R20/MG-A7). Same at the post-exit merge below.
@@ -318,7 +339,7 @@ export class StageRunner {
         if (outcome === 'succeeded' && runnerMismatch) {
           error = `runner changed from ${priorAgent!.runner} to ${this.deps.runnerKind}; started a fresh conversation`;
         }
-        const resumeId = (active.handle && this.deps.runner.getResumeId?.(active.handle)) ?? seedResumeId;
+        const resumeId = (active.handle && this.deps.runner.getResumeId?.(active.handle)) ?? carriedResumeId;
         const finishedLastRun: LastRun = {
           ...running,
           finishedAt: this.now().toISOString(),

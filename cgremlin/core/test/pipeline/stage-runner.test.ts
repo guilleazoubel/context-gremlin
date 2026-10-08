@@ -455,3 +455,102 @@ describe('MG-A7 human-turn-survives-a-run', () => {
     });
   });
 });
+
+describe('R90 — fresh runs and the per-round archive', () => {
+  async function seedRound(fs: InMemoryFileSystem, files: Record<string, string>): Promise<void> {
+    await fs.mkdir('/sessions/inv-1', { recursive: true });
+    for (const [name, text] of Object.entries(files)) await fs.writeFile(`/sessions/inv-1/${name}`, text);
+  }
+
+  it('a fresh run never passes the session’s resume id, and records the new conversation', async () => {
+    const { runner, sr } = await setup(inv({ resumeId: 'prev' }));
+    const p = sr.run({ sessionId: 'inv-1', stage: 'plan', brief: '# b', prompt: 'go', fresh: true });
+    await flush();
+    const h = runner.lastHandle();
+    expect(runner.getContext(h).resumeId).toBeUndefined();
+    runner.setResumeId(h, 'round-2');
+    runner.emitExit(h, { code: 0, signal: null });
+    const { session } = await p;
+    expect(session.agent).toEqual({ runner: 'claude-code', resumeId: 'round-2', humanTurn: null });
+  });
+
+  it('a fresh run whose agent reported no conversation id keeps the previous one, so Take over can still resume', async () => {
+    const { runner, sr } = await setup(inv({ resumeId: 'prev' }));
+    const p = sr.run({ sessionId: 'inv-1', stage: 'plan', brief: '# b', prompt: 'go', fresh: true });
+    await flush();
+    runner.emitExit(runner.lastHandle(), { code: 1, signal: null });
+    const { session } = await p;
+    expect(session.agent?.resumeId).toBe('prev');
+  });
+
+  it('a non-fresh run still resumes (today’s behaviour) and archives nothing', async () => {
+    const { fs, runner, sr } = await setup(inv({ resumeId: 'prev' }));
+    await seedRound(fs, { 'BRIEF.md': 'old brief', 'FEEDBACK.md': 'old feedback' });
+    const p = sr.run({ sessionId: 'inv-1', stage: 'plan', brief: 'new brief', prompt: 'go' });
+    await flush();
+    expect(runner.getContext(runner.lastHandle()).resumeId).toBe('prev');
+    expect(await fs.exists('/sessions/inv-1/BRIEF-v1.md')).toBe(false);
+    expect(await fs.readFile('/sessions/inv-1/BRIEF.md')).toBe('new brief');
+    expect(await fs.readFile('/sessions/inv-1/FEEDBACK.md')).toBe('old feedback');
+    runner.emitExit(runner.lastHandle(), { code: 0, signal: null });
+    await p;
+  });
+
+  it('a fresh run archives the previous round’s BRIEF.md and FEEDBACK.md under one round number, then writes its own', async () => {
+    const { fs, runner, sr } = await setup();
+    await seedRound(fs, { 'BRIEF.md': 'round 1 brief', 'FEEDBACK.md': 'round 1 feedback' });
+    const p = sr.run({
+      sessionId: 'inv-1', stage: 'plan', brief: 'round 2 brief', prompt: 'go', fresh: true, feedback: 'round 2 feedback',
+    });
+    await flush();
+    expect(await fs.readFile('/sessions/inv-1/BRIEF-v1.md')).toBe('round 1 brief');
+    expect(await fs.readFile('/sessions/inv-1/FEEDBACK-v1.md')).toBe('round 1 feedback');
+    expect(await fs.readFile('/sessions/inv-1/BRIEF.md')).toBe('round 2 brief');
+    expect(await fs.readFile('/sessions/inv-1/FEEDBACK.md')).toBe('round 2 feedback');
+    runner.emitExit(runner.lastHandle(), { code: 0, signal: null });
+    await p;
+  });
+
+  it('round numbers are shared: a round that had no FEEDBACK.md still advances the number both files use', async () => {
+    const { fs, runner, sr } = await setup();
+    await seedRound(fs, { 'BRIEF-v1.md': 'r0', 'BRIEF.md': 'r1', 'FEEDBACK.md': 'f1' });
+    const p = sr.run({ sessionId: 'inv-1', stage: 'plan', brief: 'r2', prompt: 'go', fresh: true });
+    await flush();
+    expect(await fs.readFile('/sessions/inv-1/BRIEF-v2.md')).toBe('r1');
+    expect(await fs.readFile('/sessions/inv-1/FEEDBACK-v2.md')).toBe('f1');
+    expect(await fs.exists('/sessions/inv-1/FEEDBACK-v1.md')).toBe(false);
+    runner.emitExit(runner.lastHandle(), { code: 0, signal: null });
+    await p;
+  });
+
+  it('a fresh run with no feedback of its own still moves the stale FEEDBACK.md out of the agent’s way', async () => {
+    const { fs, runner, sr } = await setup();
+    await seedRound(fs, { 'BRIEF.md': 'r1', 'FEEDBACK.md': 'stale' });
+    const p = sr.run({ sessionId: 'inv-1', stage: 'plan', brief: 'r2', prompt: 'go', fresh: true });
+    await flush();
+    expect(await fs.exists('/sessions/inv-1/FEEDBACK.md')).toBe(false);
+    expect(await fs.readFile('/sessions/inv-1/FEEDBACK-v1.md')).toBe('stale');
+    runner.emitExit(runner.lastHandle(), { code: 0, signal: null });
+    await p;
+  });
+
+  it('a fresh run with no new brief keeps reading the current BRIEF.md (copied, not moved)', async () => {
+    const { fs, runner, sr } = await setup();
+    await seedRound(fs, { 'BRIEF.md': 'r1' });
+    const p = sr.run({ sessionId: 'inv-1', stage: 'plan', brief: null, prompt: 'go', fresh: true });
+    await flush();
+    expect(await fs.readFile('/sessions/inv-1/BRIEF.md')).toBe('r1');
+    expect(await fs.readFile('/sessions/inv-1/BRIEF-v1.md')).toBe('r1');
+    runner.emitExit(runner.lastHandle(), { code: 0, signal: null });
+    await p;
+  });
+
+  it('a fresh first round has nothing to archive', async () => {
+    const { fs, runner, sr } = await setup();
+    const p = sr.run({ sessionId: 'inv-1', stage: 'plan', brief: 'r1', prompt: 'go', fresh: true });
+    await flush();
+    expect((await fs.readdir('/sessions/inv-1')).filter((f) => /-v\d+\.md$/.test(f))).toEqual([]);
+    runner.emitExit(runner.lastHandle(), { code: 0, signal: null });
+    await p;
+  });
+});
